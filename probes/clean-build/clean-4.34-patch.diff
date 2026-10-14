@@ -1,0 +1,77 @@
+diff -ru ../Clean-src/Clean/Circomlib/Gates.lean Clean-src/Clean/Circomlib/Gates.lean
+--- ../Clean-src/Clean/Circomlib/Gates.lean	2026-10-14 19:09:55.535841650 +0000
++++ Clean-src/Clean/Circomlib/Gates.lean	2026-10-14 19:22:34.137818621 +0000
+@@ -837,7 +837,6 @@
+           main input_var2 >>= fun out2 =>
+           AND.circuit (out1, out2)).operations offset) by
+         convert this
+-        rfl
+ 
+       rw [h_main_eq] at h_local_witnesses
+       rw [Circuit.ConstraintsHold.bind_usesLocalWitnesses] at h_local_witnesses
+diff -ru ../Clean-src/Clean/Gadgets/Or/Or8.lean Clean-src/Clean/Gadgets/Or/Or8.lean
+--- ../Clean-src/Clean/Gadgets/Or/Or8.lean	2026-10-14 19:09:55.631845911 +0000
++++ Clean-src/Clean/Gadgets/Or/Or8.lean	2026-10-14 19:22:34.136703134 +0000
+@@ -32,39 +32,21 @@
+   return or
+ 
+ -- OR / XOR identity that justifies the circuit
++-- [probe/clean-build patch for Lean 4.34.1: BitVec 16 identity via `bv_decide`, then `toNat` and `omega`]
+ private theorem or_times_two_sub_xor {x y : ℕ} (hx : x < 256) (hy : y < 256) :
+     2 * (x ||| y) = x + y + (x ^^^ y) := by
+-  -- proof strategy: prove a UInt16 version of the identity using `bv_decide`,
+-  -- and show that the UInt16 identity is the same as the Nat version since everything is small enough
+-  let x16 := x.toUInt16
+-  let y16 := y.toUInt16
+-  have h_u16 : (2 * (x16 ||| y16)).toNat = (x16 + y16 + (x16 ^^^ y16)).toNat := by
+-    apply congrArg UInt16.toNat
+-    bv_decide
+-
+-  have hx16 : x.toUInt16.toNat = x := UInt16.toNat_ofNat_of_lt (by linarith)
+-  have hy16 : y.toUInt16.toNat = y := UInt16.toNat_ofNat_of_lt (by linarith)
++  have h_bv : ∀ a b : BitVec 16, 2 * (a ||| b) = a + b + (a ^^^ b) := by
++    intro a b; bv_decide
++  have h := congrArg BitVec.toNat (h_bv (BitVec.ofNat 16 x) (BitVec.ofNat 16 y))
++  have hxm : x % 2^16 = x := Nat.mod_eq_of_lt (by omega)
++  have hym : y % 2^16 = y := Nat.mod_eq_of_lt (by omega)
+   have h_or_byte : x ||| y < 256 := Nat.or_lt_two_pow (n:=8) hx hy
+   have h_xor_byte : x ^^^ y < 256 := Nat.xor_lt_two_pow (n:=8) hx hy
+-
+-  have h_mod_2_to_16 : (2 * (x ||| y)) % 2^16 = (x + y + (x ^^^ y)) % 2^16 := by
+-    conv_lhs => rw [←hx16, ←hy16]
+-    conv_rhs => rw [←hx16, ←hy16]
+-    simp only [x16, y16] at h_u16
+-    simp only [← UInt16.toNat_or]
+-    norm_num at h_u16 ⊢
+-    repeat rw [Nat.mod_eq_of_lt] <;> try omega
+-    · repeat rw [Nat.mod_eq_of_lt] at h_u16 <;> try omega
+-      · simpa
+-      · repeat rw [Nat.mod_eq_of_lt] <;> try omega
+-        simp only [UInt16.toNat, UInt16.toBitVec_ofNat, BitVec.toNat_ofNat, Nat.reducePow, Nat.reduceMod]
+-        omega
+-    · repeat rw [Nat.mod_eq_of_lt] <;> try omega
+-
+-  have h_lhs : 2 * (x ||| y) < 2^16 := by linarith
+-  have h_rhs : x + y + (x ^^^ y) < 2^16 := by linarith
+-  rw [Nat.mod_eq_of_lt h_lhs, Nat.mod_eq_of_lt h_rhs] at h_mod_2_to_16
+-  exact h_mod_2_to_16
++  simp only [BitVec.toNat_mul, BitVec.toNat_add, BitVec.toNat_or, BitVec.toNat_xor,
++    BitVec.toNat_ofNat, hxm, hym] at h
++  have : (2 : BitVec 16).toNat = 2 := rfl
++  simp only [this] at h
++  omega
+ 
+ private theorem or_times_two_sub_xor' {x y : ℕ} (hx : x < 256) (hy : y < 256) :
+     2 * (x ||| y) - x - y = (x ^^^ y) := by
+diff -ru ../Clean-src/Clean/Utils/Primes.lean Clean-src/Clean/Utils/Primes.lean
+--- ../Clean-src/Clean/Utils/Primes.lean	2026-10-14 19:09:55.695848751 +0000
++++ Clean-src/Clean/Utils/Primes.lean	2026-10-14 19:17:15.600569145 +0000
+@@ -5,7 +5,7 @@
+ -- `native_decide` compiles the decision procedure, so the instances it runs must also be
+ -- reachable from meta code.
+ public meta import Mathlib.Data.Nat.Prime.Defs
+-public meta import Mathlib.Logic.Basic
++public meta import Mathlib.Basic.Logic.Basic
+ public meta import Mathlib.Algebra.Group.Nat.Defs
+ 
+ @[expose] public section

@@ -3,3 +3,6 @@ logs/
 tools/
 __pycache__/
 *.olean
+probes/clean-build/Clean-src/
+probes/clean-build/variant-patched/
+probes/clean-build/variant-fullrepo/
