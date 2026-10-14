@@ -1,5 +1,7 @@
 # DESIGN amendments (for the orchestrator to patch into `docs/DESIGN.md`)
 
+All items up to S2-A2 were applied to docs/DESIGN.md on 2026-10-14; the list is kept as the change log.
+
 Each item is tagged with the stage that produced it. It gives the agreed change and the wording to
 put into `docs/DESIGN.md`. The implemented Lean is the reference.
 
