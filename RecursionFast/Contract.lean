@@ -4,5 +4,8 @@ Carried over from v0.3 verbatim: Field, Shapes, Security. New in v2 (docs/DESIGN
 Layout, Protocol (over Layout), Hash.Blake2s, Compile, Extractor, Recursion, Certificate.
 -/
 import RecursionFast.Contract.Field
+import RecursionFast.Contract.Layout
 import RecursionFast.Contract.Shapes
 import RecursionFast.Contract.Security
+import RecursionFast.Contract.Protocol
+import RecursionFast.Contract.Hash.Blake2s

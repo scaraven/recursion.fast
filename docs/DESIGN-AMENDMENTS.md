@@ -68,3 +68,68 @@ put into `docs/DESIGN.md`. The implemented Lean is the reference.
 - **S2-A2 (wording; §3.2, §5.1–§5.2, §7.1, from S2-m10).** The design's one-argument `blake2s(·)`
   / `Blake2s(·)` is `RecursionFast.blake2s256` (unkeyed, 32-byte digest). `RecursionFast.blake2s`
   is the general keyed function `blake2s key nn msg` of RFC 7693 §3.3.
+
+## Stage 1 fix pass (after the S1 review, 2026-10-14)
+
+- **S1-A8 (S1-M1: the verifier is a query program; §3.1, §3.2).**
+  - **§3.1:** add v0.3's adaptive `QProg α` (`done a`, `query j l cont`) and
+    `QProg.eval : QProg α → List Oracle → Option α` (an out-of-range oracle or leaf gives `none`,
+    i.e. reject).
+  - **§3.1:** add `chalOf tr : Challenges sh`.
+  - **§3.1:** replace the `verify` field by
+    `verify : (Fin vkLen → K) → Stmt → Challenges shape → QProg Bool`.
+  - **§3.1:** `specVerifier s tr` accepts iff
+    `(P.verify (P.VK s.1) s.2 (chalOf tr)).eval (⟨P.idxShape, P.IDX s.1⟩ :: tr.oracles) = some true`.
+    Oracle 0 is the index, then the prover's oracles in round order.
+  - **§3.1 prose:** "the verifier sees an oracle's contents only through `query`, leaf by leaf;
+    this is exactly what the compiled argument opens".
+  - **§3.2:** compile opens the leaves that the run on the honest oracles reads, each with an
+    authentication path. `probes/s1/VerifyNotLocal.lean` (`eval_local`) shows the result depends
+    only on those leaves.
+- **S1-A9 (S1-m8a: shape caps; §3.1, §6.5).**
+  - **§3.1:** `Protocol k` gets the field `shape_ok`. Every round is `Round.Admissible k`: a
+    message oracle has `logLeaf ≤ logLen ≤ k + 10`, an index challenge `≤ 64` bits. The index
+    oracle has `logLeaf ≤ logLen ≤ k + 8`. These are v0.3's `OShape.Admissible`, `IdxAdmissible`
+    and `Round.Admissible`, now stated once, as a field.
+  - **§6.5 table:** add the rows "message oracle `≤ 2^(k+10)` elements", "index oracle
+    `≤ 2^(k+8)`" and "index challenge `≤ 64` bits".
+  - **Owner of the remaining v0.3 rules:** the tape cap and the blow-up cap of v0.3's
+    `ShapeAdmissible` belong to `Compile`'s proof format.
+  - **Cross-stage note:** the caps now live in `Protocol`, and Stage 4 and Stage 7 rely on
+    `2^(k+8)` for the index.
+- **S1-A10 (S1-m5: textbook R1CS; §2.3, S1-A3).**
+  - **§2.3 and S1-A3:** R1CS is `z = (1, x, w)` with the constant wire. The `1` is the view's
+    constant cell (S1-A11), `x` the public row's cells `0…31`, and `w` the remaining columns.
+  - **§2.3:** `R1CS_iff_layout` is stated for `relK k`: one chip, one row, no ports, `pub = 0`,
+    admissible for `≤ 2^8` constraints, `≤ 2^10` columns and `3·m·(32+n+1) ≤ 2^(k+4)` entries.
+  - **S1-A3:** the earlier "`z = (x, w)`" wording dropped the constant wire, so every instance was
+    homogeneous; S1-A10 replaces it.
+- **S1-A11 (S1-m7, option (iii): contract cells in the view; §2.1).**
+  - **§2.1:** the gadget's view has width `cols + cols + 3`. It holds the row, the next row (row 0
+    after the last), then `1`, `[r = 0]` and `[r + 1 = rows]`, and `Chip.gadget : Gadget K (cols + cols + 3)`.
+    A verifier computes these cells from the height.
+  - **§2.1, documented:** (a) a port's selector is a witness cell compared with `1`, and any other
+    value is silent, so a protocol that weights messages by the selector must have the layout
+    constrain it to `0`/`1`; (b) fixed row patterns come from the flags or from a fixed table;
+    (c) heights are arbitrary (not powers of two), and the wrap is modulo the height.
+  - **§2.1 AIR sentence:** "an AIR with boundary constraints on the first or last row (the flags)
+    and a transition on every row is one chip, many rows, no ports".
+- **S1-A12 (S1-m8b, S1-m8c: cross-stage notes).**
+  - **(b) compile stage (Stage 3 in the orchestrator's numbering; design §11 step 4).** Every
+    `Protocol k` has `k ≥ 20` (S1-A2) and fixed shapes within S1-A9. A protocol that sends the
+    witness (the toy, `P_triv`) therefore sends oracles of `2^(k+8)` to `2^(k+10)` elements, which
+    the kernel cannot evaluate. The planned controls "honest compiled toy accepted" and "two-leaf
+    node with the toy protocol" need either a small, non-`Secure` `Protocol 20` with tiny shapes
+    (`Secure` is not required of a compile control) or general theorems. Say so in §11.
+  - **(c) recursion stage (Stage 5; design §5.3).** S1-A6 enforces the cell bound of `C_V` through
+    `complete`. That clause is vacuous if `aggOK cfg P` is never true, and compile completeness is
+    not a theorem in the design. The benchmark run is what catches it (a node step must produce a
+    verifying proof). Record this in §5.3.
+- **S1-A13 (S1-m1 to S1-m4: controls; §2.3, §10).**
+  - **§2.3:** add the controls for the cyclic wrap (`wrap_pos`/`wrap_neg`), `eq`-bus multiplicity
+    (`eqMult_neg`), the fixed-table height (`fixedHeight_neg`), a boundary control for every cap,
+    and Fibonacci pinned by the flags (`fib_garbage`, `fib_boundary_neg`).
+  - **§10:** `Library/RbrSound.lean`, `Controls/Hit.lean` and `Controls/FieldSpec.lean` are carried
+    over verbatim; `hit_secure` is the positive control with challenge rounds. `Library/Transfer.lean`
+    is not carried over, because it imports the deleted `Accumulation.lean`; it should be dropped
+    from the §10 keep list.
