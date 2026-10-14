@@ -1,0 +1,91 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+The **recursion.fast v2 contract**: the trusted Lean 4 rules of an autoresearch competition in which
+agents submit a hash-based SNARK over GF(2^64) for a structured constraint relation (chips + CCS +
+bus), prove it knowledge-sound and complete, supply their verifier as a circuit, and are ranked by
+the measured wall time of one 2→1 recursion step. Plus the organiser's untrusted library, the
+positive/negative controls, the harness, and the baseline submission.
+
+**The design is `docs/DESIGN.md`. It is authoritative.** Where this repository and the design
+disagree, the design wins unless a stage RESULT records an agreed deviation with its reason.
+
+Read-only references (never edit, never build inside):
+
+- `/home/devops/CambridgePQ/recursion.fast/contract-v03/`: the v0.3 contract this one descends from
+  (its `RESULT.md` documents the harness, gate and comparator that carry over).
+- `/home/devops/CambridgePQ/recursion.fast/report/sections/*.tex`: the v1.0 report (background,
+  prior competitions, threat model; Appendix A lists the v0.3 contract).
+- `/home/devops/CambridgePQ/recursion.fast/DISCUSSION.md`: the user's decisions Q1–Q5.
+- `/home/devops/Verified-zkEVM/leanerVM/.lake/packages/Clean`: Clean at `42fe4b26` (untrusted
+  frontend, design §9).
+
+## Toolchain
+
+Lean **v4.34.1**, Mathlib v4.34.1, ArkLib `7653a90`, CompPoly `572f997`, VCVio `a4232d0`,
+PolyFun `41d3b21`. `.lake/packages` is a symlink to the prebuilt shared tree
+`/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages` (local-only, gitignored). A clean
+clone removes the symlink and runs `lake exe cache get`.
+
+```sh
+lake build                                     # default targets: RiscvZkvm, Contract, Library, Controls (≈ 40 s warm)
+lake build RecursionFastBridge gate axiomaudit # the rest
+lake env lean RecursionFast/Controls/Layout.lean   # one file
+python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean   # trusted line budget
+scripts/check-vendor.sh /home/devops/Verified-zkEVM/riscv-zkvm   # vendored Rv64 is byte-identical
+```
+
+## Trust layers
+
+| Layer | Path | Rule |
+|---|---|---|
+| Contract | `RecursionFast/Contract/*.lean` | **TRUSTED.** Imports Lean core, Mathlib, vendored Rv64 only; never ArkLib/CompPoly/VCVio/Clean. Budget ≤ 850 code lines excluding `Compile.lean` and `Hash/`. Every definition has a docstring saying what it means, not how it is written. |
+| Vendored Rv64 | `RecursionFast/Vendor/RiscvZkvm/` | **TRUSTED**, byte-identical to riscv-zkvm `6810fc1`. Never edit. |
+| Library | `RecursionFast/Library/` | Untrusted, kernel-checked helpers for submitters (padding, R1CS as a special case, field facts, Clean bridge). |
+| Bridge | `RecursionFast/Bridge/` | Untrusted bridge to ArkLib. |
+| Controls | `RecursionFast/Controls/` | Positive **and** negative controls for every trusted definition; run in CI. |
+| Harness | `scripts/` | Gate, axiom audit, manifest, sandbox, renderer, CI (carried over from v0.3, adapted stage by stage). |
+
+Hard rules for anything trusted: no `sorry`; axioms only `propext`, `Classical.choice`, `Quot.sound`;
+no `native_decide`, `implemented_by`, `extern`, `csimp`; statements are non-vacuous (a negative
+control shows the definition can fail); a proof never changes the statement it proves.
+
+## Stage protocol (how this repository is built)
+
+The build order is design §11, one stage at a time. Each stage runs the same cycle:
+
+1. **Implement** (one agent): builds the stage, keeps `lake build` green, writes
+   `docs/stages/S<n>-RESULT.md`: what was built (file by file, with code line counts from
+   `scripts/loc.py`), build time, the controls and what each shows, every deviation from
+   `docs/DESIGN.md` with its reason, open questions for the orchestrator.
+2. **Adversarial review** (one agent, in parallel with 3): spec tightness, vacuity, loopholes,
+   trust policy, hygiene; writes `docs/reviews/S<n>-review.md` with numbered findings
+   (`S<n>-M<i>` major: must fix; `S<n>-m<i>` minor) and a verdict.
+3. **Golf** (one agent, in parallel with 2): shortens proofs and definitions without changing any
+   statement; edits in place; writes `docs/reviews/S<n>-golf.md` (before/after line counts, what
+   changed, anything it declined to touch and why).
+4. **Fix** (the implementing agent): applies every major finding, answers each minor one (fixed or
+   argued), appends `## Fix pass` to the RESULT, re-runs the build and the controls.
+5. The orchestrator reads the RESULT and review, commits, and opens the next stage.
+
+Subagents **do not commit**; the orchestrator does. Measurements go in `logs/` (gitignored) and
+are quoted in the RESULT. Skills to use: `lean-spec-authoring` when writing trusted definitions or
+theorem statements; `adversarial-review` and `lean4:review` when reviewing; `lean4:golf` when
+golfing; `lean4:lean4` for any Lean work.
+
+## Layout
+
+```
+RecursionFast/Contract/   Field Shapes Security (v0.3, verbatim) · Layout Protocol Hash/ Compile Extractor Recursion Certificate (v2)
+RecursionFast/Vendor/     RiscvZkvm (trusted, vendored)
+RecursionFast/Library/    untrusted helpers
+RecursionFast/Bridge/     ArkLib bridge
+RecursionFast/Controls/   CI controls
+RecursionFast/Challenge/  challenge stubs (.lean.in) for the renderer
+scripts/                  harness (Gate.lean, AxiomAudit.lean, harness.sh, ci.sh, renderer, manifest)
+docs/                     DESIGN.md · stages/S<n>-RESULT.md · reviews/S<n>-{review,golf}.md
+submissions/baseline/     the trivial baseline (stage 8, separate agent)
+```
