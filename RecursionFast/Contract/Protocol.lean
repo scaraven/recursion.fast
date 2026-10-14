@@ -2,17 +2,18 @@
 # Contract: holographic proof systems for the layout relation                    (TRUSTED)
 
 DESIGN §3.1, S1-A8. A submission provides a `Protocol k`: contract round shapes within the shape
-caps, a holographic indexer (`VK`, `IDX`), an honest prover, a verifier, a named extractor and
+caps, a holographic indexer (`VK`, `IDX`), an honest prover, a verifier, an extractor image and
 declared per-round errors. The verifier is a **query program** (`QProg`, as v0.3's T0 programs):
 from `VK L`, the statement and the challenges it reads the oracles (oracle 0 is the index oracle
 `IDX L`, then the prover's oracles in round order) only leaf by leaf, through `query`, which is
 exactly what the compiled argument opens (a leaf plus an authentication path, §3.2). It never
 sees the layout `L` itself. Security is `Security.lean`'s, unchanged, over the class-`k` relation
-`relK k`. "Computable" (no `noncomputable`, `implemented_by`, `extern`, `csimp` in the closure of
-`VK`, `IDX`, `verify` and the extractor) is checked by the harness gate, not by Lean.
+`relK k`, with the extractor image's round-by-round extractor (`Contract/Extractor.lean`, Q1).
+"Computable" (no `noncomputable`, `implemented_by`, `extern`, `csimp` in the closure of `VK`,
+`IDX`, `verify` and the image) is checked by the harness gate, not by Lean; the image must also be
+the literal rendered from the claim.
 -/
-import RecursionFast.Contract.Security
-import RecursionFast.Contract.Layout
+import RecursionFast.Contract.Extractor
 
 open scoped NNReal
 
@@ -77,10 +78,10 @@ structure Protocol (k : ℕ) where
   /-- The verifier: from `VK L`, the statement and the challenges, a query program over the
   oracles (computable: its compiled form is executed and timed). -/
   verify : (Fin vkLen → K) → Stmt → Challenges shape → QProg Bool
-  /-- The named round-by-round extractor. -/
-  WitMid : Fin (n + 1) → Type
-  -- Stage 5: ExtractorImage (DESIGN §4.3, Q1), the bounded extractor run on Rv64.
-  extractor : Extractor shape (Layout K × Stmt) (List (Table K)) Unit WitMid
+  /-- The extractor image (DESIGN §4 item 3, Q1): the named round-by-round extractor is this
+  image run on the contract machine, with the submitter's split of `B(k)` over its `n + 1` calls
+  (`ExtractorImage.toExtractor`). -/
+  extractor : ExtractorImage k n
   /-- Declared per-round errors. -/
   ε : ChallengeIdx shape → ℝ≥0
 
@@ -94,10 +95,11 @@ def specVerifier : PureVerifier P.shape (Layout K × Stmt) Unit := fun s tr =>
   then some () else none
 
 /-- **Security of a protocol**: perfect completeness for `relK k`, worst-case RBR knowledge
-soundness with the named extractor at the declared errors, and `ε ≤ 2^-128` in every round
-(the round cap `n ≤ 2^14`, the key cap and the shape caps are fields of `Protocol`). -/
+soundness with the extractor of the image (`B(k)` steps in all over its `n + 1` calls) at the
+declared errors, and `ε ≤ 2^-128` in every round (the round cap `n ≤ 2^14`, the key cap and
+the shape caps are fields of `Protocol`). -/
 def Secure : Prop :=
-  SecureWith (relK k) Set.univ P.prover P.specVerifier P.extractor P.ε
+  SecureWith (relK k) Set.univ P.prover P.specVerifier (P.extractor.toExtractor P.shape) P.ε
 
 end Protocol
 

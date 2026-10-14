@@ -13,8 +13,9 @@ D1 §2 restated over the contract's round shapes, Mathlib only (no ArkLib in the
 Reading guide (A2-m2): `Transcript sh m` is the prefix of *length* `m`; `m.castSucc` / `m.succ`
 are "before / after round `m`"; `cast E.eqIn` is an identity coercion between equal types;
 `Bad`'s `∃ w` ranges over the *next-stage* witness, which the extractor maps backwards.
-At L1 the extractor is unconstrained, so `RbrKS` is equivalent to RBR *soundness*
-(`Library/RbrSound.lean`, A2-M2): records are labelled "RBR-sound".
+For an unconstrained extractor `RbrKS` is equivalent to RBR *soundness* (`Library/RbrSound.lean`,
+A2-M2); `Protocol.Secure` names the submitted image (`Contract/Extractor.lean`, Q1), to which the
+collapse does not apply.
 -/
 import RecursionFast.Contract.Shapes
 import Mathlib.Basic.NNReal.Defs

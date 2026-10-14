@@ -22,6 +22,7 @@ element, `40–47` leaf `i` of oracle 1, `48–111` its path (2 levels × 1 dige
 `i mod 2` of the index, `120–151` its path.
 -/
 import RecursionFast.Library.Compile
+import RecursionFast.Library.Extractor
 
 namespace RecursionFast.Controls.Compile
 open RecursionFast
@@ -78,8 +79,7 @@ def cmpToy : Protocol 20 where
     | 2 => ⟨by decide, by decide⟩, by decide, by decide⟩
   prover := { next := cmpNext, output := fun _ _ _ => ((), ()) }
   verify := cmpVerify
-  WitMid := fun _ => List (Table K)
-  extractor := { eqIn := rfl, extractMid := fun _ _ _ w => w, extractOut := fun _ _ _ => [] }
+  extractor := firstMsgImage 20 3  -- any image and split: not claimed secure
   ε := fun _ => 0
 
 /-- BLAKE2s, arity 2. -/

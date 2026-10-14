@@ -345,3 +345,207 @@ byte grammar. These items change or complete DESIGN §3.2 (and §5.1, §6.5, §1
   - Each kills a one-line mutant that survived the previous suite (`probes/s3/RevMutants.lean`).
   - `Library/Compile.lean` adds `NARG_eq_true_iff`, the unfolded acceptance condition that a
     recursion circuit `C_V` must force (§5.3).
+
+## Stage 4 fix pass (after the S4 review, 2026-10-14)
+
+- **S4-A9 (S4-M1: `B(k)` is the total over the composed extractor; §4 item 3, §6.5, Q1).
+  Supersedes S4-A7.**
+  - **Change (trusted, `Contract/Extractor.lean`).** `extractorFuel k n := 2^(2k+16) / (n + 1)`.
+    Each of the `n + 1` calls of the round-by-round extractor of an `n`-round protocol gets that
+    many steps. `toExtractor` takes `n` from the shape, and `call` runs with
+    `extractorFuel k n`.
+  - **Why.** Knowledge comes from the composed extractor (`Library/RbrSound.lean`'s `chain`).
+    Its calls may pass state through the witness words: `resumeImage`, `chain_round0`. Rounds
+    are free (`padShape`: empty challenge rounds). So under the per-call reading a one-word
+    secret was enumerable at every class: `chain_secure` in `probes/s4/ChainBudget.lean`, with
+    `2^10` rounds at class 20.
+  - **Total.** The whole extraction now has at most `B(k)` steps (`composed_fuel_le`), and
+    adding rounds buys nothing.
+  - **Per call, within the round cap.** A call has at least `2^(2k+1)` steps
+    (`pow_le_extractorFuel`).
+  - **Negative control.** `chain_search_fails` (`Controls/Extractor.lean`): a chained search
+    whose calls each test at most as many candidates as a call has steps is not an extractor at
+    class 20. This holds for any injective `f`, any prover and errors, on any number of padding
+    rounds.
+  - **Restated thresholds (S4-m2).**
+    - A one-element secret is enumerable only if `2^(2k+16) ≥ 2^64 · c`, where `c` is the steps
+      per candidate including loop control.
+    - That never happens for `k ≤ 23` (`composed_lt_word`).
+    - At `k = 24`, `c = 1`, which no loop achieves: `B(24) < 2·2^64` (`budget_24_25`).
+    - At `k = 25`, `c ≤ 4`. So in practice the boundary is `k ≥ 25` for cheap tests (`k ≥ 26` for
+      any non-trivial test).
+    - Two elements are never enumerable: `2^72 < 2^128` (`composed_lt_two_words`).
+  - **DESIGN §4 item 3 paragraph.**
+
+    > Each extractor call runs the submitted image (≤ `2^20` bytes, the same for every
+    > statement) on a tape the contract builds from `(j, L, x, transcript prefix, next
+    > witness)` alone. A protocol of `n` rounds has `n + 1` calls, each of
+    > `B(k)/(n+1)` steps, `B(k) = 2^(2k+16)`, so the whole extraction (`Library/RbrSound.lean`'s
+    > `chain`) runs for at most `B(k)` steps whatever `n`, even though calls may pass state
+    > through the witness words. The output (≤ `2^(k+12)` words, else empty) is decoded by
+    > trusted code that adds only zeros. The laws force a valid witness only before round 0,
+    > where `[]` fails `relK`. Brute force is excluded for witnesses of two or more `K` elements
+    > at every class, and for one `K` element up to `k = 23` (at `k ≥ 24` only if a candidate
+    > costs at most `2^(2k−48)` steps, loop control included).
+
+  - **Cost to honest submitters.** A protocol with many rounds gets less per call: down to about
+    `2^(2k+1)` steps at the round cap. Extraction work concentrated in one round has to fit
+    `B(k)/(n+1)`.
+- **S4-A10 (S4-M2: what `B(k)` admits; §4 item 3, Q1 rationale). Keeps the user's value of
+  `B(k)`.**
+  - **Docstring.** The `extractorFuel` docstring no longer claims "quadratic in the oracle
+    length" or "Gaussian elimination". It states:
+    - `B(k)` is `2^16` times the square of the witness-cell cap. The longest admissible oracle
+      squared is `16·B(k)` (`oracle_sq`).
+    - Cubic elimination on `2^k` unknowns exceeds `B(k)` from `k = 17` (`cube_gt`).
+    - At about 10 steps per `K` multiply-add, the whole budget admits O(N²) decoding up to about
+      `2^(k+6)` elements (`quadratic_fits`), and quasi-linear decoding of every admissible
+      oracle.
+  - **DISCUSSION Q1.** Its "Quadratic admits Berlekamp–Welch via Gaussian elimination" is to be
+    corrected when DESIGN §4 is patched.
+  - **Request to the orchestrator.** Add to DESIGN §12: "**O-11** (user / library): measure
+    whether CompPoly's Guruswami–Sudan decoder (the Johnson-regime decoder Q1 relies on) fits
+    `B(k)` at the benchmark's oracle sizes, at `k = 20`, against `B(20) = 2^56` steps over the
+    whole extraction."
+- **S4-A11 (S4-m3: one comment-only edit to a carried-over trusted file).**
+  - **What.** `Contract/Security.lean`'s header loses the sentence "At L1 the extractor is
+    unconstrained … labelled 'RBR-sound'". It is replaced by "For an unconstrained extractor
+    `RbrKS` is equivalent to RBR *soundness* (`Library/RbrSound.lean`, A2-M2);
+    `Protocol.Secure` names the submitted image (`Contract/Extractor.lean`, Q1), to which the
+    collapse does not apply."
+  - **What does not change.** No declaration changes, and the line count of code is unchanged.
+    The diff is quoted in `docs/stages/S4-RESULT.md`, "Fix pass".
+- **S4-A12 (wording; S4-m4, S4-m5, S4-m6).**
+  - **(m4) `Contract/Extractor.lean` header.** "The laws force a witness in `relK` only before
+    round 0, where `[]` fails (`nil_not_relK`); after round 0 the submitter's state function says
+    what an output must satisfy, `[]` included." This replaces "the image must succeed within
+    the fuel exactly where the laws ask".
+  - **(m5) `witCap` is an interface cap, not a security bound.** It is "the largest intermediate
+    witness an extraction passes between calls": four maximum-size oracles. The fuel already
+    bounds what an output can contain. Use this wording in S4-A1 and in DESIGN §6.5.
+  - **(m6) DESIGN §4 item 3 and Q1.** Say "steps", not "cycles": `B(k) = 2^(2k+16)` steps.
+    Every instruction is one step (`div`, `clmul` and `ECALL` included), and there is no cost
+    model.
+- **S4-A13 (S4-A8 applied: the Protocol swap; §3.1).**
+  - **`Contract/Protocol.lean`.** The `WitMid` field is gone and the field is
+    `extractor : ExtractorImage`. `Secure` uses `P.extractor.toExtractor k P.shape`, with `k`
+    the structure's class and `n` its round count, so the fuel is `extractorFuel k P.n`.
+  - **Controls migrated.** `Controls/Toy.lean` uses `firstMsgImage`, `toy_extractMid` and a
+    `Fin.cases` state function. `Controls/CompileToy.lean` and `Controls/CompileFS.lean` use
+    `firstMsgImage`; these protocols are not claimed secure.
+  - **Negative control.** `toy_not_secure_of` and `toy_spin_not_secure` (`Controls/Toy.lean`):
+    with the looping image the toy is not secure at any class in range. `nil_not_relK` is in
+    `Library/Extractor.lean`.
+  - **Probe removed.** `probes/s4/ProtocolSwap.lean` is deleted.
+  - **§3.1 block.** Replace the `WitMid`/`extractor` lines by `extractor : ExtractorImage`, and
+    `Secure` by `SecureWith … (P.extractor.toExtractor k P.shape) P.ε`.
+
+## Stage 6a (the benchmark layout `L_chain`, O-3; design §7.1–§7.2)
+
+The implemented reference is `harness/gen-chain-layout.py`. Its arithmetisation is
+`harness/CHAIN-LAYOUT.md`, and the measurements are `docs/stages/S6a-RESULT.md`.
+
+- **S6-A1 (O-3: the class of the benchmark; §2.2, §6.3, §7.2, §12).**
+  - **Measured.** `L_chain(n)` has `9,225·n + 786,505` cells. The fixed `add8` table is 786,464
+    fixed cells, above `2^19`, so the fixed-table cap `2^(k−4)` forces `k ≥ 24` for every `n`.
+
+    | n | cells | `k_min` |
+    |---|---|---|
+    | 2^8 | 3.1 M | 24 |
+    | 2^10 | 10.2 M | 24 |
+    | 2^11 | 19.7 M | 25 |
+    | 2^12 | 38.6 M | 26 |
+
+    The largest chain at class 24 is n = 1,733.
+  - **`n = 2^12` does not fit class 24.**
+    - Class 24 would need at most about 3,904 cells per compression (about 49 per G-call). The 24
+      add lookups of one G-call already produce 24 result bytes and 18 carries.
+    - Class 25 would need at most about 7,999 (13 % below this layout).
+  - **§2.2 wording.** "The range itself comes from the leaf benchmark, which fits at `k ≥ 24`"
+    stays true as "every `L_chain(n)` needs `k ≥ 24`; `n = 2^10` fits 24".
+  - **§6.3 / §7.2 (for the user).** Choose one:
+    - keep `n ∈ {2^8, 2^10, 2^12}` and run the `2^12` leaves at class 26, which `k_range` (20–28)
+      already allows; or
+    - change the leaf sizes to `{2^8, 2^10, 2^11}`, at classes 24, 24 and 25.
+
+    The recursion tree's `n = 2^10` fits class 24.
+  - **§12 O-3.** Resolved: `k_min = 24`, by the table; cells per `n` as above.
+- **S6-A2 (the arithmetisation; §7.2 wording).**
+  - **§7.2.** Replace "a Blake2s chip (one row per compression round or per G-function), an 8-bit
+    limb table chip …, a chain chip …" with the following.
+    - **Chips.** A G chip with two rows per G-call (one half of `G` per row; 53 columns). A fixed
+      `add8` table of `2^17` rows (8-bit add with carry) and a 16-row nibble table. Twenty state
+      chips `S0 … S19`, one row per compression, holding the state before each half-round and the
+      message words. A `FINAL` chip (finalisation and chain link) and the public chip.
+    - **Buses.** Four `sub` buses: `ADD`, `ADDTOP`, `PAIR`, `NIB`. Four `eq` buses: G inputs,
+      G outputs, message words, output.
+  - **Why two rows per G-call.** One G needs 24 byte lookups. The port cap (`≤ 2^4` per chip, §2.2)
+    makes one row per G-call or per round inadmissible; a row of one half-G uses 15 ports.
+  - **XOR** is field addition.
+  - **Additions** are bytewise lookups into `add8`. Byte 3 uses a second port of the same table
+    without the carry-out, so the discarded carry is not a cell.
+  - **Rotations.** `rotr 16` and `rotr 8` permute bytes. `rotr 12` and `rotr 7` cost one wrap cell
+    each (`(1 + X^32)·W`, `W` range-checked as a nibble); this is sound because every packed word
+    is later decomposed into range-checked bytes.
+  - **The gadget form** of every chip is `gate · linear = 0`: CCS with `t = 2`, `q = 1`, degree 2.
+    The gates are the view's constant and flags, and the G chip's phase cell.
+- **S6-A3 (statement and boundary conventions; §5.1, §7.1).**
+  - **The statement** is `x = (y₀, y₁, y₂, y₃, n, 0, …, 0)`, where `y_j` is digest bytes
+    `8j … 8j+7`, little-endian (S2-A1). The public chip constrains all 32 cells, so a statement
+    with another `n` or a nonzero tail has no witness.
+  - **The start** `s` is the free message of `S0`'s row 0.
+  - **The digest words `H₄ … H₇`** are range-checked in `FINAL` (byte pairs on `PAIR`). Otherwise a
+    wrong `rot 7` wrap bit in the last compression would alias across the 64-bit limb packing of `y`.
+- **S6-A4 (routing by tags; §2.1 usage, no contract change).**
+  - **Tags.** `eq`-bus messages carry tags `γ^r` with `γ = X`, a generator of `K*` (order
+    `2^64 − 1`). Row `r` of the G chip has tag `γ^r`; the state chips use
+    `κ = γ^{160i + 8(s−1)}`.
+  - **Pins.** Every tag chain is pinned at its first row (`[r = 0]`) and its last row
+    (`[r + 1 = rows]`). This fixes every height, so a prover cannot add, drop or reorder
+    compressions.
+  - **Uniqueness.** The witness is unique given `s`. No sampled single-cell change survives.
+- **S6-A5 (fidelity: tested, and kernel-checked on one G-call; §7.2).**
+  - **What the kernel can do.** `decide +kernel` costs about 40 ms per `K` product, about 10 s per
+    G row. A compression is 160 G rows (about 27 min), so the kernel control is the one-G-call
+    harness (`Controls/Chain.lean`).
+    - `rel` is decided for G-calls 0 and 79 (add table trimmed to the rows used).
+    - `rel` is proved with the full `add8` table (lookups certified row by row).
+    - The statement agrees with the contract's `Blake2s.mix`.
+    - There are three negative controls.
+    - `L_chain(1024)` is admissible at 24 and not at 23.
+  - **What Python does.** The independent evaluator `harness/check-chain.py` covers whole chains
+    (n = 4, 16, 256) against `hashlib`, with single-cell mutations and one layout mutant per
+    mechanism.
+  - **§7.2 wording.** "Fidelity is tested, not proved" stays. Add "the kernel checks one G-call of
+    the generated layout; the Python evaluator, cross-checked against the kernel on the same
+    instances, checks whole chains".
+- **S6-A6 (JSON format and rendering; §7.2, Stage 7).**
+  - **The format** is the JSON layout/witness/statement schema of `harness/README.md`, with K
+    elements as 16 hex digits and the closed-form table kind `add8`.
+  - **The renderer** is `harness/render-layout.py`.
+  - **Deviation.** The design says "rendered into Lean by the v0.3 renderer". The v0.3
+    `scripts/render-challenge.py` is unchanged; adding a `{{layout:KEY}}` placeholder that calls
+    `render-layout.py` is left to Stage 7, together with the challenge stub for the leaf board.
+- **S4-A14 (submitter-declared split of `B(k)`; supersedes the even split of S4-A9's "Change"
+  bullet; S4-A9's thresholds are unchanged because the total is unchanged).**
+  - **Change (trusted, `Contract/Extractor.lean`).** `extractorFuel` is removed and
+    `extractorBudget k := 2^(2k+16)` is `B(k)`. `ExtractorImage k n` gets the fields
+    `fuel : Fin (n + 1) → ℕ` and `fuel_le : (List.ofFn fuel).sum ≤ extractorBudget k`.
+    `toExtractor` runs `extractMid m` with `fuel m.castSucc` and `extractOut` with
+    `fuel (Fin.last n)`: each call is indexed by the round before which its witness lives.
+  - **Wording.** "The submitter chooses how the total budget `B(k)` is split over the `n + 1`
+    calls (a round-0 decoder may take almost all of it); the total, not the split, is what the
+    contract bounds."
+  - **Protocol.** The field is `extractor : ExtractorImage k n`, and `Secure` uses
+    `P.extractor.toExtractor P.shape`.
+  - **Library.** `ExtractorImage.composed_fuel_le` (it is `fuel_le`) and `fuel_le_budget`.
+    Two ready-made splits: `even` (`B(k)/(n+1)` each; `even_fuel_ge`: at least `2^(2k+1)`
+    within the round cap) and `atZero` (all of it on the call before round 0).
+    `firstMsgImage k n := atZero firstMsgImg …`.
+  - **Controls.**
+    - The toy, `cmpToy` and `pfs` use `firstMsgImage` (all on round 0).
+    - `brute_extractMid_nil` and `spin_extractMid` hold for any split.
+    - `chain_search_fails` is stated for any image at class 20 (any split) and a chained search
+      testing at most `c < 256` candidates per step of each call's fuel, so bit-slicing is
+      covered. It covers at most `255·2^56 < 2^64 − 1` candidates; reaching `2^64` would take
+      256 per step.
