@@ -1,0 +1,15 @@
+== constants: RFC dump vs spec
+identical
+== vendored code: leanerVM 485d0465 (Parameters 29-47, Semantics 64-110) vs spec
+19,20c19,20
+< /-- Rotate a 32-bit word right by `n` bits (RFC 7693 §2.3, `>>>`). -/
+< def rotr (x : UInt32) (n : ℕ) : UInt32 := ⟨x.toBitVec.rotateRight n⟩
+---
+> /-- Rotate a 32-bit word right by `n < 32` bits (RFC 7693 §2.3, `>>>`), with machine shifts. -/
+> def rotr (x : UInt32) (n : Nat) : UInt32 := x >>> n.toUInt32 ||| x <<< (32 - n).toUInt32
+51d50
+< end Blake2s
+57c56
+<   let v := sigma.foldl (fun v s ↦ Blake2s.round v m s) (Blake2s.initialState h t f0 f1)
+---
+>   let v := sigma.foldl (fun v s ↦ round v m s) (initialState h t f0 f1)
