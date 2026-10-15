@@ -1,0 +1,16 @@
+{
+ "honest": true,
+ "A1a n3-witness, x4=4": false,
+ "A1b n3-witness, x4=3": false,
+ "A1a mutant nolast": true,
+ "A2a PUB takes FINAL row 2": false,
+ "A2b + la/nl moved to row 2": false,
+ "A3 real layout": false,
+ "A3 mutant selpin": true,
+ "A4 real layout": false,
+ "A4 mutant pairport": true,
+ "A5 real layout": false,
+ "A6 harness b' ^= (1+X^32)*1": true,
+ "A6 harness b' ^= (1+X^32)*2": true,
+ "A6 harness b' ^= (1+X^32)*15": true
+}

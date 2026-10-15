@@ -1,0 +1,40 @@
+== honest n = 4
+[honest] relK 24: True
+== A1 short chain
+[A1a] relK 24: False; failing: rel: gadget: False G: row 479, constraint 6
+[A1b] relK 24: False; failing: rel: gadget: False PUB: row 0, constraint 5
+[A1am] relK 24: True
+== A2 intermediate state as y
+[A2a] relK 24: False; failing: rel: bus: False bus 7 (eq): 1 sent, 1 received
+[A2b] relK 24: False; failing: rel: gadget: False FINAL: row 2, constraint 1 | rel: bus: False bus 6 (eq): 79 sent, 79 received
+== A3 restart the chain through silent selectors
+[A3] relK 24: False; failing: rel: gadget: False S0: row 3, constraint 9
+[A3m] relK 24: True
+== A4 wrap aliasing in the last compression
+[A4] relK 24: False; failing: rel: bus: False bus 2 (sub): 131072 sent, 32 received
+[A4m] relK 24: True
+== A5 33-bit secret word
+[A5] relK 24: False; failing: rel: gadget: False G: row 0, constraint 11
+== A6 one-G-call harness: out-of-range b'
+[A6_e1] relK 20: True
+      x7 = 000000017bd5d391 (>= 2^32: True); W := 1
+[A6_e2] relK 20: True
+      x7 = 000000027bd5d392 (>= 2^32: True); W := 2
+[A6_e15] relK 20: True
+      x7 = 0000000f7bd5d39f (>= 2^32: True); W := 15
+{
+ "honest": true,
+ "A1a n3-witness, x4=4": false,
+ "A1b n3-witness, x4=3": false,
+ "A1a mutant nolast": true,
+ "A2a PUB takes FINAL row 2": false,
+ "A2b + la/nl moved to row 2": false,
+ "A3 real layout": false,
+ "A3 mutant selpin": true,
+ "A4 real layout": false,
+ "A4 mutant pairport": true,
+ "A5 real layout": false,
+ "A6 harness b' ^= (1+X^32)*1": true,
+ "A6 harness b' ^= (1+X^32)*2": true,
+ "A6 harness b' ^= (1+X^32)*15": true
+}

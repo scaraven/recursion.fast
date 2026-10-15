@@ -1,0 +1,72 @@
+== F1 (k=20)
+rel: length: True 1 tables, 1 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: True 
+rel: public: True 
+rel: cells: True 35 cells, 2^20 = 1048576
+(L, x, w) in relK 20: True  (0.0 s)
+== F2k6 (k=6)
+rel: length: True 3 tables, 3 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: True 
+rel: public: True 
+rel: cells: True 51 cells, 2^6 = 64
+(L, x, w) in relK 6: False  (0.0 s)
+== F2k5 (k=5)
+rel: length: True 3 tables, 3 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: True 
+rel: public: True 
+rel: cells: False 51 cells, 2^5 = 32
+(L, x, w) in relK 5: False  (0.0 s)
+== F3 (k=6)
+rel: length: True 3 tables, 3 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: False bus 1 (eq): 2 sent, 1 received
+rel: public: True 
+rel: cells: True 51 cells, 2^6 = 64
+(L, x, w) in relK 6: False  (0.0 s)
+== F4 (k=20)
+rel: length: True 1 tables, 1 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: True 
+rel: public: False 
+rel: cells: True 35 cells, 2^20 = 1048576
+(L, x, w) in relK 20: False  (0.0 s)
+== F5 (k=6)
+rel: length: True 3 tables, 3 chips
+rel: fixed: False TAB: height 4 != 3
+rel: gadget: True 
+rel: bus: True 
+rel: public: True 
+rel: cells: True 53 cells, 2^6 = 64
+(L, x, w) in relK 6: False  (0.0 s)
+== F7 (k=20)
+rel: length: True 1 tables, 1 chips
+rel: fixed: True 
+rel: gadget: False P: row 0, constraint 0
+rel: bus: True 
+rel: public: True 
+rel: cells: True 35 cells, 2^20 = 1048576
+(L, x, w) in relK 20: False  (0.0 s)
+== F8 (k=20)
+rel: length: True 1 tables, 1 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: True 
+rel: public: True 
+rel: cells: True 33 cells, 2^20 = 1048576
+(L, x, w) in relK 20: True  (0.0 s)
+== F8n (k=20)
+rel: length: True 1 tables, 1 chips
+rel: fixed: True 
+rel: gadget: True 
+rel: bus: False bus 9 (eq): 1 sent, 2 received
+rel: public: True 
+rel: cells: True 33 cells, 2^20 = 1048576
+(L, x, w) in relK 20: False  (0.0 s)

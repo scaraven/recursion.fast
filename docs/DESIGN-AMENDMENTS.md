@@ -549,3 +549,165 @@ The implemented reference is `harness/gen-chain-layout.py`. Its arithmetisation 
       testing at most `c < 256` candidates per step of each call's fuel, so bit-slicing is
       covered. It covers at most `255·2^56 < 2^64 − 1` candidates; reaching `2^64` would take
       256 per step.
+
+## Stage 5 (recursion and certificates; design §5, §3.3, §11 step 6)
+
+The implemented reference is `RecursionFast/Contract/Recursion.lean` and
+`RecursionFast/Contract/Certificate.lean`; the measurements are `docs/stages/S5-RESULT.md`.
+
+- **S5-A1 (bounded node witnesses; §5.2).** `aggOK` also requires both keys' index roots to be
+  32 bytes (`nw.vkC.2.length = 32 ∧ nw.vkL.2.length = 32`), the check `NARG` makes on the key it
+  uses (S3-A9).
+  - **Why.** In a node whose children are both leaves, `vkC` is constrained only by its digest
+    `d0`. A key's root is a `List UInt8` of any length, so `complete` would ask `C_V` to decode,
+    from a witness of at most `2^k` cells, every `vkC` whose digest is `d0`, including arbitrarily
+    long preimages: an unsatisfiable obligation. With the check, every part of an accepted node is
+    bounded: keys (`vkLen ≤ 2^10` elements and 32 bytes), statements (32 elements), tapes (`≤ tapeCap`,
+    by `NARG`), tags.
+  - **§5.2 draft.** Add "both keys' index roots are 32 bytes" to `aggOK`'s conjuncts.
+- **S5-A2 (finding, for the user: a vacuous recursion-board submission; §5.3, S1-A12(c), S3-A13).**
+  - **Fact.** `Controls/Certificate.lean`, `vacuous_certificate`. The toy protocol (`toy_secure`)
+    sends its message in the clear, `8·2^(k+10)` bytes, beyond `tapeCap`, so `NARG cfg2 (toy 20)`
+    accepts no tape (`toy_narg`) and `aggOK` no node (`toy_aggOK`). Then `complete` is vacuous;
+    with the unsatisfiable layout `unsat` so is `sound`. The result is a `RecursionEntry`, a
+    `SubmissionR` and a `CertificateR` (one chip, zero entries) with no node that can be proved.
+  - **Reading.** This is S1-A12(c)'s residual case: compile completeness (`narg_complete_of_secure`)
+    holds only when the honest tapes fit the cap (S3-A13). The Lean certificate therefore does not
+    show that a node can be proved, nor that `C_V` fits class `k` for any node; the benchmark run
+    does (a node step must produce a verifying proof, §6.3), and such a submission is rejected
+    there.
+  - **Option (for the orchestrator/user).** Add a field `live : ∃ x' nw, aggOK cfg P x' nw = true`
+    to `RecursionEntry`. A real submitter proves it with `aggOK_sat_of_secure`
+    (`Library/Recursion.lean`) from one instance of `relK k` (any small layout), its honest tapes,
+    and a theorem that they fit `tapeCap` (a size bound on its own proof format); no kernel
+    evaluation is needed. Then `complete` makes "`C_V` fits class `k`" non-vacuous for every
+    certified entry. Not applied: the design accepts the benchmark as the backstop (§5.3).
+- **S5-A3 (the certificate; §3.3).**
+  - **Split by board.** `Submission k := {P, cfg, secure}` (board L) and
+    `SubmissionR k extends Submission k` with `entry : RecursionEntry P cfg` (board R; the field
+    is `entry`, not `rec`, which would clash with the recursor `SubmissionR.rec`). `Declared`
+    (`k`, hash, arity) and `DeclaredR` (also the chip count and matrix-entry count of `C_V`, and the
+    two key digests); `Certificate D S` (the configuration is the declared one) and
+    `CertificateR D S` (also the size of `C_V`). The class is pinned by the type `Submission D.k`.
+  - **Cells of `C_V` are not declared.** They depend on the witness and are bounded through
+    `complete` (S1-A6). The declared size is static: chips and matrix entries, certified by
+    evaluation.
+  - **The key digests are declared, not certified.** `D (index cfg P C_V)` commits the index
+    oracle, up to `2^(k+8)` elements: beyond the kernel except for toys (`cmpToy`'s 2-leaf index
+    costs about 3 hashes). The harness computes both digests with the compiled indexer (§6.3
+    step 2, untimed), compares them with the declared ones, and uses them in `rootOK`.
+  - **§3.3 table, last row.** "claim JSON (`k`, `cfg` = hash and arity, chips and matrix entries
+    of `C_V`, the key digests of `C_V` and `L_chain`)".
+  - **Gate (Stage 6b).** The `--computable` table gains `Submission: [P]` (hence `VK`, `IDX`,
+    `verify`, `extractor`) and `RecursionEntry: [decode]`.
+- **S5-A4 (the statement format; §5.1, §5.2).**
+  - **The aggregate statement is a trusted function** `nodeStmt cfg vkC vkL x₁ x₂ =
+    ofSlots [D vkC, D vkL, blake2s256 (x₁ ‖ x₂), 0, 0, 0, 0, 0]` (slots as `digestToSlot`), and
+    `aggOK` is "`x' = nodeStmt …`, 32-byte roots, both children accepted". The harness recomputes
+    the statement tree (§6.3 step 5) with `nodeStmt` and the indexer's keys; such a tree passes
+    `rootOK` (`rootOK_nodeStmt`).
+  - **`d3 … d7 = 0`** is part of the statement (decided): a node statement carries no free bits
+    (`nonzero_d3`).
+  - **`d2` uses `blake2s256` for every `cfg`**, as §5.1 says, not `cfg.hash.run`. The two agree
+    today (`HashId` has one constructor). When the menu grows, decide whether `d2` follows
+    `cfg.hash`, so that a `C_V` needs one hash gadget.
+  - **Tags are not hashed into `d2`.** The organiser fixes the tree shape and recomputes the
+    statements, so a tag is determined by the position. A leaf statement presented as a node
+    child must have `d0`, `d1` equal to the key digests (`node_child_d0`, `node_child_d1`); a node
+    statement presented as a leaf child must satisfy `L_chain`'s public chip (S6-A3: `x₄ = n`,
+    `x₅ … x₃₁ = 0`), while its `d1` holds the four limbs of a digest.
+- **S5-A5 (the root check; §5.1).** `rootOK cfg P C L x` checks `d0`, `d1` against the indexer's
+  keys for `C` and `L` (`index cfg P C`, trusted, `Compile.lean`). With `aggOK` it pins the node's
+  keys (`keys_of_root`: their digests are the indexer's, by `digestToSlot_inj` on 32-byte
+  digests).
+- **S5-A6 (controls; §11 step 6, S1-A12(b)).** As prescribed, on `cmpToy : Protocol 20` (not
+  secure, tiny shapes). There is no positive `RecursionEntry` (§7.3). `aggOK` is shown
+  satisfiable directly (`aggOK_two_leaves`, `aggOK_node_child`) and through compile completeness
+  (`toy_sat_via_complete`, from `aggOK_sat_of_complete`). The general `aggOK_sat_of_secure` has no
+  instance in the repository: the only `Protocol` proved secure, the toy, has tapes beyond the
+  cap.
+  §11 step 6's "a layout that ignores `π₂` cannot satisfy `sound`" is `cbad_not_sound`.
+
+## Stage 5 decision pass (orchestrator, 2026-10-15)
+
+- **S5-A7 (S5-A2 resolved: `RecursionEntry.live`; §5.3).** `RecursionEntry` gets the field
+  `live : ∃ x' nw, aggOK cfg P x' nw = true`: the compiled argument accepts at least one node.
+  Without it `complete` is vacuous for a protocol whose proofs exceed the tape cap. A submitter
+  proves it with `aggOK_sat_of_secure` (`Library/Recursion.lean`) plus a bound on its own proof
+  size.
+  - **Negative control.** `toy_no_entry` (`Controls/Certificate.lean`): the toy, secure but with
+    tapes beyond the cap, has no recursion entry for any layout and decoder; `toy_vacuous_fields`
+    shows that every other field would hold with `unsat`. `toy_no_submissionR`: no `SubmissionR`
+    is built on it. The former `vacuous_certificate` is gone.
+  - **Positive evidence.** No positive `RecursionEntry` exists (§7.3). `live` holds for `cmpToy`
+    (`toy_aggOK_sat`), and `aggOK_sat_of_secure` is the general route.
+  - **§5.3 draft.** Add the field and its docstring; replace "That clause is vacuous if `aggOK cfg P`
+    is never true … The benchmark run is what catches it" by "`live` keeps `complete` (and with it
+    the cell bound) from being vacuous".
+- **S5-A8 (supersedes S5-A4's third bullet; §5.1).** `d2 = digestToSlot (cfg.hash.run (x₁ ‖ x₂))`,
+  the same function as `D` and the sponge, so a recursion circuit needs exactly one hash gadget;
+  the organiser recomputes the statement tree with `cfg.hash`. With the one-element menu
+  (`HashId.blake2s`) nothing changes numerically: the kernel KATs (`nodeStmt_kat`,
+  `nodeStmt_kat_R`) and `probes/s5/recursion_ref.py`'s output are unchanged.
+  - **§5.1 table.** The node row's `d2` becomes `H(x₁ ‖ x₂)`, `H = cfg.hash`.
+- **S5-A9 (for Stage 6b, the harness; §7.4).** The gate's `--computable` table must include
+  `Submission.P` (hence its `VK`, `IDX`, `verify` and `extractor`) and `RecursionEntry.decode`
+  (replacing v0.3's `Submission0/1/2` rows). The renderer pins `DeclaredR`; `digestC`/`digestL`
+  are compared by the harness with the compiled indexer (S5-A3), not proved.
+
+## Stage 6a fix pass (after the S6a review, 2026-10-15)
+
+- **S6-A7 (advice, not a change; S6a review): 4-bit limbs.** Keep the 8-bit `add8` table and the
+  S6-A1 sizes: `n ∈ {2^8, 2^10}` at class 24, `2^12` optional at class 26.
+  - **The floor for byte lookups.** Any arithmetisation whose additions are table lookups needs at
+    least 58 cells per G-call: `6 × (4 result bytes + 3 carries) = 42`, plus 16 operand bytes.
+    With nibbles the floor is `6 × 15 = 90`. Class 24 at `n = 2^12` leaves about 49 cells per
+    G-call, so no byte-or-narrower table fits it.
+  - **What 4-bit limbs would do.** The add table shrinks to `2^9` rows, and the fixed-cell floor
+    from `k = 24` to 16. But each half-G needs 24 lookups, so 4 rows per G-call, and about 16.4 k
+    cells per compression against 9,225.
+
+    | n | now | with 4-bit limbs |
+    |---|---|---|
+    | 2^8 | 24 | 23 |
+    | 2^10 | 24 | 25 |
+    | 2^12 | 26 | 27 |
+
+    It helps only the smallest leaf.
+- **S6-A8 (S6a-M1; replaces S6-A5's description of the kernel control; §7.2 wording).**
+  - **The harness now checks its outputs.** Its public chip `PUBG` decomposes the four output words
+    into bytes checked on `PAIR`, as `FINAL` does in `L_chain`.
+  - **Why.** Without this, `PUBG` accepted `b' ⊕ (1 + X^32)·e` through a wrong rot-7 wrap nibble
+    (the review's `A6_rel_not_mix`, which no longer holds).
+  - **What the kernel control is.**
+    - Completeness of the one-G-call harness on two calls of the chain, one of them with the full
+      `add8` table.
+    - Named single-cell faults, each rejected by the clause it names: gadget `in_A`, the add
+      lookups, `GOUT`.
+    - The wrap attack, rejected only by `PAIR` (`LG0_neg_wrap`, `LG0_wrap_rest`).
+    - `G_link`: the harness's G chip is `L_chain`'s except for the last-row pin's constant.
+    - The admissibility of `L_chain(16)`.
+  - **What it is not.** It does **not** prove that the harness computes `G` (`rel → MixStmt`).
+  - **§7.2 sentence.** "The kernel checks completeness of one G-call of the generated G chip and
+    named faults; soundness is tested by the Python evaluator on whole chains, where the next
+    decomposition range-checks every output, with one layout mutant per mechanism."
+- **S6-A9 (S6a-m4; §6.3 item 1).** The chain's secret start is never a command-line argument.
+  - **Input.** The generator reads it from a file or from stdin (`--secret-file F` / `-`), and the
+    experiments pass it on stdin.
+  - **Witness files are secret material.** A witness file holds `s` in row 0 of `S0`. Stage 7
+    places such files, like the secrets, outside the verifier's sandbox.
+- **S6-A10 (S6a-m2; §7.2 "a mutated layout must admit a wrong witness").** The mutant suite has
+  one mutant per load-bearing mechanism, eight in all: `gate`, `addport`, `nibport`, `gouttag`,
+  `fixed`, `nolast`, `selpin`, `pairport`. The three added in the fix pass:
+  - **`nolast`.** The last-row pins of every tag counter fix the heights. Without them, the
+    `(n−1)`-chain is accepted for `n`.
+  - **`selpin`.** The `0/1` pins of the `MSG` selectors `nf` and `nl` keep the chain unbroken.
+    Without them, the value `X` makes a port silent (S1-A11 (a)), and the chain restarts from a
+    fresh `s'`.
+  - **`pairport`.** `FINAL`'s byte check (S6-A3). Without it, a wrong wrap bit aliases into `y`.
+- **S6-A11 (S6a-m5, m6: sources and schema).**
+  - **The rendered `Lchain`** is `L_chain(16)` from `harness/examples/chain-n16.layout.json`,
+    kept in the repository. `L_chain(n)` depends on `n` only through three constants: the
+    last-row pins of the G chip, `S0 … S19` and `FINAL`, and `x₄ = n`.
+  - **The witness schema has one reading.** `rows` equals the number of listed rows, and K strings
+    are exactly 16 lowercase hex digits. Both the checker and the renderer enforce it.

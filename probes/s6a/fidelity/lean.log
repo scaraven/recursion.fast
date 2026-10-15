@@ -1,0 +1,8 @@
+'RecursionFast.Probe.S6a.A6_rel_not_mix' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Probe.S6a.F1_rel' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Probe.S6a.F2_rel' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Probe.S6a.F8n_clauses' depends on axioms: [propext, Classical.choice, Quot.sound]
+
+real	0m44.944s
+user	0m44.819s
+sys	0m3.148s
