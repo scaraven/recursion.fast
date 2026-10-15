@@ -9,9 +9,11 @@ submission (board L) is a protocol, its configuration and the proof that it is s
 as a circuit at the protocol's own class). Everything else a record states is measured by the
 benchmark run, not proved: wall times, proof sizes, and that every proof of the run verifies.
 
-What is declared is static. The cells of `C_V` depend on the witness, so they are bounded through
-`complete` (S1-A6), not declared; the declared size of `C_V` is its chip count and its number of
-matrix entries (the index size). The key digests `D (index cfg P C_V)` and
+What is declared is static. The extractor image is declared as the literal rendered from the
+submitted files and certified equal to the submission's (S4-A2, S7-A1), so the image `Secure` is
+about carries no expensive Lean term. The cells of `C_V` depend on the witness, so they are
+bounded through `complete` (S1-A6), not declared; the declared size of `C_V` is its chip count
+and its number of matrix entries (the index size). The key digests `D (index cfg P C_V)` and
 `D (index cfg P L_chain(2^10))` are declared for the record but **not certified** (S5-A3):
 committing an index oracle of up to `2^(k+8)` elements is beyond the kernel, so the harness
 computes them with the compiled indexer (untimed indexing, §6.3 step 2) from the submitted `C_V`
@@ -38,7 +40,7 @@ structure SubmissionR (k : ℕ) extends Submission k where
   entry : RecursionEntry P cfg
 
 /-- The **declared claim** of a leaf-board submission (rendered from the claim JSON): the class,
-the hash and the Merkle arity. -/
+the hash, the Merkle arity and the extractor image. -/
 structure Declared where
   /-- The class. -/
   k : ℕ
@@ -46,6 +48,8 @@ structure Declared where
   hash : HashId
   /-- The Merkle arity of the configuration. -/
   arity : ℕ
+  /-- The extractor image, rendered from the submitted files (a literal, S4-A2). -/
+  img : Image
 
 /-- The declared claim of a recursion-board submission: also the chip count and the number of
 matrix entries of `C_V` (certified), and the two key digests (harness-checked, S5-A3). -/
@@ -62,10 +66,13 @@ structure DeclaredR extends Declared where
   digestL : Digest
 
 /-- **A leaf-board certificate**: the submission (at the declared class, by its type) has the
-declared configuration. -/
+declared configuration and the declared extractor image. -/
 structure Certificate (D : Declared) (S : Submission D.k) : Prop where
   /-- The configuration is the declared one. -/
   cfg : S.cfg.hash = D.hash ∧ S.cfg.arity = D.arity
+  /-- The extractor image is the declared one (S4-A2): the image `Secure` is about is the
+  rendered literal. -/
+  img : S.P.extractor.img = D.img
 
 /-- **A recursion-board certificate**: the leaf-board certificate, and `C_V` has the declared chip
 and entry counts. -/

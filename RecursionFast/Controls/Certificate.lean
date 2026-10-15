@@ -3,7 +3,8 @@
 
 * `toy_certificate` (positive): the toy protocol (`Controls/Toy.lean`, secure at every class in
   range) at class 20 with BLAKE2s at arity 2 is a leaf-board submission with a certificate for the
-  declared claim `⟨20, blake2s, 2⟩`; `toy_certificate_arity` (negative): none for arity 4.
+  declared claim `⟨20, blake2s, 2, firstMsgImg⟩`; `toy_certificate_arity` (negative): none for
+  arity 4; `toy_certificate_img` (negative, S7-A1): none for another extractor image.
 * `toy_no_entry` (negative, S5-A2 → S5-A7): the toy's one message is sent in the clear,
   `8·2^30` bytes, beyond the tape cap, so `NARG` accepts no tape (`toy_narg`) and `aggOK` no node
   (`toy_aggOK`). Before S5-A7 this made a vacuous recursion entry: with the unsatisfiable layout
@@ -28,11 +29,17 @@ theorem h20 : 20 ≤ 20 ∧ 20 ≤ 28 := ⟨le_rfl, by decide⟩
 def toySub : Submission 20 := ⟨toy 20 h20, cfg2, toy_secure 20 h20⟩
 
 /-- **Positive**: the toy submission has a certificate for its declared claim. -/
-theorem toy_certificate : Certificate ⟨20, .blake2s, 2⟩ toySub := ⟨⟨rfl, rfl⟩⟩
+theorem toy_certificate : Certificate ⟨20, .blake2s, 2, firstMsgImg⟩ toySub := ⟨⟨rfl, rfl⟩, rfl⟩
 
 /-- No certificate for a claim with another arity. -/
-theorem toy_certificate_arity : ¬ Certificate ⟨20, .blake2s, 4⟩ toySub :=
+theorem toy_certificate_arity : ¬ Certificate ⟨20, .blake2s, 4, firstMsgImg⟩ toySub :=
   fun h => absurd h.cfg.2 (by decide)
+
+/-- No certificate for a claim with another extractor image (S7-A1): here the first code word of
+`firstMsgImg` changed (`addi t1, zero, 1` to `addi t1, zero, 0`), the data words kept. -/
+theorem toy_certificate_img :
+    ¬ Certificate ⟨20, .blake2s, 2, ⟨0x00000313 :: firstMsgImg.code.tail, []⟩⟩ toySub :=
+  fun h => absurd (congrArg Image.code h.img) (by decide)
 
 /-! ## The toy accepts no node, so it has no recursion entry (S5-A2, S5-A7) -/
 

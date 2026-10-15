@@ -857,3 +857,193 @@ library: nothing under `Contract/` changed.
   - `complete`: every accepted node is decoded from a satisfying witness, so every accepted
     statement has a witness of at most `2^k` cells (`decode` may also read cells outside
     `rows × cols`).
+
+## Stage 8 decision pass (2026-10-15; continues "Stage 8" above)
+
+- **S8-A9 (ports cap 2^4 → 2^5; §2.2 table "ports per chip", `Contract/Layout.lean`).**
+  - **The change.** `Chip.Admissible` allows `C.ports.length ≤ 2 ^ 5`. This is one number, and
+    the docstring follows it. The message-length cap stays `2^4` and the bus cap `2^8`.
+  - **Reason.**
+    - leanerVM's BLAKE2s row has **22** bus interactions: 2 state, 2 bytecode, and 9 memory
+      reads, each a pull plus a push.
+    - Stage 6a's G chip had to be split for the same reason.
+    - The index-reading cost grows by at most `16 × 20` words per chip.
+  - **Controls and library.**
+    - `ports_cap` (`Controls/Layout.lean`) now accepts 32 ports and rejects 33.
+    - `Library/Codec.lean`: `eChip_length` is now `≤ 3300 + 3·entries + fixed cells` (ports
+      `≤ 640` words, was 320). `eLayout_length` keeps its `2^(k+8)` bound, so the extractor's
+      image and fuel budgets are unchanged.
+    - No other control mentions the cap. The default build is green (3 min 47 s, after the
+      change).
+  - **For Stage 6b (harness/).** `harness/check-chain.py:201` checks `len(C.ports) <= 2 ** 4`. It
+    must become `2 ** 5` to match.
+  - **For DESIGN.** §2.2's table and §2.3's control list should say `2^5`.
+  - **Result.** With this cap, `toLayout` of the leanerVM table, using the pair map of S8-A11, is
+    admissible at class 24 (and at 20). It has 60 cells per row: 37 row cells and 23 auxiliary
+    cells. The remaining port work is only the `BF64 → K` transport and the compression
+    constraints (S8-A8 (c) and (d)).
+- **S8-A10 (tables; §9.3 "Lookup ⇒ sub bus; ProverData tables ⇒ fixed tables").**
+  - **The decision.**
+    - Static lookup tables become **fixed** tables, part of the index.
+    - `ProverData` tables become **witness** chips: their rows are chosen by the prover and sent
+      on the lookup's `sub` bus.
+  - **Covered by the bridge** (`toLayout_rel_iff`): a `lookup` into a table whose `Contains` is
+    membership in fixed rows for every prover data (`StaticTable`/`Table.fromStatic`;
+    `LookupsFaithful`). Each such table is registered in `tabs` (by name and arity) and becomes a
+    fixed chip.
+  - **Stated gaps:**
+    - **(a) Data-dependent tables.** These are tables whose `Contains` reads `data name arity`.
+      The witness-chip translation would make `toCleanWit` rebuild `data` from those chips'
+      rows and `toLayoutWit` write them out. Estimate: about 250 lines, modelled on the fixed
+      case.
+    - **(b) `StaticLookupChannel`.** It is a channel, not a `lookup`, and today it is translated
+      as an ordinary `eq` channel. Making it a fixed table needs a lookup mode in the channel
+      map, so that its pulls become receives on the table's `sub` bus and the channel's pushes
+      are dropped. That is a semantic choice for `StatementPerm` (membership instead of
+      balance). Until then, write static lookups as `lookup (Table.fromStatic …)`, which is
+      covered.
+- **S8-A11 (channel-to-bus map; §9.3, S8-A5).**
+  - **The map.** `toLayout tabs ens cm` takes `cm : ChannelMap := String → Option (ℕ × Bool)`,
+    with default `ChannelMap.byName = fun _ => none`.
+    - `none`: the channel is its own bus (the index of its name) and the direction comes from
+      `readMult`.
+    - `some (b, s)`: the channel is bus `b` and every interaction on it sends iff `s`. This is
+      leanerVM's pull/push pairs, e.g. `"st.pull" ↦ (0, false)`, `"st.push" ↦ (0, true)`.
+  - **Buses.**
+    - Channel buses lie below `cm.nBus` (the largest mapped bus + 1, over the listed channels)
+      and have kind `eq`.
+    - Lookup bus `j` is `cm.nBus + j`, of kind `sub`.
+  - **`StatementPerm cm` and `BalancedPerm cm`** balance per bus. `balancedPerm_byName_iff`:
+    under the default map with distinct names this is exactly "every channel balances", the
+    S8 reading.
+  - **What changed.**
+    - `Supported` no longer requires distinct names; completeness no longer needs them.
+    - All bridge theorems take `cm`.
+  - **Controls.**
+    - `pair_rel` and `pair_statement`: a pull/push pair is accepted with the map.
+    - `pair_byName_neg`: the same witness is rejected by name, because each side is a
+      one-direction bus.
+- **S8-A12 (CI; for Stage 6b, owner of `scripts/ci.sh`).**
+  - **The step.** Add a separate step after the organiser steps, never in the organiser package:
+    ```sh
+    scripts/setup-clean.sh            # idempotent; first step of any fresh clone (root lakefile requires ext/Clean)
+    lake build RecursionFastClean     # expected: ≈ 4 s warm (no-op); ≈ 4 min cold (39 Clean modules + 6 ours)
+    ```
+    It must print `Build completed successfully`. The two Clean deprecation warnings
+    (`Gadgets/Conditional.lean`) are Clean's.
+  - **The organiser package stays Clean-free.**
+    - `scripts/org-build.sh` drops the `Clean` require, the `RecursionFastClean` lib and Clean's
+      manifest entry.
+    - A full run into a scratch directory, `.lake/org-s8-check`, succeeded (time in
+      S8-RESULT).
+    - **The olean manifest (`scripts/olean-manifest.sha256`) must be regenerated** from a clean
+      organiser build after Stage 6b's changes and this stage's contract change (S8-A9).
+
+## Stage 7 (the trivial baseline `P_triv` as a submission; design §7.3, §11 step 8)
+
+The implemented reference is `submissions/baseline/`; the measurements are `docs/stages/S7-RESULT.md`.
+Nothing under `RecursionFast/` or `scripts/` changed.
+
+- **S7-A1 (the leaf challenge binds the extractor image; §3.3, S4-A2; reconciled with Stage 6b).**
+  - **Problem.** S4-A2 requires the comparator to check `P.extractor.img = rendered`. The trusted
+    `Certificate` has only the configuration conjunct, so the binding lives in the challenge stub.
+  - **What the baseline did.** Stage 6b's stub did not exist yet, so the baseline first proposed
+    a stopgap stub and renderer with
+    ```lean
+    theorem certified : Certificate declared submission ∧ submission.P.extractor.img = extractor
+    ```
+    with `{{hash:KEY}}` and a v2 `{{image:KEY}}` that has no `harts`.
+  - **Reconciliation.** Stage 6b's `RecursionFast/Challenge/L.lean.in` landed with the same
+    statement, the image named `image`, and its renderer has the same placeholders. The baseline
+    now uses them (`claim.json`: `{"k", "hash", "arity", "image": {"code", "data"}}`), and the
+    stopgap is deleted.
+  - **Option left for the orchestrator.** Move the binding into the contract, as
+    `Declared.img : Image` and `Certificate.img : S.P.extractor.img = D.img` (about 2 trusted
+    lines). `CertificateR` inherits it, and the stubs keep a one-conjunct theorem.
+  - **Evidence.** A claim with one image bit flipped, or with arity 4, fails at `certified`
+    (`logs/S7/negative-claims.log`).
+- **S7-A2 (§7.3 wording, O-10: "listed, unranked" is a theorem).**
+  - **§7.3 text to replace.** Replace "It is a valid L entry only if it meets the 128 KiB cap,
+    which it does not at the benchmark sizes" with the following.
+
+    > The compiled `P_triv` accepts no tape at any class (`triv_narg`). Its honest tape has
+    > `5 · 2^(k+11)` bytes on every instance (`triv_uncapped_length`), 160 GiB at `k = 24`.
+    > The witness of `L_chain(2^10)` alone is 78 MiB, 78× the 1 MiB cap and 625× the 128 KiB cap,
+    > so no protocol that sends the witness fits, whatever its shapes. It has no recursion entry
+    > (`triv_no_entry`: `live` fails).
+
+  - **§7.3, the extractor sentence.** "The extractor image copies the tables out of the transcript
+    (well within `B(k)`)" becomes "the 8-instruction image `firstMsgImg` outputs round 0 in place,
+    in 8 steps; the declared split is `![8, 0]` (`trivExtractor_fuel_tight`)".
+- **S7-A3 (S3-A13: who checks the 128 KiB board-L cap; §6.2, §6.5).**
+  - **Proposal.** The benchmark runner checks it on every measured leaf tape: a board-L evaluation
+    with a leaf proof over `2^17` bytes is rejected.
+  - **Why the certificate cannot.** It can state nothing about the native prover's tapes; `NARG`
+    itself enforces only `tapeCap = 2^20`.
+  - **No contract change.**
+- **S7-A4 (the gate's `badgeFields`; §7.4, S5-A9; already done by Stage 6b, uncommitted).**
+  - **What was wrong.** The carried-over `Protocol` row was v0.3's: `[VK, IDX, prover, extractor]`.
+    In v2 `verify` is executed, while `prover` is a specification that may be noncomputable (§3.1).
+  - **Stage 6b's `Gate.lean`** has the v2 rows (`Submission: [P, cfg]`, `Protocol: [n, shape,
+    vkLen, VK, idxShape, IDX, verify, extractor]`, `ExtractorImage: [img]`,
+    `RecursionEntry: [C, decode]`). This item records that the change is needed.
+  - **The baseline passes both gates:** `RecursionFast.Challenge.submission` has compiled code as
+    a whole (`logs/S7/harness-L.log`).
+
+## Stage 7 fix pass (after the S7 review, 2026-10-15)
+
+- **S7-A5 (S7-A1 applied: the extractor image is part of the declared record; §3.3, S4-A2).**
+  **For Stage 6b: three of the edited files are yours.**
+  - **Trusted, `Contract/Certificate.lean`** (25 code lines, was 23):
+    - `Declared` gets `img : Image`, the image rendered from the submitted files;
+    - `Certificate` gets `img : S.P.extractor.img = D.img`;
+    - the header and both docstrings say so.
+
+    `DeclaredR` and `CertificateR` inherit both fields. Adding a field to a `Prop` structure only
+    adds a conjunct, so nothing weakens: the review's `cert'_weakens_nothing` is the extension
+    form of this.
+  - **`RecursionFast/Challenge/L.lean.in` (Stage 6b's).**
+    - Was: `declared : Declared := ⟨{{nat:k}}, {{hash:hash}}, {{nat:arity}}⟩` and
+      `certified : Certificate declared submission ∧ submission.P.extractor.img = image`.
+    - Now: `declared := ⟨{{nat:k}}, {{hash:hash}}, {{nat:arity}}, image⟩` and
+      `certified : Certificate declared submission`.
+    - The header comment mentions S7-A1.
+  - **`RecursionFast/Challenge/R.lean.in` (Stage 6b's).**
+    - `declared` gets `img := image`.
+    - `certified : CertificateR declared submission ∧ submission.entry.C = C`: the image conjunct
+      is gone, since `CertificateR` extends `Certificate`.
+    - The header comment mentions it.
+  - **`scripts/toy-solution.py` (Stage 6b's).** Its two replacement strings follow the stub: the
+    proof `⟨⟨rfl, rfl⟩, rfl⟩`, and the bad variant's `⟨⟨rfl, rfl⟩, sorry⟩`.
+    `audit/Toy{Challenge,Solution,SolutionBad}.lean` are regenerated from it; `toy-claim.json` is
+    unchanged.
+  - **`Controls/Certificate.lean`.**
+    - `toy_certificate` and `toy_certificate_arity` now take the image.
+    - New negative control `toy_certificate_img`: no certificate for an image whose first code
+      word differs.
+  - **Checked:**
+    - `scripts/test-render.sh`: all well-formed claims are accepted and every malformed one
+      rejected (54);
+    - the rendered L, R and Rchain stubs elaborate with only the two `sorry`s;
+    - the toy solution elaborates;
+    - the baseline certificate is `⟨⟨rfl, rfl⟩, rfl⟩`;
+    - the baseline's negative claims (one image bit, arity 4) are rejected;
+    - comparator and gate: see `docs/stages/S7-RESULT.md`, "Fix pass".
+  - **The olean manifest must be regenerated** (a trusted file changed).
+  - **Optional, not applied.** The same pattern for `DeclaredR.C : Layout K` and
+    `CertificateR.layout : S.entry.C = D.C` would move the R stub's last conjunct into the
+    contract too (the review's §6).
+- **S7-A6 (S7-m2, S7-M2: §7.3 wording; amends S7-A2's text).**
+  - **`ε`.** Drop "`ε = 0`" from §7.3. Write instead: "no challenge rounds, so the counting bound
+    `RbrKS` and the cap are vacuous for every `ε`; the knowledge content is the `KSF` and its
+    `next`/`full` laws".
+    - `ε` is a function on an empty type, so `fun _ => 0` and `fun _ => errorCap` are the same
+      protocol.
+    - A starved extractor makes `P_triv` insecure (`split0_not_secure`, now a control in
+      `submissions/baseline`).
+  - **The class.** §7.3/§6.2 should say which class each board needs. The recursion tree's
+    `L_chain(2^10)` needs `k ≥ 24`, and a board-L entry needs the class of its largest leaf layout
+    (26 for `L_chain(2^12)`). The decision is S7-M2's (orchestrator, Stage 6b).
+- **S7-A7 (S7-A3 accepted; §6.5 wording).** The §6.5 row "tape (proof) ≤ 1 MiB (R, W); ≤ 128 KiB
+  (L)" gets the note "1 MiB is checked by `NARG` (`tapeCap`); 128 KiB by the benchmark runner on
+  every measured leaf tape". No certificate field.
