@@ -6,13 +6,15 @@ and decides the relation.
 
 - It is **proved secure at every class `20 ≤ k ≤ 28`**.
 - It is **certified at `k = 24`**, the recursion tree's `k_min` (`L_chain(2^10)` fits class 24).
-  - A board-L entry must declare the class of its largest leaf layout. With the runner's default
-    leaf board `{2^8, 2^12}` that is 26, since `L_chain(2^12)` needs class 26.
-  - A class-24 entry that requests board L fails every default evaluation (S7-M2, open with the
-    orchestrator and Stage 6b).
-- It is **listed, unranked**. The compiled verifier accepts no tape at any class, because the
-  rounds section alone exceeds the tape cap (`triv_narg`). So the entry cannot run the badge path
-  (O-10).
+  The runner rejects a declared `k` below 24 up front.
+  - The default leaf board is `n ∈ {2^8, 2^10}`, both at class 24.
+  - `L_chain(2^12)` needs class 26, and it runs only for an entry declaring `k ≥ 26`; otherwise
+    it is skipped, not failed (S6b-A8, `harness/README.md` "Classes and boards").
+- **Boards.** **R is the only ranked board**. L (`S_leaf`) and W (`S_wrap`) are published and
+  unranked (S9I-M1, S9I-M2; §4).
+- It is **listed, unranked**. It has no recursion entry (`triv_no_entry`), and the compiled
+  verifier accepts no tape at any class, because the rounds section alone exceeds the tape cap
+  (`triv_narg`). So the entry cannot run the badge path (O-10).
 
 This file is written for a submitter.
 
@@ -66,12 +68,25 @@ that output as exactly the tables the verifier checked (`triv_extractMid`).
 | `n`, `n_le` | number of rounds, at most `roundCap = 2^14` | `1` | kernel (`decide`); gate (`n` compiled) |
 | `shape` | the rounds: `msg ⟨logLen, logLeaf⟩` or `chal nE idx` | `msg ⟨k+10, k+10⟩` (one leaf) | kernel; gate (compiled) |
 | `vkLen`, `vkLen_le`, `VK` | the verification key, at most `2^10` elements | `1`; `trivVK` | kernel; gate (`vkLen`, `VK` compiled) |
-| `idxShape`, `IDX` | the index oracle (oracle 0) | `⟨k+8, k+8⟩`; `toOracle (k+8) (eLayout L)` | kernel; gate (compiled) |
+| `idxShape`, `IDX` | the index oracle (oracle 0); see the indexer advice below the table | `⟨k+8, k+8⟩`; `toOracle (k+8) (eLayout L)` | kernel; gate (compiled) |
 | `shape_ok` | the shape caps: messages `logLeaf ≤ logLen ≤ k+10`, index `≤ k+8`, index challenges `≤ 64` bits | at the caps exactly | kernel |
 | `prover` | the honest prover: a Lean specification, never executed, may be noncomputable | sends `eWit L w` | kernel (completeness) |
 | `verify` | the verifier: a query program from `VK L`, `x` and the challenges | `trivVerify` | kernel; gate (compiled) |
 | `extractor` | the extractor image and its fuel split (§3.2) | `trivExtractor k` | kernel; gate (`img` compiled); `Certificate.img` binds `img` to the claim |
 | `ε` | the declared error of each challenge round | `fun _ => 0`, a function on an empty type (no challenge rounds) | kernel (`RbrKS` at `ε`, and `cap`: `ε ≤ 2^-128`) |
+
+**The indexer: do not recompute a precomputation per element** (S9-A10/O-17; first recorded in
+S9-A10, "Submitter trap").
+
+- **The trap.** `IDX L` is read element by element by the trusted `commit`. Lean's compiler
+  eta-expands a definition `Layout K → OVal o` that begins with a `let`, so a precomputation
+  bound by that `let` is redone for every element read. The measured cost is 190 ms per element
+  (`probes/s3/index-bench`).
+- **The remedy.** Keep the precomputation in a structure field (`IdxFn` in that probe), or compute
+  each element directly.
+- **This entry.** `P_triv`'s `IDX L = toOracle (k+8) (eLayout L)` has the same shape, the
+  serialisation `eLayout L` applied per element. It was not measured: this entry never indexes at
+  class size (§6).
 
 **`verify` is executed and timed.** The executed code is what the Lean compiler emits for the
 submission's module. The comparator and the gate check the kernel term of `verify`, not that
@@ -230,7 +245,7 @@ vacuous. A claim with arity 4, or with one image bit flipped, fails to elaborate
 | **Kernel** (Lean, at build time) | Every field above has its type: the caps (`n_le`, `vkLen_le`, `shape_ok`, `img_le`, `fuel_le`, `k_range`), `Secure`, and the certificate's fields. `check.sh` also runs `leanchecker` on the solution's whole closure. The organiser's harness does not. | All pass. Axioms: `propext`, `Classical.choice`, `Quot.sound` only. |
 | **Comparator** (`harness.sh` stage 1, fresh sandboxed tree) | The challenge is built and exported before the solution. `certified` has the challenge's type, the axioms are permitted, and only `submission`'s value may differ (§3.4). The closure of `certified` and `submission` is exported and replayed by nanoda and the Lean kernel. | "Your solution is okay!": nanoda and the Lean kernel accept. |
 | **Gate** (stage 2, second fresh tree, byte-identical build) | Trust is by `.olean` hash. It rejects `sorryAx` and non-standard axioms in the closure, `unsafe`/`partial`/`opaque` constants from untrusted modules, and `implemented_by`/`extern`/`export`/`init`/`csimp` registered by untrusted modules. The badge-path fields must have compiled code: `Submission`: `P`, `cfg`; `Protocol`: `n`, `shape`, `vkLen`, `VK`, `idxShape`, `IDX`, `verify`, `extractor`; `ExtractorImage`: `img`; `SubmissionR`: `toSubmission`, `entry`; `RecursionEntry`: `C`, `decode`. A `submission` with compiled code as a whole passes outright. Otherwise the fields are checked one by one. It does **not** check that compiled code agrees with kernel terms (S7-M1). | PASS: `RecursionFast.Challenge.submission` has compiled code as a whole. |
-| **Benchmark runner** (`harness/run-benchmark.py`, DESIGN §6.2–§6.3) | It indexes the benchmark layouts with the Lean-compiled indexer (untimed, ≤ 1 h). It runs the native prover on each instance and `harness-verify` (`NARG`) on each proof; every proof must verify. Board L is scored on prover + verifier wall time, medians of 3 runs. **The 128 KiB board-L proof cap is enforced here** on every measured leaf tape (S7-A3). `NARG` itself enforces only `tapeCap = 2^20`, and the certificate states nothing about proof sizes. In Stage 6b's current runner, requesting board L also applies the 128 KiB cap to the recursion tree's leaves, and the leaf board's largest layout fixes the class an entry needs (S7-M2). | **Nothing runs.** No tape is accepted (`triv_narg`), and the honest prover writes none (`triv_prove_none`). The entry is listed, unranked. |
+| **Benchmark runner** (`harness/run-benchmark.py`; `harness/README.md`, `harness/reference-machine.md` §4) | It indexes the benchmark layouts with the Lean-compiled indexer (untimed, ≤ 1 h). It runs the native prover on each instance and `harness-verify` (`NARG`) on each proof; every proof must verify. **R is the only ranked board.** Its score `S_rec` is the slowest level group: the max over level 2, level 3 and levels 4–6 (pooled) of the median over runs of the per-run median step time. L (`S_leaf`) and W (`S_wrap`) are published, unranked. Boards are judged separately: a failure only board L depends on rejects only board L. **The 128 KiB board-L proof cap is enforced here** on every measured leaf-board tape (S7-A3). `NARG` itself enforces only `tapeCap = 2^20`, and the certificate states nothing about proof sizes. **Record rule:** a ranked `S_rec` at most `0.97 ×` the standing record's is tentative. It is confirmed by a one-session paired comparison: standing and challenger are interleaved over 5 pairs on one fresh set of instances, and the median ratio must be `≤ 0.97`. | **Nothing runs.** No tape is accepted (`triv_narg`), and the honest prover writes none (`triv_prove_none`). There is no board-R entry (`triv_no_entry`). The entry is listed, unranked. |
 
 ## 5. What is proved, what is declared, what is measured
 
@@ -285,9 +300,13 @@ Shrinking the shapes would not help. On `L_chain(2^10)` at `k = 24` (measured:
 - **The layout** is 792,851 elements (6.0 MiB). It holds the `add8` table too, so adding it to the
   witness counts that table twice.
 - **Witness and layout are 0.05 % of the compiled tape**; the rest is zero padding.
-- **The prover-chosen part alone is 72× the 1 MiB cap and 577× the 128 KiB cap.** Any protocol
-  whose proof contains the witness is excluded, whatever its shapes. This is the role DESIGN §6.2
-  gives the proof-size cap.
+- **The prover-chosen part alone is 72× the 1 MiB cap and 577× the 128 KiB cap.** So any protocol
+  whose proof carries the witness *tables* is excluded, whatever its shapes; that includes
+  `P_triv` and every variant below.
+- **The cap does not exclude a compressed witness** (S9I-M1). The witness of `L_chain(n)` is a
+  function of the 32-byte start `s` (S6-A4). A sound protocol can send `s` and let the verifier
+  recompute the chain: a 64-byte tape. No proof-size cap separates that from a SNARK, which is
+  why board L is published but unranked.
 - **A Merkle variant (a model, `scripts/tape-size.py`).** Take leaves of `2^l` elements, and let an
   adaptive verifier open only the occupied leaves. The minimum over `l` and the arity is 84.5 MiB
   (arity 2; message leaves `2^14`, index leaves `2^13`).
@@ -298,12 +317,15 @@ Shrinking the shapes would not help. On `L_chain(2^10)` at `k = 24` (measured:
 hashing its one leaf, and building that leaf is already infeasible:
 
 - `IDX L = toOracle (k+8) (eLayout L) = fun p => (eLayout L).getD p 0`;
-- `Oracle.leaf` builds the leaf with `List.ofFn` over all `2^(k+8)` positions.
+- `Oracle.leaf` builds the leaf with `List.ofFn` over all `2^(k+8)` positions;
+- the sparse `commit` (S9-A10) skips only all-zero leaves, and `P_triv`'s index is a single leaf
+  that is not all zero.
 
 At `k = 24` there are `2^32` lookups. Every lookup past the end walks the whole 792,851-element
 list. That is `3.4 · 10^15 ≈ 2^51.6` list steps before any hashing, beyond the 1 h indexing
 budget at any plausible speed. The review's "about `2^63`" assumed lookups that walk `p` steps.
-`scripts/tape-size.py` prints this count.
+`scripts/tape-size.py` prints this count. If the compiler also recomputes `eLayout L` per element
+(the trap above), each lookup additionally rebuilds the whole serialisation.
 
 ## 7. The extractor budget split
 
@@ -338,14 +360,17 @@ informative declaration.
 
 ## 8. Measurements
 
-From `scripts/check.sh` and its harness run; logs are in `logs/S7/`.
+The latest run is `scripts/check.sh` with `HARNESS=1` on a **fresh clone**. It uses the clone's
+organiser package (`.lake/org`) and the committed manifest `scripts/olean-manifest.sha256`. The
+output is in `logs/S9/fresh/out-6-baseline.log` and `time-6-baseline.txt`. Local runs write
+`logs/S7/`.
 
 | Item | Result |
 |---|---|
-| `lake build RecursionFastCandidate` (its 5 modules; contract and library warm) | 19.8 s wall, 2.7 GB (`build-candidate.log`) |
-| `scripts/check.sh` with `HARNESS=1` | 6 min 22 s, CHECK OK (`check.log`) |
-| Production harness (`scripts/harness.sh`: comparator with nanoda and the Lean kernel, then the gate) on a private organiser build | **HARNESS: ACCEPT**, 293 s wall, 3.5 GB; comparator (nanoda and the Lean kernel) 203 s; gate PASS (Stage 6b's v2 gate) (`harness-L.log`) |
-| `leanchecker BaselineSolution` | OK, 24 s, 2.3 GB (`leanchecker.log`) |
+| `lake build RecursionFastCandidate` (its 5 modules; contract and library warm) | 19.4 s wall, 2.7 GB |
+| `scripts/check.sh` with `HARNESS=1` | 5 min 54 s, 3.5 GB peak, CHECK OK |
+| Production harness (`scripts/harness.sh`: comparator with nanoda and the Lean kernel, then the gate) | **HARNESS: ACCEPT**, 268 s wall, 3.5 GB. Comparator (nanoda and the Lean kernel) 195 s. Gate PASS: closure of 23,836 constants, standard axioms. |
+| `leanchecker BaselineSolution` | OK, 22.7 s, 2.3 GB |
 | Axioms of every theorem of the package, and of `certified` | within `[propext, Classical.choice, Quot.sound]` (`axioms.log`) |
 | Hygiene (no `sorry`/`admit`/`native_decide`/`implemented_by`/`extern`/`csimp`/`axiom`/`noncomputable`) | OK (`hygiene.log`) |
 | Size (`scripts/loc.py`) | 231 code lines, 21 theorems: `Protocol` 111, `Compiled` 53, `Negative` 33, `Submission` 14, root 4, solution 16 (`loc.log`) |

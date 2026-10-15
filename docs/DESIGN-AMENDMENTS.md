@@ -1,5 +1,7 @@
 # DESIGN amendments (for the orchestrator to patch into `docs/DESIGN.md`)
 
+All items up to S9-A44 were applied to docs/DESIGN.md on 2026-10-15.
+
 All items up to S6b-A26 were applied to docs/DESIGN.md on 2026-10-15.
 
 Items up to S8-A19 (and S1-A8..A13) were applied to docs/DESIGN.md on 2026-10-15.

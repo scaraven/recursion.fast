@@ -42,9 +42,16 @@ Two constraints hold whatever the file format:
 - Witness material (the secret start `s`) is visible only in its own leaf step's directory, never
   in the verifier's sandbox (S6-A9).
 
-**Size.** `|tape| ≤ 2^20` bytes for `NARG` and on boards R and W. On board L every leaf proof must
-also be `≤ 2^17` bytes. The benchmark runner enforces that on every measured leaf tape (DESIGN §6.2,
-S7-A3); neither `NARG` nor the certificate does.
+**Size.** `|tape| ≤ 2^20` bytes for `NARG` and on boards R and W.
+
+- On board L, which is published and unranked, every leaf-board proof must also be `≤ 2^17`
+  bytes. The benchmark runner enforces that (S7-A3); neither `NARG` nor the certificate does.
+  A failure there rejects only board L.
+- **R is the only ranked board** (`S_rec`, `harness/README.md`).
+  - What is ranked is the node prover plus the verifier on its output, at levels ≥ 2.
+  - Leaf and wrap proofs must still succeed within budget; they are published, not ranked.
+  - The leaf prover is handed the chain's 32-byte start `s` and generates the witness tables from
+    it inside its timed region.
 
 ## The tape grammar (authoritative: the header of `Contract/Compile.lean`)
 

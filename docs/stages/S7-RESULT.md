@@ -302,3 +302,38 @@ states nothing about proof sizes.
   says so wherever it mentions the executed verifier.
 - **S7-M2 (orchestrator, Stage 6b).** The class each board needs, and whether boards L and R are
   separate evaluations. The README states the current facts.
+
+## S9 README pass (2026-10-15)
+
+**Inputs.**
+
+- `docs/reviews/S9-incentives.md`, S9I-m6.
+- The compile owner's S9-A10/O-17: the `IDX` `let` trap, first recorded in S9-A10, "Submitter
+  trap".
+- The board change: R is the only ranked board, `S_rec` is the slowest level group, and the record
+  rule is a paired confirmation (`harness/README.md`, `harness/reference-machine.md` §4).
+
+Only `submissions/baseline/README.md` and `prover/README.md` were edited. Nothing is committed.
+
+**Changes to `README.md`.**
+
+| Where | Change |
+|---|---|
+| Intro | The stale default leaf board `{2^8, 2^12}` and "a class-24 entry that requests board L fails every default evaluation" (S9I-m6) are replaced by the current facts. The leaf board is `{2^8, 2^10}` at class 24; `2^12` runs only at `k ≥ 26` and is otherwise skipped; a `k` below 24 is rejected up front. New bullet: **R is the only ranked board**, L and W are published and unranked. "Listed, unranked" now also cites `triv_no_entry`. |
+| §3.1 | New paragraph "The indexer: do not recompute a precomputation per element" (S9-A10/O-17). It covers the trap (a `let` at the head of `IDX` is redone per element read, 190 ms per element measured) and the remedy (a structure field, or computing elements directly). It notes that `P_triv`'s `IDX` has that shape, unmeasured because it never indexes at class size. |
+| §4, runner row | The board change: R alone ranked, with `S_rec` the max over level groups (2, 3, 4–6 pooled) of medians. L and W are unranked, and boards are judged separately. The 128 KiB cap applies to leaf-board tapes. The record rule: screening at `0.97 ×`, then a one-session paired confirmation, 5 interleaved pairs, median ratio `≤ 0.97`. The stale S7-M2 sentences are gone. |
+| §6 | "Any protocol whose proof contains the witness is excluded … the role DESIGN §6.2 gives the proof-size cap" (S9I-m6) is narrowed to proofs carrying the witness *tables*. A bullet adds that the cap does not exclude the compressed witness (`s`, 64-byte tape; S9I-M1), which is why L is unranked. The indexer paragraph notes that the sparse `commit` (S9-A10) does not help a single non-zero leaf, and that the `let` trap would add per-lookup recomputation. |
+| §8 | The numbers come from the fresh-clone run (`logs/S9/fresh/out-6-baseline.log`, `time-6-baseline.txt`), on the clone's organiser package and the committed manifest: candidate 19.4 s; `check.sh` 5 min 54 s, 3.5 GB, CHECK OK; HARNESS: ACCEPT, 268 s; comparator 195 s; gate PASS, closure 23,836 constants; `leanchecker` 22.7 s. |
+
+**Changes to `prover/README.md`.** The size paragraph now says that board L is published and
+unranked and that a cap failure rejects only board L. It also says that R is the only ranked board
+(node prover plus verifier, levels ≥ 2), and that the leaf prover generates the tables from `s`
+inside its timed region.
+
+**Consistency.** Every number in both files agrees with `logs/S9/fresh/out-6-baseline.log`:
+
+- the tape table, 160 GiB at `k = 24`;
+- 78.1 / 72.1 MiB, 72× / 577×, 84.5 MiB, 89.2–104.6 MiB;
+- `2^51.6` list steps;
+- 231 code lines and 21 theorems;
+- the 21 axiom lines.
