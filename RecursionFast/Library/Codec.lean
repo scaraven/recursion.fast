@@ -390,15 +390,15 @@ private theorem eGadget_length {w : ℕ} (g : Gadget K w) :
     Finset.sum_congr rfl fun _ _ => Nat.mul_comm _ _
   omega
 
-/-- A chip's serialisation is at most `3000 + 3·entries + fixed cells` long. -/
+/-- A chip's serialisation is at most `3300 + 3·entries + fixed cells` long. -/
 theorem eChip_length (C : Chip K) (hC : C.Admissible) :
-    (eChip C).length ≤ 3000 + 3 * C.entries + C.fixedCells := by
+    (eChip C).length ≤ 3300 + 3 * C.entries + C.fixedCells := by
   obtain ⟨h1, h2, h3, h4, h5, hdeg, h7, hports⟩ := hC
   have hS : (List.ofFn fun s => 1 + (C.gadget.S s).length).sum ≤ 2304 := by
     have := List.sum_le_length_nsmul (List.ofFn fun s => 1 + (C.gadget.S s).length) 9
       (fun x hx => by obtain ⟨s, rfl⟩ := List.mem_ofFn.mp hx; have := hdeg s; omega)
     simp only [List.length_ofFn, smul_eq_mul] at this; omega
-  have hP : ((C.ports.map ePort).map List.length).sum ≤ 320 := by
+  have hP : ((C.ports.map ePort).map List.length).sum ≤ 640 := by
     have := List.sum_le_length_nsmul ((C.ports.map ePort).map List.length) 20 (fun x hx => by
       simp only [List.map_map, List.mem_map, Function.comp_apply] at hx
       obtain ⟨p, hp, rfl⟩ := hx
@@ -417,7 +417,7 @@ theorem eLayout_length {k : ℕ} (hk : 20 ≤ k) {L : Layout K} (h : L.Admissibl
     (eLayout L).length ≤ 2 ^ (k + 8) := by
   obtain ⟨hlen, -, hent, hfix, hchips⟩ := h
   have hsum : ((L.chips.map eChip).map List.length).sum ≤
-      3000 * L.chips.length + 3 * (L.chips.map Chip.entries).sum +
+      3300 * L.chips.length + 3 * (L.chips.map Chip.entries).sum +
         (L.chips.map Chip.fixedCells).sum := by
     rw [List.map_map]
     refine le_trans (List.sum_le_sum (fun C hC => eChip_length C (hchips C hC))) ?_

@@ -715,7 +715,7 @@ The implemented reference is `RecursionFast/Contract/Recursion.lean` and
 ## Stage 8 (Clean as the untrusted circuit frontend; design §9.3, §11 step 9)
 
 Details and measurements are in `docs/stages/S8-RESULT.md`. Every item concerns the untrusted
-library: nothing under `Contract/` changed.
+library, except S8-A9 (decision pass), which changes one number in `Contract/Layout.lean`.
 
 - **S8-A1 (location and build; §9.3, §10, O-4).**
   - **Location.** The frontend lives in `RecursionFast/Clean/`, in the lean_lib
@@ -736,11 +736,14 @@ library: nothing under `Contract/` changed.
     (`pubVec_injective`), and `StatementPerm ens p ↔ ∃ k w, rel k (pubVec p) w`
     (`statementPerm_iff`). With more elements the bridge still holds, but only the first 32 are
     statement; the rest are witness.
-- **S8-A3 (direction from the syntax; §9.3 "mult = ±1 ⇒ send/receive").**
-  - **Rule.** The direction of an interaction comes from its multiplicity as written
-    (`readMult`), never from its value: in `K`, `-1 = 1`. The multiplicity `(-1) · e` (Clean's
-    `Neg`: `pull`, `pulledIf`) receives with selector `e`; any other `e` (`push`, `pushedIf`,
-    `emit`) sends with selector `e`.
+- **S8-A3 (direction from Clean's constructors; §9.3 "mult = ±1 ⇒ send/receive"; rule
+  amended by S8-A14).**
+  - **Rule.** The direction of an interaction comes from the constructor that wrote it
+    (`readMult`), never from a value: in `K`, `-1 = 1`.
+    - `pull` and `pulled(If)` set `assumeGuarantees` and write `(-1) · e`: they receive with
+      selector `e`.
+    - `push`, `pushed(If)` and `emit` send with the multiplicity as selector.
+    - Any other shape is rejected by `Supported` (`ShapeOK`).
   - **Counting.** A message counts once in ℕ when its selector evaluates to `1`; otherwise it is
     silent, as `Table.msgs` reads a selector cell.
   - **Consequence.** A variable multiplicity meant as a count (LogUp's `emit m`) is not `m`
@@ -760,11 +763,15 @@ library: nothing under `Contract/` changed.
     every auxiliary message expression has `degreeBound ≤ 8`.
   - **Auxiliary columns.** A message coordinate or selector that is not a row variable gets an
     auxiliary column constrained to equal it.
-- **S8-A5 (channels; §9.3).**
+- **S8-A5 (channels; §9.3; corrected by S8-A13).**
   - **Names.** A channel is its name, as in leanerVM: Clean's `RawChannel` carries propositions
-    and has no decidable equality. Bus `b < nch` is `ens.channels[b]` (kind `eq`).
-  - **Completeness** needs distinct names (`Supported`). Interactions on unlisted channels
-    produce no port, since Clean balances listed channels only.
+    and has no decidable equality. By default, bus `b` is the `b`-th listed name (kind `eq`).
+  - **Interactions whose channel's name is not listed** produce no port.
+  - **Not "nothing" in general.** An interaction on an unlisted `RawChannel` that shares a
+    listed name is on that name's bus, and listed channels that share a name share a bus.
+    Clean filters by `RawChannel` instead.
+  - **Exactness** holds under `ChannelsByName` (S8-A13).
+  - **Superseded wording.** "Completeness needs distinct names" no longer holds (S8-A11).
 - **S8-A6 (lookups; §9.3 "Lookup ⇒ sub bus; ProverData tables ⇒ fixed tables").**
   - **Static tables.** A lookup into a table registered in `tabs` (by name and arity) receives
     on a `sub` bus. A fixed chip holding the table's rows sends them on it.
@@ -1047,3 +1054,273 @@ Nothing under `RecursionFast/` or `scripts/` changed.
 - **S7-A7 (S7-A3 accepted; §6.5 wording).** The §6.5 row "tape (proof) ≤ 1 MiB (R, W); ≤ 128 KiB
   (L)" gets the note "1 MiB is checked by `NARG` (`tapeCap`); 128 KiB by the benchmark runner on
   every measured leaf tape". No certificate field.
+
+## Stage 6b (the harness: gate, challenges, badge executables, benchmark runner; design §3.3, §6.3–§6.5, §7.4, §11 step 7)
+
+The implemented reference is `scripts/` (gate, renderer, harness, CI), `RecursionFast/Challenge/`,
+`harness/lean/`, `harness/smoke/` and `harness/run-benchmark.py`; usage is `harness/README.md`, the
+results `docs/stages/S6b-RESULT.md`, the measurement policy `harness/reference-machine.md`. Items
+are `S6b-A<i>` (Stage 6a's are `S6-A1 … S6-A11`).
+
+- **S6b-A1 (gate rule 4: the v2 badge-path fields; §3.3, §7.4; S5-A9, S7-A4).** `badgeFields` is
+  `Submission: [P, cfg]`, `SubmissionR: [toSubmission, entry]`, `Protocol: [n, shape, vkLen, VK,
+  idxShape, IDX, verify, extractor]`, `ExtractorImage: [img]`, `RecursionEntry: [C, decode]`; the
+  v0.3 rows (`Submission0/1/2`, `Accumulation`, `Reduction`, `Protocol.prover`) are gone.
+  - **Wider than S5-A9 / S7-A4:** `n`, `shape`, `vkLen`, `idxShape` too. The executed `NARG` reads
+    the round shapes and the key length, `index` the index shape; a noncomputable one would pass
+    the gate and fail only at the badge build.
+  - **Not required:** `prover` (v2 never executes the Lean prover), `ε`, the image's `fuel`
+    split, every proof (`secure`, `fits`, `sound`, `complete`, `live`), the bounds.
+  - **Controls** (`probes/s6b/gate/GateV2.lean`, CI step 8): `ε := errorCap`, a noncomputable
+    prover, a noncomputable fuel split and a board-R submission pass; a noncomputable `IDX`, `VK`,
+    `verify`, image, `decode` or `C` is each rejected at exactly its path.
+- **S6b-A2 (S7-M1: the executed code and the gate; §7.4, §8). Gate rules 3, 6, 7.**
+  - **The finding** (S7 review). A submission can replace the code Lean *emits* for one of its
+    definitions from an elaboration-time metaprogram (`run_meta … saveImpureDeclCore`), without
+    any attribute and without leaving a declaration; the kernel sees the honest definition, the
+    linked executable runs another. A second route is a `@[cpass]` compiler-pass installer.
+  - **Rule 3** now also rejects, in untrusted modules, `@[cpass]` and `@[computed_field]` entries;
+    the docstring enumerates every Lean 4.34 attribute with an effect on compiled code
+    (`implemented_by`, `extern`, `export`, `init`/`builtin_init` with every `initialize`,
+    `register_simp_attr`, `register_option`; `csimp`; `cpass`; `computed_field`; `tagged_return`
+    qualifies only `extern`) and the semantics-preserving ones it allows (`inline`, `noinline`,
+    `macro_inline`, `specialize`, `never_extract`, `unbox`).
+  - **Rule 6 (new; binding; `--allowed-imports FILE`).** An untrusted module may import only
+    untrusted modules and modules of `scripts/import-allowlist.txt`: the import closure of
+    `Mathlib`, `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls` (10,820
+    modules; written by `gate --closure` in `scripts/org-build.sh`, checked current by CI). It
+    excludes `Lean` and `Lean.Compiler.LCNF.PhaseExt` (where `impureExt` and `saveImpureDeclCore`
+    live), which no allowed module imports. **Allowed imports, exactly:** Mathlib (any module),
+    the contract, the organiser library and controls, the submission's own modules (and, once
+    pinned, Clean: S6b-A11).
+  - **Rule 7 (new).** No *definition* of an untrusted module refers to a non-theorem constant of
+    the compiler or the environment (`Lean.Elab`, `Lean.Compiler`, `Lean.IR`, `Lean.Meta`,
+    `Lean.Environment`, `Lean.Kernel`, `Lean.Core`, the environment-extension types,
+    `Lean.modifyEnv`, `Lean.setEnv`, `Lean.persistentEnvExtensionsRef`, `Lean.envExtensionsRef`,
+    `Lean.addDecl`, `Lean.compileDecl(s)`, `unsafeCast`): a submission defines no elaborator,
+    tactic, compiler pass or environment manipulation (macros, notation, `syntax` are fine).
+  - **Controls** (CI step 8): the S7 forgery (`probes/s6b/gate/Forge.lean`, a copy of
+    `probes/s7/ForgeGate.lean`) is rejected by rule 6, and the gate without rule 6 still passes it
+    (rule 7 cannot see a `run_meta`); the `@[cpass]` installer (`Cpass.lean`) by rules 3, 6 and 7;
+    the forgery with every allowed root imported (`ForgeNoLean.lean`) does not elaborate
+    (`Unknown identifier impureExt.getState`).
+  - **Trust statement for DESIGN §8** (to add under the trusted base): "The executed verifier and
+    indexer are the code Lean's compiler emitted for the submission while elaborating it, linked
+    with the organiser's. The gate binds that code to the kernel terms only indirectly: no
+    attribute substitutes or changes compiled code (rule 3); the submission imports nothing the
+    organiser's own libraries do not (rule 6), so the compiler's code-emission state
+    (`Lean.Compiler.LCNF.PhaseExt`) is out of its reach; none of its definitions uses the
+    compiler's or the environment's API (rule 7). Not excluded: elaboration-time code that
+    reaches the compiler's state through raw extension access (`persistentEnvExtensionsRef`,
+    `unsafeCast` and re-declared types), or that corrupts the stored IR signatures
+    (`Lean.Compiler.IR.CompilerM` is in Mathlib's closure). These would need deliberate
+    memory-level forgery; closing them is S6b-A3."
+- **S6b-A3 (proposal, not implemented: kernel-regenerated badge code; S7-M1 option (c)).** The
+  sound fix: the badge executables never link a submission object. An organiser process imports
+  the trusted modules only, re-adds the kernel declarations of the badge-path closure of the
+  submission (definitions, theorems they need, inductive types with their auxiliary
+  constructions), compiles them from their kernel terms (structural recursion through the
+  kernel-checked unfolding equation `f.eq_def` with a direct-recursive implementation, since the
+  compiler cannot compile `brecOn`; matchers and projections from their kernel values, never the
+  submission's matcher or specialisation caches), writes the result as an `.olean` and a `.c`, and
+  links the executable from those and the trusted objects. Obstacles measured or found: a linked
+  submission object would run its initialiser before `main` (so even recompiled copies inside the
+  main module are not enough); `brecOn` is not compilable (`Failed to find LCNF signature for
+  Nat.brecOn`), well-founded recursion is; Lake cannot build a module without source, so the link
+  is manual. **Estimate: 2–3 days with a review. Decision needed** (orchestrator): adopt as a
+  Stage 6c, or accept the residual of S6b-A2.
+- **S6b-A4 (the executable twin; §3.2 "the executed verifier is `NARG cfg P` compiled").** A
+  submission is noncomputable as a whole whenever its `ε` is a real (always, in practice), and
+  Lean cannot compile a `main` that refers to it. The badge executables therefore run on the
+  twin (`harness_twin`, `harness/lean/RecursionFastHarness/Twin.lean`): the submission's own
+  field terms for everything `NARG` and `index` read, executable placeholders for the prover,
+  extractor and errors. The generated main module states, and the kernel checks by `rfl` when it
+  is built, `NARG cfg' P' = NARG S.cfg S.P` and `index cfg' P' = index S.cfg S.P`.
+- **S6b-A5 (finding and fix: `Library/Field.lean`'s `Fintype K`, `Fintype E` are noncomputable).**
+  As computable instances they are closed terms, which a compiled executable evaluates when it
+  initialises the module: `2^64` (and `2^192`) elements, out of memory after 18 s. Every
+  executable importing `Library.Field` (through `Challenges`, `RbrSound`, `Compile`, `Recursion`:
+  any realistic submission) died at start-up. Nothing executes them; the library, controls and
+  bridge build unchanged. `harness-linkcheck` (built and run by `scripts/org-build.sh`) catches
+  any organiser module that is expensive to initialise (start-up 0.07 s for all of them).
+- **S6b-A6 (challenge stubs; S4-A2, S7-A1/S7-A5).** `RecursionFast/Challenge/L.lean.in`:
+  `{{image:image}}`, `declared : Declared := ⟨k, hash, arity, image⟩`, `submission : Submission
+  declared.k`, `certified : Certificate declared submission`. `R.lean.in`: also `{{layout:C}}`,
+  `DeclaredR` with `img`, `C.chips`, `C.entries`, `digestC`, `digestL`, and
+  `certified : CertificateR declared submission ∧ submission.entry.C = C`.
+  - **Renderer.** New placeholders `{{hash:K}}` (menu `blake2s`), `{{digest:K}}` (64 lowercase hex
+    → `List UInt8`), `{{layout:K}}` (a confined path to a layout JSON, validated so that no `Fin`
+    literal wraps, rendered by `harness/render-layout.py`'s emitter, informational strings
+    dropped); `{{image:K}}` without `harts`; no float, NaN or duplicate key anywhere;
+    `C.chips`/`C.entries` must match the layout. 54 malformed claims rejected (`test-render.sh`).
+- **S6b-A7 (the key digests; S5-A13).** The badge `index` reads the claim's layout JSON with
+  `RecursionFastHarness.LayoutJson`; CI cross-checks it against the renderer on every layout of
+  `harness/examples/` through `Layout.words` (and a changed literal is detected). The runner
+  compares the declared `digestC`, `digestL` with the indexer's digests of `C_V` and
+  `L_chain(tree.n)` and uses only its own keys. Controls (CI step 10): one flipped bit of
+  `digestC`; a `digestL` that is the digest of `L_chain(16)` (on `keyed`, a smoke protocol whose
+  key depends on the layout; with `cmpToy` the two digests coincide).
+- **S6b-A8 (classes and boards; §6.2, §6.3; S6-A1, S7-M2, S7-A6).** The runner takes the declared
+  class `k`. Below the class of `L_chain(tree.n)` (24 for `2^10`) it rejects up front. The leaf
+  board is `n ∈ {2^8, 2^10}` at class 24 by default (the 64 tree chains are its `2^10` instances,
+  plus 16 chains of `2^8`); `L_chain(2^12)` (class 26) runs only at `k ≥ 26`, otherwise it is
+  skipped, not failed. Boards are judged separately: a failure only board L depends on (a
+  leaf-board chain, the `2^17`-byte cap, S7-A3) rejects board L; one only the tree depends on
+  (`C_V`'s key, the digests, a step, the root) rejects boards R and W; anything shared (a tree
+  chain's leaf, indexing `L_chain`, the budget, the DoS column) rejects all. `S_leaf` is the
+  median over the run's leaf chains (per-`n` medians beside it), `S_wrap` over the level-1 steps,
+  `S_rec` over the steps of levels ≥ 2, each the median of the per-run medians; the three runs of
+  an evaluation reuse its instances.
+- **S6b-A9 (the prover interface; §3.2, §6.3; for the baseline's `submissions/baseline/prover/
+  README.md`).** The runner calls `PROVER... leaf|node` (the mode is the **last** argument) in a
+  fresh step directory, the only writable path, with no network and the run directory and the
+  secrets hidden; it must write `proof.bin`.
+  - `leaf`: `layout.json` (`L_chain(n)`, schema `recursion.fast/layout/1`), `vkc.bin` (the leaf
+    key bytes from the organiser's indexer: `8·vkLen` bytes of `VK L`, then the 32-byte index
+    root), `stmt.bin` (256 bytes, 32 elements little-endian), `secret.hex` (the chain's start `s`,
+    64 hex digits and a newline), and `witness.json` (the tables) only with `"witness": "full"`.
+  - `node`: `layout.json` (`C_V`), `vkc.bin` = `vkC.bin` (the recursion key), `vkL.bin`,
+    `stmt.bin` (the aggregate statement `nodeStmt`, computed by the runner), `child1.stmt`,
+    `child1.proof`, `child1.tag` (`leaf` or `node`), and the same for `child2`.
+  - **Proposal (decision needed):** `s` as the witness interface. The witness of `L_chain(2^10)`
+    is 10.2 M cells (78 MiB binary, S7; several hundred MB as JSON); the tables are a function of
+    `s` (S6-A4).
+- **S6b-A10 (the smoke protocol is not a `Submission`; O-10).** The badge path is smoke-tested on
+  `cmpToy` (not secure). A `Submission` needs `secure : P.Secure`, which `cmpToy` does not have,
+  so `harness/smoke/RecursionFastSmoke.lean` defines `SmokeSubmission` (fields `P`, `cfg` only,
+  what the executables read) instead of a `sorry`-backed `Submission`.
+- **S6b-A11 (finding: Clean is not usable by a submission yet; §9.3, S8-A1).** Clean's modules
+  register `[init]` entries (`register_simp_attr circuit_norm`, …, in
+  `Clean.Circuit.SimpGadget`), and Clean is neither in the organiser package nor in the olean
+  manifest, so gate rule 3 rejects any submission importing it (measured: 6 rejections on
+  `RecursionFast.Clean.FiniteField`), and rule 6 rejects its imports. **Decision needed:** pin
+  Clean `42fe4b26` as a package of the pinned class (manifest + `Gate.lean`'s `pinnedPackages`)
+  and add `RecursionFast.Clean` to the allowlist roots, or keep board-R circuits Clean-free.
+- **S6b-A12 (measurement; §6.4).** Timed region: spawn to exit (`perf_counter_ns` around a
+  blocking `wait4`), through the sandbox; inputs copied into a fresh step directory; the run
+  directory and the secrets hidden (`bwrap-landrun.sh --hide`, new). Peak memory by GNU time
+  inside the sandbox (bwrap's PID namespace hides the process tree from `wait4`); production
+  should add a cgroup `memory.max`. Process start-up is inside the timed region: 0.07–0.1 s for a
+  Lean executable. `harness/reference-machine.md`: the reference SKU must expose carry-less
+  multiply (this development VM has neither `pclmulqdq` nor `gfni`).
+- **S6b-A13 (object files; §7.4 step 3).** The gate tree links the badge executables with the
+  organiser package read-only, so `scripts/org-build.sh` prebuilds every object file of the
+  organiser libraries' import closure (`harness-linkcheck`). A submission importing a module
+  outside it (another Mathlib module, CompPoly beyond the library's) fails at stage 3a until the
+  organiser prebuilds those objects (e.g. `lake build Mathlib:static`, once per machine).
+  **Decision needed:** prebuild all of Mathlib's objects, or document the closure.
+- **S6b-A14 (harness and CI; S8-A12).** `scripts/harness.sh` requires `--org` (the repository
+  root requires Clean and holds submissions, so it is no organiser package) and passes
+  `--allowed-imports` to the gate by default. `scripts/ci.sh` adds `scripts/setup-clean.sh &&
+  lake build RecursionFastClean` and an axiom audit of `RecursionFast.Clean*`
+  (`probes/s6b/AxiomAuditClean.lean`), never in the organiser package. `harness/check-chain.py`
+  and `harness/CHAIN-LAYOUT.md` follow S8-A9's ports cap `2^5`.
+
+## Stage 8 fix pass (after the S8 review, 2026-10-15)
+
+- **S8-A13 (S8-M1: channels are names; corrects S8-A5).**
+  - **The problem.** A channel is identified by its **name**:
+    - an interaction on an unlisted `RawChannel` that shares a listed name is counted on that
+      name's bus;
+    - listed channels sharing a name share a bus.
+    Clean's `BalancedChannels` filters by `RawChannel` equality instead.
+  - **The fix: a stated hypothesis.**
+    `ChannelsByName ens := (chNames ens).Nodup ∧ ∀ c ∈ ens.allTables,
+    ∀ i ∈ c.rowOperations.interactions, i.channel.name ∈ chNames ens → i.channel ∈ ens.channels`.
+    It is not decidable; prove it per ensemble (`fibK_channelsByName`).
+  - **What it gives.**
+    - `balancedPerm_byName_iff_raw`: under the hypothesis, the default map's balance is the
+      per-`RawChannel` ℕ-balance (`BalancedRaw`, Clean's own filter).
+    - `statementPerm_byName_iff_raw`: `StatementPerm ChannelMap.byName ens x ↔
+      StatementRaw ens x`. `StatementRaw` is Clean's `Ensemble.Statement` with
+      `BalancedChannels` replaced by that ℕ-balance.
+    - The bridge carries the hypothesis in `toLayout_rel_iff_raw` and `statementRaw_iff`. The
+      general `toLayout_rel_iff` and `statementPerm_iff` (any map, name semantics) do not need
+      it.
+  - **Why it is needed.** Without it the two statements differ both ways, kernel-checked:
+    - `Names.name_merge_weakens`: `StatementPerm` accepts what Clean's `Statement` rejects;
+    - `Names.name_merge_strengthens`: the converse;
+    - `Names.not_channelsByName`: the hypothesis fails for that ensemble.
+- **S8-A14 (S8-m1: direction from constructors only; amends S8-A3).**
+  - **The old reading.** `readMult` matched the multiplicity's value against `-1`. In `K` it
+    therefore read a push written `pushedIf ((1 : K) · en)` as a receive.
+  - **The new rule.** `readMult` reads the constructor:
+    - `assumeGuarantees` set (`pull`, `pulled(If)`) with multiplicity `(-1) · e` (`negArg?`):
+      receive, selector `e`;
+    - `assumeGuarantees` clear (`push`, `pushed(If)`, `emit`): send, selector the multiplicity.
+  - **Any other interaction is rejected.** That is an `assumeGuarantees` interaction whose
+    multiplicity is not `(-1) · e`, which no constructor writes. `ShapeOK` checks this, and it is
+    part of `Supported`.
+  - **Controls.** `readMult_pull`, `readMult_push`, `readMult_pullIf`, `readMult_pushIf_one`
+    (stays a send) and `shape_neg`.
+  - **Consequence.** A hand-written `emit (-1 * e)` is a send with selector `(-1) · e`, not a
+    pull. Write pulls with `pull`/`pullIf`.
+- **S8-A15 (S8-m8: no silent bus merging; refines S8-A11).**
+  - **The rule.** `ChannelMap.Separate cm names` is decidable and part of `Supported cm`. Two
+    distinct listed names may share a bus only as a declared pull/push pair: both mapped, same
+    bus, opposite directions.
+  - **What it excludes.**
+    - A default bus (a name's index) equal to a mapped one (`mixedMap_not_separate`).
+    - Two mapped channels sharing a bus in the same direction.
+  - **Pairs pass:** `pairs_separate`.
+  - **Still in force.** `some (b, s)` forces **every** interaction of that channel to direction
+    `s`, so a channel that both pulls and pushes must not be mapped (`ChannelMap`'s docstring).
+- **S8-A16 (S8-m3: `scripts/setup-clean.sh` verifies the checkout).**
+  - **What it requires.** `ext/Clean` must be a git checkout:
+    - `.git` present;
+    - `git rev-parse HEAD` = `42fe4b26…`;
+    - no modified or staged tracked file.
+    Otherwise the script fails, also when `ext/Clean` already exists.
+  - **How it creates one.** By clone: upstream, or a local git checkout given as argument
+    (offline).
+  - **Tested in a scratch tree** (`logs/S8/50-setup-clean-tests.log`):
+    - fresh clone from a local checkout: verified;
+    - rerun: verified;
+    - tampered tracked file: rejected;
+    - another revision: rejected;
+    - a copy without `.git`: rejected;
+    - a staged change: rejected.
+  - **This repository's `ext/Clean`** was re-made as a git clone at the pin. Its sources are
+    byte-identical to the earlier copy, and the prebuilt `.lake` was kept.
+  - **Not covered.** Untracked files and the `.lake` build outputs. Lake rebuilds from source
+    hashes.
+- **S8-A17 (S8-m5, S8-m6: the hypotheses can fail; completeness into `relK`).**
+  - **Negative controls:**
+    - `fibK_not_faithful_unregistered` (`¬ LookupsFaithful [] ens`);
+    - `wide_not_supported`: a component reading variable 5 at width 3;
+    - `wide_holdsPerm` together with `wide_rejected`: Clean accepts a 6-cell row, but its
+      translation is rejected, so `Supported` is necessary for completeness. This is
+      witness-level: the translated witness, not every witness.
+  - **`relK_toLayoutWit` (over `K`).** From `HoldsPerm cm cw` and the cell bound, the
+    translation is in the contract's `relK k`.
+    - **Admissibility is a hypothesis.** No theorem bounds the caps by Clean quantities; it is
+      decided per instance.
+    - **Use:** `fibK_relK_roundtrip` takes soundness from `rel 6`, then this corollary with
+      `fibK_admissible`, into `relK 20`.
+- **S8-A18 (S8-m9: CI axiom audit of the bridge; for Stage 6b).**
+  - **Command.** From the repository root, after `scripts/setup-clean.sh` and
+    `lake build RecursionFastClean`, run `lake env lean probes/s8/review/P3Axioms.lean`.
+  - **What it does.** It audits every constant declared in a `RecursionFast.Clean*` module, at
+    the current count 739. It takes about 2 min 15 s.
+  - **Expected output.** It must print
+    `audited N constants from RecursionFast.Clean* modules; non-standard: 0; sorryAx: 0`.
+  - **Request.** Stage 6b to add it to the S8-A12 CI step (or an equivalent `axiomaudit` mode
+    restricted to `RecursionFast.Clean*`).
+- **S8-A19 (S8-m2, S8-m7, S8-m10, statement change).**
+  - **Corrected stale statements:**
+    - RESULT: "not touched under `Contract/`", "`Supported`: distinct names", the
+      unlisted-channel row;
+    - this file's Stage 8 preamble and S8-A5;
+    - the `ToLayout` header and `pubPart` (`max 32 (size PublicIO)` columns).
+  - **The upstream note:**
+    - the vacuity is stated exactly (`clean_balance_K`: a balanced list over `K` is empty or one
+      silent interaction);
+    - `OrderedChannel.lean` is described correctly (it has a `ringChar F = 0` case split, no
+      `Fact`).
+  - **Global orphan instances.** The two derived `DecidableEq` instances on Clean's types are
+    documented in the `ToLayout` header; they clash if Clean derives them.
+  - **Line length.** Lines over 100 characters: 59 (review) → 26, all proof-internal or
+    signature lines in `Semantics`/`Gadget`.
+  - **Statement change, allowed in a fix pass.** `idxOf_eq_iff` loses its unused hypothesis
+    `b ∈ names`: membership of `b` follows from the equal index.
+

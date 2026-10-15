@@ -1,0 +1,31 @@
+import RecursionFast.Clean
+open RecursionFast.Clean
+#print axioms toLayout_rel_iff
+#print axioms statementPerm_iff
+#print axioms toLayout_rel_iff_raw
+#print axioms statementRaw_iff
+#print axioms balancedPerm_byName_iff_raw
+#print axioms statementPerm_byName_iff_raw
+#print axioms relK_toLayoutWit
+#print axioms holdsPerm_of_relK
+#print axioms idxOf_eq_iff
+#print axioms FibK.fibK_relK_roundtrip
+#print axioms FibK.fibK_channelsByName
+#print axioms FibK.fibK_statementRaw
+#print axioms FibK.fibK_supported
+#print axioms FibK.fibK_not_faithful_unregistered
+#print axioms FibK.mixedMap_not_separate
+#print axioms FibK.pairs_separate
+#print axioms FibK.wide_not_supported
+#print axioms FibK.wide_holdsPerm
+#print axioms FibK.wide_rejected
+#print axioms FibK.clean_balance_K
+#print axioms FibK.readMult_pull
+#print axioms FibK.readMult_push
+#print axioms FibK.readMult_pullIf
+#print axioms FibK.readMult_pushIf_one
+#print axioms FibK.shape_neg
+#print axioms FibK.pair_statement
+#print axioms Names.name_merge_weakens
+#print axioms Names.name_merge_strengthens
+#print axioms Names.not_channelsByName

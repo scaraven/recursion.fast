@@ -183,13 +183,13 @@ end Rel
 /-! ## Admission caps (DESIGN §2.2) -/
 
 /-- Caps on one chip: `1 ≤ cols ≤ 2^10`; gadget `t ≤ 2^6`, `cons ≤ 2^8`, `q ≤ 2^8`, degree
-`|S i| ≤ 8`; at most `2^4` ports, each on a bus `< 2^8`, with a message of at most `2^4` cells;
+`|S i| ≤ 8`; at most `2^5` ports, each on a bus `< 2^8`, with a message of at most `2^4` cells;
 ports read only the chip's own columns. -/
 def Chip.Admissible (C : Chip F) : Prop :=
   1 ≤ C.cols ∧ C.cols ≤ 2 ^ 10 ∧
   C.gadget.t ≤ 2 ^ 6 ∧ C.gadget.cons ≤ 2 ^ 8 ∧ C.gadget.q ≤ 2 ^ 8 ∧
   (∀ i, (C.gadget.S i).length ≤ 8) ∧
-  C.ports.length ≤ 2 ^ 4 ∧
+  C.ports.length ≤ 2 ^ 5 ∧
   ∀ p ∈ C.ports, p.bus < 2 ^ 8 ∧ p.sel < C.cols ∧ p.msg.length ≤ 2 ^ 4 ∧ ∀ c ∈ p.msg, c < C.cols
 
 /-- Number of entries of a chip's gadget matrices. -/

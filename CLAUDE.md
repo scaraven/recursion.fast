@@ -30,6 +30,12 @@ PolyFun `41d3b21`. `.lake/packages` is a symlink to the prebuilt shared tree
 `/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages` (local-only, gitignored). A clean
 clone removes the symlink and runs `lake exe cache get`.
 
+Clean (`42fe4b26`) is an **untrusted** dependency of the non-default library `RecursionFastClean`
+(`RecursionFast/Clean/`, design §9): the workspace requires it by path (`ext/Clean`, gitignored), so a
+fresh clone must run `scripts/setup-clean.sh` before any `lake` command. `scripts/org-build.sh` drops
+it from the organiser package. It is never imported by `Contract/`, `Library/`, `Controls/` or the
+harness.
+
 ```sh
 lake build                                     # default targets: RiscvZkvm, Contract, Library, Controls (≈ 40 s warm)
 lake build RecursionFastBridge gate axiomaudit # the rest

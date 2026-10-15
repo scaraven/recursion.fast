@@ -314,8 +314,8 @@ theorem chips_cap : (⟨List.replicate (2 ^ 8) pubC, fun _ => .eq, 0⟩ : Layout
     ¬ (⟨List.replicate (2 ^ 8 + 1) pubC, fun _ => .eq, 0⟩ : Layout K).Admissible 7 := by
   decide +kernel
 
-theorem ports_cap : (withChip (portChip 1 (List.replicate 16 ⟨0, true, 0, []⟩))).Admissible 7 ∧
-    ¬ (withChip (portChip 1 (List.replicate 17 ⟨0, true, 0, []⟩))).Admissible 7 := by
+theorem ports_cap : (withChip (portChip 1 (List.replicate 32 ⟨0, true, 0, []⟩))).Admissible 7 ∧
+    ¬ (withChip (portChip 1 (List.replicate 33 ⟨0, true, 0, []⟩))).Admissible 7 := by
   decide +kernel
 
 theorem msg_cap : (withChip (portChip 1 [⟨0, true, 0, List.replicate 16 0⟩])).Admissible 7 ∧
