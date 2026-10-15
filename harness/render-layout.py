@@ -98,9 +98,10 @@ def chip_lean(name, i, cj):
     return "\n".join(lines)
 
 
-def render(name, lp, wp, xp, src):
-    L = json.load(open(lp))
-    out = [f"/-! ## `{name}`: {L.get('name', '')} (`{src[lp]}`) -/", ""]
+def layout_lean(name, L, src_note):
+    """The chip and layout definitions of the layout object `L` (also used by the challenge
+    renderer's `{{layout:KEY}}` placeholder, scripts/render-challenge.py)."""
+    out = [f"/-! ## `{name}`: {L.get('name', '')} (`{src_note}`) -/", ""]
     for i, cj in enumerate(L["chips"]):
         out.append(chip_lean(name, i, cj))
         out.append("")
@@ -109,6 +110,12 @@ def render(name, lp, wp, xp, src):
     out.append(f"/-- The layout `{L.get('name', name)}`: bus `b` has kind `[{kinds}][b]` (`.eq` beyond). -/")
     out.append(f"def {name} : Layout K :=\n  ⟨[{chips}],\n   fun b => ([{kinds}] : List BusKind).getD b .eq, {L['pub']}⟩")
     out.append("")
+    return out
+
+
+def render(name, lp, wp, xp, src):
+    L = json.load(open(lp))
+    out = layout_lean(name, L, src[lp])
     if wp:
         W = json.load(open(wp))
         tabs = ",\n  ".join(table_lean(t) for t in W["tables"])

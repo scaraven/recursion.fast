@@ -70,7 +70,10 @@ def equivFin : K ≃ Fin (2 ^ 64) where
   left_inv _ := rfl
   right_inv _ := rfl
 
-instance : Fintype K := Fintype.ofEquiv _ equivFin.symm
+/-- `K` is finite. Noncomputable on purpose (S6b): a computable instance is a closed term, which a
+compiled executable evaluates when it initialises this module, i.e. it materialises all `2^64`
+elements (the badge path's `verify` ran out of memory at start-up). Nothing executes it. -/
+noncomputable instance : Fintype K := Fintype.ofEquiv _ equivFin.symm
 
 theorem card_K : Fintype.card K = 2 ^ 64 := by
   rw [Fintype.card_congr equivFin, Fintype.card_fin]
@@ -203,7 +206,9 @@ def equivK3 : E ≃ K × K × K where
   left_inv _ := rfl
   right_inv _ := rfl
 
-instance : Fintype E := Fintype.ofEquiv _ equivK3.symm
+/-- `E` is finite. Noncomputable on purpose, as `Fintype K` (S6b): no compiled executable may
+enumerate `2^192` elements at start-up. -/
+noncomputable instance : Fintype E := Fintype.ofEquiv _ equivK3.symm
 
 theorem card_E : Fintype.card E = 2 ^ 192 := by
   rw [Fintype.card_congr equivK3, Fintype.card_prod, Fintype.card_prod, K.card_K]; norm_num

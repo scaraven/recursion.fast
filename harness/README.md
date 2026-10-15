@@ -1,8 +1,10 @@
-# harness/: the benchmark leaf layout `L_chain(n)` (Stage 6a)
+# harness/: the benchmark layout `L_chain(n)` (Stage 6a) and the badge path (Stage 6b)
 
 The relation of the leaf benchmark is `R_chain(y, n; s) : blake2s256^n(s) = y` (DESIGN §7.1).
 `L_chain(n)` arithmetises it as a contract `Layout K`. The design is in [`CHAIN-LAYOUT.md`](CHAIN-LAYOUT.md);
-the results are in `docs/stages/S6a-RESULT.md`.
+the results are in `docs/stages/S6a-RESULT.md`. The badge path (the compiled `verify` and `index`,
+the benchmark runner, DESIGN §6.3, §6.4, §7.4) is [below](#the-badge-path-stage-6b); its results
+are in `docs/stages/S6b-RESULT.md`, the reference machine in [`reference-machine.md`](reference-machine.md).
 
 | file | what |
 |---|---|
@@ -97,8 +99,10 @@ of `blake2s256^n(s)`, little-endian.
 - **Definitions.** Each chip is a `def NAME_chipI : Chip K`, the layout is
   `def NAME : Layout K`, the witness `NAME_wit` and the statement `NAME_stmt`.
 - **Copying only.** The renderer copies numbers and evaluates nothing.
-- **Not yet in the challenge renderer.** `scripts/render-challenge.py` (v0.3) has no layout
-  placeholder yet. A `{{layout:KEY}}` that calls this renderer is the Stage 7 integration.
+- **In the challenge renderer** (Stage 6b). `scripts/render-challenge.py`'s `{{layout:KEY}}`
+  placeholder validates a layout JSON strictly (below) and renders it with this file's emitter
+  (`layout_lean`); `RecursionFast/Challenge/R.lean.in` renders the submitted `C_V` this way. A
+  fixed table may carry an informational `"note"` (the trimmed tables of `gcall0`/`gcall79` do).
 
 ## Cell counts
 
@@ -115,3 +119,168 @@ These come from `gen-chain-layout.py report`, and the measured witnesses agree:
 - **Fixed:** 786,464 cells (`ADD8` 786,432, `NIB` 32). These need `k ≥ 24` (cap `2^(k−4)`).
 - **Matrix entries:** 1,163, against the cap `2^(k+4)`.
 - **The largest chain at class 24** is n = 1,733.
+
+## The badge path (Stage 6b)
+
+DESIGN §7.4 step 3: after the comparator and the gate, the organiser builds the compiled verifier
+and indexer against the submission, indexes, and runs the benchmark (§6.3) with the agent's native
+prover. Every command takes paths as arguments; Python runs with `-I`.
+
+| file | what |
+|---|---|
+| `lean/RecursionFastHarness/Driver.lean` | `verifyMain` (`verify VKC STMT TAPE`: exit 0 `ACCEPT` iff `NARG cfg P` accepts, 1 `REJECT`, 2 malformed key/statement) and `indexMain` (`index LAYOUT.json VKC_OUT`: writes `VKc.toBytes` of `index cfg P L`, prints `VKc.digest cfg` in hex) |
+| `lean/RecursionFastHarness/Twin.lean` | `harness_twin P' cfg' := S`: the executable twin of a submission whose `ε` (or prover) is noncomputable; same `n`, `shape`, `vkLen`, `VK`, `idxShape`, `IDX`, `verify` terms |
+| `lean/RecursionFastHarness/LayoutJson.lean` | layout JSON → `Layout K`, the renderer's checks and table constructions; CI checks reader = renderer (`probes/s6b/layout/check.sh`) |
+| `lean/Main.lean.in`, `badge-main.py` | the executables' main module: imports the submission module, defines the twin, states (kernel-checked `rfl`) that the twin's `NARG` and `index` are the submission's |
+| `lean/LinkCheck.lean` | `harness-linkcheck`: imports every organiser library; `scripts/org-build.sh` builds it (prebuilding every object file a badge executable links) and runs it (start-up cost of the organiser modules) |
+| `badge-build.sh` | builds `harness-verify`/`harness-index` against a module in a fresh sandboxed tree (the gate tree's stage 3a without comparator and gate) |
+| `mk-tree.py` | a fresh tree's `lakefile.toml` and `lake-manifest.json` (the organiser package by path; challenge, submission, badge mains), shared by `scripts/harness.sh` (with the module-root freshness check) and `badge-build.sh` |
+| `run-benchmark.py` | the benchmark runner: `run`, `secrets`, `selftest`, `record` |
+| `smoke/` | the NOT SECURE smoke protocol (`cmpToy`, O-10; `RecursionFastSmoke.lean`), its generated mains (`SmokeVerify.lean`, `SmokeIndex.lean`; lake exes `smoke-verify`, `smoke-index`) and its "native prover" `toy_prover.py` |
+| `reference-machine.md` | the measurement policy (§6.4) as the organiser's per-season checklist, and the first noise measurement |
+
+### Building the executables
+
+```sh
+scripts/org-build.sh .lake/org                       # organiser package, incl. RecursionFastHarness + harness-linkcheck
+# production (gate tree, after comparator and gate; scripts/harness.sh stage 3a):
+scripts/harness.sh --org .lake/org --gate RecursionFast.Challenge.certified \
+  --computable RecursionFast.Challenge.submission --badge-build RecursionFast.Challenge.submission \
+  [--bench BENCH.json --secrets SECRETS --claim CLAIM.json --stub RecursionFast/Challenge/R.lean.in] \
+  CHALLENGE.lean SOLUTION_DIR CONFIG.json
+# a module outside the harness (smoke test, local checks):
+harness/badge-build.sh --org .lake/org --work DIR SRC_DIR MODULE SUBMISSION   # prints the two paths
+python3 -I harness/badge-main.py OUT.lean MODULE SUBMISSION verify|index       # the main module only
+lake build smoke-verify smoke-index                                             # the smoke protocol, in this tree
+```
+
+- **The source rule before everything** (`scripts/source-rule.py`, S6b-M3 fix pass). In each
+  fresh tree, before anything of the submission is built, the harness rejects submission sources
+  that use elaboration-time code (`run_meta`, `#eval`, `elab`, `macro`, `initialize`, `unsafe`,
+  `persistentEnvExtensionsRef`, `import Lean`, `open Lean`, Qq's `by_elabq`, …; the list is the
+  script's docstring). It raises the bar against forging the emitted code
+  (`probes/s6b/gate/ForgeRaw.lean`, which no gate rule sees); the sound fix is O-12. Allowed are
+  `#check`, `#print`, `#reduce`, `#guard_msgs`, the literals `#[…]` and `#v[…]` (Clean's
+  vectors), notation, attributes such as `simp` and `elab_as_elim`; Mathlib's `#s` is not (write
+  `s.card`). `tests/source-rule/check.sh` (CI step 1) holds one fixture line per rejected form and
+  a file of allowed forms. `--source-rule off` exists only for the layer regressions in
+  `tests/pipeline/`.
+- **The claim binds the benchmark** (S6b-M2). With `--bench`, `--claim` and `--stub` are required:
+  the harness copies the claim and its files into the work directory, re-renders the stub with it
+  and requires the challenge to be that rendering, byte for byte; then it writes the benchmark
+  configuration's `k`, `cfg.hash`, `claim` (digests) and `layouts.C` from that claim (so `C` is the
+  very file rendered into the certified `C`), and the sandbox (`--landrun`), whatever the bench
+  file says.
+- **The gate before them** (`scripts/Gate.lean`). Rule 4 requires compiled code for the badge-path
+  fields only (S6-A12). Rules 3, 6, 7 (S7-M1) keep a submission away from the compiler: no
+  code-substituting or compiler-changing attribute (`implemented_by`, `extern`, `export`, `init`,
+  `csimp`, `cpass`, `computed_field`); no import outside `scripts/import-allowlist.txt` (the import
+  closure of `Mathlib`, the contract, the library and the controls; written by `gate --closure` in
+  `scripts/org-build.sh`, checked current by CI); no definition that refers to the compiler's or
+  the environment's API. The Clean frontend (S6b-A11, S6b-A17) may be imported for circuit proofs
+  (`scripts/import-frontend.txt`), but never on the badge path: the executables import only the
+  module of the badge root (board L: `RecursionFast.Challenge.submission`; board R:
+  `RecursionFast.Challenge.leaf`), whose imports must stay in the compiler-free closure (rule 8),
+  and no badge-path field may call Clean code (rule 9). `scripts/harness.sh` passes
+  `--allowed-imports`, `--frontend-imports` and (with `--badge-build CONST`) `--badge-root CONST`
+  by default, and requires `--org`.
+- **How the gate tree builds them.** With `--badge-build SUBMISSION`, `scripts/harness.sh` writes
+  `badge/HarnessVerify.lean` and `badge/HarnessIndex.lean` (from `lean/Main.lean.in`, importing
+  the solution module `solution_module` of the comparator config) and two `[[lean_exe]]` blocks
+  into **both** fresh trees, so the comparator's and the gate's trees have the same lakefile;
+  neither the comparator nor the gate's `lake build <solution>` builds them. After the gate
+  passes, stage 3a runs `lake build harness-verify harness-index` in the gate tree under the
+  sandbox (only the tree's `.lake` is writable; `TMPDIR` inside it for the linker) and checks that
+  every artifact bound to the comparator-verified build (A7-M3) is unchanged. The executables run
+  the solution's compiled code from that bound build.
+- **Object files.** Linking needs the object file of every module in the executable's import
+  closure. The organiser package and the shared packages are read-only in the sandbox, so
+  `scripts/org-build.sh` prebuilds the organiser closure's objects (`harness-linkcheck`), and the
+  reference machine prebuilds all of Mathlib's once (`lake build mathlib/Mathlib:static`, S6b-A18,
+  `reference-machine.md`): a submission may import any Mathlib module.
+- **Start-up.** A compiled executable evaluates every closed term of every imported module when
+  it starts. `harness-linkcheck` fails `org-build.sh` if the organiser modules are expensive to
+  initialise; the submission's own closed terms are timed with it (they are inside the timed
+  region of every run).
+
+### The benchmark runner
+
+```sh
+python3 -I harness/run-benchmark.py secrets 96 SECRETS        # 64 tree chains + 16 + 16 (board L), mode 0600
+python3 -I harness/run-benchmark.py run --config BENCH.json --secrets SECRETS --out RESULT.json [--workdir DIR] [--keep]
+python3 -I harness/run-benchmark.py selftest --lean-data RecursionFast/Controls/RecursionData.lean --gen harness/gen-chain-layout.py
+python3 -I harness/run-benchmark.py record NEW STANDING [--margin 0.03]   # the 3 % record rule; exit 0 iff a record
+```
+
+**Config** (JSON; every key but the first six has the default shown):
+
+```
+{ "k": 24,                                                 // the declared class (from the claim, S6b-m2)
+  "verify": [exe], "index": [exe], "prover": [argv...], "gen": "harness/gen-chain-layout.py",
+  "layouts": {"C": "C_V.layout.json"},                       // board R
+  "claim": {"digestC": hex64, "digestL": hex64},             // board R: the declared key digests
+  "boards": ["L", "R"], "cfg": {"hash": "blake2s"},          // no arity: the submission's (S6b-m5)
+  "tree": {"n": 1024, "leaves": 64}, "leafboard": {"256": 16, "4096": 16}, "repeats": 3,
+  "classes": {"256": 24, "1024": 24, "2048": 25, "4096": 26},   // least class of L_chain(n), S6-A1
+  "budgets": {"index_total_s": 3600, "leaf_s": 120, "step_s": 600, "root_s": 60, "verify_s": 60,
+              "eval_s": 21600, "mem_kb": 48000000, "prover_build_s": 3600},
+  "caps": {"tape_R": 1048576, "tape_L": 131072},
+  "dos": {"tapes": 1000, "max_len": 1048576, "seed": null},
+  "sandbox": "scripts/bwrap-landrun.sh",                     // REQUIRED: `run` refuses to start without it (S6b-M1)
+  "sandbox_ro": [paths...],                                  // what a step may read besides /usr, /etc (S6b-m3)
+  "prover_build": null | {"cmd": [argv...], "dir": "..."} }
+```
+
+**Classes and boards** (S6-A1, S7-M2). A declared `k` below the class of `L_chain(tree.n)` (24)
+is rejected up front. A leaf-board size whose layout needs a class above `k` is skipped, not
+failed: by default the leaf board is `n ∈ {2^8, 2^10}` (the 64 tree chains are its `2^10`
+instances), and `2^12` (class 26) runs only at `k ≥ 26`. Boards are judged separately: a failure
+only board L depends on (a leaf-board chain, the `2^17`-byte cap) rejects board L; one only the
+tree depends on (`C_V`'s key, the declared digests, a step, the root) rejects boards R and W; a
+failure of a tree chain's leaf, of indexing `L_chain`, of the budget or of the DoS column rejects
+every board. The run exits 0 iff at least one requested board is accepted.
+
+**Isolation and memory** (fix pass, S6b-M1, S6b-m1, S6b-m3). `run` refuses to start without the
+sandbox and without a memory cgroup (`systemd-run --user --scope`). Every step runs in its own
+cgroup with `MemoryMax` = `mem_kb` and `OOMPolicy=continue` (the whole process tree; its
+`memory.peak` is reported, and any `oom_kill` in it rejects: "killed at the memory cap"), inside
+`bwrap-landrun.sh --minimal-root`: readable are only `/usr`, `/etc`, a fresh `/tmp`, the
+executables' directories, the files the prover's argv names and `sandbox_ro`; writable only the
+step directory; no network; own PID namespace. The wall time is the sandboxed process's (measured
+by an organiser shell in the cgroup, outside the sandbox).
+
+**Prover interface** (S6b-A9). `PROVER... leaf|node`: the mode is the **last** argument (the
+runner appends it to the configured argv). It runs in a fresh step directory (the only writable
+path; no network; the run directory and the secrets file are hidden: `bwrap-landrun.sh --hide`),
+and must write `proof.bin`:
+
+- `leaf`: `layout.json` (`L_chain(n)`, schema `recursion.fast/layout/1`), `vkc.bin` (the leaf
+  key bytes from the organiser's indexer: `8·vkLen` bytes of `VK L`, then the 32-byte index root),
+  `stmt.bin` (256 bytes: 32 elements, 8 bytes little-endian each) and `secret.hex` (the chain's
+  start `s`: 64 lowercase hex digits and a newline). The prover generates the witness tables from
+  `s` itself, **inside the timed region**: witness generation is part of proving, the same for
+  every entry (the tables are a function of `s`, S6-A4). No witness file is provided.
+- `node`: `layout.json` (`C_V`), `vkc.bin` = `vkC.bin` (the recursion key), `vkL.bin`, `stmt.bin`
+  (the aggregate statement `nodeStmt`, computed by the runner), `child1.stmt`, `child1.proof`,
+  `child1.tag` (`leaf` or `node`), and the same for `child2`.
+
+**Verifier interface.** `VERIFY vkc.bin stmt.bin proof.bin` in a fresh directory holding only
+those three files (never a secret); exit 0 = accept.
+
+**Result** (`--out`): `verdict` (`ACCEPT` iff some board is accepted), `accepted_boards`,
+`reason`, `scores` (per board: `verdict`, `reason`, and `L.S_leaf` with per-`n` medians and the
+skipped sizes, `W.S_wrap`, `R.S_rec`; `DoS.max_verify_s`), `runs` (every leaf and step: prover and
+verifier wall time, proof size, peak memory), `instances`, `indexing` (times, digests), `machine`,
+`config`, `claim`, `elapsed_s`.
+
+### Challenges
+
+`RecursionFast/Challenge/L.lean.in` (board L) and `R.lean.in` (board R), rendered by
+`python3 -I scripts/render-challenge.py STUB claim.json OUT.lean`. Claim keys: L `k`, `hash`,
+`arity`, `image` (`{"code", "data"}` paths); R also `C` (layout JSON path), `C.chips`,
+`C.entries`, `digestC`, `digestL`. Definition names: L `submission`; R `leaf` (the protocol part,
+in a module that does not import Clean) and `submission`, with `submission.toSubmission = leaf`. `scripts/dummy-claim.py STUB OUT` writes a dummy claim;
+`scripts/test-render.sh [OUTDIR]` runs the renderer's 50+ malformed-claim cases;
+`python3 -I scripts/toy-solution.py OUTDIR` re-makes the v2 toy comparator pair in `audit/`.
+`python3 -I scripts/source-rule.py DIR` runs the source rule on the `.lean` files under `DIR`
+(exit 1 and one line per finding); `tests/source-rule/check.sh` runs its fixtures.

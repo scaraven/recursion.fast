@@ -9,16 +9,33 @@
 #   - a fresh /dev and /proc; no network (`--unshare-net`); own PID namespace, so every process the
 #     solution's elaboration starts (`#eval`, `IO.Process.spawn`, daemons) is killed when the command
 #     exits (`--unshare-pid --die-with-parent`); new session (no TIOCSTI);
-#   - the environment is cleared except the `--env` variables (landrun semantics).
+#   - the environment is cleared except the `--env` variables (landrun semantics);
+#   - `--hide PATH` (an extension, not landrun's; the benchmark runner, harness/run-benchmark.py):
+#     PATH is invisible inside: an empty tmpfs over a directory, /dev/null over a file. Options act
+#     in order, so `--hide RUN --rwx RUN/step` exposes only the step directory of the run directory;
+#   - `--minimal-root` (an extension, first option; the benchmark runner, S6b-m3): instead of the
+#     whole file system, only /usr (and its /bin, /lib, /lib64, /sbin links), /etc, a fresh /tmp,
+#     and the `--ro` paths are readable; so an untrusted prover cannot read other submissions,
+#     standing records or organiser material on the machine.
 # Executability restrictions (`--rox`) are not modelled (bwrap has no per-path exec bit).
 set -euo pipefail
-args=(--ro-bind / / --dev /dev --proc /proc --unshare-net --unshare-pid --unshare-ipc --unshare-uts
+MIN=0; [[ "${1:-}" == --minimal-root ]] && { MIN=1; shift; }
+if [[ $MIN == 1 ]]; then
+  args=(--ro-bind /usr /usr --ro-bind /etc /etc --tmpfs /tmp)
+  for l in bin lib lib64 sbin; do
+    if [[ -L "/$l" ]]; then args+=(--symlink "$(readlink "/$l")" "/$l"); elif [[ -d "/$l" ]]; then args+=(--ro-bind "/$l" "/$l"); fi
+  done
+else
+  args=(--ro-bind / /)
+fi
+args+=(--dev /dev --proc /proc --unshare-net --unshare-pid --unshare-ipc --unshare-uts
       --die-with-parent --new-session --clearenv)
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --) shift; break ;;
     --rw|--rwx) [[ "$2" == /dev ]] || args+=(--bind "$2" "$2"); shift 2 ;;
-    --ro|--rox) shift 2 ;;                 # already readable
+    --ro|--rox) [[ $MIN == 1 ]] && args+=(--ro-bind "$2" "$2"); shift 2 ;;   # else already readable
+    --hide) if [[ -d "$2" ]]; then args+=(--tmpfs "$2"); else args+=(--ro-bind /dev/null "$2"); fi; shift 2 ;;
     --env) if [[ -v "$2" ]]; then args+=(--setenv "$2" "${!2}"); fi; shift 2 ;;
     --bind-tcp|--connect-tcp|--log-level) shift 2 ;;
     -*) shift ;;                           # --best-effort, -ldd, -add-exec, ...

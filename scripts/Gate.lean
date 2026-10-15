@@ -1,7 +1,10 @@
 /-
 # Environment-level hygiene and computability gate (A4-F3, A6-G1/G2)   (TRUSTED harness tool)
 
-  lake exe gate MODULE THEOREM --manifest FILE [--computable N1,N2,...]
+  lake exe gate MODULE THEOREM --manifest FILE [--computable N1,N2,...] [--allowed-imports FILE]
+       [--frontend-imports FILE] [--badge-root CONST]
+  lake exe gate --closure ROOT1,ROOT2,... OUT        (writes the import closure of the roots: the
+                                                     allowed-imports list, scripts/org-build.sh)
 
 Loads the **elaborated environment** of `MODULE` (its `.olean` and imports; no source text is
 read, so comment/string tricks are irrelevant; no `[init]` code is run, since this process never
@@ -23,46 +26,103 @@ It rejects (exit code 1) if:
    (this is `#print axioms THEOREM`, computed on the certificate itself);
 2. a constant of the closure declared in an untrusted or pinned module is `unsafe`, `partial` or
    `opaque` (an `opaque`/`partial` body is invisible to the kernel);
-3. **any** untrusted module registers an entry of a compiler-substitution or load-time-code
-   attribute, for any target: `implemented_by`, `extern`, `export` (symbol interposition in a
+3. **any** untrusted module registers an entry of an attribute that substitutes compiled code,
+   runs code at load time or changes the compiler, for any target. Lean 4.34's attributes with an
+   effect on compiled code are: `implemented_by`, `extern`, `export` (symbol interposition in a
    linked badge executable), `init`/`builtin_init` (code run when a compiled executable starts,
-   A6-G1: `@[init f] def x := 0` is an ordinary `def` whose compiled value is `f`'s result),
-   `csimp`. Pinned modules may register `csimp` lemmas (kernel-proved equalities) and `init`
-   entries (their `initialize` declarations: trace classes, simp sets); these are reported;
-4. with `--computable N`, a **badge-path field** of `N` has no compiled code (A7-M2, DESIGN §3).
-   The badge path executes only the indexer (`VK`, `IDX`), the honest prover and the extractor
-   (`badgeFields`; for `Accumulation`, `VK`/`IDX` and each step's prover and extractor). If `N`
-   itself has compiled code, every field has. Otherwise `N` is unfolded (`whnf`, all
-   transparency) to its constructor, `Fin k`-indexed families (`Submission*.protocol`/`scheme`)
-   are checked member by member, and each badge-path field term is **compiled in this process**
-   as an auxiliary definition; it passes iff the compiler emits code for it. Every other field
-   (`ε`, `verify`, `qprog`, shapes, `WitMid`, `Racc`, proofs) is specification data: it is never
-   executed and may be `noncomputable` (e.g. `ε := fun _ => errorCap`). "Computable" means
-   *executable* (Lean has compiled code), not *feasible*: a brute-force indexer is computable.
-   Feasibility is enforced only by the badge path's time and memory budget (A7-M1). No imported
-   extension code runs: environment extensions keep their initial state except the pure-data
-   ones the compiler needs (`pureExts`), and initializer execution is never enabled;
-5. an organiser module of the environment does not match the manifest (above).
-Options such as `debug.skipKernelTC` leave no trace in an `.olean`; they are defeated by the
-comparator's replay through a fresh kernel (and nanoda / `leanchecker`), not by this gate.
-The gate must run after the comparator, in a separate tree, with no solution process alive;
-the badge executable runs afterwards as its own process (RESULT.md, "Round-3 fixes").
+   A6-G1: `@[init f] def x := 0` is an ordinary `def` whose compiled value is `f`'s result; also
+   every `initialize`, `register_simp_attr`, `register_option`), `csimp` (replacement lemmas),
+   `cpass` (a compiler-pass installer, run by every importer's compiler: S7-M1),
+   `computed_field` (compiled field implementations); all rejected (`tagged_return` qualifies
+   only `extern` declarations, already rejected, and is private to the compiler). `inline`, `noinline`, `macro_inline`,
+   `specialize`, `never_extract` and `unbox` steer the compiler without changing what a total
+   function computes, and are allowed. Pinned modules may register `csimp` lemmas (kernel-proved
+   equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
+   others; these are reported;
+4. with `--computable N`, a **badge-path field** of `N` has no compiled code (A7-M2, S5-A9,
+   DESIGN §3.3, §7.4). In v2 the badge path executes the compiled verifier `NARG cfg P` (round
+   shapes, key length, `verify`), the compiled indexer (`VK`, `IDX`, the index shape) and nothing
+   else of the submission; the extractor image is executed by the contract machine and must be the
+   rendered literal (S4-A2). `badgeFields`: `Submission`: `P`, `cfg`; `SubmissionR`: also `entry`
+   (`toSubmission` is its `Submission`); `Protocol`: `n`, `shape`, `vkLen`, `VK`, `idxShape`,
+   `IDX`, `verify`, `extractor`; `ExtractorImage`: `img` (its `fuel` split is data);
+   `RecursionEntry`: `C`, `decode`. If `N` itself has compiled code, every field has. Otherwise
+   `N` is unfolded (`whnf`, all transparency) to its constructor, `Fin k`-indexed families are
+   checked member by member, and each badge-path field term is **compiled in this process** as an
+   auxiliary definition; it passes iff the compiler emits code for it. Every other field
+   (`prover`, `ε`, the proofs `secure`, `fits`, `sound`, `complete`, `live`, the bounds) is
+   specification data: it is never executed and may be `noncomputable` (e.g. `ε := fun _ =>
+   errorCap`). "Computable" means *executable* (Lean has compiled code), not *feasible*: a
+   brute-force indexer is computable. Feasibility is enforced only by the badge path's time and
+   memory budget (A7-M1). No imported extension code runs: environment extensions keep their
+   initial state except the pure-data ones the compiler needs (`pureExts`), and initializer
+   execution is never enabled;
+5. an organiser module of the environment does not match the manifest (above);
+6. (S7-M1, with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
+   is neither untrusted itself nor in FILE. FILE is the import closure of the organiser's roots
+   (`Mathlib`, `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`; written
+   by `gate --closure` in `scripts/org-build.sh`, committed as `scripts/import-allowlist.txt`).
+   This keeps the compiler's internals out of a submission's reach: the S7-M1 forgery overwrote a
+   definition's emitted code from an elaboration-time `run_meta`, which leaves no declaration, but
+   needs `Lean.Compiler.LCNF.PhaseExt` (`impureExt`, `saveImpureDeclCore`), which no module of the
+   closure imports (nor `Lean` itself). A submission may import any module of Mathlib, the
+   contract, the organiser library and controls, its own modules, and the modules of
+   `--frontend-imports FILE` (S6b-A11: Clean's own modules at the pinned rev and the organiser's
+   bridge `RecursionFast.Clean*`, `scripts/import-frontend.txt`; Clean imports `Lean`, so a module
+   that imports it reaches the compiler: rule 8 keeps such modules out of the badge
+   executables); nothing else (`Lean`, `Lean.Compiler.*` beyond Mathlib's, `Lake`, …). And
+   transitively (S6b fix pass, `rule6t`): every module a submission-owned module reaches is its
+   own, in FILE, or reached through a frontend module, so an untrusted organiser module outside
+   both lists (the harness driver imports `Lean`) cannot carry the compiler in;
+7. (S7-M1) a **definition** declared in an untrusted module refers, in its type or value, to a
+   non-theorem constant of the compiler or the environment: under `Lean.Elab`, `Lean.Compiler`,
+   `Lean.IR`, `Lean.Meta`, `Lean.Environment`, `Lean.Kernel`, `Lean.Core`, the environment
+   extension types, or one of `Lean.modifyEnv`, `Lean.setEnv`, `Lean.persistentEnvExtensionsRef`,
+   `Lean.envExtensionsRef`, `Lean.addDecl`, `Lean.compileDecl(s)`, `unsafeCast`. A submission
+   defines no elaborator, tactic, compiler pass or environment manipulation (macros, notation and
+   `syntax` are fine). Theorems are exempt (their terms are never executed);
+8. (S6b-A11, with `--badge-root CONST`) the module that declares `CONST` (the constant the badge
+   executables are built from: the challenge's `submission` on board L, `leaf` on board R) imports,
+   transitively, a module that is neither untrusted nor in the `--allowed-imports` closure, i.e.
+   it reaches a frontend (Clean) or the compiler. The badge executables import only that module
+   (the gate prints `gate: badge-root-module M`), so no module that can reach the compiler's state
+   is linked into them, whatever the submission's circuit proofs import;
+9. (S6b-A11) a badge-path field (rule 4) refers, through definitions of untrusted modules, to a
+   non-theorem constant of a frontend module (`--frontend-imports`): the executed code and the
+   decoder never call Clean.
+
+Each rule is a function below: `classify` (5), `rules12` over `closure` (1, 2), `rule3`, `rule6`
+and `rule6t`, `rule8`, `rule7`, and `rule4` (`checkExec`, with rule 9's `frontendRefs`). `main`
+runs them in that order, which is the order of the `REJECT` lines.
+
+**What the gate cannot see (S7-M1, S6b-M3, S6b-A20, open item O-12).** The executed code is the
+code Lean's compiler emitted while elaborating the submission's badge-root module and its imports.
+A metaprogram run at elaboration time (`run_meta`, `#eval`, …) leaves no declaration. Rules 6 and
+8 keep `Lean.Compiler.LCNF.PhaseExt` out of reach, but not the raw route: `persistentEnvExtensionsRef`
+(in `Lean.Environment`, which every Mathlib module imports) and `unsafeCast` let a `run_meta` in a
+Mathlib-only module rewrite the compiler data its importers inline (`probes/s6b/gate/ForgeRaw.lean`:
+the gate PASSES it, its importer's code runs `acceptAll`). The harness's source rule
+(`scripts/source-rule.py`, run before any build) rejects the commands such code needs; that raises
+the bar. The sound fix is O-12: badge executables regenerated from kernel terms, without linking the
+submission's objects, which must ship before any ranked board opens.
 -/
 import Lean
 
 open Lean
 
 /-- Manifest packages of the **pinned** class (DESIGN §13); every other manifest entry is trusted. -/
-def pinnedPackages : List String := ["CompPoly", "Arklib", "VCVio", "PolyFun"]
+def pinnedPackages : List String := ["CompPoly", "Arklib", "VCVio", "PolyFun", "Clean"]
 
+/-- Rule 1: constants the certificate's closure must not use. -/
 def bannedConsts : List Name := [``sorryAx, ``Lean.ofReduceBool, ``Lean.ofReduceNat, ``Lean.trustCompiler]
+/-- Rule 1: the only axioms allowed. -/
 def allowedAxioms : List Name := [``propext, ``Classical.choice, ``Quot.sound]
 
+/-- The module that declares `n` (`_current` for a declaration of this process). -/
 def moduleOf (env : Environment) (n : Name) : Name :=
   match env.getModuleIdxFor? n with
   | some i => env.header.moduleNames[i.toNat]!
   | none => `_current
-
 /-- The manifest: module-relative `.olean` path (e.g. `Mathlib/Order/Basic.olean.server`) ↦
 (sha256, pinned?). Lines are `<sha256>  <tag>/<path>`, tag `core`, `project` or `packages/<pkg>`. -/
 def readManifest (file : System.FilePath) : IO (Std.HashMap String (String × Bool)) := do
@@ -122,41 +182,78 @@ def classify (env : Environment) (manifest : Std.HashMap String (String × Bool)
     else trusted := trusted.insert m
   return (trusted, pinned, errs)
 
-/-- Transitive closure of the constants used by `root`. -/
-partial def closure (env : Environment) (root : Name) : NameSet := Id.run do
+/-! ### Walks shared by the rules -/
+
+/-- The nodes reachable from `roots` along `succ`, each once, in depth-first visiting order: the
+one worklist behind the certificate's closure (rules 1, 2), the badge root's import closure
+(rule 8) and the walk through definitions to frontend code (rule 9). -/
+def reach (roots : Array Name) (succ : Name → Array Name) : Array Name := Id.run do
   let mut seen : NameSet := {}
-  let mut todo : Array Name := #[root]
+  let mut order := #[]
+  let mut todo := roots
   while h : todo.size > 0 do
     let n := todo.back
     todo := todo.pop
     if seen.contains n then continue
     seen := seen.insert n
-    let some ci := env.find? n | continue
-    let mut next := ci.type.getUsedConstants
-    if let some v := ci.value? (allowOpaque := true) then next := next ++ v.getUsedConstants
-    match ci with
-    | .inductInfo v => next := next ++ v.ctors.toArray ++ #[mkRecName n]
-    | .ctorInfo v => next := next.push v.induct
-    | .recInfo v => next := next ++ v.all.toArray
-    | _ => pure ()
-    for m in next do
+    order := order.push n
+    for m in succ n do
       unless seen.contains m do todo := todo.push m
-  return seen
+  return order
+
+/-- The constants the type and the value of `ci` refer to. -/
+def usedConsts (ci : ConstantInfo) : Array Name :=
+  ci.type.getUsedConstants ++ ((ci.value? (allowOpaque := true)).map (·.getUsedConstants)).getD #[]
+
+/-- `c` is a theorem: its term is never executed (rules 7 and 9 exempt it). -/
+def isTheorem (env : Environment) (c : Name) : Bool :=
+  match env.find? c with | some (.thmInfo _) => true | _ => false
+
+/-- The modules `m` imports directly (none if `m` is not a module of `env`). -/
+def moduleImports (env : Environment) (m : Name) : Array Name :=
+  match env.getModuleIdx? m with
+  | some i => env.header.moduleData[i.toNat]!.imports.map (·.module)
+  | none => #[]
+
+/-- Rules 1, 2: the transitive closure of the constants used by `root` (types and values;
+inductives with their constructors and recursors). -/
+def closure (env : Environment) (root : Name) : NameSet :=
+  .ofArray <| reach #[root] fun n => match env.find? n with
+    | none => #[]
+    | some ci => usedConsts ci ++ match ci with
+      | .inductInfo v => v.ctors.toArray.push (mkRecName n)
+      | .ctorInfo v => #[v.induct]
+      | .recInfo v => v.all.toArray
+      | _ => #[]
+
+/-- Rule 9: the non-theorem constants of `front` modules reachable from `e` through the values of
+definitions declared outside the `stop` modules (the compiler-free closure cannot reach a
+frontend). -/
+def frontendRefs (env : Environment) (front stop : NameSet) (e : Expr) : Array Name :=
+  let succ c :=
+    let m := moduleOf env c
+    if front.contains m || stop.contains m then #[] else
+    match env.find? c with
+    | some (.defnInfo v) => v.value.getUsedConstants
+    | some (.opaqueInfo v) => v.value.getUsedConstants
+    | _ => #[]
+  (reach e.getUsedConstants succ).filter fun c => front.contains (moduleOf env c) && !isTheorem env c
 
 /-! ### Rule 4: badge-path computability (A7-M2) -/
 
 open Meta
 
-/-- The computational fields the **badge path executes**, per contract structure: the holographic
-indexer (`VK`, `IDX`), the honest prover and the named extractor. Fields of a nested structure
-listed here are checked recursively. Everything else is specification data (never run). -/
+/-- The computational fields the **badge path executes**, per contract structure (v2, S5-A9):
+`NARG cfg P` reads the round shapes (`n`, `shape`), the key length and `verify`; the indexer reads
+`VK`, `idxShape`, `IDX`; the extractor image must be a computable literal (S4-A2); a recursion
+entry's layout and decoder (DESIGN §7.4). Fields of a nested structure listed here are checked
+recursively. Everything else (`prover`, `ε`, proofs, the `fuel` split) is specification data. -/
 def badgeFields : List (Name × List Name) :=
-  [(`RecursionFast.Protocol, [`VK, `IDX, `prover, `extractor]),
-   (`RecursionFast.Accumulation, [`VK, `IDX, `embed, `fold, `decide]),
-   (`RecursionFast.Reduction, [`prover, `extractor]),
-   (`RecursionFast.Submission0, [`protocol]),
-   (`RecursionFast.Submission1, [`protocol]),
-   (`RecursionFast.Submission2, [`scheme])]
+  [(`RecursionFast.Protocol, [`n, `shape, `vkLen, `VK, `idxShape, `IDX, `verify, `extractor]),
+   (`RecursionFast.ExtractorImage, [`img]),
+   (`RecursionFast.Submission, [`P, `cfg]),
+   (`RecursionFast.SubmissionR, [`toSubmission, `entry]),
+   (`RecursionFast.RecursionEntry, [`C, `decode])]
 
 /-- Persistent extensions whose imported state `whnf` and the compiler need here (matcher info,
 so that `match` in a field term compiles). Their `addImportedFn` is core code over plain data.
@@ -164,6 +261,7 @@ All other extensions keep their initial state: no imported macro, parser, attrib
 pass or `[init]` code is evaluated by the gate (it never enables initializer execution). -/
 def pureExts : List Name := [`Lean.Meta.Match.Extension.extension]
 
+/-- `env` with the imported state of the `pureExts` loaded. -/
 def loadPureExts (env : Environment) : IO Environment := do
   let mut env := env
   for d in ← persistentEnvExtensionsRef.get do
@@ -236,8 +334,9 @@ def reduceProjs (e : Expr) : MetaM Expr :=
       | some a => return .visit (mkAppN a args[info.numParams + 1:]).headBeta
       | none => return .done e)
 
-/-- Rule 4 on the term `e` (displayed as `path`): returns the rejections. -/
-partial def checkExec (path : String) (e : Expr) : MetaM (Array String) := do
+/-- Rule 4 on the term `e` (displayed as `path`), with rule 9 on every field that has code: returns
+the rejections. -/
+partial def checkExec (front stop : NameSet) (path : String) (e : Expr) : MetaM (Array String) := do
   -- (a) the whole term has compiled code: then so has every field
   let mut err? ← match e with
     | .const n _ => pure (if hasCode (← getEnv) n then none else some s!"{n} has no compiled code")
@@ -245,16 +344,20 @@ partial def checkExec (path : String) (e : Expr) : MetaM (Array String) := do
   if err?.isSome && !e.isConst then
     let e2 ← reduceProjs e
     if e2 != e then err? ← compileAux (Name.mkSimple s!"_gate_badge {path} (projections reduced)") e2
-  let some err := err? | IO.println s!"gate: rule 4: {path}: compiled code"; return #[]
+  let some err := err? | do
+    IO.println s!"gate: rule 4: {path}: compiled code"
+    let bad := frontendRefs (← getEnv) front stop e
+    return if bad.isEmpty then #[] else
+      #[s!"{path}: refers to frontend (Clean) code {bad.toList.take 3} (rule 9)"]
   let ty ← whnf (← inferType e)
-  -- (b) a family over `Fin k` (`Submission*.protocol`/`scheme`): member by member
+  -- (b) a family over `Fin k` (v0.3's `Submission*.protocol`; kept for families): member by member
   if let .forallE _ d _ _ := ty then
     let d ← whnf d
     if d.isAppOfArity ``Fin 1 then
       if let some k ← evalNat d.appArg! then
         if k ≤ 64 then
           let mut errs := #[]
-          for i in [:k] do errs := errs ++ (← checkExec s!"{path}[{i}]" (mkApp e (finLit k i)))
+          for i in [:k] do errs := errs ++ (← checkExec front stop s!"{path}[{i}]" (mkApp e (finLit k i)))
           return errs
   -- (c) a contract structure: unfold to its constructor, check the badge-path fields only
   let some S := ty.getAppFn.constName? | return #[s!"{path}: {err}"]
@@ -270,82 +373,239 @@ partial def checkExec (path : String) (e : Expr) : MetaM (Array String) := do
   let mut errs := #[]
   for f in fields do
     match names.idxOf? f with
-    | some j => errs := errs ++ (← checkExec s!"{path}.{f}" e'.getAppArgs[iv.numParams + j]!)
+    | some j => errs := errs ++ (← checkExec front stop s!"{path}.{f}" e'.getAppArgs[iv.numParams + j]!)
     | none => errs := errs.push s!"{path}: structure {S} has no field {f}"
   return errs
 
-def parseArgs : List String → Option (String × String × String × String)
+/-! ### Rule 7: the compiler's and the environment's API (S7-M1) -/
+
+/-- Rule 7: name prefixes of the compiler's and the environment's API. -/
+def metaPrefixes : List Name :=
+  [`Lean.Elab, `Lean.Compiler, `Lean.IR, `Lean.Meta, `Lean.Environment, `Lean.Kernel, `Lean.Core,
+   `Lean.EnvExtension, `Lean.EnvExtensionInterfaceUnsafe, `Lean.PersistentEnvExtension,
+   `Lean.SimplePersistentEnvExtension, `Lean.ScopedEnvExtension, `Lean.MonadEnv]
+
+/-- Rule 7: single constants of the environment's API. -/
+def metaConsts : List Name :=
+  [`Lean.modifyEnv, `Lean.setEnv, `Lean.persistentEnvExtensionsRef, `Lean.envExtensionsRef,
+   `Lean.addDecl, `Lean.compileDecl, `Lean.compileDecls, `Lean.addAndCompile, `unsafeCast]
+
+/-- Rule 7: `c` is a non-theorem constant of the compiler's or the environment's API. -/
+def isMetaConst (env : Environment) (c : Name) : Bool :=
+  (metaConsts.contains c || metaPrefixes.any (·.isPrefixOf c)) && !isTheorem env c
+
+/-! ### The rules -/
+
+/-- What the rules read: the environment, its modules classified by content hash (rule 5), and the
+module lists of the command line. -/
+structure GateCtx where
+  env : Environment
+  trusted : NameSet
+  pinned : NameSet
+  /-- `--allowed-imports`: the import closure of the organiser's roots (rules 6, 8, 9). -/
+  allowed : NameSet
+  /-- `--frontend-imports`: the frontend's modules (rules 6, 9). -/
+  front : NameSet
+
+/-- `m` is neither trusted nor pinned by content hash. -/
+def GateCtx.untrusted (g : GateCtx) (m : Name) : Bool := !g.trusted.contains m && !g.pinned.contains m
+
+/-- The modules of the environment with their indices, in the header's order. -/
+def GateCtx.modules (g : GateCtx) : Array (Name × ModuleIdx) :=
+  g.env.header.moduleNames.mapIdx fun i m => (m, i)
+
+/-- Rule 1 on the constant `n` of the certificate's closure: banned, or a non-standard axiom. -/
+def rule1 (n : Name) (ci? : Option ConstantInfo) : Array String :=
+  (if bannedConsts.contains n then #[s!"closure uses {n}"] else #[]) ++
+  match ci? with
+  | some (.axiomInfo _) => if allowedAxioms.contains n then #[] else #[s!"non-standard axiom {n}"]
+  | _ => #[]
+
+/-- Rule 2 on the constant `n` of the certificate's closure, declared in the non-trusted module
+`m`: `unsafe`, `opaque` or `partial`. -/
+def rule2 (n m : Name) (ci : ConstantInfo) : Array String :=
+  (if ci.isUnsafe then #[s!"unsafe constant {n} (module {m})"] else #[]) ++
+  match ci with
+  | .opaqueInfo _ => #[s!"opaque (or partial) constant {n} (module {m})"]
+  | .defnInfo v => if v.safety == .partial then #[s!"partial definition {n} (module {m})"] else #[]
+  | _ => #[]
+
+/-- Rules 1 and 2 on the closure `cl`, constant by constant; and the closure's axioms. -/
+def rules12 (g : GateCtx) (cl : NameSet) : Array String × Array Name := Id.run do
+  let mut errs := #[]
+  let mut axioms := #[]
+  for n in cl.toList do
+    let ci? := g.env.find? n
+    errs := errs ++ rule1 n ci?
+    let some ci := ci? | continue
+    if ci matches .axiomInfo _ then axioms := axioms.push n
+    let m := moduleOf g.env n
+    unless g.trusted.contains m do errs := errs ++ rule2 n m ci
+  return (errs, axioms)
+
+/-- Rule 3 on the non-trusted module `m` (index `i`): its entries of the attributes that substitute
+compiled code, run code at load time or change the compiler. `implemented_by`, `extern` and
+`export` are rejected outright; `[init]`, `@[csimp]`, `@[cpass]` and `@[computed_field]` entries
+are reported for a pinned module (`gate: note:`) and rejected for an untrusted one. -/
+def rule3 (g : GateCtx) (m : Name) (i : ModuleIdx) : IO (Array String) := do
+  let mut errs := #[]
+  for (d, impl) in Compiler.implementedByAttr.ext.getModuleEntries g.env i (level := .private) do
+    errs := errs.push s!"module {m}: @[implemented_by {impl}] on {d}"
+  for (d, _) in externAttr.ext.getModuleEntries g.env i (level := .private) do
+    errs := errs.push s!"module {m}: @[extern] on {d}"
+  for (d, sym) in exportAttr.ext.getModuleEntries g.env i (level := .private) do
+    errs := errs.push s!"module {m}: @[export {sym}] on {d}"
+  -- `count` entries described as `what`: a note for a pinned module, the rejections `rej` otherwise
+  let pinnedNote (count : Nat) (what : String) (rej : Array String) : IO (Array String) := do
+    if count == 0 then return #[]
+    unless g.pinned.contains m do return rej
+    IO.println s!"gate: note: pinned dependency {m} registers {count} {what}"
+    return #[]
+  let inits := (regularInitAttr.ext.getModuleEntries g.env i (level := .private)).map (·.1) ++
+    (builtinInitAttr.ext.getModuleEntries g.env i (level := .private)).map (·.1)
+  errs := errs ++ (← pinnedNote inits.size "[init] declaration(s)"
+    (inits.map fun d => s!"module {m}: [init]/[builtin_init] on {d}"))
+  errs := errs ++ (← pinnedNote (Compiler.CSimp.ext.ext.getModuleEntries g.env i (level := .private)).size
+    "@[csimp] lemma(s) (proved equalities)" #[s!"module {m}: registers @[csimp] lemmas"])
+  -- S7-M1: compiler-pass installers, computed fields
+  for (a, ds) in [("cpass", Compiler.LCNF.passManagerExt.getModuleEntries g.env i (level := .private)),
+      ("computed_field", Elab.ComputedFields.computedFieldAttr.ext.getModuleEntries g.env i (level := .private))] do
+    errs := errs ++ (← pinnedNote ds.size s!"@[{a}] entr(y/ies)" (ds.map fun d => s!"module {m}: @[{a}] on {d}"))
+  return errs
+
+/-- Rule 6 on the untrusted module `m` (index `i`): each direct import that is neither untrusted,
+nor in the allowed closure, nor a frontend module. -/
+def rule6 (g : GateCtx) (m : Name) (i : ModuleIdx) : Array String :=
+  g.env.header.moduleData[i.toNat]!.imports.filterMap fun imp =>
+    if g.untrusted imp.module || g.allowed.contains imp.module || g.front.contains imp.module then none
+    else some s!"module {m} imports {imp.module}, which is outside the allowed imports"
+
+/-- A submission-owned module: untrusted, and none of the organiser's modules named by the allowed
+closure or the frontend list (a submission's module roots are fresh, `harness/mk-tree.py`). -/
+def GateCtx.submissionOwned (g : GateCtx) (m : Name) : Bool :=
+  g.untrusted m && !g.allowed.contains m && !g.front.contains m
+
+/-- Rule 6, transitive (S6b-M3 fix pass) on the submission-owned module `m`: every module it
+reaches is submission-owned, in the allowed closure, or reached through a frontend module (Clean's
+own imports, `frontClosure`); so an untrusted organiser module outside both lists (e.g. the
+harness driver, which imports `Lean`) cannot carry the compiler into a submission. -/
+def rule6t (g : GateCtx) (frontClosure : NameSet) (m : Name) : Array String :=
+  let bad := (reach #[m] (moduleImports g.env)).filter fun n =>
+    !(g.submissionOwned n || g.allowed.contains n || frontClosure.contains n)
+  if bad.isEmpty then #[] else
+    #[s!"module {m} reaches (transitively) {bad.size} module(s) outside the allowed imports and the " ++
+      s!"frontend's closure, e.g. {bad.toList.take 3} (rule 6)"]
+
+/-- Rule 7 on the untrusted module `m` (index `i`): each definition (not a theorem) whose type or
+value refers to the compiler's or the environment's API. -/
+def rule7 (g : GateCtx) (m : Name) (i : ModuleIdx) : Array String :=
+  g.env.header.moduleData[i.toNat]!.constNames.filterMap fun n =>
+    match g.env.find? n with
+    | none | some (.thmInfo _) => none
+    | some ci =>
+      let bad := (usedConsts ci).filter (isMetaConst g.env)
+      if bad.isEmpty then none
+      else some s!"module {m}: {n} refers to the compiler/environment API ({bad.toList.take 3})"
+
+/-- Rule 8 on the badge root `r`: its module and that module's transitive imports are untrusted
+or in the allowed (compiler-free) closure. On success prints `gate: badge-root-module M`. -/
+def rule8 (g : GateCtx) (r : Name) : IO (Array String) := do
+  unless g.env.contains r do return #[s!"--badge-root {r}: not found"]
+  let m := moduleOf g.env r
+  let bad := (reach #[m] (moduleImports g.env)).filter fun n => !(g.untrusted n || g.allowed.contains n)
+  if bad.isEmpty then
+    IO.println s!"gate: badge-root-module {m}"
+    return #[]
+  return #[s!"badge root {r} is declared in module {m}, which imports (transitively) " ++
+    s!"{bad.size} module(s) outside the compiler-free closure, e.g. {bad.toList.take 3} (rule 8)"]
+
+/-- Rule 4 (with rule 9) on the constants `comps`, in this process, over the environment with the
+`pureExts` loaded. -/
+def rule4 (g : GateCtx) (comps : List String) : IO (Array String) := do
+  if comps.isEmpty then return #[]
+  let opts : Options := ({} : Options) |>.set `Elab.async false |>.set `maxHeartbeats gateHeartbeats
+  let ctx : Core.Context := { fileName := "<gate>", fileMap := default, options := opts,
+                              maxHeartbeats := gateHeartbeats * 1000 }
+  let act : MetaM (Array String) := comps.foldlM (init := #[]) fun acc c => do
+    unless (← getEnv).contains c.toName do return acc.push s!"--computable {c}: not found"
+    return acc ++ (← checkExec g.front g.allowed c (mkConst c.toName))
+  return (← (act.run' {} {}).toIO ctx { env := ← loadPureExts g.env }).1
+
+/-! ### Command line -/
+
+/-- The command line, after `MODULE THEOREM`: the options by name. -/
+structure GateArgs where
+  manifest : String := ""
+  computable : String := ""
+  allowed : String := ""
+  frontend : String := ""
+  badgeRoot : String := ""
+
+/-- `MODULE THEOREM` and the options; `none` on a malformed command line, without `--manifest`, or
+with `--badge-root` but no `--allowed-imports`. -/
+def parseArgs : List String → Option (String × String × GateArgs)
   | m :: t :: rest =>
-    let rec go (man comp : String) : List String → Option (String × String)
-      | [] => some (man, comp)
-      | "--manifest" :: f :: r => go f comp r
-      | "--computable" :: c :: r => go man c r
+    let rec go (a : GateArgs) : List String → Option GateArgs
+      | [] => some a
+      | "--manifest" :: f :: r => go { a with manifest := f } r
+      | "--computable" :: c :: r => go { a with computable := c } r
+      | "--allowed-imports" :: f :: r => go { a with allowed := f } r
+      | "--frontend-imports" :: f :: r => go { a with frontend := f } r
+      | "--badge-root" :: c :: r => go { a with badgeRoot := c } r
       | _ => none
-    (go "" "" rest).bind fun (man, comp) => if man.isEmpty then none else some (m, t, man, comp)
+    (go {} rest).bind fun a =>
+      if a.manifest.isEmpty || (!a.badgeRoot.isEmpty && a.allowed.isEmpty) then none else some (m, t, a)
   | _ => none
 
-def main (args : List String) : IO UInt32 := do
-  let some (modName, thm, manifestFile, comp) := parseArgs args
-    | throw <| IO.userError "usage: gate MODULE THEOREM --manifest FILE [--computable N1,N2,...]"
+/-- Module names, one per line. -/
+def readNames (file : String) : IO NameSet := do
+  if file.isEmpty then return {}
+  return (← IO.FS.lines file).foldl (init := {}) fun s l => if l.isEmpty then s else s.insert l.toName
+
+/-- The import closure of `roots`, one module per line (`gate --closure`). -/
+def writeClosure (roots : String) (out : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let manifest ← readManifest manifestFile
+  let env ← importModules ((roots.splitOn ",").toArray.map fun r => { module := r.toName }) {}
+    (trustLevel := 0)
+  let ms := env.header.moduleNames.map (·.toString) |>.qsort (· < ·)
+  IO.FS.writeFile out (String.join (ms.toList.map (· ++ "\n")))
+  IO.println s!"gate: wrote the import closure of {roots} ({ms.size} modules) to {out}"
+  return 0
+
+/-- The rules in the order of their `REJECT` lines: 5, 1–2, 3, 6, 8, 7, 4 with 9. -/
+def main (args : List String) : IO UInt32 := do
+  if let ["--closure", roots, out] := args then return ← writeClosure roots out
+  let some (modName, thm, ga) := parseArgs args
+    | throw <| IO.userError ("usage: gate MODULE THEOREM --manifest FILE [--computable N1,N2,...] " ++
+        "[--allowed-imports FILE] [--frontend-imports FILE] [--badge-root CONST (needs --allowed-imports)]" ++
+        "  |  gate --closure ROOT1,ROOT2,... OUT")
+  let allowed ← readNames ga.allowed
+  let front ← readNames ga.frontend
+  initSearchPath (← findSysroot)
+  let manifest ← readManifest ga.manifest
   let env ← importModules #[{ module := modName.toName }] {} (trustLevel := 0)
   let thmName := thm.toName
   unless env.contains thmName do
     IO.eprintln s!"gate: {thm} not found in {modName}"; return 1
-  -- 5: organiser modules by content hash
   let (trusted, pinned, hashErrs) ← classify env manifest
-  let mut errs : Array String := hashErrs
-  -- 1, 2: the closure of the certificate
+  let g : GateCtx := { env, trusted, pinned, allowed, front }
   let cl := closure env thmName
-  let mut axioms : Array Name := #[]
-  for n in cl.toList do
-    if bannedConsts.contains n then errs := errs.push s!"closure uses {n}"
-    let some ci := env.find? n | continue
-    if let .axiomInfo _ := ci then
-      axioms := axioms.push n
-      unless allowedAxioms.contains n do errs := errs.push s!"non-standard axiom {n}"
-    let m := moduleOf env n
-    unless trusted.contains m do
-      if ci.isUnsafe then errs := errs.push s!"unsafe constant {n} (module {m})"
-      match ci with
-      | .opaqueInfo _ => errs := errs.push s!"opaque (or partial) constant {n} (module {m})"
-      | .defnInfo v => if v.safety == .partial then errs := errs.push s!"partial definition {n} (module {m})"
-      | _ => pure ()
-  -- 3: compiler-substitution and load-time-code attributes registered by untrusted modules
-  for i in [:env.header.moduleNames.size] do
-    let m := env.header.moduleNames[i]!
-    if trusted.contains m then continue
-    let isPinned := pinned.contains m
-    let idx : ModuleIdx := i
-    for (d, impl) in Compiler.implementedByAttr.ext.getModuleEntries env idx (level := .private) do
-      errs := errs.push s!"module {m}: @[implemented_by {impl}] on {d}"
-    for (d, _) in externAttr.ext.getModuleEntries env idx (level := .private) do
-      errs := errs.push s!"module {m}: @[extern] on {d}"
-    for (d, sym) in exportAttr.ext.getModuleEntries env idx (level := .private) do
-      errs := errs.push s!"module {m}: @[export {sym}] on {d}"
-    let inits := (regularInitAttr.ext.getModuleEntries env idx (level := .private)).map (·.1) ++
-      (builtinInitAttr.ext.getModuleEntries env idx (level := .private)).map (·.1)
-    if inits.size > 0 then
-      if isPinned then IO.println s!"gate: note: pinned dependency {m} registers {inits.size} [init] declaration(s)"
-      else for d in inits do errs := errs.push s!"module {m}: [init]/[builtin_init] on {d}"
-    let ncs := (Compiler.CSimp.ext.ext.getModuleEntries env idx (level := .private)).size
-    if ncs > 0 then
-      if isPinned then
-        IO.println s!"gate: note: pinned dependency {m} registers {ncs} @[csimp] lemma(s) (proved equalities)"
-      else errs := errs.push s!"module {m}: registers @[csimp] lemmas"
-  -- 4: the badge-path fields of the named constants have compiled code (A7-M2)
-  let comps := (comp.splitOn ",").filter (· ≠ "")
-  unless comps.isEmpty do
-    let cenv ← loadPureExts env
-    let opts : Options := ({} : Options) |>.set `Elab.async false |>.set `maxHeartbeats gateHeartbeats
-    let ctx : Core.Context := { fileName := "<gate>", fileMap := default, options := opts,
-                                maxHeartbeats := gateHeartbeats * 1000 }
-    let act : MetaM (Array String) := comps.foldlM (init := #[]) fun acc c => do
-      unless (← getEnv).contains c.toName do return acc.push s!"--computable {c}: not found"
-      return acc ++ (← checkExec c (mkConst c.toName))
-    let (cerrs, _) ← (act.run' {} {}).toIO ctx { env := cenv }
-    errs := errs ++ cerrs
+  let (errs12, axioms) := rules12 g cl
+  let mut errs := hashErrs ++ errs12
+  let mods := g.modules
+  for (m, i) in mods do
+    unless trusted.contains m do errs := errs ++ (← rule3 g m i)
+  if !ga.allowed.isEmpty then
+    for (m, i) in mods do
+      if g.untrusted m then errs := errs ++ rule6 g m i
+    let fronts := mods.filterMap fun (m, _) => if front.contains m then some m else none
+    let frontClosure := (reach fronts (moduleImports env)).foldl (·.insert ·) ({} : NameSet)
+    for (m, _) in mods do
+      if g.submissionOwned m then errs := errs ++ rule6t g frontClosure m
+  if !ga.badgeRoot.isEmpty then errs := errs ++ (← rule8 g ga.badgeRoot.toName)
+  for (m, i) in mods do
+    if g.untrusted m then errs := errs ++ rule7 g m i
+  errs := errs ++ (← rule4 g ((ga.computable.splitOn ",").filter (· ≠ "")))
   IO.println s!"gate: {env.header.moduleNames.size} modules, {trusted.size} trusted and {pinned.size} pinned by hash"
   IO.println s!"gate: {thm}: closure of {cl.size} constants, axioms {axioms.qsort (·.lt ·) |>.toList}"
   if errs.isEmpty then

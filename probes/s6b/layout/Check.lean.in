@@ -1,0 +1,17 @@
+/-
+  Stage 6b cross-check (CI): the badge indexer's JSON reader (`RecursionFastHarness.LayoutJson`)
+  and the challenge renderer (`scripts/render-challenge.py`, `layout` placeholder) produce the same
+  layout from the same file, compared through the contract's serialisation `Layout.words` (every
+  chip's columns, gadget, matrices, terms, coefficients, ports and fixed table, the bus kinds below
+  2^8, the public chip). Rendered by probes/s6b/layout/check.sh, which appends the comparison.
+-/
+import RecursionFast.Contract
+import Mathlib.Data.Fin.VecNotation
+import RecursionFastHarness.LayoutJson
+
+namespace ParseCheck
+open RecursionFast
+
+{{layout:C}}
+
+end ParseCheck

@@ -84,8 +84,9 @@ supportInterpreter = true
 # UNTRUSTED circuit frontend (DESIGN §9.3, §11 step 9; Stage 8). Clean 42fe4b26 by path, fetched
 # into the gitignored `ext/Clean` by `scripts/setup-clean.sh`; the root's mathlib/CompPoly pins
 # override Clean's own v4.33.1 requires. Only `RecursionFastClean` imports Clean (the
-# `Clean.Air.FlatEnsemble` cone); it is not a default target, the contract never mentions it, and
-# `scripts/org-build.sh` drops both blocks from the organiser package.
+# `Clean.Air.FlatEnsemble` cone); it is not a default target and the contract never mentions it.
+# `scripts/org-build.sh` keeps both blocks (Stage 6b decision, S6b-A17): Clean is hash-pinned and
+# importable by circuit proofs, never by a badge root's module (gate rule 8).
 name = "Clean"
 path = "ext/Clean"
 

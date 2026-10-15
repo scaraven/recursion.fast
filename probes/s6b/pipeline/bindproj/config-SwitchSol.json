@@ -1,0 +1,3 @@
+{"challenge_module": "Challenge", "solution_module": "SwitchSol", "theorem_names": ["certified"],
+ "definition_names": ["submission"], "permitted_axioms": ["propext", "Quot.sound", "Classical.choice"],
+ "enable_nanoda": false}

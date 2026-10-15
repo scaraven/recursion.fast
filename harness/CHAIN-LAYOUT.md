@@ -94,9 +94,10 @@ The whole layout has 1,163 matrix entries.
 
 ## 4. The G chip (two rows per G-call)
 
-**Why two rows.** One G is six 32-bit additions, i.e. 24 byte lookups. A chip has at most `2^4` ports
-(§2.2), so a one-row-per-G chip is inadmissible. A one-row-per-round chip is too, more so. G is
-therefore split into its halves:
+**Why two rows.** One G is six 32-bit additions, i.e. 24 byte lookups. When this layout was
+designed a chip had at most `2^4` ports (§2.2), so a one-row-per-G chip was inadmissible (a
+one-row-per-round chip more so). The cap is now `2^5` (S8-A9), which would admit the 24 lookups in
+one row; the layout is unchanged and keeps two rows per G-call. G is split into its halves:
 
 | phase | computes |
 |---|---|

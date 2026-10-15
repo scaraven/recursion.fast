@@ -1326,3 +1326,131 @@ are `S6b-A<i>` (Stage 6a's are `S6-A1 … S6-A11`).
   - **Statement change, allowed in a fix pass.** `idxOf_eq_iff` loses its unused hypothesis
     `b ∈ names`: membership of `b` follows from the equal index.
 
+
+## Stage 6b decision pass (orchestrator, 2026-10-15)
+
+- **S6b-A15 (S6b-A3 deferred: open item O-12).** For DESIGN §12: "**O-12** (organiser, recommended
+  before launch): badge executables regenerated from the kernel terms of the badge-path fields, so
+  that no submission object is linked into `verify`/`index`. Residual risk until then: forgery of
+  the emitted code through raw compiler-state access (`persistentEnvExtensionsRef`, `unsafeCast`).
+  Estimate 2–3 days (S6b-A3)." Gate rules 3, 6, 7, 8 and the trust statement of S6b-A2 (now with
+  rule 8, S6b-A17) are the current guarantee.
+- **S6b-A16 (S6b-A9 decided: the leaf prover reads `s`).** The leaf prover reads `layout.json`,
+  `vkc.bin`, `stmt.bin` and `secret.hex` (the start `s`) and generates the witness tables itself,
+  inside the timed region (witness generation is part of proving, the same for every entry). The
+  runner provides no witness file (its `"witness": "full"` option is gone); the mode is the last
+  argument. **Note for `submissions/baseline/prover/README.md`:** follow `harness/README.md`,
+  "Prover interface" (the orchestrator reconciles it).
+- **S6b-A17 (S6b-A11 decided: Clean for circuit proofs, never on the badge path).**
+  - **Finding that shaped it.** Clean's import closure contains `Lean` and
+    `Lean.Compiler.LCNF.PhaseExt` (4,708 modules from `RecursionFast.Clean`; at least 10 Clean modules import
+    `Lean` or `Lean.Elab.*`). The S7 forgery elaborates when it imports Clean instead of `Lean`, and
+    its emitted C is forged (`probes/s6b/gate/ForgeClean.lean`, CI). Adding Clean's closure to the
+    allowlist would have reopened S7-M1 for every submission.
+  - **Organiser package and manifest.** `scripts/org-build.sh` now builds the `Clean` require (at
+    the pinned rev, from `ext/Clean` by absolute path) and the bridge `RecursionFastClean`; this
+    reverses S8-A1's "the organiser package stays Clean-free". The olean manifest covers Clean's
+    `.olean`s as a pinned package (`packages/Clean/…`, 130 files; `olean-manifest.py` reads the
+    organiser's `path` requires); `Gate.lean`'s pinned class includes `Clean`, so Clean's `[init]`
+    entries (`register_simp_attr`, deriving handlers) are reported, not rejected (rule 3 rejects
+    attributes of submission-owned modules only, i.e. modules outside the manifest).
+  - **Rule 6.** A submission's modules may also import, directly, the modules of
+    `scripts/import-frontend.txt` (`--frontend-imports`): Clean's own 39 modules and the 6 bridge
+    modules, not the `Lean` modules Clean imports.
+  - **Rule 8 (new, `--badge-root CONST`).** The badge executables import only the module that
+    declares the badge root (board L: `submission`; board R: the new `leaf`), and its transitive
+    imports must stay inside the compiler-free closure (`import-allowlist.txt`) or the
+    submission's own modules. The gate prints `gate: badge-root-module M`; `scripts/harness.sh`
+    builds `verify`/`index` from `M`. So a module that can reach the compiler (anything importing
+    Clean) is never linked into them, whatever the circuit proofs import.
+  - **Rule 9 (new).** A badge-path field (rule 4: `P`'s fields, `cfg`, `entry.C`, `entry.decode`)
+    must not reach a non-theorem constant of a frontend module through the definitions of
+    untrusted modules.
+  - **R stub.** `def leaf : Submission declared.k` (in a Clean-free module of the solution) and
+    `certified : CertificateR declared submission ∧ submission.entry.C = C ∧
+    submission.toSubmission = leaf`; `definition_names` = `leaf`, `submission`.
+  - **Probes** (`probes/s6b/gate/clean/`, CI step 8): a board-R submission whose circuit module
+    imports Clean and whose certificate uses a Clean theorem passes (badge root module
+    `GClean.Core`); one whose `decode` calls `FiniteField.val` is rejected (rule 9); a badge root
+    declared in a Clean-importing module is rejected (rule 8); `ForgeClean` is rejected as a badge
+    root (rule 8).
+- **S6b-A18 (S6b-A13 decided: prebuild all of Mathlib's object files).** On the reference machine,
+  once per toolchain: `(cd ORG && lake build mathlib/Mathlib:static)` (cost in
+  `harness/reference-machine.md`). Submitters' Mathlib imports are not restricted.
+- **S6b-A19 (O-6: the user's decision).** `harness/reference-machine.md` requires carry-less
+  multiply (`pclmulqdq`, or Zbc on RISC-V) and records this machine's noise figures as the
+  placeholder.
+
+## Stage 6b fix pass (after the S6b review, 2026-10-15)
+
+- **S6b-A20 (S6b-M3, interim and binding: the source rule; §7.4, §8; amends S6b-A2's trust
+  statement).**
+  - **Finding confirmed and made concrete.** `probes/s6b/gate/ForgeRaw.lean` forges the compiler
+    data of a definition through the raw route, under Mathlib-only imports (every import allowed
+    by rule 6, and rule 8 passes it as a badge root): a `run_meta` takes `monoExt`/`baseExt` from
+    `persistentEnvExtensionsRef` (in `Lean.Environment`, imported by every Mathlib module), casts
+    them with `unsafeCast`, and gives the `@[inline]` `dec` the code of `acceptAll`. The kernel
+    sees the honest `dec`; an importer that calls it (the badge main's role, `UseRaw.lean`) emits
+    `msg == msg`. **No gate rule catches it**: CI shows the gate PASSES it.
+  - **The source rule** (`scripts/source-rule.py`, run by `scripts/harness.sh` in each fresh tree
+    before anything of the submission is built): submission-owned `.lean` files may not contain,
+    as tokens (comments and literals skipped, interpolations scanned), `run_meta`, `run_cmd`,
+    `run_elab`, `run_tac`, `by_elab`, `eval%`, any `#`-command but `#check`, `#print`, `#reduce`,
+    `#guard_msgs` (so `#eval`, `#exit`), `elab`, `elab_rules`, `macro`, `macro_rules`, `syntax`,
+    `declare_syntax_cat`, `initialize`, `builtin_initialize`, `register_…`, `unsafe`, `partial`,
+    names with an `unsafe…`/`…Unsafe` component, `persistentEnvExtensionsRef`,
+    `envExtensionsRef`, the attributes `implemented_by`, `extern`, `cpass`, `computed_field`,
+    `set_option` of `compiler…`, `debug…`, `Elab…`, `interpreter…`, `bootstrap…`,
+    `trace.compiler…`, `import Lean…`, `import Lake…` and `open Lean…`; after a sweep of the
+    keywords of Lean v4.34.1 and of Mathlib's package closure, also every word starting `run_`
+    (Qq's `run_tacq`, Mathlib's `run_conv`), Qq's `by_elabq`, `import Qq…`, `open Qq…`, and
+    `simproc`, `dsimproc`, `simproc_decl`, `dsimproc_decl` (these leave declarations, which rule 7
+    rejects too). Allowed: the literals `#[…]` and `#v[…]` (Clean's vectors; the first version
+    rejected them) and a `#` not followed by a letter; Mathlib's `#s` is rejected (write
+    `s.card`). CI: ForgeRaw is rejected by it before anything is built; the toy, the baseline
+    (8 files) and `RecursionFast/Clean/` (5 files) pass it; `tests/source-rule/check.sh` (step 1)
+    checks 52 rejected forms, each reported on its own line, and a file of allowed forms.
+    `--source-rule off` is for the layer regressions of `tests/pipeline/` only.
+  - **Rule 6 transitive** (`rule6t`): every module a submission-owned module reaches is its own,
+    in the allowed closure, or reached through a frontend module (Clean's imports). A submission
+    importing an organiser module outside both lists (the harness driver, which imports `Lean`) is
+    rejected.
+  - **Trust statement** (replaces S6b-A2's last sentence): "The source rule and gate rules 3, 6,
+    7, 8 raise the bar; they do not exclude elaboration-time code that forges the emitted code by
+    means the rule's token list does not name. The sound fix is O-12 (badge executables
+    regenerated from kernel terms), which must ship before any ranked board opens."
+- **S6b-A21 (S6b-M1: the runner fails closed).** `run-benchmark.py run` refuses to start (REJECT,
+  "no sandbox: …") unless `sandbox` names an executable, and (S6b-A23) unless per-step memory
+  cgroups work. `scripts/harness.sh` stage 3b writes `sandbox` = its `--landrun`, whatever the
+  bench file says. CI: a configuration without `sandbox` is rejected.
+- **S6b-A22 (S6b-M2, S6b-m2, S6b-m5: the scored layout is the certified one).** With `--bench`,
+  `scripts/harness.sh` requires `--claim CLAIM.json --stub STUB.lean.in`; it copies the claim and
+  the files it names into the work directory, re-renders the stub with that copy, and rejects
+  unless the challenge is that rendering byte for byte. It then writes the benchmark's `k`
+  (= `Declared.k`), `cfg.hash`, `claim.digestC`/`digestL` and `layouts.C` from the copy, so the
+  recursion key is indexed from the very file rendered into the certified `C` (`certified` binds
+  `submission.entry.C = C`), and the runner checks `H(index(C)) = digestC` before scoring. The
+  runner's `cfg` takes only `hash` (the arity is the submission's). CI: a claim that does not
+  render the challenge, and a layout file that is not the claimed one, are rejected.
+- **S6b-A23 (S6b-m1: per-step memory cgroup).** Every sandboxed step runs under `systemd-run --user
+  --scope -p MemoryMax=<mem_kb> -p MemorySwapMax=0 -p OOMPolicy=continue`; an organiser shell in
+  the cgroup, outside the sandbox, records the cgroup's `memory.peak` (the whole process tree), its
+  `oom_kill` count and the sandboxed process's wall time into a directory the sandbox does not see;
+  a step with an `oom_kill` rejects ("killed at the memory cap"), whatever its exit code.
+  `OOMPolicy=continue` is needed: under systemd's default (`stop`) an OOM kill stops the whole
+  scope, the organiser shell included (SIGTERM, measured), and nothing is recorded. Without cgroups the runner rejects the run. CI: a 300 MB prover under a 150 MB
+  cap is rejected. `harness/reference-machine.md` makes delegated cgroups a requirement.
+- **S6b-A24 (S6b-m3: a minimal sandbox root).** `bwrap-landrun.sh --minimal-root` (runner steps):
+  readable are only `/usr` (with its `/bin`, `/lib*`, `/sbin` links), `/etc`, a fresh `/tmp`, the
+  executables' directories, the files the prover's argv names and the config's `sandbox_ro`. The
+  comparator and the builds keep the read-only whole root. CI: a step cannot read the repository,
+  and the smoke benchmark runs. The timed region is now the sandboxed process's (S6b-A23); the
+  sandbox's set-up is inside it (about 0.05 s here), the cgroup's is not.
+- **S6b-A25 (S6b-m4).** `submissions/baseline/prover/README.md` states the S6b-A9/A16 interface
+  (edited by this stage, at the orchestrator's instruction).
+- **S6b-A26 (rule 4's `Fin`-family branch; the simplify pass's note).** Behaviour kept. The gate
+  may PASS a `shape` that has code only member by member (branch (b)); the twin compiles `shape`
+  whole, so such a submission fails at stage 3a ("badge executables build"): a REJECT one stage
+  later, never an ACCEPT. Every shape in the repository (the toy's, `cmpToy`'s) passes both (CI
+  steps 7 and 10). Making them agree means compiling `shape` whole in rule 4, a behaviour change
+  left to the next gate revision.

@@ -198,7 +198,7 @@ def admissible(L, k):
     ok = True
     for C in ch:
         ok &= 1 <= C.cols <= 2 ** 10 and C.t <= 2 ** 6 and C.cons <= 2 ** 8 and C.q <= 2 ** 8
-        ok &= all(len(s) <= 8 for s in C.S) and len(C.ports) <= 2 ** 4
+        ok &= all(len(s) <= 8 for s in C.S) and len(C.ports) <= 2 ** 5
         ok &= all(b < 2 ** 8 and sel < C.cols and len(msg) <= 2 ** 4 and all(c < C.cols for c in msg)
                   for (b, _, sel, msg) in C.ports)
     res["every chip admissible"] = ok

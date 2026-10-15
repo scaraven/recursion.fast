@@ -1,0 +1,9 @@
+{
+ "k": 20,
+ "hash": "blake2s",
+ "arity": 2,
+ "image": {
+  "code": "firstmsg.code",
+  "data": "firstmsg.data"
+ }
+}

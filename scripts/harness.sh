@@ -21,92 +21,99 @@
 #      WORK/cmp-build.sha256; Lean builds are deterministic, so an honest solution reproduces them,
 #      and a solution whose elaboration differs between the two builds is rejected), then the
 #      environment gate (trust by content hash, --manifest).
-#   3. (--badge "CMD ...") the badge path (compiled prover/indexer) runs as its OWN sandboxed process
-#      in WORK/tree after the gate; never inside the gate or an emulator process. It therefore runs
-#      the comparator-verified code (the bound .olean IR and .c files).
+#   3. The badge path (DESIGN §7.4 step 3), after the gate, in WORK/tree, on the comparator-verified
+#      code (the bound .olean IR and .c files); never inside the gate or an emulator process:
+#      3a (--badge-build SUBMISSION, v2) builds the badge executables `harness-verify` and
+#         `harness-index` (harness/lean/Main.lean.in, generated into WORK/tree/badge at stage 1 so
+#         that both trees have the same lakefile) against the constant SUBMISSION (board L
+#         `RecursionFast.Challenge.submission`, board R `RecursionFast.Challenge.leaf`), importing only
+#         the module that declares it (gate rule 8 checks that it reaches neither Clean nor the
+#         compiler and prints it; S6b-A17),
+#         sandboxed (only the tree's .lake writable: every organiser/package object file must be
+#         prebuilt by scripts/org-build.sh); the bound artifacts must be unchanged afterwards;
+#      3b (--bench CONFIG --secrets FILE --claim CLAIM --stub STUB, v2) runs the benchmark
+#         (harness/run-benchmark.py, an organiser process that sandboxes every step itself) with
+#         CONFIG plus, forced by the harness: the two executables, the sandbox (--landrun, S6b-M1),
+#         and from the claim that rendered the challenge (S6b-M2): the class `k` (= Declared.k,
+#         S6b-m2), the hash, the declared digests and the recursion layout C, i.e. the very file
+#         rendered into the certified `C`; its result is WORK/bench.json and some board must ACCEPT.
+#   Fix pass (S6b-M3, S6b-M2): in each fresh tree, before anything of the submission is built in
+#   it, the SOURCE RULE (scripts/source-rule.py) on the submission's .lean files (--source-rule off
+#   only for the layer regressions in tests/pipeline, each of which tests one other layer alone);
+#   and before stage 0, with --claim/--stub, CHALLENGE must be the rendering of STUB with CLAIM.
 # Exit 0 and "HARNESS: ACCEPT" iff every stage passes; otherwise "HARNESS: REJECT (<stage>)", exit 1.
 #
-# Options: --org DIR (organiser package, default this tree)  --manifest FILE  --work DIR
+# Options: --org DIR (organiser package, REQUIRED: scripts/org-build.sh DIR; this repository's root
+#          is not one, it requires Clean and holds submissions)  --manifest FILE  --work DIR
+#          --allowed-imports FILE (gate rule 6, S7-M1; default scripts/import-allowlist.txt, '' = off)
+#          --frontend-imports FILE (gate rule 6, S6b-A11; default scripts/import-frontend.txt)
 #          --prefix MOD (trusted project prefixes, repeatable; default RecursionFast.Contract, RiscvZkvm)
-#          --packages DIR ('' = none)  --landrun PATH  --gate THEOREM  --computable N1,N2  --badge CMD
+#          --packages DIR ('' = none)  --landrun PATH  --gate THEOREM  --computable N1,N2
+#          --badge-build SUBMISSION  --bench CONFIG  --secrets FILE  --claim CLAIM.json  --stub STUB.lean.in
+#          --source-rule on|off
+# Environment: COMPARATOR_HOME (the comparator checkout; default ./tools/comparator),
+#          COMPARATOR_NANODA (nanoda_bin; default ./tools/ext/nanoda_lib/target/release/nanoda_bin),
+#          COMPARATOR_LEAN4EXPORT (default under COMPARATOR_HOME). Binaries are never in git.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-ORG=$HERE; MANIFEST=$HERE/scripts/olean-manifest.sha256; WORK=""; LANDRUN=$HERE/scripts/bwrap-landrun.sh
-GATE_THM=""; COMPUTABLE=""; BADGE=""; MARGS=()
+ORG=""; MANIFEST=$HERE/scripts/olean-manifest.sha256; WORK=""; LANDRUN=$HERE/scripts/bwrap-landrun.sh
+ALLOW=$HERE/scripts/import-allowlist.txt; FRONT=$HERE/scripts/import-frontend.txt
+GATE_THM=""; COMPUTABLE=""; BADGE_SUB=""; BENCH=""; SECRETS=""; CLAIM=""; STUB=""; SRCRULE=on; MARGS=()
 while [[ $# -gt 0 && "$1" == --* ]]; do
   case "$1" in
     --org) ORG=$(cd "$2" && pwd); shift 2 ;;
     --manifest) MANIFEST=$(realpath "$2"); shift 2 ;;
+    --allowed-imports) ALLOW=${2:+$(realpath "$2")}; shift 2 ;;
+    --frontend-imports) FRONT=${2:+$(realpath "$2")}; shift 2 ;;
     --work) WORK=$2; shift 2 ;;
     --prefix) MARGS+=(--prefix "$2"); shift 2 ;;
     --packages) MARGS+=(--packages "$2"); shift 2 ;;
     --landrun) LANDRUN=$(realpath "$2"); shift 2 ;;
     --gate) GATE_THM=$2; shift 2 ;;
     --computable) COMPUTABLE=$2; shift 2 ;;
-    --badge) BADGE=$2; shift 2 ;;
+    --badge-build) BADGE_SUB=$2; shift 2 ;;
+    --bench) BENCH=$(realpath "$2"); shift 2 ;;
+    --secrets) SECRETS=$(realpath "$2"); shift 2 ;;
+    --claim) CLAIM=$(realpath "$2"); shift 2 ;;
+    --stub) STUB=$(realpath "$2"); shift 2 ;;
+    --source-rule) SRCRULE=$2; shift 2 ;;
     *) echo "harness: unknown option $1" >&2; exit 2 ;;
   esac
 done
-[[ $# -eq 3 ]] || { sed -n '2,31p' "$0"; exit 2; }
+[[ $# -eq 3 ]] || { sed -n "2,$(grep -n '^set -euo' "$0" | head -1 | cut -d: -f1)p" "$0"; exit 2; }
+[[ -n "$ORG" ]] || { echo "harness: --org DIR is required (an organiser package built by scripts/org-build.sh DIR)" >&2; exit 2; }
+[[ -z "$BENCH" || ( -n "$BADGE_SUB" && -n "$SECRETS" && -n "$CLAIM" && -n "$STUB" ) ]] \
+  || { echo "harness: --bench needs --badge-build, --secrets, --claim and --stub (S6b-M2)" >&2; exit 2; }
+[[ ( -z "$CLAIM" && -z "$STUB" ) || ( -n "$CLAIM" && -n "$STUB" ) ]] || { echo "harness: --claim and --stub go together" >&2; exit 2; }
+[[ "$SRCRULE" == on || "$SRCRULE" == off ]] || { echo "harness: --source-rule on|off" >&2; exit 2; }
 CHALLENGE=$(realpath "$1"); SOLDIR=$(realpath "$2"); CONFIG=$(realpath "$3")
-CMP=${COMPARATOR_HOME:-$HERE/../contract/tools/comparator}
+CMP=${COMPARATOR_HOME:-$HERE/tools/comparator}
+NANODA=${COMPARATOR_NANODA:-$HERE/tools/ext/nanoda_lib/target/release/nanoda_bin}
+[[ -x "$CMP/.lake/build/bin/comparator" ]] || { echo "harness: no comparator at $CMP (set COMPARATOR_HOME)" >&2; exit 2; }
 [[ -n "$WORK" ]] || { WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT; }
 mkdir -p "$WORK"; WORK=$(cd "$WORK" && pwd); TREE=$WORK/tree
 [[ ! -e "$TREE" && ! -e "$WORK/cmp" ]] || { echo "harness: $WORK already holds a tree; use a fresh --work" >&2; exit 2; }
 reject() { echo "HARNESS: REJECT ($*)"; exit 1; }
 mcheck() { python3 -I "$HERE/scripts/olean-manifest.py" check --org "$ORG" "${MARGS[@]}" "$MANIFEST"; }
-cfg() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$CONFIG" "$1"; }
-CH_MOD=$(cfg challenge_module); SOL_MOD=$(cfg solution_module)
+jget() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+CH_MOD=$(jget "$CONFIG" challenge_module); SOL_MOD=$(jget "$CONFIG" solution_module)
+# The badge executables' main modules in DIR, importing MODULE (harness/badge-main.py).
+badge_mains() {
+  mkdir -p "$1"; local e
+  for e in verify index; do python3 -I "$HERE/harness/badge-main.py" "$1/Harness${e^}.lean" "$2" "$BADGE_SUB" $e; done
+}
 
-# A fresh tree: challenge + solution sources + harness lakefile; the organiser package by path.
+# A fresh tree: challenge + solution sources (+ the badge mains, which stage 3a builds) + the
+# lakefile and manifest of harness/mk-tree.py (module roots checked fresh); the organiser package by path.
 mkfresh() {
   local t=$1
   mkdir -p "$t/challenge" "$t/submission" "$t/.lake"
-  cp "$ORG/lean-toolchain" "$t/"
+  cp "$ORG/lean-toolchain" "$t/"; cp "$CONFIG" "$t/config.json"
   local chpath; chpath="$t/challenge/$(echo "$CH_MOD" | tr . /).lean"
   mkdir -p "$(dirname "$chpath")"; cp "$CHALLENGE" "$chpath"
   (cd "$SOLDIR" && find . -name '*.lean' -not -path '*/.lake/*' -exec cp --parents {} "$t/submission/" \;)
-  python3 -I - "$ORG" "$t" "$CH_MOD" <<'EOF'
-import json, os, sys, tomllib
-org, t, ch = sys.argv[1:]
-name = tomllib.load(open(os.path.join(org, "lakefile.toml"), "rb"))["name"]
-m = json.load(open(os.path.join(org, "lake-manifest.json")))
-pk = os.path.normpath(os.path.join(org, m.get("packagesDir") or ".lake/packages"))
-mods = sorted(os.path.relpath(os.path.join(d, f), os.path.join(t, "submission"))[:-5].replace(os.sep, ".")
-              for d, _, fs in os.walk(os.path.join(t, "submission")) for f in fs if f.endswith(".lean"))
-# Module roots must be fresh: Lean resolves a module through the FIRST search-path root that has
-# its top-level name, and the organiser package and packages precede the tree's own build output.
-import glob, subprocess
-dirs = [os.path.join(org, ".lake/build/lib/lean")] + glob.glob(os.path.join(pk, "*/.lake/build/lib/lean"))
-dirs.append(os.path.join(subprocess.run(["lean", "--print-prefix"], cwd=t, capture_output=True, text=True,
-                                        check=True).stdout.strip(), "lib/lean"))
-for r in sorted({x.split(".")[0] for x in mods + [ch]}):
-    for d in dirs:
-        if os.path.isdir(os.path.join(d, r)) or os.path.exists(os.path.join(d, r + ".olean")):
-            sys.exit(f"harness: module root {r} of the challenge/solution exists in {d}")
-q = lambda xs: "[" + ", ".join(json.dumps(x) for x in xs) + "]"
-open(os.path.join(t, "lakefile.toml"), "w").write(f"""name = "harness"
-packagesDir = {json.dumps(pk)}
-[[require]]
-name = {json.dumps(name)}
-path = {json.dumps(org)}
-[[lean_lib]]
-name = "HarnessChallenge"
-srcDir = "challenge"
-roots = {q([ch])}
-[[lean_lib]]
-name = "HarnessSubmission"
-srcDir = "submission"
-roots = {q(mods)}
-""")
-for p in m["packages"]:
-    p["inherited"] = True
-m["packages"].insert(0, {"type": "path", "scope": "", "name": name, "manifestFile": "lake-manifest.json",
-                         "inherited": False, "dir": org, "configFile": "lakefile.toml"})
-m["name"] = "harness"; m["packagesDir"] = pk
-json.dump(m, open(os.path.join(t, "lake-manifest.json"), "w"), indent=1)
-EOF
-  cp "$CONFIG" "$t/config.json"
+  [[ -z "$BADGE_SUB" ]] || badge_mains "$t/badge" "$SOL_MOD"
+  python3 -I "$HERE/harness/mk-tree.py" "$ORG" "$t" harness "$CH_MOD"
 }
 # The solution must not place an organiser module (by manifest path) anywhere in its build output.
 shadow() {
@@ -138,15 +145,48 @@ arts() {
      -o -name '*.ir' -o -name '*.c' \) -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)
 }
 
+if [[ -n "$CLAIM" ]]; then
+  echo "== claim: the challenge is the rendering of the stub with the claim (S6b-M2)"
+  # copy the claim and the files it names (images, layouts) into WORK/claim: the challenge and the
+  # benchmark read these copies, never the submitter's directory again
+  python3 -I - "$STUB" "$CLAIM" "$WORK/claim" <<'EOF' || reject "claim files"
+import json, os, re, shutil, sys
+stub, claim, dst = sys.argv[1:]
+src = os.path.dirname(claim); os.makedirs(dst)
+kinds = dict((k, t) for t, k in re.findall(r"\{\{(nat|rat|hash|digest|image|layout):([A-Za-z0-9_.]+)\}\}", open(stub).read()))
+d = json.load(open(claim))
+paths = [d[k] for k, t in kinds.items() if t == "layout" and k in d] + \
+        [v for k, t in kinds.items() if t == "image" and isinstance(d.get(k), dict) for v in d[k].values()]
+for rel in paths:
+    if not isinstance(rel, str) or os.path.isabs(rel) or ".." in rel.split("/"):
+        sys.exit(f"harness: claim path {rel!r} is not a plain relative path")
+    os.makedirs(os.path.dirname(os.path.join(dst, rel)) or dst, exist_ok=True)
+    shutil.copyfile(os.path.join(src, rel), os.path.join(dst, rel))
+shutil.copyfile(claim, os.path.join(dst, "claim.json"))
+EOF
+  python3 -I "$HERE/scripts/render-challenge.py" "$STUB" "$WORK/claim/claim.json" "$WORK/claim/challenge.lean" \
+    || reject "claim does not render"
+  cmp -s "$WORK/claim/challenge.lean" "$CHALLENGE" || reject "the challenge is not the rendering of the stub with the claim"
+  echo "harness: the challenge is the stub rendered with the claim"
+fi
+# The source rule (S6b-M3) on the submission's .lean files as copied into a fresh tree, before
+# anything of the submission is built in it.
+srcrule() {
+  [[ "$SRCRULE" == on ]] || return 0
+  python3 -I "$HERE/scripts/source-rule.py" "$1/submission" > "$WORK/source-rule.log" 2>&1 \
+    || { tail -12 "$WORK/source-rule.log"; reject "source rule: $(tail -1 "$WORK/source-rule.log" | sed 's/^source-rule: //')"; }
+  echo "harness: $(tail -1 "$WORK/source-rule.log")"
+}
 echo "== stage 0: organiser build integrity"
 mcheck || reject "organiser build does not match the olean manifest"
 
 echo "== stage 1: comparator, fresh tree $TREE (no solution code has run on it)"
 mkfresh "$TREE" || reject "fresh tree (module names)"
+srcrule "$TREE"
 set +e
 (cd "$TREE" && COMPARATOR_LANDRUN=$LANDRUN \
   COMPARATOR_LEAN4EXPORT=${COMPARATOR_LEAN4EXPORT:-$CMP/.lake/packages/lean4export/.lake/build/bin/lean4export} \
-  COMPARATOR_NANODA=${COMPARATOR_NANODA:-$HERE/tools/ext/nanoda_lib/target/release/nanoda_bin} \
+  COMPARATOR_NANODA=$NANODA \
   /usr/bin/time -f "TIME %e s wall, %U s user, %M KB max" lake env "$CMP/.lake/build/bin/comparator" config.json) \
   > "$WORK/comparator.log" 2>&1
 rc=$?
@@ -163,6 +203,7 @@ mv "$TREE" "$WORK/cmp"
 if [[ -n "$GATE_THM" ]]; then
   echo "== stage 2: gate, fresh tree $TREE (same path; the comparator's tree is now $WORK/cmp)"
   mkfresh "$TREE" || reject "fresh tree (module names)"
+  srcrule "$TREE"
   (cd "$TREE" && "$LANDRUN" --env PATH --env HOME --rwx "$TREE/.lake" -- lake build "$SOL_MOD") \
     > "$WORK/gate-build.log" 2>&1 || { tail -5 "$WORK/gate-build.log"; reject "solution build in the gate tree"; }
   mcheck || reject "organiser .olean changed during the solution build"
@@ -179,11 +220,57 @@ if [[ -n "$GATE_THM" ]]; then
   echo "harness: gate tree build = comparator-verified build ($(wc -l < "$WORK/gate-build.sha256") artifacts byte-identical)"
   LP=$(cd "$TREE" && lake env printenv LEAN_PATH)
   gargs=("$SOL_MOD" "$GATE_THM" --manifest "$MANIFEST"); [[ -n "$COMPUTABLE" ]] && gargs+=(--computable "$COMPUTABLE")
+  [[ -n "$ALLOW" ]] && gargs+=(--allowed-imports "$ALLOW")
+  [[ -n "$FRONT" ]] && gargs+=(--frontend-imports "$FRONT")
+  # rule 8 (S6b-A11): the badge executables are built from the module that declares BADGE_SUB, which
+  # must reach neither Clean nor the compiler; the gate prints it
+  [[ -n "$BADGE_SUB" && -n "$ALLOW" ]] && gargs+=(--badge-root "$BADGE_SUB")
   (cd "$TREE" && LEAN_PATH=$LP "$LANDRUN" --env PATH --env HOME --env LEAN_PATH -- \
-    "$ORG/.lake/build/bin/gate" "${gargs[@]}") || reject "gate"
-  if [[ -n "$BADGE" ]]; then
-    echo "== stage 3: badge path (own sandboxed process)"
-    (cd "$TREE" && "$LANDRUN" --env PATH --env HOME -- bash -c "$BADGE") || reject "badge"
+    "$ORG/.lake/build/bin/gate" "${gargs[@]}") | tee "$WORK/gate.log" || reject "gate"
+  if [[ -n "$BADGE_SUB" ]]; then
+    echo "== stage 3a: badge executables (sandboxed build in the gate tree, after the gate)"
+    # the mains import only the badge root's module (rule 8; the gate prints it), else the solution's
+    BMOD=$(sed -n 's/^gate: badge-root-module //p' "$WORK/gate.log")
+    badge_mains "$TREE/badge" "${BMOD:-$SOL_MOD}"
+    [[ -z "$BMOD" || "$BMOD" == "$SOL_MOD" ]] || echo "harness: the badge executables import $BMOD (the module of $BADGE_SUB), not $SOL_MOD"
+    mkdir -p "$TREE/.lake/tmp"   # the linker's temporary files
+    (cd "$TREE" && TMPDIR=$TREE/.lake/tmp "$LANDRUN" --env PATH --env HOME --env TMPDIR --rwx "$TREE/.lake" -- \
+      lake build harness-verify harness-index) > "$WORK/badge-build.log" 2>&1 \
+      || { grep -v "^✔\|^⣿\|^ℹ" "$WORK/badge-build.log" | tail -8; reject "badge executables build"; }
+    mcheck || reject "organiser .olean changed during the badge build"
+    # the bound artifacts (A7-M3) are unchanged; the badge mains' own artifacts are new
+    arts "$TREE" > "$WORK/badge-build.sha256" || reject "badge tree artifacts"
+    nb=$(LC_ALL=C comm -23 <(LC_ALL=C sort "$WORK/gate-build.sha256") <(LC_ALL=C sort "$WORK/badge-build.sha256") | wc -l)
+    [[ $nb -eq 0 ]] || reject "the badge build changed $nb comparator-verified artifacts"
+    echo "harness: badge executables built: $TREE/.lake/build/bin/harness-{verify,index} ($(wc -l < "$WORK/gate-build.sha256") bound artifacts unchanged)"
+  fi
+  if [[ -n "$BENCH" ]]; then
+    echo "== stage 3b: benchmark run (harness/run-benchmark.py; every step sandboxed)"
+    # forced by the harness (S6b-M1, S6b-M2, S6b-m2, S6b-m5): the executables, the sandbox, and from
+    # the claim that rendered the challenge the class, the hash, the digests and the layout C
+    python3 -I -c 'import json, os, sys
+cfg = json.load(open(sys.argv[1])); b, landrun, cdir = sys.argv[2:5]
+claim = json.load(open(os.path.join(cdir, "claim.json")))
+cfg["verify"] = [os.path.join(b, "harness-verify")]; cfg["index"] = [os.path.join(b, "harness-index")]
+cfg["sandbox"] = landrun
+cfg["k"] = claim["k"]
+cfg["cfg"] = {"hash": claim["hash"]}
+if "C" in claim:
+    cfg.setdefault("layouts", {})["C"] = os.path.join(cdir, claim["C"])
+    cfg["claim"] = {"digestC": claim["digestC"], "digestL": claim["digestL"]}
+elif "R" in cfg.get("boards", []):
+    sys.exit("harness: board R needs a board-R claim (C, digestC, digestL)")
+else:
+    cfg.pop("claim", None); cfg.get("layouts", {}).pop("C", None)
+json.dump(cfg, open(sys.argv[5], "w"), indent=1)' "$BENCH" "$TREE/.lake/build/bin" "$LANDRUN" "$WORK/claim" \
+      "$WORK/bench-config.json" || reject "benchmark configuration"
+    python3 -I "$HERE/harness/run-benchmark.py" run --config "$WORK/bench-config.json" --secrets "$SECRETS" \
+      --out "$WORK/bench.json" --workdir "$WORK/bench" \
+      || reject "benchmark: $(jget "$WORK/bench.json" reason)"
+    python3 -I -c 'import json, sys
+for b, v in json.load(open(sys.argv[1]))["scores"].items():
+    r = v.get("reason")
+    print("harness: board " + b + ": " + str(v.get("verdict", "unranked")) + (" (" + str(r) + ")" if r else "") + " " + str(v))' "$WORK/bench.json"
   fi
 fi
 echo "HARNESS: ACCEPT"

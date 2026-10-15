@@ -18,15 +18,29 @@ accepts:
 NARG cfg P (index cfg P L) x tape = true        (Contract/Compile.lean; executed by the runner's compiled verifier)
 ```
 
-**Interface.** See `harness/README.md` ("Prover interface", "Verifier interface") for the
-runner's interface. Stage 6b is finalising it, so it is not restated here. It covers the files a
-leaf or node prover reads, the `proof.bin` it writes, the sandbox and the budgets.
+**Interface** (S6b-A9/A16; `harness/README.md`, "Prover interface", is authoritative). The
+runner calls `PROVER... leaf|node`: the mode is the **last** argument, appended to the configured
+argv. Each call runs in a fresh step directory, the only writable path, in a sandbox (no network;
+only `/usr`, `/etc`, a fresh `/tmp`, the prover's own files and the step directory are visible) and
+in a cgroup capped at 48 GB for the whole process tree. It must write `proof.bin` there.
+
+- `leaf`: `layout.json` (`L_chain(n)`, schema `recursion.fast/layout/1`), `vkc.bin` (the leaf key
+  bytes from the organiser's indexer: the `vkLen` elements of `VK L`, 8 bytes little-endian each,
+  then the 32-byte index root), `stmt.bin` (256 bytes: 32 elements, 8 bytes little-endian each)
+  and `secret.hex` (the chain's start `s`: 64 lowercase hex digits and a newline). No witness file
+  is provided: the prover builds the witness tables from `s` itself, **inside the timed region**
+  (witness generation is part of proving, the same for every entry).
+- `node`: `layout.json` (`C_V`, the claim's certified layout), `vkc.bin` = `vkC.bin` (the
+  recursion key), `vkL.bin`, `stmt.bin` (the aggregate statement `nodeStmt`, computed by the
+  runner), `child1.stmt`, `child1.proof`, `child1.tag` (`leaf` or `node`), and the same for
+  `child2`.
 
 Two constraints hold whatever the file format:
 
 - A native indexer may be used, but its key bytes must equal those of the Lean-compiled indexer
   (`VK`, `IDX`, committed by the trusted `index`).
-- Witness material (the secret start `s`) stays outside the verifier's sandbox (S6-A9).
+- Witness material (the secret start `s`) is visible only in its own leaf step's directory, never
+  in the verifier's sandbox (S6-A9).
 
 **Size.** `|tape| ≤ 2^20` bytes for `NARG` and on boards R and W. On board L every leaf proof must
 also be `≤ 2^17` bytes. The benchmark runner enforces that on every measured leaf tape (DESIGN §6.2,
