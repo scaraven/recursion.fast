@@ -2,9 +2,10 @@
 # recursion.fast v2: chips + CCS relation, verifier-as-circuit recursion, wall-time scoring
 
 Status: **design in force for the v2 contract** (user decisions of 2026-10-14; amended 2026-10-15
-after Stages 1–8 (see docs/DESIGN-AMENDMENTS.md); this file supersedes `DESIGN.md` wherever the two
-disagree). Written for the agent that builds the v2 contract, harness and baseline. Read
-`CLAUDE.md` first, then this file, then `contract-v03/RESULT.md` for the harness that carries over.
+after Stages 1–8 and the harness (see docs/DESIGN-AMENDMENTS.md); this file supersedes `DESIGN.md`
+wherever the two disagree). Written for the agent that builds the v2 contract, harness and
+baseline. Read `CLAUDE.md` first, then this file, then `contract-v03/RESULT.md` for the harness
+that carries over.
 
 What changed against the report (v1.0) and `DESIGN.md` v0.3, in one paragraph: the relation is
 no longer a flat R1CS but a *structured* constraint system (chips, each a uniform CCS row gadget,
@@ -442,11 +443,18 @@ protocol, `cfg` and instance:
 The **executed verifier** is `NARG cfg P` compiled by the Lean compiler (`lake exe verify`,
 organiser `Main.lean` importing the agent's module, built in the gate tree). There is no second
 verifier artefact and no `Agrees` theorem in v2: the thing timed is the thing proved, up to the
-Lean compiler and `compile` (§8).
+Lean compiler and `compile` (§8). A `Submission` as a whole is noncomputable whenever its `ε` is a
+real (always, in practice), and Lean cannot compile a `main` that refers to it, so the executables
+run its **twin** (S6b-A4, `harness/lean/RecursionFastHarness/Twin.lean`): the submission's own field
+terms for everything `NARG` and `index` read, and executable placeholders for the prover, the
+extractor and the errors. The generated main module states, and the kernel checks by `rfl` when it
+is built, `NARG cfg' P' = NARG S.cfg S.P` and `index cfg' P' = index S.cfg S.P`.
 
 The **executed prover** is the agent's native program (any language; built from source in the
-sandbox with the pinned toolchains). It is *not proved*. It must: read `(L, VK, x, w)` from
-files, write a tape that `NARG cfg P` accepts, and do so for every benchmark instance within
+sandbox with the pinned toolchains). It is *not proved*. It must: read its inputs from files (a
+leaf: `L`, the key, `x` and the chain's secret start `s`, from which it generates the witness
+itself; a node: `C_V`, the keys, the aggregate statement and the two child proofs; the interface is
+in §6.3), write a tape that `NARG cfg P` accepts, and do so for every benchmark instance within
 budget. The **executed indexer** is the Lean-compiled `VK`/`IDX` (untimed, §7.4); a native
 indexer may be used by the prover but the resulting `VK` bytes must be identical.
 
@@ -454,12 +462,66 @@ indexer may be used by the prover but the resulting `VK` bytes must be identical
 
 | Item | Form | Checked by |
 |---|---|---|
-| `P : Protocol k`, `cfg : Cfg` | Lean | gate (computable `VK`, `IDX`, `verify`, extractor image; `--computable` rule updated) |
-| `secure : P.Secure` | Lean theorem | comparator (two kernels), axiom audit |
+| `P : Protocol k`, `cfg : Cfg` | Lean | the source rule, then gate rules 3, 4 and 6–9: compiled code for the badge-path fields only (`VK`, `IDX`, `verify`, the shapes, the extractor image; S6b-A1), nothing that changes compiled code or reaches the compiler (below) |
+| `secure : P.Secure` | Lean theorem | comparator (two kernels), gate rules 1–2 (the axiom audit) |
 | leaf entry (board L, optional) | nothing extra | benchmark runner |
-| recursion entry (board R): `entry : RecursionEntry` = `C`, `fits`, `decode`, `sound`, `complete`, `live` (§5.3) | Lean | comparator, gate |
-| native prover (+ optional indexer) | source + build script | sandbox build, benchmark runner |
-| claim JSON (`k`, `cfg` = hash and arity, the extractor image, chips and matrix entries of `C_V`, the key digests of `C_V` and `L_chain`) | rendered into the challenge stub (v0.3 renderer) | comparator (`submission = rendered`); the digests by the harness |
+| recursion entry (board R): `entry : RecursionEntry` = `C`, `fits`, `decode`, `sound`, `complete`, `live` (§5.3), and `leaf : Submission` in a Clean-free module (the badge root, S6b-A17) | Lean | comparator, gate (rules 4, 8, 9) |
+| native prover (+ optional indexer) | source + build script | sandboxed build (≤ 1 h), benchmark runner |
+| claim JSON (`k`, `cfg` = hash and arity, the extractor image, chips and matrix entries of `C_V`, the key digests of `C_V` and `L_chain`) | rendered into the challenge stub (strict renderer) | comparator (`submission = rendered`); the harness re-renders the stub with its own copy of the claim and requires the challenge to be that rendering (S6b-A22); the digests by the runner |
+
+**What checks what, in harness order** (§7.4; S6b-A1, A2, A6, A17, A20, A22, A26). Every check runs
+in a fresh tree, and trust is by `.olean` content hash, never by module name (A6-G2).
+
+- **The claim binds the challenge** (S6b-A6, S6b-A22). The stubs (`Challenge/L.lean.in`,
+  `R.lean.in`) hold organiser data and the names the submitter fills. Board L: `declared :
+  Declared := ⟨k, hash, arity, image⟩`, `submission : Submission declared.k`, `certified :
+  Certificate declared submission`. Board R: `declared : DeclaredR` (also `chips`, `entries`,
+  `digestC`, `digestL`), `leaf : Submission declared.k`, `submission : SubmissionR declared.k` and
+  `certified : CertificateR declared submission ∧ submission.entry.C = C ∧ submission.toSubmission
+  = leaf`, with `C` the rendered layout literal. With `--bench` the harness copies the claim and
+  the files it names, re-renders the stub with that copy and rejects unless the challenge is that
+  rendering byte for byte. The renderer takes a strict schema only (no float, NaN or duplicate
+  key, a confined path, no `Fin` literal that wraps) and rejects 54 malformed claims in CI.
+- **The source rule** (`scripts/source-rule.py`, S6b-A20), in each fresh tree before anything of
+  the submission is built in it. Submission-owned `.lean` files may not contain, as tokens
+  (comments and literals skipped, interpolations scanned): code that runs while a module is
+  elaborated (`run_meta` and every word starting `run_`, `by_elab`, `by_elabq`, `eval%`, every
+  `#`-command but `#check`, `#print`, `#reduce`, `#guard_msgs`, so `#eval`); definitions of
+  elaborators, syntax and simprocs (`elab`, `macro`, `syntax`, …); load-time code (`initialize`,
+  `register_…`); `unsafe`, `partial` and names with an `unsafe…`/`…Unsafe` component;
+  `persistentEnvExtensionsRef`, `envExtensionsRef`; the attributes `implemented_by`, `extern`,
+  `cpass`, `computed_field`; `set_option` of a compiler, debug, elaborator, interpreter or
+  bootstrap option; `import Lean…`, `import Lake…`, `import Qq…`, `open Lean…`, `open Qq…`. The
+  literals `#[…]` and `#v[…]` (Clean's vectors), notation, `deriving`, `attribute [simp]` and
+  tactics are allowed. CI holds one fixture per rejected form (52) and a file of allowed forms.
+- **The comparator**, first, with the default kernel and nanoda: the solution proves exactly
+  `certified`, and `definition_names` are `submission` (board R: `leaf` and `submission`). The
+  image `Secure` is about is the rendered literal because `Certificate` states `S.P.extractor.img
+  = D.img` (below; S4-A2, S7-A1).
+- **Build binding** (A7-M3): the gate tree's build must be byte-identical to the
+  comparator-verified build (every `.olean`, `.ir` and `.c`).
+- **The gate** (`scripts/Gate.lean`, 367 code lines (actual)): nine rules, below. The environment is
+  loaded without running any imported code.
+- **The twin** (S6b-A4, §3.2): the badge executables are built after the gate, from the badge
+  root's module only, and their main module states by `rfl` that the twin's `NARG` and `index` are
+  the submission's.
+
+| Gate rule | Rejects |
+|---|---|
+| 1 axioms | a constant of the certificate's closure that is `sorryAx`, `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` or an axiom other than `propext`, `Classical.choice`, `Quot.sound` |
+| 2 `unsafe` / `partial` / `opaque` | such a constant of the closure, declared in an untrusted or pinned module (its body is invisible to the kernel) |
+| 3 code-changing attributes | in any untrusted module, an entry of `implemented_by`, `extern`, `export`, `init` / `builtin_init` (so every `initialize`, `register_simp_attr`, `register_option`), `csimp`, `cpass` or `computed_field`: Lean 4.34's attributes with an effect on compiled code. `inline`, `noinline`, `macro_inline`, `specialize`, `never_extract` and `unbox` only steer the compiler and are allowed. Entries of pinned packages (Clean's `register_simp_attr`) are reported, not rejected |
+| 4 badge-path fields compiled | no compiled code for a field the executables read (`badgeFields`): `Submission`: `P`, `cfg`; `SubmissionR`: `toSubmission`, `entry`; `Protocol`: `n`, `shape`, `vkLen`, `VK`, `idxShape`, `IDX`, `verify`, `extractor`; `ExtractorImage`: `img`; `RecursionEntry`: `C`, `decode`. `prover`, `ε`, the fuel split and every proof may be `noncomputable` (S6b-A1) |
+| 5 tampered organiser module | a trusted or pinned module whose `.olean` files do not hash to the manifest (`scripts/olean-manifest.sha256`) |
+| 6 imports | an untrusted module that imports, directly or transitively (`rule6t`), a module that is neither untrusted nor in `scripts/import-allowlist.txt` (10,820 modules: the import closure of Mathlib, the contract, the organiser's library and controls, which excludes `Lean`) nor in `scripts/import-frontend.txt` (Clean's 39 modules and the bridge's 6) |
+| 7 compiler API | a definition of an untrusted module that refers to a non-theorem constant of the compiler or the environment (`Lean.Elab`, `Lean.Compiler`, `Lean.IR`, `Lean.Meta`, `Lean.Environment`, `Lean.Kernel`, `Lean.Core`, `Lean.modifyEnv`, `Lean.addDecl`, `unsafeCast`, …). Macros, notation and `syntax` are fine; theorems are exempt |
+| 8 badge root | the module that declares the badge root (`submission` on board L, `leaf` on board R) reaches, transitively, a module outside the compiler-free closure. The executables import only that module, so nothing that can reach the compiler (Clean) is linked into them |
+| 9 no Clean on the badge path | a badge-path field that refers, through the definitions of untrusted modules, to a non-theorem constant of a frontend module (Clean) |
+
+Rule 4 compiles each badge-path field in the gate's process; "computable" means executable, not
+feasible, and feasibility is the budget's job. For a `Fin`-indexed family it may pass a `shape`
+that has code only member by member, while the twin compiles `shape` whole: such a submission fails
+at stage 3a, a REJECT one stage later, never an ACCEPT (S6b-A26; O-13).
 
 **The certificate** (`Contract/Certificate.lean`, Stage 5 and S7-A5; 25 code lines (actual);
 trusted, §8) is split by board, as the claim is:
@@ -473,17 +535,21 @@ trusted, §8) is split by board, as the claim is:
 - `Certificate D S` (board L): the submission's configuration is the declared one, and
   `S.P.extractor.img = D.img`, so the image `Secure` is about is the literal rendered from the
   submitted files (S4-A2, S7-A1/A5). `CertificateR D S` extends it by `size`: `C_V` has the
-  declared chip and entry counts. Adding a field to a `Prop` structure only adds a conjunct, so
-  nothing weakens.
+  declared chip and entry counts. The R stub's `certified` adds `submission.entry.C = C` (the
+  recursion layout is the rendered literal) and `submission.toSubmission = leaf` (S6b-A6, S6b-A17).
+  Adding a field to a `Prop` structure only adds a conjunct, so nothing weakens.
 - **The cells of `C_V` are not declared.** They depend on the witness and are bounded through
   `complete` (S1-A6, §5.3). The declared size is static, certified by evaluation.
 - **The key digests are declared, not certified.** `D (index cfg P C_V)` commits an index oracle
   of up to `2^(k+8)` elements, beyond the kernel except for toys. The harness computes both
   digests with the compiled indexer (§6.3 step 2, untimed): `D (index cfg P S.entry.C)` from the
   *submitted* `C_V`, never from a layout the prover supplies, and `D (index cfg P (L_chain 2^10))`
-  (the recursion tree's `n`, not the rendered `L_chain(16)`). It rejects a claim whose digests
-  differ, and uses its own values in `rootOK` and as the key of every node's and leaf's `NARG` run,
-  never the declared ones (S5-A13).
+  (the recursion tree's `n`, not the rendered `L_chain(16)`). The badge `index` reads the claim's
+  layout JSON with the harness's own reader (`RecursionFastHarness.LayoutJson`), which CI
+  cross-checks against the renderer (equal `Layout.words` on every example layout; a changed
+  literal is detected; S6b-A7). The harness rejects a claim whose digests differ (CI: one flipped
+  bit of `digestC`; a `digestL` that is the digest of `L_chain(16)`), and uses its own values in
+  `rootOK` and as the key of every node's and leaf's `NARG` run, never the declared ones (S5-A13).
 
 ---
 
@@ -843,41 +909,114 @@ largest leaf layout (24 for `n ∈ {2^8, 2^10}`, 26 for `L_chain(2^12)`).
 
 ### 6.3 Benchmark run (one evaluation)
 
-1. **Instances.** `N = 64` chains, fresh random secret starts `s_i` per evaluation, length
-   `n = 2^10` for the recursion tree (`L_chain(2^10)` fits class 24). The leaf board is
+The runner is `harness/run-benchmark.py` (Stage 6b; usage and schemas in `harness/README.md`).
+
+1. **Instances.** `N = 64` chains, fresh random secret starts `s_i` per evaluation (`os.urandom`),
+   length `n = 2^10` for the recursion tree (`L_chain(2^10)` fits class 24). The leaf board is
    `n ∈ {2^8, 2^10}` at class 24 (the 64 tree chains are its `2^10` instances, plus 16 chains of
-   `2^8`), and optionally `n = 2^12` at class 26 (16 chains; `k_range` allows it, and an entry at a
-   lower class does not run it). Secrets are never written to the sandbox the verifier runs in. The
-   chain generator reads a secret from a file or stdin, never from a command-line argument, and a
-   witness file holds `s` (row 0 of `S0`), so it is secret material too (S6-A9).
-2. **Indexing** (untimed, budget 1 h total): Lean-compiled `VK`/`IDX` on `L_chain(n)` and `C_V`.
-   The harness computes the key digests of the submitted `C_V` and of `L_chain(2^10)` here and
-   compares them with the claim (§3.3, S5-A13).
-3. **Leaves**: the native prover on each chain (budget 120 s each, 48 GB). Every proof must
-   verify.
+   `2^8`), and `n = 2^12` at class 26 (16 chains; `k_range` allows it) only when the declared class
+   is `k ≥ 26`: at a lower class it is skipped, not failed (S6b-A8). The class is `Declared.k`,
+   taken from the claim (S6b-A22), and the runner rejects up front a class below that of
+   `L_chain(tree.n)` (24). A secret exists only in its own leaf step's directory (`secret.hex`):
+   the runner reads the secrets from a file, never from a command line, and the secrets file and
+   the run directory are hidden from every sandboxed step. **The witness is generated inside the
+   timed region** (S6b-A16): the leaf prover gets the start `s`, not the tables, and builds the
+   witness itself; witness generation is part of proving, the same for every entry (the tables are
+   a function of `s`, S6-A4). The runner provides no witness file.
+2. **Indexing** (untimed, budget 1 h total, each run in its own sandbox): Lean-compiled `VK`/`IDX`
+   on `L_chain(n)` for every leaf-board `n` and on `C_V`. The harness computes the key digests of
+   the submitted `C_V` and of `L_chain(2^10)` here and compares them with the claim (§3.3,
+   S5-A13); the runner uses only its own keys. **The scored layout is the certified one**
+   (S6b-A22): with `--bench`, `scripts/harness.sh` writes the runner's class `k` (`Declared.k`),
+   `cfg.hash`, the claim's digests and the recursion layout from the very claim file that rendered
+   the challenge, so the recursion key is indexed from the file rendered into the certified `C`
+   (`certified` binds `submission.entry.C = C`), and the runner rejects unless `H(index(C)) =
+   digestC` before it scores anything. The runner's `cfg` takes only `hash`; the arity is the
+   submission's.
+3. **Leaves**: the native prover (`PROVER … leaf`, budget 120 s each, 48 GB). Every proof must
+   verify (`verify`, ≤ 60 s). On board L every leaf tape, the tree chains' included, has at most
+   `2^17` bytes (§6.2).
 4. **Tree**: 32 wrap steps, then 16 + 8 + 4 + 2 + 1 = 31 node steps. Each step is a fresh
-   process in a fresh working directory, inputs on local disk (warm page cache allowed), all cores
-   available, no network, no GPU, budget 600 s. Every output must verify.
+   process (`PROVER … node`) in a fresh working directory, inputs on local disk (warm page cache
+   allowed), all cores available, no network, no GPU, budget 600 s, inside its own sandbox and
+   memory cgroup (§6.4). Every output must verify under the recursion key.
 5. **Root**: organiser checks `rootOK` (§5.1: the statement tree recomputed over the 64 leaf
    statements with its own key digests, which pins `d0 … d3`); `NARG` on the root proof
    (budget 60 s).
-6. **Repeat** the whole run 3 times; `S_rec`, `S_wrap`, `S_leaf` are medians of per-run medians.
+6. **Repeat** the whole run 3 times (the runs reuse the evaluation's instances); `S_rec`,
+   `S_wrap`, `S_leaf` are medians of per-run medians. `S_leaf` is the median over the run's leaf
+   chains (the per-`n` medians are published beside it), `S_wrap` over the level-1 steps and
+   `S_rec` over the steps of levels ≥ 2 (S6b-A8).
+7. **DoS column** (unranked): `verify` on 1,000 random tapes (random bytes, random length up to
+   1 MiB) under the leaf key and the first leaf statement; the maximum wall time is published. A
+   random tape that is accepted, or a `verify` that crashes (an exit code other than 0 or 1),
+   rejects the evaluation.
 
-Any failure anywhere (a proof that does not verify, a timeout, a crash, memory above 48 GB)
-rejects the evaluation; there is no partial credit.
+**The prover interface** (S6b-A9, S6b-A16; `harness/README.md` is the reference, and
+`submissions/baseline/prover/README.md` states it for the baseline, S6b-A25). `PROVER… leaf|node`,
+the mode being the **last** argument, runs in a fresh step directory, the only writable path, and
+must write `proof.bin`. Leaf: `layout.json` (`L_chain(n)`), `vkc.bin` (the leaf key bytes from the
+organiser's indexer), `stmt.bin` (256 bytes) and `secret.hex`. Node: `layout.json` (`C_V`),
+`vkc.bin` = `vkC.bin` (the recursion key), `vkL.bin`, `stmt.bin` (the aggregate statement, computed
+by the runner) and, for each child, `childI.stmt`, `childI.proof` and `childI.tag` (`leaf` or
+`node`). The verifier is `verify vkc.bin stmt.bin proof.bin` in a fresh directory holding only
+those files, never a secret; exit 0 means accept.
+
+**Boards are judged separately** (S6b-A8). A failure only board L depends on (a leaf-board chain,
+the `2^17`-byte cap) rejects board L; one only the tree depends on (`C_V`'s key, the declared
+digests, a step, the root) rejects boards R and W; anything shared (a tree chain's leaf, indexing
+`L_chain`, the budget, the DoS column) rejects every board. The run is accepted iff at least one
+requested board is. Any failure (a proof that does not verify, a timeout, a crash, memory above
+48 GB) rejects the boards that depend on it; there is no partial credit.
 
 ### 6.4 Measurement policy
 
 - Reference machine: x86-64, ≥ 32 cores, 64 GB, NVMe, idle during evaluation; exact SKU, kernel,
   glibc, Rust/gcc/Lean versions published per season in `harness/reference-machine.md`.
-- Timed region: process start to output file closed, `perf stat`-style wall clock from the
-  runner. Builds and indexing are outside it.
-- Record rule: a new record must beat the standing one by **≥ 3 %** (above the measured noise).
+  **Requirements** (S6b-A12, S6b-A19, S6b-A23): **carry-less multiply** (`pclmulqdq`, ideally also
+  `vpclmulqdq`/`gfni`; Zbc on RISC-V), because the field is GF(2^64) and the executed verifier
+  computes in it; and a delegated cgroup v2 with the memory controller, because the runner caps
+  and measures memory per step. The development VM has neither `pclmulqdq` nor `gfni` (O-6).
+- One-time setup per machine and toolchain: the organiser package (Clean and the bridge included)
+  built and its manifest checked, and **every Mathlib object file prebuilt** (`lake build
+  mathlib/Mathlib:static`; 3 min 35 s wall and 29 min CPU on the development VM, about 5 min from
+  scratch on 32 cores), so that a submission may import any Mathlib module and its badge
+  executables still link in the read-only sandbox (S6b-A13, S6b-A18).
+- Isolation fails closed (S6b-A21, A23, A24). `run` refuses to start (REJECT, "no sandbox")
+  unless `sandbox` names an executable and per-step memory cgroups work, and `scripts/harness.sh`
+  sets its own sandbox whatever the bench file says. Every step runs in a fresh working directory
+  holding copies of its inputs, in its own cgroup (`systemd-run --user --scope -p
+  MemoryMax=<48 GB> -p MemorySwapMax=0 -p OOMPolicy=continue`), inside `bwrap-landrun.sh
+  --minimal-root`: readable are only `/usr`, `/etc`, a fresh `/tmp`, the executables' directories,
+  the files the prover's argv names and the config's `sandbox_ro`; writable only the step
+  directory; no network; its own PID namespace; the run directory and the secrets hidden. The
+  cgroup caps the whole process tree. A step in whose cgroup the kernel killed a process at the
+  cap rejects ("killed at the memory cap"), whatever its exit code, and the reported peak is the
+  cgroup's `memory.peak`.
+- Timed region: the sandboxed process, from its start to its exit, read by an organiser shell in
+  the cgroup, outside the sandbox (S6b-A12, A23). The sandbox's set-up (about 0.05 s here) is
+  inside it, the cgroup's is not, and process start-up is inside (0.07–0.1 s for a Lean
+  executable): every entry pays both. Builds, indexing and the runner's bookkeeping (copying
+  inputs, computing statements) are outside it.
+- Record rule: a new record must beat the standing one by **≥ 3 %** (above the measured noise;
+  `is_record`: at most 0.97 × the standing record, but see the placeholder noise below).
 - Re-runs: all standing records are re-measured each season and whenever the machine changes;
   the scoreboard shows the hardware id next to every number. A record is never invalidated by a
   re-run, only re-ranked.
 - Prover nondeterminism: allowed (randomised algorithms), but every instance must succeed.
   Variance is the agent's problem: medians over 31 steps × 3 runs.
+- **Smoke timings and noise so far are placeholders (O-6).** The runner ran end to end on `cmpToy`
+  (a smoke protocol, not secure and not a `Submission`, S6b-A10) with a Python prover, on the
+  development VM, which is not a reference machine (QEMU, 32 vCPUs, shared with other builds, no
+  `pclmulqdq`). The full tree (64 leaves, 32 wrap and 31 node steps), 3 runs and 100 DoS tapes
+  were accepted in 218 s: `S_leaf` 0.267 s, `S_wrap` 0.262 s, `S_rec` 0.268 s, DoS max 0.22 s
+  (`logs/S6b/ci-run-8.log`). Every step is dominated by process start-up, and the sandbox with its
+  cgroup adds about 0.07 s per process. Over 10 repetitions, a sandboxed `verify` took a median
+  0.156 s (0.144–0.184 s, a 26 % spread) and the sandboxed Python prover 0.095 s (15 %). Before the
+  fix pass, at 0.17 s per step, the medians of medians of three smoke evaluations differed by up
+  to 5.9 % (`S_wrap`), above the 3 % margin. On this VM the margin would not separate a record
+  from noise; an isolated machine and steps of seconds to minutes shrink both effects, and O-6
+  must re-measure on the reference SKU before the margin is relied on.
 
 ### 6.5 Caps (pass/fail, never scored)
 
@@ -885,7 +1024,7 @@ rejects the evaluation; there is no partial credit.
 |---|---|
 | `lake build` of the submission on the reference machine | ≤ 1 h, ≤ 48 GB |
 | harness (comparator + nanoda + gate + axiom audit) | ≤ 2 h |
-| tape (proof) | ≤ 1 MiB (R, W), checked by `NARG` (`tapeCap`); ≤ 128 KiB (L), checked by the benchmark runner on every measured leaf tape |
+| tape (proof) | ≤ 1 MiB (R, W), checked by `NARG` (`tapeCap`) and by the runner on every proof it verifies; ≤ 128 KiB (L), checked by the benchmark runner on every measured leaf tape, the tree chains' included |
 | VK | ≤ 2^10 K-elements |
 | rounds | ≤ 2^14 |
 | message oracle | ≤ 2^(k+10) elements |
@@ -895,9 +1034,16 @@ rejects the evaluation; there is no partial credit.
 | extractor image | ≤ `2^20` bytes (`imageCap`) |
 | extractor output | ≤ `2^(k+12)` words per call (`witCap`: an interface cap, not a security bound) |
 | indexing | ≤ 1 h total |
+| native prover build | ≤ 1 h, in the sandbox |
 | leaf proving | ≤ 120 s per chain |
 | a recursion step | ≤ 600 s |
+| one `NARG` run (a verified proof, the root, a DoS tape) | ≤ 60 s |
+| memory of one step | ≤ 48 GB, a cgroup `MemoryMax` on the whole process tree |
 | whole evaluation | ≤ 6 h |
+
+The benchmark runner enforces the tape, indexing, native-prover-build, leaf-proving,
+recursion-step, `NARG`-run, step-memory and whole-evaluation rows (`budgets` and `caps` in its
+configuration; S6b-A8, A23): a violation rejects the boards that depend on it (§6.3).
 
 Build time is a cap, not a score term (the earlier regulariser idea): it measures proof
 engineering, not design, and has no exchange rate against seconds of proving.
@@ -925,6 +1071,10 @@ engineering, not design, and has no exchange rate against seconds of proving.
 | `compile` tampering | organiser code, fixed; the gate's trust-by-hash covers it |
 | proof engineering tricks to pass build caps | caps are generous; not scored |
 | Lean-compiled verifier is slow | same for every entry; verifier time is a small share of `S_rec`; the agent chooses `cfg` to keep it small |
+| executed verifier ≠ proved verifier (an elaboration-time metaprogram rewrites the code Lean emits for a definition, the kernel sees the honest one) | the executable runs the twin, whose `NARG` and `index` the kernel proves equal to the submission's (`rfl`, S6b-A4), from a build byte-identical to the comparator's (A7-M3). Gate rules 3, 6, 7, 8 and the source rule (before any build) raise the bar: the S7 forgery is rejected by rule 6 and the source rule, and the raw variant (`ForgeRaw`: `persistentEnvExtensionsRef` + `unsafeCast` under Mathlib-only imports) by the source rule alone, since the gate passes it. **Not closed**: forgery by means the source rule's token list does not name. The sound fix is O-12 (§12), which must ship before any ranked board opens (§8) |
+| no sandbox (an unsandboxed step reads the secrets and the run directory, has the network, is not isolated from other steps) | the runner fails closed: it refuses to run without an executable sandbox and working per-step cgroups, `scripts/harness.sh` sets its own sandbox, and a step sees only a minimal root (S6b-A21, A24); CI rejects a configuration without a sandbox |
+| multi-process memory (a forked prover evades a per-process cap) | every step in its own cgroup with `MemoryMax` and `MemorySwapMax = 0`: the whole tree is capped and measured (`memory.peak`), any `oom_kill` rejects (S6b-A23); no cgroups, no run |
+| cross-step precomputation via daemons (a process outliving its step precomputes for the next) | every step has its own PID namespace (its processes die with the step), a fresh working directory and a fresh `/tmp`, no network, and the run directory and the secrets hidden, so nothing persists between steps (S6b-A12, A24) |
 
 ---
 
@@ -1054,11 +1204,40 @@ variant's problem). Phase 2 may fund a reference entry; it is not required to op
 
 ### 7.4 What the organiser runs per submission (harness order, carried over: A6-G0)
 
-1. Comparator first in a fresh sandboxed tree (default kernel + nanoda), manifest checked.
-2. Gate in a second fresh tree, build bound byte-for-byte to the comparator's (A7-M3), trust by
-   `.olean` hash; `--computable` on `VK`, `IDX`, `verify`, `decode`, the extractor image.
-3. Badge path: build `lake exe verify`; index; benchmark run (§6.3) under the sandbox with the
-   agent's native prover; publish numbers.
+`scripts/harness.sh --org ORG …` runs these stages, where ORG is the organiser package built by
+`scripts/org-build.sh` (`--org` is required: the repository root requires Clean and holds
+submissions, so it is no organiser package; S6b-A14). Stage 0: the organiser build matches the
+olean manifest, and with `--bench` the challenge is the stub rendered with the harness's copy of
+the claim, byte for byte (S6b-A22).
+
+1. The source rule (S6b-A20), then the comparator, first, in a fresh sandboxed tree (default
+   kernel + nanoda). The manifest is re-checked, the solution must not shadow an organiser
+   module, and the content hashes of the compiled artifacts are recorded.
+2. The source rule again, then the gate in a second fresh tree at the same path: sandboxed `lake
+   build`, manifest, build bound byte-for-byte to the comparator's (A7-M3), then the nine gate
+   rules (§3.3), trust by `.olean` hash. `--computable` names the badge-path fields only (rule 4);
+   `--allowed-imports` and `--frontend-imports` default to the lists in `scripts/`;
+   `--badge-root` names the constant the executables are built from.
+3. Badge path, on the comparator-verified build, never inside the gate: (a) build `verify` and
+   `index` from the badge root's module only (the gate prints it), sandboxed in the gate tree,
+   against the read-only organiser package with Mathlib's object files prebuilt (§6.4); the
+   twin's `rfl` theorems are checked by this build, and the bound artifacts must be unchanged
+   afterwards; (b) index; benchmark run (§6.3) under the sandbox with the agent's native prover;
+   publish numbers.
+
+**CI** (`scripts/ci.sh`, 12 steps; the organiser-only steps 1–4 run before any code that resembles
+a solution, and each harness run keeps the order above): **11 min 47 s** (707 s,
+`logs/S6b/ci-run-8.log`), against 25 min 52 s before the simplify pass made independent steps
+concurrent; every check still runs. Breakdown: steps 1–4 (source checks including the source-rule
+fixtures, the organiser build with Clean, the manifest and allowlists, the axiom audit and line
+counts) 35 s; phase A, steps 5 and 6 concurrently (BLAKE2s against `hashlib`, `check-chain.py`, the
+runner's self-test; renderer tests, stubs, reader = renderer) 128 s; phase B, the builds and
+harness runs of steps 7–10 concurrently, 289 s, its critical path the toy through the production
+harness (the comparator takes 207 s of it), beside the toy `--bench` run (231 s), the negative toy
+(97 s), the gate probes (A4 ports 135 s, rule 4 and Clean 246 s, S7 and the forgeries 158 s), the
+pipeline regressions (56, 31 and 54 s) and the smoke executables (99 s); the timed smoke benchmark,
+alone, with the runner's rejection checks, 240 s (the benchmark 218 s); the Clean frontend and its
+axiom audit 11 s; the manifest re-check 4 s.
 
 ---
 
@@ -1098,9 +1277,65 @@ the Lean byte for byte at arity 2, 4, 8 and 16, and known-answer controls pin th
 challenge decoding and the openings (`digest_kat`, `decode_kat`, `idx_path_flip`, `oob_rejected`,
 `pfs_honest`/`pfs_cheat`, S3-A14). The honest prover is not in the contract (S3-A10).
 
+**The executed code and the harness (Stage 6b).** Besides the contract, a human must accept what
+guards the step from "proved" to "executed". The guards are organiser code outside the contract:
+the gate (`scripts/Gate.lean`, 367 code lines (actual)), the source rule, the renderer,
+`scripts/harness.sh` and the benchmark runner. They are checked by CI regressions with positive and
+negative controls (§7.4), not by theorems. The trust statement for the executed verifier and
+indexer (S6b-A2, with its last sentence replaced by S6b-A20):
+
+> The executed verifier and indexer are the code Lean's compiler emitted for the submission while
+> elaborating it, linked with the organiser's. The gate binds that code to the kernel terms only
+> indirectly: no attribute substitutes or changes compiled code (rule 3); the submission imports
+> nothing the organiser's own libraries do not (rule 6), so the compiler's code-emission state
+> (`Lean.Compiler.LCNF.PhaseExt`) is out of its reach; none of its definitions uses the compiler's
+> or the environment's API (rule 7). Not excluded: elaboration-time code that reaches the
+> compiler's state through raw extension access (`persistentEnvExtensionsRef`, `unsafeCast` and
+> re-declared types), or that corrupts the stored IR signatures (`Lean.Compiler.IR.CompilerM` is in
+> Mathlib's closure). The source rule and gate rules 3, 6, 7, 8 raise the bar; they do not exclude
+> elaboration-time code that forges the emitted code by means the rule's token list does not name.
+> The sound fix is O-12 (badge executables regenerated from kernel terms), which must ship before
+> any ranked board opens.
+
+Two refinements qualify the statement. Rule 6 also lets a submission import the Clean frontend
+(`import-frontend.txt`) for circuit proofs; rule 8 keeps every module that can reach the compiler
+out of the executables, and rule 9 keeps Clean code out of the badge-path fields (S6b-A17, §9.3).
+And the raw route is not merely theoretical: `probes/s6b/gate/ForgeRaw.lean` forges the code of a
+definition under Mathlib-only imports, and the gate passes it (S6b-A20). What each clause rests on,
+and where it stops:
+
+| Clause | Enforced by | What it does not give |
+|---|---|---|
+| the executed `NARG` and `index` are the submission's terms | the twin's `rfl` (S6b-A4); the build bound byte for byte to the comparator's (A7-M3); rule 8 (the executables import the badge root's module only) | the emitted code is not the kernel term: equality is up to the compiler |
+| no attribute substitutes or changes compiled code | rule 3, Lean 4.34's attributes with an effect on compiled code | nothing for attributes; the pinned packages' entries (Clean's) are reported, not rejected |
+| the submission imports nothing the organiser's libraries do not | rule 6, direct and transitive | Mathlib's own transitive `Lean.Environment` imports are inside the allowlist |
+| the compiler's code-emission state (`PhaseExt`) is out of reach | rule 6 (`ForgeNoLean`: with every allowed root imported, `impureExt` does not elaborate) | the raw route is open: `persistentEnvExtensionsRef` + `unsafeCast` |
+| no definition uses the compiler's or the environment's API | rule 7, definitions only; theorems are exempt | blind to `run_meta` and `#eval`, which leave no declaration |
+| no module that can reach the compiler is linked into the executables | rule 8 (the badge root's closure); this is how Clean is kept out | does not exclude Mathlib, which carries the API constants |
+| no badge-path field calls Clean | rule 9 | |
+| no elaboration-time code | the source rule, a token list that runs before any build | **not excluded**: code that forges the emitted code by means the list does not name; the sound fix is O-12 (§12) |
+
+**A start-up finding (S6b-A5).** `Library/Field.lean`'s `Fintype K` and `Fintype E` were computable
+instances. As closed terms they are evaluated when a compiled executable initialises its modules,
+which enumerates `2^64` (and `2^192`) elements: out of memory after 18 s. Every executable that
+imported `Library.Field` (through `Challenges`, `RbrSound`, `Compile`, `Recursion`: any realistic
+submission) died at start-up. Both instances are now `noncomputable`, since nothing executes them
+(the library, controls and bridge build unchanged), and `harness-linkcheck`, built and run by
+`scripts/org-build.sh`, fails the organiser build if any organiser module is expensive to
+initialise (start-up 0.07 s for all of them). A submission's own closed terms are inside the timed
+region of every step.
+
+**Clean is pinned, not trusted** (S6b-A17). The organiser package builds the `Clean` require
+(`42fe4b26`, by path from `ext/Clean`) and the bridge `RecursionFastClean`, which reverses S8-A1's
+"the organiser package stays Clean-free". The olean manifest covers Clean's `.olean`s as a pinned
+package (130 `packages/Clean/` entries, 35,222 files in all), and the gate reports Clean's `[init]`
+entries (`register_simp_attr`, deriving handlers) instead of rejecting them, as rule 3 rejects the
+attributes of submission-owned modules only. Clean's theorems may be used in circuit proofs, which
+the kernel checks; its code never reaches the badge path (rules 8 and 9, §9.3).
+
 Everything else is untrusted and kernel-checked: `Library/` (padding, dense equivalence, field
 facts, `FiniteField K` instance, compile and recursion facts), `Clean/` (§9), `Bridge/`,
-`Controls/`, the benchmark generator, the runner.
+`Controls/`, the benchmark generator (the runner is organiser code, treated above).
 
 ---
 
@@ -1148,21 +1383,40 @@ the user's decision (O-5).
   form one CCS gadget (see "Gadgets" below), one port per channel interaction, a lookup into a
   static table a `.sub` bus against a fixed table, multiset balance in ℕ.
 - Agents may bypass Clean and hand-write `C_V` with their own `sound`/`complete` proofs.
+- A submission **may import Clean** (its 39 modules and the bridge's 6, `scripts/import-frontend.txt`)
+  for its circuit proofs, but **never on the badge path** (S6b-A11, S6b-A17). Clean's import
+  closure contains `Lean` and `Lean.Compiler.LCNF.PhaseExt` (4,708 modules from
+  `RecursionFast.Clean`; at least 10 Clean modules import `Lean` or `Lean.Elab.*`), and the S7
+  forgery elaborates when it imports Clean instead of `Lean` (`probes/s6b/gate/ForgeClean.lean`:
+  the emitted `dec` calls `acceptAll`). Allowing Clean's closure would have reopened S7-M1 for
+  every submission. So rule 6 allows only direct imports of the 45 frontend modules, not the `Lean`
+  modules they import. Rule 8: the badge executables import only the module of the badge root
+  (board L: `submission`; board R: `leaf`, a `Submission` in a Clean-free module, with
+  `submission.toSubmission = leaf`), whose transitive imports must stay inside the compiler-free
+  closure. Rule 9: no badge-path field (`P`'s fields, `cfg`, `entry.C`, `entry.decode`) calls Clean
+  code. Probes (CI step 8): a board-R submission whose circuit module imports Clean and whose
+  certificate uses a Clean theorem passes (badge root module `GClean.Core`); a `decode` that calls
+  `FiniteField.val` is rejected (rule 9); a badge root declared in a Clean-importing module is
+  rejected (rule 8, 560 modules outside the closure); so is `ForgeClean` as a badge root.
 
 **Built (Stage 8; `RecursionFast/Clean/`, the lean_lib `RecursionFastClean`, untrusted and
 kernel-checked).** Every constant of a `RecursionFast.Clean*` module depends on at most `propext`,
 `Classical.choice` and `Quot.sound` (739 constants audited, `probes/s8/review/P3Axioms.lean`, about
 2 min 15 s; it must print `non-standard: 0; sorryAx: 0`).
 
-- **Location and build** (S8-A1, S8-A16). The frontend is `RecursionFastClean`, not a default
-  target and not part of `RecursionFastLibrary` or the organiser package (`scripts/org-build.sh`
-  drops the `Clean` require and the lib). Clean `42fe4b26` is required by path from the gitignored
-  `ext/Clean`. `scripts/setup-clean.sh` fetches it (a clone at the rev, or a local git checkout
-  given as argument, for offline use) and verifies it: `.git` present, `HEAD` = `42fe4b26…`, no
-  modified or staged tracked file; every fresh clone runs it before any root-level `lake` call.
+- **Location and build** (S8-A1, S8-A16, S6b-A17). The frontend is `RecursionFastClean`, not a
+  default target and not part of `RecursionFastLibrary`; since S6b-A17 the organiser package builds
+  the `Clean` require and the bridge `RecursionFastClean` (`scripts/org-build.sh`), reversing
+  S8-A1's "the organiser package stays Clean-free", and pins Clean in the olean manifest (§8).
+  Clean `42fe4b26` is required by path from the gitignored `ext/Clean`. `scripts/setup-clean.sh`
+  fetches it (a clone at the rev, or a local git checkout given as argument, for offline use) and
+  verifies it: `.git` present, `HEAD` = `42fe4b26…`, no modified or staged tracked file; every
+  fresh clone runs it before any root-level `lake` call.
   The cone is 39 modules and `RecursionFastClean` builds in **3 min 34 s cold** (the Clean cone and
-  our six modules) and **3.4 s warm**; `import RecursionFast.Clean` takes 7.2 s and 3.2 GB. Clean
-  is built in a separate CI step after the organiser steps, never in the organiser package (S8-A12).
+  our six modules) and **3.4 s warm**; `import RecursionFast.Clean` takes 7.2 s and 3.2 GB. CI
+  builds Clean in the organiser package (step 2) and again in the repository tree, with the axiom
+  audit of `RecursionFast.Clean*`, in a step of its own after the harness steps (step 11, 11 s
+  warm; S8-A12, S6b-A14).
 - **`FiniteField K`** (`Clean/FiniteField.lean`): the instance that lets Clean's field-generic core
   run over the contract's `K`.
 - **`toLayout tabs ens cm : Layout F`** (`Clean/ToLayout.lean`, generic over `FiniteField F`). The
@@ -1260,9 +1514,9 @@ the cone.
 
 ## 11. Build order for the organiser (P0 first)
 
-Status (2026-10-15): steps 1–6, 8 and 9 are **done** (Stages 1–5, 7, 8); step 7 (the harness) is
-**in progress** (Stage 6a done, Stage 6b under way); step 10 is **pending**. A stage's result is
-`docs/stages/S<n>-RESULT.md` and its adversarial review `docs/reviews/S<n>-review.md`.
+Status (2026-10-15): steps 1–9 are **done** (Stages 1–8, the harness included); step 10 is **in
+progress** (S9). A stage's result is `docs/stages/S<n>-RESULT.md` and its adversarial review
+`docs/reviews/S<n>-review.md`.
 
 1. **Done (Stage 1).** `Contract/Layout.lean` + `Controls/Layout.lean` + `Library/R1CS_iff_layout`;
    line count 80 (≤ 90).
@@ -1289,11 +1543,14 @@ Status (2026-10-15): steps 1–6, 8 and 9 are **done** (Stages 1–5, 7, 8); ste
    `cmpToy`, a hand-made two-leaf node (`aggOK_two_leaves`, `aggOK_node_child`,
    `toy_sat_via_complete`); a layout that ignores `π₂` cannot satisfy `sound` (`cbad_not_sound`);
    `mistag_rejected`, `rootOK_xT`; `toy_no_entry` and `magic_no_entry` for `live` (§5.3).
-7. **In progress.** Harness. Stage 6a is done: the leaf layout generator `harness/gen-chain-layout.py`,
-   its independent Python evaluator `check-chain.py` and mutant suite, and the one-G-call kernel
-   control (§7.2). Stage 6b is under way: gate `--computable` update, challenge stubs, `lake exe
-   verify`, the benchmark runner, timing policy and the reference-machine document (the `S6b-A`
-   items of the amendments file, applied to this document in a later pass).
+7. **Done (Stages 6a, 6b).** Harness. Stage 6a: the leaf layout generator
+   `harness/gen-chain-layout.py`, its independent Python evaluator `check-chain.py` and mutant
+   suite, and the one-G-call kernel control (§7.2). Stage 6b: the gate (rules 1–9) and the source
+   rule, the challenge stubs and renderer, the badge executables `verify` and `index` (built from
+   the twin), the benchmark runner (§6.3), the timing policy and the reference-machine document,
+   and CI (12 steps, 11 min 47 s, §7.4). The badge path is smoke-tested on `cmpToy`, which is not secure and so is not a
+   `Submission` (S6b-A10, O-10). Open from this stage: O-6 (the reference SKU and its noise),
+   O-12 (kernel-regenerated badge code) and O-13 (rule 4's `Fin`-family branch).
 8. **Done (Stage 7).** Baseline `P_triv` (`submissions/baseline/`), certified at class 24 and
    listed, unranked (§7.3); `scripts/check.sh` takes 6 min 27 s, the production harness alone
    298 s.
@@ -1301,8 +1558,9 @@ Status (2026-10-15): steps 1–6, 8 and 9 are **done** (Stages 1–5, 7, 8); ste
    `toLayout_rel_iff` in both directions, the characteristic-2 balance as `StatementPerm`, and the
    BLAKE2s port analysis (§9.3). The BLAKE2s compression gadget itself and the `BF64 → K` transport
    remain (with `L_chain`, §7.2). Clean's build time is measured (O-4).
-10. **Pending.** Adversarial reviews (incentives, definitions, feasibility) before opening the
-    boards; the report's §6–§12 are rewritten from this file afterwards.
+10. **In progress (S9).** Adversarial reviews (incentives, definitions, feasibility) before opening
+    the boards; the report's §6–§12 are rewritten from this file afterwards. No ranked board opens
+    before O-12 (§8, §12).
 
 ---
 
@@ -1315,9 +1573,11 @@ Status (2026-10-15): steps 1–6, 8 and 9 are **done** (Stages 1–5, 7, 8); ste
 | O-3 | ~~Exact `L_chain` gadget design and measured cell counts per `n`; fix `k_min`~~ **resolved** by Stage 6a (S6-A1, S6-A2): `L_chain(n)` has `9,225·n + 786,505` cells and `k_min = 24` for every `n` (the `add8` table exceeds the fixed-table cap below it); `n = 2^8, 2^10` fit class 24, `2^11` needs 25 and `2^12` needs 26 (§7.2) | harness |
 | O-4 | ~~Clean build time against the v4.34.1 pins~~ **resolved** by `probes/clean-build/RESULT.md`: the `Clean.Air.FlatEnsemble` cone (39 modules, 15.6k lines by the probe's count of the imports) builds as a plain `require` on our pins in 2 min 19 s cold, 2.5 s warm; the full `Clean` library needs 3 small patches (≈ 20 lines) and is not needed. `toLayout` and its bridge were built in Stage 8 (§9.3, §11 step 9) | library |
 | O-5 | Characteristic-2 balance upstream to Clean. Open; the proposal and the working model are in `docs/upstream/clean-char2-balance.md`, and `StatementPerm` (§9.3) is the in-repository solution. Whether to open the PR is the user's decision | library / external |
-| O-6 | Reference machine SKU and toolchain pins; noise measurement to justify the 3 % margin | organiser |
+| O-6 | Reference machine SKU and toolchain pins; noise measurement to justify the 3 % margin. **Requirements** (S6b-A19, `harness/reference-machine.md`): the SKU must expose **carry-less multiply** (`pclmulqdq`; Zbc on RISC-V), because the field is GF(2^64), and delegated cgroups, which the runner needs. The development VM has neither `pclmulqdq` nor `gfni`, so its numbers are **placeholders** that bound the noise from above (10 repetitions, `harness/measure-noise.py`): a sandboxed `verify` takes a median 0.156 s (0.144–0.184 s, a 26 % spread) and the sandboxed Python prover 0.095 s (15 %); the sandbox with its cgroup adds about 0.07 s per process; the medians of medians of three smoke evaluations (steps of 0.17 s, before the fix pass) differed by up to 5.9 %, above the 3 % margin (§6.4). To do: repeat on the reference SKU with steps of seconds to minutes. The SKU is the user's decision | organiser / user |
 | O-7 | Whether to fund a reference R entry (phase 2) | user |
 | O-8 | Report rewrite (§6–§12, Appendix A regenerated from the v2 sources) | report |
 | O-9 | The compiled trusted `K.mul` (`Field.lean`, carry-less product over `BitVec 128`) costs ≈ 27 µs (`logs/S2/bench-kmul.lean`), about 4.5 one-block `blake2s256` hashes; the executed verifier is timed (§6), so a fast pure definition of the `K` arithmetic, proved equal to the spec, is needed in the Library before the executed verifier is timed | library |
 | O-10 | ~~A protocol that sends the witness has oracles of `2^(k+8)` … `2^(k+10)` elements, so the trivial baseline `P_triv` cannot run the badge path~~ **resolved as a theorem** by Stage 7 (S7-A2): the compiled `P_triv` accepts no tape at any class (`triv_narg`); its honest tape has `5·2^(k+11)` bytes (`triv_uncapped_length`), 160 GiB at `k = 24`; it has no `RecursionEntry` (`triv_no_entry`). It is listed, unranked (§7.3). The kernel-evaluation restriction on compile controls is handled with `cmpToy` (§11 step 4) | harness |
 | O-11 | Whether CompPoly's Guruswami–Sudan decoder (the Johnson-regime decoder Q1 relies on) fits `B(k)` at the benchmark's oracle sizes: measure at `k = 20` against `B(20) = 2^56` steps over the whole extraction (S4-A10). `B(k)` admits O(N²) decoding up to about `2^(k+6)` elements and quasi-linear decoding of every oracle (§4 item 3), not Gaussian elimination | user / library |
+| O-12 | **Badge executables regenerated from the kernel terms of the badge-path fields** (S6b-A3, S6b-A15), so that no submission object is linked into `verify`/`index`. Today the executed code is what Lean's compiler emitted while elaborating the submission, and the twin's `rfl`, the build binding, the gate rules and the source rule bind it to the kernel terms only indirectly. Residual risk, in the S6b review's words: rules 3/6/7/8/9 "are not a sound substitute, only a raise of the bar"; the emitted code stays forgeable through raw compiler-state access (`persistentEnvExtensionsRef`, `unsafeCast`), which only the source rule's token list excludes (`ForgeRaw`: the gate passes it). The fix: an organiser process imports the trusted modules only, re-adds the kernel declarations of the badge-path closure of the submission, compiles them from their kernel terms (structural recursion through `f.eq_def`, matchers and projections from their kernel values), writes the `.olean` and `.c` and links the executables from those and the trusted objects. Estimate 2–3 days with a review. Recommended before launch, and required before any ranked board opens (§8) | organiser |
+| O-13 | Gate rule 4's `Fin`-family branch: for a `Fin`-indexed family the gate may pass a `shape` that has code only member by member, while the twin compiles `shape` whole, so stage 3a (badge executables build) rejects it one stage later; it is never an ACCEPT. Making the two agree means compiling `shape` whole in rule 4, a behaviour change left to the next gate revision (S6b-A26) | harness |
