@@ -24,5 +24,6 @@ theorem harnessP_narg (vkc : VKc harnessP.vkLen) (x : Stmt) (t : Tape) :
 theorem harnessP_index (L : Layout K) :
     index harnessCfg harnessP L = index RecursionFastSmoke.submission.cfg RecursionFastSmoke.submission.P L := rfl
 
+
 /-- `index`: see `RecursionFastHarness.indexMain`. -/
-def main (args : List String) : IO UInt32 := RecursionFastHarness.indexMain harnessCfg harnessP args
+def main (args : List String) : IO UInt32 := RecursionFastHarness.indexMain harnessCfg harnessP none args

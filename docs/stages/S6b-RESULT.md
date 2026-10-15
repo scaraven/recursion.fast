@@ -328,3 +328,85 @@ So the sandbox and the cgroup add about 0.07 s per process; it was 0.03 s. The s
 CI after the fix pass: **CI OK in 11 min 47 s** (707 s; `logs/S6b/ci-run-8.log`; run 7, without
 the fixture step, took 11 min 48 s). That is 14 min less than the decision pass's 25 min 52 s,
 mostly from the simplify pass's concurrent phases. The default `lake build` is green (2,490 jobs).
+
+## S9 fix pass (the S9 reviews' harness items)
+
+Sources: `docs/reviews/S9-definitions.md`, `S9-incentives.md` and `S9-feasibility.md`. The
+amendments are S9-A30 … S9-A44 in `docs/DESIGN-AMENDMENTS.md` ("Stage 9 harness fix pass").
+Nothing is committed. Other agents edited `Contract/`, `Library/` and `Bridge/` at the same time;
+I touched none of those. The only Lean I changed is the KAT `xNK` with its theorem
+(`Controls/RecursionData.lean`, `Controls/Recursion.lean`) and the harness driver
+(`harness/lean/`).
+
+| finding | fix | CI evidence (`logs/S9/ci-harness-1.log`) |
+|---|---|---|
+| **S9D-M1** the source rule's lexer diverges from Lean's | `scripts/source-rule.py` has two nets. Net 1 is a Lean lexer (raw strings only for `r#…"`, every string read both plainly and as an interpolation, nested comments, character literals) that **fails closed** on anything open at the end of the file and on a string whose end depends on interpolation. Net 2 is a raw word scan. The keywords are exact (Library names such as `run_mono` stay usable). A keyword sweep over the closure's token table runs in CI. Trust statement corrected (S9-A30). | "source rule: 95 rejected forms reported exactly (bad/: by each net alone; …), 4 forgeries (S9 bypasses, ForgeRaw) caught by each net alone; the allowed forms pass"; "sweep: 418 keyword tokens: 159 rejected by the source rule, 259 reviewed, 0 unreviewed"; "harness rejects ForgeRawR by the source rule before any build: 25: open Lean 35: run_meta 36: persistentEnvExtensionsRef.get 39: unsafe 39: unsafeCast" |
+| **S9F-M1** `RecursionFast/Bridge/` breaks clones | `org-build.sh` makes a missing source directory an empty one (a library's `globs` needs it; deleting it failed, measured). The directory is now tracked through the ArkLib port (S9-A4). | the fresh clone, below |
+| **S9F-M2** the manifest is machine state | `olean-manifest.py gen --closure` covers exactly the trusted closure (allowlist plus the whole frontend closure; `check` scoped to the manifest's modules). Regenerated: 34,512 entries, down from 35,222; exactly the reviewer's 710 out-of-closure files are gone. CI step 3 regenerates it and requires equality. | "olean manifest = the trusted closure: 34512 files of the import allowlist and the frontend closure (S9F-M2)" |
+| `harness.sh` comparator default | `scripts/tools.env` holds one default, shared with `ci.sh`, with pins and build commands. Without a built comparator the harness stops with a message naming `COMPARATOR_HOME` (CLAUDE.md text: S9-A43). | the fresh clone's baseline check, below |
+| **S9I-M1** board L is won by recomputing the chain | L (and W) are `"ranked": false`; R is the only ranked board. | "result: board R ranked, … L, W unranked" |
+| **S9I-M2** level 2 decides the `S_rec` median | `S_rec` = max over the level groups 2, 3, 4–6 of the median step time; per-level medians are published. | "S_rec = max of the level groups {'2': 0.2659…, '3': 0.2667…, '4+': 0.2631…} = 0.2667 s" |
+| **S9I-M3** the record rule does not separate noise | `record` only screens (result files; same season and hardware id; different entries). `compare` confirms in one session: shared fresh instances, ABBA interleaving, 5 pairs, median ratio ≤ 0.97. `compare --calibrate` gives σ and the pairs needed; the sybil limit is in reference-machine.md §4. | "compare: faster challenger: RECORD: median ratio 0.454…"; "slower challenger: NOT A RECORD: median ratio 2.138…"; "--calibrate (self-pairs): CALIBRATED: … sigma 0.047…, pairs needed 35"; "record refuses: … the same entry …; … differ in config_sha256" |
+| **S9I-m3** no wrong proof is ever verified | Canaries for 8 proofs per kind and run: a byte appended, a byte removed, a statement bit flipped, the other key. DoS tapes also go under the recursion key. | "225 canaries rejected; DoS {'leaf key': 50, 'recursion key': 50}"; "runner rejects accept-all: … the verifier ACCEPTED a canary (one byte appended; S9I-m3)" |
+| **S9I-m4** secrets from a file | The runner draws the secrets from `os.urandom` per evaluation; `--secrets` is refused. | "harness refuses --secrets (S9I-m4)" |
+| **S9I-m5** a result does not say what it was measured under | `config_sha256`, `hardware_id`, `machine` (with `has_clmul`), `entry` (hashes of `verify`, `index`, the prover's argv and files, the claim, `C`'s layout) and `entry_id`. | the result's checks (`entry a68b…`) |
+| **S9D-m2** the selftest is blind to a `d0`/`d1` swap | Kernel KAT `nodeStmt_kat_keys` with two keys (`xNK`). The selftest checks it and that a swap differs. | "selftest: nodeStmt_kat_keys (xNK …): OK", "a d0/d1 swap is caught: OK"; a swapped `node_stmt` fails the selftest, while the S6b selftest passed it (by hand) |
+| **S9D-m4** the recursion key comes from a second reader | The harness renders the claim's `C` with the challenge renderer into `harness-index` (`--certified-c`); the runner indexes it (`--certified-C`, `index_C = certified`). | "runner (index_C = certified, S9D-m4): the recursion key is the certified C's (e14eb11c… = the layout file's), whatever layouts.C says (here chain-n1)" |
+| **S9F-M5** caps that cannot be met together | The per-step caps are kept; the whole-evaluation cap is derived from them (`budget` in the result; 73 h at the defaults). `budgets.eval_s` is refused. S9F-M4: the 1 h indexing cap stays. | "derived budget 207682 s" (the CI smoke configuration) |
+
+Findings made during the fix pass:
+
+1. **Prefixes were too broad.** The first S9 lexer rejected every `run_…` word. The organiser's
+   Library has `run_mono`, `run_length` and `run_firstMsgImage…` (the baseline cites them in
+   docstrings). The keywords are now exact words, checked against the closure's token table.
+2. **More code-running keywords.** The sweep found and banned `test_extern`, `compile_inductive%`,
+   `compile_def%`, `leading_parser`/`trailing_parser`, `elab_stx_quot`, `grind_propagator`,
+   `set_library_suggestions` (it defines a `meta def` run by `grind`), Mathlib's `sudo` and
+   `idbg`. The rest of the closure's 418 keywords are reviewed in
+   `tests/source-rule/reviewed-tokens.txt`. The token table does not hold scoped or non-reserved
+   keywords (`by_elabq`, `run_tacq`, `run_tac`), so those come from grepping the syntax
+   declarations: a residual.
+3. **Fail-closed costs.** Rejected are: a string inside `{…}` of an interpolation (also a legitimate
+   nested `s!`), an unbalanced `{` in a plain string, Mathlib's `#s`, and a rejected word in a
+   comment. Clean's `#v[…]` and `#[…]` are fine. The baseline (8 files) and the toy have no
+   finding. `RecursionFast/Clean/Examples.lean` (organiser code, never scanned) has one comment
+   word.
+4. **`compare` identity and order.** Entry identity first ignored the prover's argv: two configs
+   differing only in `--spin` were "the same entry", which a dev-clone CI run caught. Runs are now
+   interleaved ABBA. Self-pairs of the smoke protocol here give σ ≈ 4.7–8 % per pair, so a 3 %
+   margin would need 35–110 pairs on this shared VM with 0.27 s steps. The calibration procedure
+   is doing its job; O-6 must calibrate on the reference SKU with realistic steps.
+5. **The old manifest broke clones.** In a dev clone of HEAD (S6b state), `olean-manifest.py check`
+   fails on the committed manifest: "missing packages/Clean/Clean/Gadgets/Addition8/Theorems…, FAIL
+   (12 differences in 35222 entries)", the reviewer's S9F-M2 observation. The closure manifest
+   regenerated there differs from this tree's only in the 5 `Contract` files that the contract
+   cleanup changed.
+
+Timings:
+
+- Main CI: **CI OK in 15 min 0 s** (900 s; `logs/S9/ci-harness-1.log`). That is +3 min 13 s over
+  the S6b fix pass's 11 min 47 s: step 10 adds canaries, three `compare` sessions and the
+  certified-C runs (from 4 min to 7 min 16 s); step 6 adds the sweep (21 s, concurrent).
+- Dev-clone CI (HEAD plus only my changes): 12 min 51 s, failing only at the `compare` identity
+  bug since fixed.
+- Default `lake build`: green in the main tree and in the clones.
+
+**Fresh clone** (S9F; the reviewer's procedure, `logs/S9/fresh/`, driver `logs/S9/fresh/fresh-clone.sh`):
+`git clone` of HEAD plus this working tree's changes and untracked files (55 paths, 10:21). Then
+`scripts/setup-clean.sh <local ext/Clean>` (offline) and the packages symlink. No environment
+override: `COMPARATOR_HOME` and `COMPARATOR_NANODA` were unset and came from `scripts/tools.env`.
+**No workaround.**
+
+| step | result | wall (CPU) |
+|---|---|---|
+| default `lake build`, cold | OK, 2,490 jobs | 5 min 03 s (695 s user), peak 9.1 GB |
+| `lake build` again | OK | 4 s |
+| `scripts/ci.sh` | **CI OK** (1,304 s by CI's clock) | 21 min 44 s (4,394 s user) |
+| ↳ step 2, organiser build | OK, cold, Clean's cone included | 5 min 26 s |
+| ↳ step 3, manifest | OK: 34,512 files match; equals the closure | 8 s |
+| ↳ step 10, timed benchmark and rejections | OK | 7 min 14 s |
+| ↳ step 11, Clean frontend | OK, cold in the clone's root tree | 1 min 59 s |
+| `HARNESS=1 ORG=… MANIFEST=scripts/olean-manifest.sha256 submissions/baseline/scripts/check.sh` | **CHECK OK**, HARNESS: ACCEPT | 5 min 54 s; harness 268 s (comparator 195 s; gate: 3,639 modules, 3,596 trusted and 29 pinned by hash, PASS) |
+
+Before this pass the same procedure failed at CI step 2 (Bridge), then at step 3 (12 Clean
+files), and the baseline check failed on `COMPARATOR_HOME`.

@@ -1456,3 +1456,375 @@ are `S6b-A<i>` (Stage 6a's are `S6-A1 … S6-A11`).
   later, never an ACCEPT. Every shape in the repository (the toy's, `cmpToy`'s) passes both (CI
   steps 7 and 10). Making them agree means compiling `shape` whole in rule 4, a behaviour change
   left to the next gate revision.
+
+## Stage 9 contract cleanup (Field, Shapes, Security, Layout, Protocol, Library, Bridge; 2026-10-15)
+
+From `docs/reviews/S9-definitions.md` (S9D-m1, m3, m6, m7) and `docs/reviews/S9-feasibility.md`
+(the ArkLib bridge). Owner: the Stage-1 implementer.
+
+- **S9-A1 (S9D-m1: delete trusted declarations that certify nothing; §8, §10).**
+  - **Deleted from the contract (9 declarations).**
+    - `Field.lean`: `K`'s `Sub` and `Neg` instances; `E`'s `Zero`, `One`, `Add`, `Mul`
+      instances; `E.toBytes`.
+    - `Shapes.lean`: `FullTranscript.tapeWords` and `instance : Inhabited Oracle`.
+  - **Why each could go.** No trusted declaration used them; the contract builds without them.
+    `E` enters the trusted statements only as a set: `Round.Ty (chal nE _)` is `Fin nE → E`,
+    `RbrKS` counts over all `2^192` triples, and nothing trusted multiplies two `E` elements.
+    `FullTranscript.tapeWords` had no caller. The `Inhabited Oracle` instance is not required by
+    `QProg.eval` (`os[j]?`).
+  - **Kept, because something trusted depends on it.**
+    - The challenge types depend on `E` itself (the structure), `E.toWords` and
+      `Round.tapeWords`, which the extractor tape uses (`Round.words`).
+    - Compile (`K.bytes`) depends on `K`'s `0, 1, +, *` and `K.toBytes`.
+  - **Moved to `Library/Field.lean`.** The deleted instances and `E.toBytes`, unchanged. The
+    library's `Field K` and `Field E` are built from them. One organiser harness line had to
+    change with them: `harness/lean/RecursionFastHarness/Twin.lean`'s `Round.zero` writes the
+    zero challenge as `⟨0, 0, 0⟩`.
+  - **Effect on size.** Trusted code: 739 → **724** lines (`Field` 36 → 24, `Shapes` 50 → 47);
+    543 → 528 without `Compile` and BLAKE2s. The contract has 1,080 → 1,071 constants
+    (`probes/s9/definitions/TrustedAudit.lean`). The certificate cone holds 294 of 302
+    declarations (`CertificateCone.lean`).
+  - **Status of the carried-over files.** They become "verbatim minus deletions (listed), with
+    docstrings updated (S9-A3)":
+    - `Field.lean`: the six `K`/`E` arithmetic declarations above;
+    - `Shapes.lean`: the two above;
+    - `Security.lean`: no deletion, docstrings only.
+
+    DESIGN §8 and §10 should say so.
+  - **Still outside the cone, in files this owner does not edit.**
+    - `Round.decode` and `instReprHashId(.repr)` in `Compile.lean`;
+    - `pairUp`, `treeRoot`, `treeRoot.go` and `rootOK` in `Recursion.lean`, which S9D-m2 covers.
+
+    `unpack` (`Machine.lean`) is load-bearing through the rendered image literal.
+  - **Change in meaning:** none.
+- **S9-A2 (S9D-m3: what `Secure` asks; §3.1, §4 items 1–2).** Documented in the `Protocol.lean`
+  header, `Protocol.Secure`'s docstring (the reviewer's rewrite 2) and `Security.lean`'s reading
+  guide. Add to DESIGN §4 item 2:
+
+  > Soundness ranges over every statement `(L, x)`, admissible or not. A secure verifier
+  > therefore rejects non-admissible layouts, which it can learn only through `VK L`; the toy
+  > and `P_triv` key one element, `[L.Admissible k]`. `ε c` bounds each challenge round. The
+  > protocol's knowledge error is at most `Σ_c ε c ≤ n · 2^-128 ≤ 2^14 · 2^-128 = 2^-114`.
+
+  **Change in meaning:** none; the probe `NonAdmissible.lean` (`nonadmissible_rejected`) pins the
+  rejection.
+- **S9-A3 (S9D-m6: stale docstrings in the carried-over files; DESIGN references).** The
+  reviewer's rewrites 1, 2 and 5 are applied. Rewrites 3 (`NARG`) and 4 (`rootOK`) belong to
+  `Compile.lean` and `Recursion.lean`, which other owners edit.
+  - **`Shapes.lean` header.** QUERY and `Agrees` are replaced by `QProg.query`, and "the
+    security statements quantify over every string an adversary can commit to".
+  - **Other `Shapes.lean` docstrings.**
+    - "DESIGN §7: leaf_j | ℓ_j" becomes "DESIGN §3.1".
+    - `roundCap`: "every protocol has at most `2^14` rounds (DESIGN §3.1)".
+    - `OShape`: "a query opens …".
+    - `Oracle`: "as the verifier's query program sees it".
+    - `Oracle.get`: "`QProg.eval` reads only leaves below `leaves`, so never there".
+    - `Round.tapeWords`: "the extractor's tape … `b ≤ 64` is a shape cap, `Round.Admissible`".
+  - **`Security.lean`.**
+    - Header: the bridge is untrusted and one-directional.
+    - `errorCap`: "DESIGN §4: every challenge round's error is at most `2^-128`".
+    - `SecureWith`: "the security clause of a protocol … (DESIGN §4)".
+    - `RbrKS`: finiteness is in `Library/Challenges.lean`.
+  - **`Protocol.lean` header.** The computable list is gate rule 4's badge-path fields: `n`,
+    `shape`, `vkLen`, `VK`, `idxShape`, `IDX`, `verify`, the image.
+  - **`Field.lean`.** The header says `E` is the challenge *set* and its arithmetic is library
+    arithmetic (S9-A1); the `E` structure's docstring says the same.
+  - **Change in meaning:** none.
+  - **Manifest.** The olean manifest must be regenerated once all S9 trusted edits are in. Today
+    `olean-manifest.py check` reports exactly the 4 changed contract `.olean`s (`Field`, `Shapes`,
+    `Security`, `Protocol`). I did not regenerate it, because other S9 owners are editing trusted
+    files and `olean-manifest.py` concurrently.
+- **S9-A4 (S9F: the ArkLib bridge; §4, §8, §10, CLAUDE.md).**
+  - **Port.** `RecursionFast/Bridge/ArkLib.lean` is v0.3's file, unchanged except its header and
+    the import of `Contract.Protocol`: `toPSpec`, `Extractor.toArk`, `PureVerifier.toArk`,
+    `KSF.toArk`, and `RbrKS.toArk`, which says contract RBR-KS implies ArkLib's
+    `rbrKnowledgeSoundnessWorstCaseWith` with the same errors for any uniform sampler. It
+    compiles against v2's `Security.lean` as is.
+  - **New v2 corollary `Protocol.secure_toArk`.** `P.Secure` gives a KSF with which the
+    protocol's verifier (its query program on `IDX L` and the transcript's oracles, as a pure
+    verifier) is ArkLib worst-case RBR knowledge sound for `relK k`, with the image's extractor
+    `P.extractor.toExtractor P.shape`.
+  - **Non-vacuity control:** `Bridge/ArkLibToy.lean`, `toy20_arkRbrKS` (kept in `Bridge/`, so
+    `Controls/` never imports ArkLib).
+  - **Build.** `RecursionFast/Bridge.lean` imports both files and `RecursionFastBridge` builds.
+    `Bridge/` is now a tracked directory, which also closes S9F-M1's `rsync` failure on clones.
+    The axiom audit covers both modules and reports PASS: ArkLib's sorried parts are outside the
+    bridge's closure.
+  - **What it does not carry, stated in the header.**
+    1. Contract → ArkLib only, so a submitter cannot obtain `Secure` from ArkLib's proofs through
+       it (S9F's decision item stands).
+    2. ArkLib's extractor is unbounded, so the image's step bound `B(k)` is forgotten.
+    3. Perfect completeness is not restated in ArkLib's probabilistic form; the contract's form
+       is stronger.
+  - **Gate.** The bridge is not in gate rule 6's allowlist; that list's roots are unchanged, and
+    the regenerated allowlists are identical.
+  - **Cost.** On a fresh clone the organiser build now builds ArkLib's `RoundByRound` cone.
+    Locally that cone was prebuilt, and the build took 15 s; the cold time is not measured.
+  - **Change in meaning:** none (untrusted).
+- **S9-A5 (S9D-m7: the dead ZiskAccel reach; analysis only, for the orchestrator; §8,
+  `Machine.lean`).**
+  - **Facts.**
+    - The contract reaches the vendored `execInstrBr` (`Rv64/Execution.lean` lines 38–202: 165
+      lines, 150 of code) through `ordinaryStep`.
+    - Its `CSRS` arm calls `MachineState.execCsrs` (`ZiskAccel.lean:787`), and that pulls in
+      ZiskAccel's 33 declarations and 316 lines.
+    - `decodeInstruction` intercepts opcode `0x73` and returns only an exact `ECALL`.
+      `ordinaryStep` refuses `CSRS`, `ECALL`, `EBREAK`, `LI`, `MV` and `NOP`. So these six arms,
+      and all of ZiskAccel, are unreachable from `execute`, but they are in the kernel term and
+      in the reading list.
+  - **Options.**
+    - **(a) Copy the live semantics into `Machine.lean`.** Copy `execInstrBr` minus its six dead
+      arms, about 140 trusted code lines, and stop referencing `execInstrBr`. The helpers it uses
+      (`MachineState` setters and getters, `rv64_mul*`/`div`/`rem`, `signExtend12`) stay vendored
+      in `Basic.lean`/`Word.lean`, so no ZiskAccel constant is reached.
+      - Reading cost: −316 (ZiskAccel) − 165 (`execInstrBr`) + 140 (copy), net about −340 lines.
+      - Trusted budget: contract 528 → about 670 of 850 (excluding `Compile`/`Hash`).
+      - Fidelity: the copy is no longer byte-identical upstream text. It needs a Library
+        theorem, `execLive s i = execInstrBr s i` for every live `i` (`cases i <;> rfl`, cheap),
+        so the transcription is kernel-checked against the vendored model. That model stays in
+        the repository and in the manifest, but outside the certificates' cone.
+      - The import cone (files) does not shrink: `Execution.lean` still imports `ZiskAccel.lean`
+        through `Instructions.lean`. A copy that imports only `Basic.lean` would avoid even that.
+    - **(b) Document only (the reviewer's fix).** Add one sentence to `Machine.lean`'s header and
+      to §8: "of the 930 reached lines, ZiskAccel's 316 and `execInstrBr`'s
+      `ECALL`/`EBREAK`/`CSRS`/`LI`/`MV`/`NOP` arms are unreachable from `execute`, since
+      `decodeInstruction` never produces them and `ordinaryStep` refuses them". The kernel term is
+      unchanged; the auditor is told what to skip.
+    - **(c) Upstream.** Split `execInstrBr` in riscv-zkvm into a base step plus a `CSRS` wrapper,
+      then re-vendor at the new commit (`scripts/check-vendor.sh` pin). The reach drops by 316
+      lines with no trusted copy and no loss of byte-identity, but it depends on an upstream
+      change and a re-vendor.
+  - **Recommendation.** Do (b) now; it is the `Machine.lean` owner's edit plus a §8 sentence.
+    Pursue (c) as the clean fix. Do (a) only if the reading count matters more than
+    byte-identity with upstream; its benefit is mainly for a human auditor, since the dead arms
+    are not a soundness risk (unreachable, and checked by `ordinaryStep`).
+
+## Stage 9 compile fix pass (Compile, Library/Compile, Controls/Compile*; 2026-10-15)
+
+Numbered from S9-A10, to stay clear of the contract-cleanup items S9-A1 to S9-A5.
+
+- **S9-A10 (S9F-M4: the indexing cost; §3.2, §6.3 step 2).** The trusted `commit` is now sparse.
+  - **What it skips.** It does not hash a subtree whose positions are all padding, or all leaves
+    with every element zero. Such a subtree's digest is the same wherever it occurs. The towers
+    over the zero digest and over `H(all-zero leaf)` give it in `depth` hashes, once per commit.
+    The definitions are `tower` and `nodeS`.
+  - **Same root.** `commit_eq_commitDense` (`Library/Compile.lean`) proves the root equal to the
+    dense recursion `node`, which moved to the Library as the specification.
+    - The tape grammar, the paths, every KAT and both Python encoders are byte-identical.
+    - New `#guard`s check a mostly-zero, padded oracle at arity 2, 4 and 16 against the dense
+      root and against `indep_encoder.py`.
+  - **Cost.** Hashing is now O((non-empty leaves + 1) × depth). Every element of the oracle is
+    still read once to find the empty leaves.
+  - **Memory.** Constant: 130 MB at every size measured. Nothing is materialised. `prove`'s
+    paths use the same sparse nodes.
+  - **Trusted text.** +13 code lines (128 → 141): `tower`, `nodeS` and the sparse `commit`; the
+    dense `node` left the contract.
+  - **Measured.** Probe `probes/s3/index-bench` builds `index` compiled. It runs `cmpToy` at
+    class 24 with an index oracle of `2^m` elements in leaves of 16, holding `L_chain(2^10)`'s
+    serialisation (792,851 elements):
+
+    | Index oracle | Dense (before) | Sparse (after) |
+    |---|---:|---:|
+    | `2^24` elements | 41.9 s | 5.3 s |
+    | `2^29` = `2^(k+5)` | 1,342 s | 105 s |
+    | `2^32`, the cap `2^(k+8)` | ≈ 3 h (extrapolated, ×8 per 3 doublings) | 861 s |
+
+    The toy's 2-leaf index takes 0.3 s in both. The logs are `logs/S3/s9-index-*.log`.
+  - **What remains (for the owner of `Protocol`/DESIGN).** The time is now the element reads,
+    about 200 ns each: 14 min at the cap at k = 24, and about 3.7 h at the cap at k = 28. Removing
+    that needs `IDX` to expose its support, for example a declared bound beyond which `IDX L` is
+    zero, which `commit` would not read. That is a `Protocol` change. The alternative is the
+    feasibility review's lower index cap.
+  - **Submitter trap, to document in §3.1.** Lean's compiler eta-expands a definition
+    `Layout K → OVal o` that begins with a `let`, so the precomputation is redone for every
+    element read (measured: 190 ms per element). An `IDX` must keep its precomputation in a
+    structure field (`probes/s3/index-bench`, `IdxFn`) or compute each element directly.
+- **S9-A11 (S9D-m5: Merkle binding in CI).** `Collision`, `LevelOK`, `climb_binding`,
+  `verifyPath_binding`, `readOpening_shape` and `opening_binding` moved from
+  `probes/s3/RevBinding.lean` into `Library/Compile.lean`, section "Merkle binding". The header
+  of `Contract/Compile.lean` cites `opening_binding` as the binding argument for "no leaf/node tag".
+- **S9-A12 (S9D-m6: `NARG`'s docstring).** It now reads: "`vkc` is any compiled key: on the badge
+  path it is the indexer's output (`index`); in `aggOK` it is a key from the node's witness, bound
+  to the statement only by its digest." The `Protocol.lean` header was already corrected
+  (S9-A3).
+- **S9-A13 (dependants of the sparse `commit`).** The trusted `commit` no longer unfolds to the
+  dense `node`. Three proofs that used `node_length` for a key's root now use
+  `commit_length`: `Library/Recursion.lean` (twice), `Controls/MagicKey.lean`, and the probe
+  `probes/s5/review/MagicKey.lean`. No statement changed.
+
+## Stage 9 harness fix pass (the S9 reviews' harness items, 2026-10-15)
+
+From `docs/reviews/S9-definitions.md` (S9D-M1, m2, m4), `S9-incentives.md` (S9I-M1, M2, M3, m3,
+m4, m5) and `S9-feasibility.md` (S9F-M1, M2, M4 note, M5, m2, m3). IDs S9-A30 … S9-A44 (the
+contract passes use S9-A1 …). Evidence: `docs/stages/S6b-RESULT.md`, "S9 fix pass".
+
+- **S9-A30 (S9D-M1: the source rule lexes like Lean, fails closed and has a second net; §7.4,
+  §8; corrects S6b-A20's trust statement).** `scripts/source-rule.py` has two independent nets,
+  both binding:
+  - **Net 1, a lexer that follows Lean's.** It handles `--` and nested `/- -/` comments, string
+    escapes, raw strings only for `r` + `#`s + `"` (so `r#check r` is `r` and the allowed
+    `#check r`), character literals, `«»` names and numbers as one token. Interpolation is a
+    property of the surrounding syntax, so every string is read both plainly and as an
+    interpolation (`{…}` lexed recursively). A string whose two readings end in different places
+    is a finding (`s!"{ "}" }"`, also a nested `s!"…"` or an unbalanced `{` in a plain string).
+  - **Fail closed.** A comment, literal, `«name»` or interpolation still open at the end of the
+    file is a finding. So are nesting deeper than 4, a file that is not UTF-8, and a lexing work
+    budget exceeded.
+  - **Net 2, a raw word scan.** It scans the bytes, comments and strings included, at ASCII word
+    boundaries (never fewer boundaries than Lean's), so no lexer desynchronisation hides a word.
+    A rejected word in a comment is a finding; the submitter rewords it.
+  - **The word list.** It is exact keywords, not prefixes, so the Library's `run_mono` and
+    `run_firstMsgImage` stay usable. It covers `run_meta`, `run_cmd`, `run_elab`, `run_tac`,
+    `run_tacq`, `run_conv`, `by_elab`, `by_elabq`, `eval%`, `test_extern`,
+    `compile_inductive%`/`compile_def%`, `leading_parser`/`trailing_parser`, `elab_stx_quot`,
+    `grind_propagator`, `set_library_suggestions`, `sudo`, `idbg`, the simproc family, every
+    `register_…`/`builtin_…`/`declare_…`, the attributes `command_elab`, `term_elab`, `delab`,
+    `app_unexpander`, `library_suggestions`, and `tactic`/`init`/`export`/`…_parser` after `[` or
+    `,`. The script's docstring has the full list.
+  - **Keyword sweep.** `scripts/TokenSweep.lean` (Lean core only) dumps the token table of the
+    allowed import closure (10,865 modules, 1,154 tokens). `tests/source-rule/sweep.py` requires
+    every keyword-like token (418) to be rejected (159) or listed as reviewed
+    (`tests/source-rule/reviewed-tokens.txt`, 259, with notes on the suspicious ones). It runs in
+    CI step 6, so a toolchain or Mathlib bump fails CI until its new keywords are reviewed. Scoped
+    and non-reserved keywords (`by_elabq`, `run_tacq`, `run_tac`) are not in the table; they come
+    from a grep of the packages' syntax declarations.
+  - **Fixtures** (`tests/source-rule/check.sh`, CI step 1):
+    - 95 rejected forms, each reported exactly on its line;
+    - in `bad/`, each code-level form is reported by each net alone;
+    - the S9 bypasses `RawHash`, `Interp` and `ForgeRawR` (copied verbatim from
+      `probes/s9/definitions/srcrule/`) and `ForgeRaw` are each caught by each net alone;
+    - a file of allowed forms has no finding;
+    - negative controls: the S6b rule and a rule without the ambiguity check fail the fixtures.
+  - **Harness regression** (CI step 7): `ForgeRaw` and `ForgeRawR` are rejected by the source rule
+    before anything is built.
+  - **Trust statement** (replaces S6b-A20's): "The source rule (two nets over a closed, reviewed
+    keyword list, checked against the closure's token table) and gate rules 3, 6, 7, 8 raise the
+    bar. They do not exclude elaboration-time code reached through a keyword the review missed,
+    such as a scoped or non-reserved keyword absent from the token table. The sound fix is O-12,
+    which must ship before any ranked board opens."
+- **S9-A31 (S9F-M1: an untracked directory breaks clones).** `scripts/org-build.sh` turns a source
+  directory that git does not hold (an empty one is absent from every clone) into an empty
+  directory in the organiser package. A library's `globs` needs the directory to exist, so
+  deleting it fails the build (measured). `RecursionFast/Bridge/` is tracked once the ArkLib
+  bridge is committed (S9-A4).
+- **S9-A32 (S9F-M2: the olean manifest is the trusted closure; §7.4, §13).**
+  - **Scope.** `olean-manifest.py gen --closure …` hashes the toolchain, the package modules of
+    `import-allowlist.txt` and of `frontend-closure.txt` (the whole import closure of
+    `RecursionFast.Clean`, now kept by `org-build.sh`), and the contract and vendored modules.
+  - **Fails** if a closure module has no `.olean` anywhere.
+  - **`check`** verifies every manifest file. It reports extra files in `core/` and `project/`
+    and new files of manifest modules. A new module dropped into a package directory is out of
+    scope: gate rule 6 refuses to import it, and the gate treats it as untrusted, since it trusts
+    only by manifest hash.
+  - **Regenerated:** 34,512 entries (was 35,222). Exactly the reviewer's 710 out-of-closure
+    entries are gone: ArkLib 136, VCVio 357, PolyFun 78, CompPoly 108, Clean 13 (the 4 probe
+    modules among them), mathlib `Cache.*` 18. Every other key is unchanged.
+  - **CI step 3** regenerates the manifest into a scratch file and requires it to equal the
+    committed one.
+  - **Rule for every trusted change:** regenerate on the machine of record, after its organiser
+    build (`harness/README.md`, "The olean manifest").
+- **S9-A33 (S9F-m2: one default for the external tools).** `scripts/tools.env` is sourced by
+  `scripts/harness.sh` and `scripts/ci.sh`. It gives `COMPARATOR_HOME` (leanprover/comparator
+  `d03acab`, with lean4export `076e8e5`) and `COMPARATOR_NANODA` (ammkrn/nanoda_lib `3a24072`)
+  their defaults when the checkouts exist here, and it documents pins and build commands.
+  `harness.sh` has no repository-relative default. Without a built comparator it stops: "harness:
+  no comparator: set COMPARATOR_HOME to a built leanprover/comparator checkout (…; pins and build
+  commands: scripts/tools.env)", and the same for nanoda.
+- **S9-A34 (S9I-M1: board L unranked; §6.2 table and "Why these", §6.6 row 1).** The result
+  marks L and W `"ranked": false` and R `"ranked": true`, and gives `ranked = {board: R, S_rec,
+  verdict}`. A leaf's witness is its 32-byte start, so no proof-size cap separates "send `s`,
+  recompute the chain" from a SNARK. §6.6 row 1 becomes "L: unranked; the leaf witness is 32
+  bytes (S9I-M1)".
+- **S9-A35 (S9I-M2: `S_rec` is the slowest level group; §6.2 R row, §6.3 step 6, §6.6).**
+  - **Definition.** `S_rec := max(m₂, m₃, m₄₊)`, where `m_g` is the median over runs of the
+    per-run median step time of group `g`: level 2, level 3, and levels 4–6 pooled (7 steps).
+  - **Published.** `S_rec_by_group`, and the per-level medians `S_by_level`.
+  - **The attack it closes.** Wrap proofs that are expensive to prove and cheap to verify make
+    level 2 cheap. The 16 level-2 steps are a majority of the 31, so they decide a median over
+    levels ≥ 2, and that median moves without lowering the steady-state cost of a step. §6.6
+    gains "and from the wrap steps into level 2: `S_rec` is the slowest level group (S9I-M2)".
+- **S9-A36 (S9I-M3: the record rule is a paired confirmation; §6.4, §6.6 "lucky runs").**
+  - **Screening.** `record NEW.json STANDING.json` takes result files, not floats. It refuses
+    results of another `config_sha256` or `hardware_id` and an entry with itself.
+  - **Confirmation.** `compare --standing --challenger` runs both entries in one session, on one
+    fresh set of tree instances, interleaved ABBA run by run (an order or drift effect cancels;
+    measured 0.85–1.06 per-pair ratios for self-pairs here), 5 pairs, board R. The challenger is
+    the record iff the median ratio is ≤ 0.97.
+  - **Calibration.** `compare --calibrate` with ≥ 10 self-pairs; pairs needed ≥ (3.75·σ/m)².
+  - **Sybil limit.** One ranked entry per submitter per season; a resubmission replaces; the same
+    `entry_id` is one entry; one confirmation per submitter per week.
+  - **Ties** go to the incumbent.
+  - **Where it is written.** `harness/reference-machine.md` §4 and the runner's docstring.
+- **S9-A37 (S9I-m3: canaries; §6.3).**
+  - **The canaries.** For the first `canaries.per_kind` (8) proofs of each kind per run, `verify`
+    must reject four mutations. Two are guaranteed by the tape grammar: the tape with one byte
+    appended, and with its last byte removed. Two follow from soundness: one statement bit flipped
+    (`y` of a leaf, `d2` of a node), and the other key, when the keys differ.
+  - **On failure.** An accepted canary rejects the whole evaluation.
+  - **DoS.** The tapes alternate between the leaf key and the recursion key.
+  - **CI.** An accept-all `verify` is rejected by the first canary.
+- **S9-A38 (S9I-m4: fresh secrets).** The runner draws the chain starts from `os.urandom` for every
+  evaluation and holds them itself; they reach only the leaf's step directory. `run --secrets`
+  and the `secrets` subcommand are gone, and `harness.sh --secrets` is refused. The result keeps
+  `secrets_sha256` for a ledger.
+- **S9-A39 (S9I-m5: what a result was measured under).** Every result carries:
+  - `config_sha256`: the season's bench configuration, everything but the entry's keys;
+  - `hardware_id`: the config's `hardware_id`;
+  - `machine`: now with `has_clmul`;
+  - `entry`: sha256 of `verify`, `index`, the prover's argv and its files, the prover build
+    directory, the claim and the layout of `C`;
+  - `entry_id`.
+- **S9-A40 (S9D-m2: a key-swap KAT).**
+  - **KAT.** `Controls/RecursionData.lean` `xNK` = `nodeStmt cfg2 vkc2 vkK .leaf .leaf x0 x1`, with
+    two different keys. `Controls/Recursion.lean` `nodeStmt_kat_keys` (`decide +kernel`) checks it.
+  - **Selftest.** The runner's `selftest` checks `node_stmt` against `xNK` and that a `d0`/`d1`
+    swap differs from it.
+  - **Negative control.** A swapped `node_stmt` fails the selftest; the S6b selftest passed it.
+- **S9-A41 (S9D-m4: the recursion key from the certified `C`; one reader).**
+  - **Rendering.** For a board-R claim, `scripts/harness.sh` renders the claim's `C` with the
+    challenge renderer (the stub line `{{layout:C}}`, the same rendering as the challenge's
+    certified `C`).
+  - **Into the index executable.** `harness/badge-main.py --certified-c` inlines it into
+    `harness-index` (namespace `RecursionFastHarness.Certified`).
+  - **Indexing.** The runner (`index_C = "certified"`, forced by the harness) calls
+    `harness-index --certified-C VKC_OUT`. The key is the index of that compiled `C`, never a parse
+    of the layout file; the file still goes to the prover.
+  - **What the link rests on.** The same renderer applied to the same claim file. No kernel term
+    states it: the challenge module cannot be imported into a badge executable (rule 8).
+  - **CI.** `harness/badge-build.sh --certified-c` is used for the keyed smoke protocol. Its
+    certified digest equals the layout file's, and with `index_C = certified` the key does not
+    change when `layouts.C` names another file.
+- **S9-A42 (S9F-M5, S9F-M4 note: derived budgets; §6.3, §6.5).**
+  - **Per-step caps, kept:** `leaf_s` 120 s, `step_s` 600 s, `root_s` 60 s, `verify_s` 60 s,
+    `index_total_s` 1 h (indexing cost is being reduced in `Compile`, S9F-M4).
+  - **The whole-evaluation cap is derived:** every process the evaluation may start, at its cap,
+    plus `overhead_s` (600 s) and `per_process_s` (2 s) per process. It is reported as `budget`
+    with its terms.
+  - **No independent 6 h:** `budgets.eval_s` in a config is an error. An entry that keeps every
+    per-step cap is never rejected by the whole-evaluation cap. With the default configuration
+    (64 + 16 + 16 chains, 63 steps, 3 runs, 1,000 DoS tapes, 8 canaries per kind) the derived cap is
+    263,482 s ≈ 73 h at k ≥ 26 (254,648 s at k = 24); a real evaluation is far below it.
+- **S9-A43 (S9F-m3: CLAUDE.md, for the orchestrator).** Replace the Toolchain paragraph's last
+  sentence and the build line with this text:
+
+  > A fresh clone (S9 fix pass, measured): `scripts/setup-clean.sh [LOCAL_CLEAN_CHECKOUT]`
+  > (offline with a local checkout, e.g. `/home/devops/Verified-zkEVM/recursion.fast/ext/Clean`),
+  > then `mkdir -p .lake && ln -s /home/devops/CambridgePQ/recursion.fast/contract/.lake/packages
+  > .lake/packages`. Elsewhere, `lake exe cache get` supplies Mathlib only; CompPoly's cone and
+  > Clean are then built. The comparator and nanoda are external: set `COMPARATOR_HOME` and
+  > `COMPARATOR_NANODA` (defaults, pins and build commands in `scripts/tools.env`;
+  > `scripts/harness.sh` stops with a message naming them when they are missing).
+  >
+  > ```sh
+  > lake build                         # default targets: 5 min cold (the kernel-evaluated controls), 4 s warm
+  > scripts/org-build.sh .lake/org     # organiser package: ≈ 5 min 30 s cold (Clean's cone included)
+  > scripts/ci.sh /home/devops/Verified-zkEVM/riscv-zkvm   # full CI: 15 min warm; ≈ 22 min from a fresh clone
+  > HARNESS=1 ORG=.lake/org MANIFEST=scripts/olean-manifest.sha256 submissions/baseline/scripts/check.sh   # ≈ 6 min
+  > ```
+- **S9-A44 (the fresh-clone result).** The reviewer's procedure was run on a clone of HEAD plus
+  this working tree, with no environment override and no workaround. Results:
+  - default build: 5 min 03 s cold, 4 s warm;
+  - CI: **OK in 21 min 44 s** (cold organiser build 5 min 26 s; manifest equal to the closure);
+  - baseline `HARNESS=1` check: **CHECK OK** in 5 min 54 s.
+
+  Details are in `docs/stages/S6b-RESULT.md`, "S9 fix pass", and the logs in `logs/S9/fresh/`.

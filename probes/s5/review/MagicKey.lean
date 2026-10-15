@@ -198,7 +198,7 @@ def vkM : VKc 1 := (fun _ => magic, List.replicate 32 0)
 /-- **`live` holds** for `toyCM`: two magic leaves (the recursion key may even be the indexer's
 key of any `C`). -/
 theorem toyCM_live (C : Layout K) : ∃ x' nw, aggOK cfg2 P20 x' nw = true :=
-  ⟨_, _, aggOK_leaves cfg2 P20 (index cfg2 P20 C) vkM (node_length cfg2 _ _ _) x0 x0
+  ⟨_, _, aggOK_leaves cfg2 P20 (index cfg2 P20 C) vkM (commit_length cfg2 _) x0 x0
     (List.replicate 32 0) (List.replicate 32 0) (narg_magic _ rfl rfl _ _ rfl)
     (narg_magic _ rfl rfl _ _ rfl)⟩
 

@@ -20,8 +20,8 @@ and derive `aggOK` from the library's lemmas (`Library/Recursion.lean`).
   `d0` or `d1` differs from the parent's, with an honest tape that `NARG` accepts, so the key
   check alone rejects it), `nwMis` (`nwR` with the node child tagged leaf, S5-m1).
 * A second key `vkK` (`cmpToyK`: key element `0x1235`, same index) and its honest tape `tapeK`,
-  for nodes whose recursion and leaf keys differ (`nwK`, `nwKC`, S5-m7); a key `vkC33` with a
-  33-byte root (`nw33`).
+  for nodes whose recursion and leaf keys differ (`nwK`, `nwKC`, S5-m7; `xNK`, the node statement
+  with `d0 = D vkc2` and `d1 = D vkK`, S9D-m2); a key `vkC33` with a 33-byte root (`nw33`).
 -/
 import RecursionFast.Contract.Certificate
 import RecursionFast.Library.Recursion
@@ -186,6 +186,20 @@ def tapeK : Tape :=
    0x74, 0x67, 0x49, 0x3a, 0x66, 0xd2, 0xf9, 0x6a, 0x69, 0x80, 0x27, 0xab,
    0x86, 0x9d, 0xed, 0xce, 0x37, 0x1e, 0x0d, 0x36, 0xd0, 0xae, 0x26, 0x43,
    0x37, 0x1b, 0xaf, 0x3f, 0x69, 0x38, 0x76, 0xda]
+
+/-- The two-leaf node statement with DISTINCT keys, `nodeStmt cfg2 vkc2 vkK .leaf .leaf x0 x1`
+(Python `node_stmt(D vkc2, D vkK, …)`): `d0 = D vkc2` (the recursion key), `d1 = D vkK` (the leaf
+key). The runner's selftest checks its statement function against it, so a swap of `d0` and `d1`
+is caught (with `dC = dL`, as in `xN`, it is invisible; S9D-m2). -/
+def xNK : Stmt := stmtOfWords
+  [0x30e57aba8b674c0f, 0x44e914aea2deaa87, 0xc6685b9444bad2fc, 0xd3569522f6a1b901,
+   0xdeab96442343b1e1, 0x9dfc49d9a3c1d4c0, 0x0d2e17bbb16de434, 0x89f1114159b26f30,
+   0x951893297ee6c582, 0x7ef6b4092e377de5, 0x7a38863e0759cc79, 0x4ea6ac0ebc11a2f5,
+   0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+   0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+   0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+   0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000,
+   0x0000000000000000, 0x0000000000000000, 0x0000000000000000, 0x0000000000000000]
 
 /-- Distinct keys, leaf children proved under the leaf key `vkK`: accepted. -/
 def nwK : NodeWitness 1 := ⟨vkc2, vkK, .leaf, .leaf, x0, x0, tapeK, tapeK⟩

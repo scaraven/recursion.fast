@@ -135,7 +135,7 @@ prover. Every command takes paths as arguments; Python runs with `-I`.
 | `lean/LinkCheck.lean` | `harness-linkcheck`: imports every organiser library; `scripts/org-build.sh` builds it (prebuilding every object file a badge executable links) and runs it (start-up cost of the organiser modules) |
 | `badge-build.sh` | builds `harness-verify`/`harness-index` against a module in a fresh sandboxed tree (the gate tree's stage 3a without comparator and gate) |
 | `mk-tree.py` | a fresh tree's `lakefile.toml` and `lake-manifest.json` (the organiser package by path; challenge, submission, badge mains), shared by `scripts/harness.sh` (with the module-root freshness check) and `badge-build.sh` |
-| `run-benchmark.py` | the benchmark runner: `run`, `secrets`, `selftest`, `record` |
+| `run-benchmark.py` | the benchmark runner: `run`, `compare`, `record`, `selftest` |
 | `smoke/` | the NOT SECURE smoke protocol (`cmpToy`, O-10; `RecursionFastSmoke.lean`), its generated mains (`SmokeVerify.lean`, `SmokeIndex.lean`; lake exes `smoke-verify`, `smoke-index`) and its "native prover" `toy_prover.py` |
 | `reference-machine.md` | the measurement policy (§6.4) as the organiser's per-season checklist, and the first noise measurement |
 
@@ -146,31 +146,49 @@ scripts/org-build.sh .lake/org                       # organiser package, incl. 
 # production (gate tree, after comparator and gate; scripts/harness.sh stage 3a):
 scripts/harness.sh --org .lake/org --gate RecursionFast.Challenge.certified \
   --computable RecursionFast.Challenge.submission --badge-build RecursionFast.Challenge.submission \
-  [--bench BENCH.json --secrets SECRETS --claim CLAIM.json --stub RecursionFast/Challenge/R.lean.in] \
+  [--bench BENCH.json --claim CLAIM.json --stub RecursionFast/Challenge/R.lean.in] \
   CHALLENGE.lean SOLUTION_DIR CONFIG.json
 # a module outside the harness (smoke test, local checks):
-harness/badge-build.sh --org .lake/org --work DIR SRC_DIR MODULE SUBMISSION   # prints the two paths
-python3 -I harness/badge-main.py OUT.lean MODULE SUBMISSION verify|index       # the main module only
+harness/badge-build.sh --org .lake/org --work DIR [--certified-c LAYOUT.json] SRC_DIR MODULE SUBMISSION
+python3 -I harness/badge-main.py OUT.lean MODULE SUBMISSION verify|index [--certified-c C.lean]   # the main module only
 lake build smoke-verify smoke-index                                             # the smoke protocol, in this tree
 ```
 
-- **The source rule before everything** (`scripts/source-rule.py`, S6b-M3 fix pass). In each
+- **The source rule before everything** (`scripts/source-rule.py`, S6b-M3, S9D-M1). In each
   fresh tree, before anything of the submission is built, the harness rejects submission sources
   that use elaboration-time code (`run_meta`, `#eval`, `elab`, `macro`, `initialize`, `unsafe`,
   `persistentEnvExtensionsRef`, `import Lean`, `open Lean`, Qq's `by_elabq`, …; the list is the
   script's docstring). It raises the bar against forging the emitted code
-  (`probes/s6b/gate/ForgeRaw.lean`, which no gate rule sees); the sound fix is O-12. Allowed are
-  `#check`, `#print`, `#reduce`, `#guard_msgs`, the literals `#[…]` and `#v[…]` (Clean's
-  vectors), notation, attributes such as `simp` and `elab_as_elim`; Mathlib's `#s` is not (write
-  `s.card`). `tests/source-rule/check.sh` (CI step 1) holds one fixture line per rejected form and
-  a file of allowed forms. `--source-rule off` exists only for the layer regressions in
-  `tests/pipeline/`.
+  (`probes/s6b/gate/ForgeRaw.lean`, which no gate rule sees); the sound fix is O-12. **Two nets**,
+  each binding: a lexer that follows Lean's (raw strings only for `r#…"`, every string read both
+  plainly and as an interpolation, nested comments, character literals; **fail closed**: anything
+  open at the end of the file, and a string whose end depends on interpolation, is a finding), and
+  a raw word scan of the bytes, comments and strings included (no lexer can desynchronise it; a
+  rejected word in a comment is a finding too, reword it). Allowed are `#check`, `#print`,
+  `#reduce`, `#guard_msgs`, the literals `#[…]` and `#v[…]` (Clean's vectors), notation,
+  attributes such as `simp` and `elab_as_elim`, and Library names such as `run_mono`; Mathlib's
+  `#s` is not (write `s.card`), nor a string inside `{…}` of an interpolation.
+  `tests/source-rule/check.sh` (CI step 1) holds one fixture per rejected form (each net alone
+  must report every code-level one), the S9 review's lexer bypasses and the forgeries (each net
+  alone must catch them), and a file of allowed forms; `scripts/TokenSweep.lean` with
+  `tests/source-rule/sweep.py` (CI step 6) requires every keyword of the allowed closure's token
+  table to be rejected or listed in `tests/source-rule/reviewed-tokens.txt`. `--source-rule off`
+  exists only for the layer regressions in `tests/pipeline/`.
 - **The claim binds the benchmark** (S6b-M2). With `--bench`, `--claim` and `--stub` are required:
   the harness copies the claim and its files into the work directory, re-renders the stub with it
   and requires the challenge to be that rendering, byte for byte; then it writes the benchmark
   configuration's `k`, `cfg.hash`, `claim` (digests) and `layouts.C` from that claim (so `C` is the
   very file rendered into the certified `C`), and the sandbox (`--landrun`), whatever the bench
-  file says.
+  file says. **One reader for the recursion key** (S9D-m4): for a board-R claim the harness renders
+  the claim's `C` with the challenge renderer (stub line `{{layout:C}}`) into `harness-index`
+  (`badge-main.py --certified-c`), and the runner indexes that compiled `C`
+  (`harness-index --certified-C VKC_OUT`, `index_C = "certified"`), not a parse of the file.
+  **Secrets** (S9I-m4): `--secrets` is refused; the runner draws fresh chain starts from the OS for
+  every evaluation and holds them itself.
+- **External tools** (S9F-m2): `scripts/tools.env` (sourced by `harness.sh` and `ci.sh`) gives
+  `COMPARATOR_HOME` (leanprover/comparator at `d03acab`, built) and `COMPARATOR_NANODA`
+  (ammkrn/nanoda_lib at `3a24072`, `cargo build --release`) their defaults; without them the
+  harness stops with a message naming the variables.
 - **The gate before them** (`scripts/Gate.lean`). Rule 4 requires compiled code for the badge-path
   fields only (S6-A12). Rules 3, 6, 7 (S7-M1) keep a submission away from the compiler: no
   code-substituting or compiler-changing attribute (`implemented_by`, `extern`, `export`, `init`,
@@ -206,10 +224,12 @@ lake build smoke-verify smoke-index                                             
 ### The benchmark runner
 
 ```sh
-python3 -I harness/run-benchmark.py secrets 96 SECRETS        # 64 tree chains + 16 + 16 (board L), mode 0600
-python3 -I harness/run-benchmark.py run --config BENCH.json --secrets SECRETS --out RESULT.json [--workdir DIR] [--keep]
+python3 -I harness/run-benchmark.py run --config BENCH.json --out RESULT.json [--workdir DIR] [--keep]
+python3 -I harness/run-benchmark.py record NEW.json STANDING.json [--margin 0.03]   # screening: exit 0 iff a TENTATIVE record
+python3 -I harness/run-benchmark.py compare --standing STD.json --challenger NEW.json [--pairs 5] [--margin 0.03] \
+    --out CMP.json [--workdir DIR]                            # the paired confirmation (one session); exit 0 iff RECORD
+python3 -I harness/run-benchmark.py compare --calibrate --standing CFG.json --pairs 10 --out CAL.json   # sigma, pairs needed
 python3 -I harness/run-benchmark.py selftest --lean-data RecursionFast/Controls/RecursionData.lean --gen harness/gen-chain-layout.py
-python3 -I harness/run-benchmark.py record NEW STANDING [--margin 0.03]   # the 3 % record rule; exit 0 iff a record
 ```
 
 **Config** (JSON; every key but the first six has the default shown):
@@ -223,13 +243,26 @@ python3 -I harness/run-benchmark.py record NEW STANDING [--margin 0.03]   # the 
   "tree": {"n": 1024, "leaves": 64}, "leafboard": {"256": 16, "4096": 16}, "repeats": 3,
   "classes": {"256": 24, "1024": 24, "2048": 25, "4096": 26},   // least class of L_chain(n), S6-A1
   "budgets": {"index_total_s": 3600, "leaf_s": 120, "step_s": 600, "root_s": 60, "verify_s": 60,
-              "eval_s": 21600, "mem_kb": 48000000, "prover_build_s": 3600},
+              "mem_kb": 48000000, "prover_build_s": 3600, "overhead_s": 600, "per_process_s": 2},
+              // no eval_s: the whole-evaluation cap is DERIVED from these (S9F-M5; `budget` in the result)
   "caps": {"tape_R": 1048576, "tape_L": 131072},
-  "dos": {"tapes": 1000, "max_len": 1048576, "seed": null},
+  "dos": {"tapes": 1000, "max_len": 1048576, "seed": null},     // alternately leaf key and recursion key
+  "canaries": {"per_kind": 8},                               // S9I-m3: canaries of 8 proofs per kind and run
+  "index_C": "json" | "certified",                           // S9D-m4: harness.sh forces "certified" for board R
+  "hardware_id": "…", "submitter": "…",                      // S9I-m5, S9I-M3 (the season's id; the entrant)
   "sandbox": "scripts/bwrap-landrun.sh",                     // REQUIRED: `run` refuses to start without it (S6b-M1)
   "sandbox_ro": [paths...],                                  // what a step may read besides /usr, /etc (S6b-m3)
   "prover_build": null | {"cmd": [argv...], "dir": "..."} }
 ```
+
+**Ranked board** (S9I-M1, S9I-M2). **R is the only ranked board**, scored by `S_rec`, the slowest
+level group: the max over level 2, level 3 and levels 4–6 (pooled, 7 steps) of the median over
+runs of the per-run median step time; the per-level medians are published (`S_by_level`). L
+(`S_leaf`) and W (`S_wrap`) are published, unranked (`"ranked": false`): a leaf's witness is its
+32-byte start, so on L no proof-size cap separates "send the start, recompute the chain" from a
+SNARK; and a median over all levels ≥ 2 would be decided by level 2, whose children are the
+unranked wrap steps' proofs (wrap proofs expensive to prove and cheap to verify would make level
+2 cheap without lowering the steady-state step).
 
 **Classes and boards** (S6-A1, S7-M2). A declared `k` below the class of `L_chain(tree.n)` (24)
 is rejected up front. A leaf-board size whose layout needs a class above `k` is skipped, not
@@ -237,8 +270,21 @@ failed: by default the leaf board is `n ∈ {2^8, 2^10}` (the 64 tree chains are
 instances), and `2^12` (class 26) runs only at `k ≥ 26`. Boards are judged separately: a failure
 only board L depends on (a leaf-board chain, the `2^17`-byte cap) rejects board L; one only the
 tree depends on (`C_V`'s key, the declared digests, a step, the root) rejects boards R and W; a
-failure of a tree chain's leaf, of indexing `L_chain`, of the budget or of the DoS column rejects
-every board. The run exits 0 iff at least one requested board is accepted.
+failure of a tree chain's leaf, of indexing `L_chain`, of a canary, of the budget or of the DoS
+column rejects every board. The run exits 0 iff at least one requested board is accepted.
+
+**Canaries** (S9I-m3). Untimed, for the first `canaries.per_kind` proofs of each kind (leaf, wrap,
+node, root) in each run, `verify` must reject the proof with one byte appended, with its last
+byte removed (the tape grammar, for every protocol), under the statement with one bit flipped
+(`y` of a leaf, `d2` of a node) and under the other key (by soundness). An accepted canary
+rejects the evaluation: it catches an accept-all or input-blind executable, not a keyed forgery
+(only O-12 does). The DoS tapes alternate between the leaf key and the recursion key.
+
+**Budgets** (S9F-M5). The per-step caps (`leaf_s` 120 s, `step_s` 600 s, `index_total_s` 1 h,
+…) are the policy; the whole-evaluation cap is derived: every process the evaluation may start
+at its cap, plus `overhead_s` and `per_process_s` per process (`budget.eval_s` and its
+`derived_from` in the result). An entry that keeps every per-step cap is never rejected by the
+whole-evaluation cap. `budgets.eval_s` in a config is an error.
 
 **Isolation and memory** (fix pass, S6b-M1, S6b-m1, S6b-m3). `run` refuses to start without the
 sandbox and without a memory cgroup (`systemd-run --user --scope`). Every step runs in its own
@@ -251,7 +297,7 @@ by an organiser shell in the cgroup, outside the sandbox).
 
 **Prover interface** (S6b-A9). `PROVER... leaf|node`: the mode is the **last** argument (the
 runner appends it to the configured argv). It runs in a fresh step directory (the only writable
-path; no network; the run directory and the secrets file are hidden: `bwrap-landrun.sh --hide`),
+path; no network; the run directory, with every other chain's secret, is hidden: `bwrap-landrun.sh --hide`),
 and must write `proof.bin`:
 
 - `leaf`: `layout.json` (`L_chain(n)`, schema `recursion.fast/layout/1`), `vkc.bin` (the leaf
@@ -265,13 +311,26 @@ and must write `proof.bin`:
   `child1.tag` (`leaf` or `node`), and the same for `child2`.
 
 **Verifier interface.** `VERIFY vkc.bin stmt.bin proof.bin` in a fresh directory holding only
-those three files (never a secret); exit 0 = accept.
+those three files (never a secret); exit 0 = accept, 1 = reject (anything else is a crash).
 
 **Result** (`--out`): `verdict` (`ACCEPT` iff some board is accepted), `accepted_boards`,
-`reason`, `scores` (per board: `verdict`, `reason`, and `L.S_leaf` with per-`n` medians and the
-skipped sizes, `W.S_wrap`, `R.S_rec`; `DoS.max_verify_s`), `runs` (every leaf and step: prover and
-verifier wall time, proof size, peak memory), `instances`, `indexing` (times, digests), `machine`,
-`config`, `claim`, `elapsed_s`.
+`reason`, `ranked` (board R's `S_rec` and verdict), `scores` (per board: `ranked`, `verdict`,
+`reason`, and `L.S_leaf` with per-`n` medians and the skipped sizes, `W.S_wrap`, `R.S_rec` with
+`S_rec_by_group` and `S_by_level`; `DoS` by key; `canaries`), `runs` (every leaf and step: prover
+and verifier wall time, proof size, peak memory), `instances` (with `secrets_sha256`), `indexing`
+(times, digests, the source of `C`'s key), `budget` (the derived cap), and what it was measured
+under (S9I-m5): `config_sha256` (the season's configuration: everything but the entry's keys),
+`hardware_id`, `machine`, `entry` (sha256 of `verify`, `index`, the prover's files and build
+directory; the claim; the layout of `C`) and `entry_id`. `record` and `compare` refuse to compare
+results or configurations whose `config_sha256` or `hardware_id` differ, and an entry with
+itself (except `compare --calibrate`).
+
+**Records** (S9I-M3, `reference-machine.md` §4). `record NEW.json STANDING.json` only screens: a
+`S_rec` at most `0.97 ×` the standing one is a *tentative* record. It is confirmed by `compare`:
+the standing entry and the challenger in **one session**, on **one fresh set of instances**,
+interleaved run by run (standing, challenger, …), **5 pairs**; a record iff the median over pairs
+of `S_rec(challenger) / S_rec(standing)` is at most `0.97`. `compare --calibrate` runs self-pairs
+of one entry and reports `sigma_log_ratio` and `pairs_needed_for_margin` = `⌈(3.75·σ/m)²⌉`.
 
 ### Challenges
 
@@ -282,5 +341,23 @@ verifier wall time, proof size, peak memory), `instances`, `indexing` (times, di
 in a module that does not import Clean) and `submission`, with `submission.toSubmission = leaf`. `scripts/dummy-claim.py STUB OUT` writes a dummy claim;
 `scripts/test-render.sh [OUTDIR]` runs the renderer's 50+ malformed-claim cases;
 `python3 -I scripts/toy-solution.py OUTDIR` re-makes the v2 toy comparator pair in `audit/`.
-`python3 -I scripts/source-rule.py DIR` runs the source rule on the `.lean` files under `DIR`
-(exit 1 and one line per finding); `tests/source-rule/check.sh` runs its fixtures.
+`python3 -I scripts/source-rule.py [--net lexer|raw|both] DIR` runs the source rule on the `.lean`
+files under `DIR` (exit 1 and one line per finding); `tests/source-rule/check.sh` runs its
+fixtures; `(cd ORG && lake env lean --run SCRIPTS/TokenSweep.lean import-allowlist.txt
+import-frontend.txt) > TOKENS` and `python3 -I tests/source-rule/sweep.py scripts/source-rule.py
+TOKENS tests/source-rule/reviewed-tokens.txt` run the keyword sweep.
+
+### The olean manifest (S9F-M2)
+
+`scripts/olean-manifest.sha256` covers exactly the trusted closure: the toolchain's files, the
+package modules of the organiser's import allowlist and of the frontend closure (both written by
+`scripts/org-build.sh`), and the contract and vendored modules of the organiser build. Regenerate
+it after a trusted change, on the machine of record, from a clean organiser build:
+
+```sh
+scripts/org-build.sh .lake/org
+python3 -I scripts/olean-manifest.py gen --org .lake/org --closure .lake/org/import-allowlist.txt \
+  --closure .lake/org/frontend-closure.txt scripts/olean-manifest.sha256
+```
+
+CI step 3 regenerates it into a scratch file and requires it to equal the committed one.

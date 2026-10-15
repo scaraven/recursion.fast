@@ -216,7 +216,7 @@ theorem aggOK_sat_of_complete (C L : Layout K) (x₁ x₂ : Stmt) (w₁ w₂ : L
     (h₂ : P.specVerifier (L, x₂) (fsTranscript cfg P L x₂ w₂) = some ()) :
     aggOK cfg P (nodeStmt cfg (index cfg P C) (index cfg P L) .leaf .leaf x₁ x₂)
       ⟨index cfg P C, index cfg P L, .leaf, .leaf, x₁, x₂, π₁, π₂⟩ = true :=
-  aggOK_leaves cfg P _ _ (node_length cfg _ _ _) x₁ x₂ π₁ π₂
+  aggOK_leaves cfg P _ _ (commit_length cfg _) x₁ x₂ π₁ π₂
     (narg_complete cfg P L x₁ w₁ π₁ hπ₁ h₁) (narg_complete cfg P L x₂ w₂ π₂ hπ₂ h₂)
 
 /-- **Satisfiability of `aggOK` for a secure protocol**: on two instances of `relK k` for the leaf
@@ -227,7 +227,7 @@ theorem aggOK_sat_of_secure (hP : P.Secure) (C L : Layout K) (x₁ x₂ : Stmt)
     (π₁ π₂ : Tape) (hπ₁ : prove cfg P L x₁ w₁ = some π₁) (hπ₂ : prove cfg P L x₂ w₂ = some π₂) :
     aggOK cfg P (nodeStmt cfg (index cfg P C) (index cfg P L) .leaf .leaf x₁ x₂)
       ⟨index cfg P C, index cfg P L, .leaf, .leaf, x₁, x₂, π₁, π₂⟩ = true :=
-  aggOK_leaves cfg P _ _ (node_length cfg _ _ _) x₁ x₂ π₁ π₂
+  aggOK_leaves cfg P _ _ (commit_length cfg _) x₁ x₂ π₁ π₂
     (narg_complete_of_secure cfg P L x₁ w₁ hP hw₁ π₁ hπ₁)
     (narg_complete_of_secure cfg P L x₂ w₂ hP hw₂ π₂ hπ₂)
 

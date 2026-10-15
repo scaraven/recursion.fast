@@ -23,7 +23,13 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 DEST=${1:?usage: org-build.sh DEST}
 mkdir -p "$DEST/RecursionFast" "$DEST/scripts"
 for d in Contract Vendor Library Controls Bridge Clean; do
-  rsync -a --delete "$HERE/RecursionFast/$d/" "$DEST/RecursionFast/$d/"
+  # S9F-M1: a directory git does not hold (an empty one, absent from every clone) is an empty
+  # directory here (a library's `globs` need the directory to exist)
+  if [[ -d "$HERE/RecursionFast/$d" ]]; then
+    rsync -a --delete "$HERE/RecursionFast/$d/" "$DEST/RecursionFast/$d/"
+  else
+    rm -rf "${DEST:?}/RecursionFast/${d:?}"; mkdir -p "$DEST/RecursionFast/$d"
+  fi
   [[ -f "$HERE/RecursionFast/$d.lean" ]] && cp -p "$HERE/RecursionFast/$d.lean" "$DEST/RecursionFast/"
 done
 mkdir -p "$DEST/harness/lean"
@@ -69,7 +75,9 @@ lake env .lake/build/bin/gate --closure Mathlib,RecursionFast.Contract,Recursion
 # circuit proofs but not by the module of its badge root (rule 8); compared with
 # scripts/import-frontend.txt by scripts/ci.sh. (Clean's closure contains `Lean` itself, so only
 # Clean's own modules are listed, not the Lean modules they import.)
+# frontend-closure.txt (the whole closure, Lean and Mathlib modules included) is kept: with
+# import-allowlist.txt it is the trusted closure the olean manifest covers (S9F-M2,
+# scripts/olean-manifest.py gen --closure).
 lake env .lake/build/bin/gate --closure RecursionFast.Clean frontend-closure.txt 2>&1 | grep -v "manifest out of date"
 grep -E '^(Clean|RecursionFast\.Clean)(\.|$)' frontend-closure.txt > import-frontend.txt
-rm -f frontend-closure.txt
 echo "org-build: organiser package built in $DEST"

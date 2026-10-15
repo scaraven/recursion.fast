@@ -34,7 +34,7 @@ open scoped NNReal
 /-- A value of every round type (all zeros). -/
 def Round.zero : (r : Round) → r.Ty
   | .msg _ => fun _ => 0
-  | .chal _ _ => (fun _ => 0, fun _ => 0)
+  | .chal _ _ => (fun _ => ⟨0, 0, 0⟩, fun _ => 0)
 
 /-- The twin's prover: every message all zeros. Never run (the native prover is). -/
 def zeroProver {n : ℕ} (sh : Fin n → Round) :

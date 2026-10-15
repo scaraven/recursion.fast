@@ -504,3 +504,77 @@ Otherwise every finding is applied as proposed.
 - `RevKernel.lean`: reduced to `toy_prove`; `toy_local` is now a CI control.
 - `RevBinding.lean`, `RevKill.lean`, `RevEncoder.lean`, `RevAxioms.lean`, `OneRun.lean` and
   `TwoRuns.lean` compile unchanged.
+
+## S9 fix pass
+
+This pass applies S9F-M4 (`docs/reviews/S9-feasibility.md`) and S9D-m5/m6 (the `NARG` part;
+`docs/reviews/S9-definitions.md`). The amendments are S9-A10 to S9-A13. Logs are
+`logs/S3/s9-*.log`.
+
+### What changed
+
+- **Sparse Merkle commitment (trusted, +13 code lines, 128 → 141).**
+  - `commit` computes the header's root with `nodeS`. A subtree that is all padding, or all leaves
+    whose elements are all zero, takes its digest from a precomputed tower over the zero digest or
+    over `H(all-zero leaf)`. Every other node is hashed.
+  - The dense `node` is the specification, now in `Library/Compile.lean`.
+  - `commit_eq_commitDense` (via `nodeS_eq` and `node_padding`) proves the sparse root equals the
+    dense one for every oracle, configuration and depth.
+  - `pathOf`, the honest prover's paths, uses `nodeS` too. `pathOf_eq_dense` proves that equal to
+    the dense paths, so `narg_complete` and every other statement is unchanged.
+- **Merkle binding in CI (S9D-m5).** `opening_binding` and its helpers are in the Library, and the
+  header cites them.
+- **`NARG` docstring (S9D-m6).** "`vkc` is any compiled key …".
+- **Controls.** New `#guard`s in `Controls/CompileToy.lean` cover a mostly-zero, padded oracle
+  (`sparseO`; 64 elements, leaves of 2) at arity 2, 4 and 16. The sparse root equals
+  `commitDense` and the independent encoder's root (`logs/S3/s9-sparse-roots.log`).
+
+### Checks
+
+- **Byte-identical outputs:**
+  - every existing KAT and `#guard`: honest tapes at arity 2 and 4, `index_eq`, `digest_kat`,
+    `prove` outputs, `pfs`;
+  - `compile_ref.py` (`logs/S3/s9-python-ref.log`, no diff);
+  - `indep_encoder.py`: its output is unchanged, and Lean matches it byte for byte at arity 2,
+    4, 8 and 16, padded root included (`logs/S3/s9-indep-encoder-compare.log`; `RevEncoder`
+    output unchanged);
+  - the mutant table (`logs/S3/s9-rev-mutants.log`) is unchanged.
+- **Builds.** The five Stage 3 targets build, and the default `lake build` is green
+  (`logs/S3/s9-build-default.log`).
+- **Axioms.** `lake exe axiomaudit` reports PASS (`logs/S3/s9-axiomaudit.log`). Declaration
+  counts: `Contract.Compile` 111, `Library.Compile` 163, `Controls.CompileToy` 30.
+  `#print axioms` (`logs/S3/s9-print-axioms.log`):
+  - `NARG`, `commit` and `index` use only `[propext, Quot.sound]`;
+  - `commit_eq_commitDense`, `nodeS_eq`, `opening_binding` and `narg_complete` use the standard
+    three.
+- **Hygiene** reports OK.
+
+### Index timings
+
+`probes/s3/index-bench` (`run.sh`) builds `index` compiled. It indexes `L_chain(2^10)` (class 24)
+under `cmpToy`'s rounds at class 24, with an index oracle of `2^m` elements in leaves of 16 that
+holds the layout's serialisation (792,851 elements), then zeros.
+
+| Index oracle | Dense (before) | Sparse (after) | Root |
+|---|---:|---:|---|
+| `cmpToy` (2 leaves) | 0.27 s | 0.31 s | same |
+| `2^20` | 3.0 s | 2.5 s | same |
+| `2^24` | 41.9 s | 5.3 s | same |
+| `2^29` = `2^(k+5)` | 1,342 s | **105 s** | same |
+| `2^32` = cap `2^(k+8)` | ≈ 3 h (extrapolated) | **861 s** | — |
+
+Peak memory is 130 MB at every size, so the commitment streams and nothing is materialised. What
+remains is one read of every index element, about 200 ns each. At the cap that is 14 min at
+k = 24 and ≈ 3.7 h at k = 28. Removing it needs a `Protocol`-level support bound for `IDX`, which
+is outside these files (S9-A10).
+
+### Other files touched (necessarily)
+
+The trusted `commit` no longer unfolds to `node`, so three proofs that used `node_length` for a
+key's root now use `commit_length`:
+- `Library/Recursion.lean` (two lines);
+- `Controls/MagicKey.lean` (one line);
+- `probes/s5/review/MagicKey.lean`. That probe already had 9 unrelated errors at `HEAD`.
+
+The reviewer's probes `RevMutants.lean` and `RevKill.lean` are updated to Stage 4's `Protocol`
+(the `extractor` field), and `RevEncoder.lean` drops its own `cfg16`.

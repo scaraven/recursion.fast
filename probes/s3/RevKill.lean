@@ -45,8 +45,7 @@ def pfs : Protocol 20 where
     | 2 => ⟨by decide, by decide⟩, by decide, by decide⟩
   prover := { next := pfsNext, output := fun _ _ _ => ((), ()) }
   verify := pfsVerify
-  WitMid := fun _ => List (Table K)
-  extractor := { eqIn := rfl, extractMid := fun _ _ _ w => w, extractOut := fun _ _ _ => [] }
+  extractor := firstMsgImage 20 3
   ε := fun _ => 0
 
 /-- The honest `pfs` tape (Python `pfs_tapes`): `a = 5`, `m = e.c0 + 5`. -/

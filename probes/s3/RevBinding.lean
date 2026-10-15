@@ -22,128 +22,8 @@ open RecursionFast
 
 variable (cfg : Cfg)
 
-/-- A collision of the configured hash. -/
-def Collision : Prop := ∃ m m' : List UInt8, m ≠ m' ∧ cfg.hash.run m = cfg.hash.run m'
-
-/-- A well-formed path level: `A - 1` digests of 32 bytes. -/
-def LevelOK (lev : List Digest) : Prop := lev.length = cfg.arity - 1 ∧ ∀ d ∈ lev, d.length = 32
-
-theorem flatten_length_32 (s : List Digest) (hs : ∀ e ∈ s, e.length = 32) :
-    s.flatten.length = 32 * s.length := by
-  induction s with
-  | nil => rfl
-  | cons a s ih =>
-    simp only [List.flatten_cons, List.length_append, List.length_cons,
-      hs a List.mem_cons_self, ih fun e he => hs e (List.mem_cons_of_mem _ he)]
-    ring
-
-/-- The inserted digest is recovered from the flattened level. -/
-theorem flatten_insert (s : List Digest) (d : Digest) (q : ℕ)
-    (hs : ∀ e ∈ s, e.length = 32) (hd : d.length = 32) :
-    ((s.take q ++ d :: s.drop q).flatten.drop (32 * (s.take q).length)).take 32 = d := by
-  have hl := flatten_length_32 (s.take q) fun e he => hs e (List.mem_of_mem_take he)
-  rw [List.flatten_append, List.flatten_cons, ← hl, List.drop_left]
-  simp [hd]
-
-theorem climb_binding (path path' : List (List Digest)) (d d' : Digest) (p : ℕ)
-    (hd : d.length = 32) (hd' : d'.length = 32) (hlen : path.length = path'.length)
-    (hp : ∀ lev ∈ path, LevelOK cfg lev) (hp' : ∀ lev ∈ path', LevelOK cfg lev)
-    (h : climb cfg d p path = climb cfg d' p path') : d = d' ∨ Collision cfg := by
-  induction path generalizing path' d d' p with
-  | nil =>
-    cases path' with
-    | nil => exact Or.inl (by simpa [climb] using h)
-    | cons _ _ => simp at hlen
-  | cons s path ih =>
-    cases path' with
-    | nil => simp at hlen
-    | cons s' path' =>
-      simp only [climb] at h
-      have hA := cfg.two_le_arity
-      have hs := hp s List.mem_cons_self
-      have hs' := hp' s' List.mem_cons_self
-      rcases ih path' _ _ (p / cfg.arity) (HashId.run_length _ _) (HashId.run_length _ _)
-          (by simpa using hlen) (fun l hl => hp l (List.mem_cons_of_mem _ hl))
-          (fun l hl => hp' l (List.mem_cons_of_mem _ hl)) h with he | hc
-      · by_cases hm : (s.take (p % cfg.arity) ++ d :: s.drop (p % cfg.arity)).flatten =
-            (s'.take (p % cfg.arity) ++ d' :: s'.drop (p % cfg.arity)).flatten
-        · left
-          have hq : p % cfg.arity ≤ s.length := by rw [hs.1]; have := Nat.mod_lt p (by omega : 0 < cfg.arity); omega
-          have hq' : p % cfg.arity ≤ s'.length := by rw [hs'.1]; have := Nat.mod_lt p (by omega : 0 < cfg.arity); omega
-          have e1 := flatten_insert s d (p % cfg.arity) hs.2 hd
-          have e2 := flatten_insert s' d' (p % cfg.arity) hs'.2 hd'
-          rw [List.length_take_of_le hq] at e1
-          rw [List.length_take_of_le hq', ← hm] at e2
-          rw [← e1, ← e2]
-        · exact Or.inr ⟨_, _, hm, he⟩
-      · exact Or.inr hc
-
-theorem verifyPath_binding (r : Digest) (l : ℕ) (leaf leaf' : List K)
-    (path path' : List (List Digest)) (hlen : path.length = path'.length)
-    (hp : ∀ lev ∈ path, LevelOK cfg lev) (hp' : ∀ lev ∈ path', LevelOK cfg lev)
-    (h : verifyPath cfg r l leaf path = true) (h' : verifyPath cfg r l leaf' path' = true) :
-    leaf = leaf' ∨ Collision cfg := by
-  simp only [verifyPath, beq_iff_eq] at h h'
-  rcases climb_binding cfg path path' _ _ l (HashId.run_length _ _) (HashId.run_length _ _) hlen
-      hp hp' (h.trans h'.symm) with he | hc
-  · by_cases hb : leaf.flatMap K.bytes = leaf'.flatMap K.bytes
-    · left; rw [← kList_flatMap leaf, ← kList_flatMap leaf', hb]
-    · exact Or.inr ⟨_, _, hb, he⟩
-  · exact Or.inr hc
-
-theorem takeN_length : ∀ (n : ℕ) (t acc b t' : List UInt8),
-    takeN n t acc = some (b, t') → b.length = n + acc.length
-  | 0, t, acc, b, t', h => by simp [takeN] at h; obtain ⟨rfl, -⟩ := h; simp
-  | n + 1, [], acc, b, t', h => by simp [takeN] at h
-  | n + 1, c :: t, acc, b, t', h => by
-    have := takeN_length n t (c :: acc) b t' h; simp at this; omega
-
-theorem readMany_shape {α : Type} (r : Tape → Option (α × Tape)) (Q : α → Prop)
-    (hr : ∀ t a t', r t = some (a, t') → Q a) :
-    ∀ (n : ℕ) (t : Tape) (as : List α) (t' : Tape), readMany r n t = some (as, t') →
-      as.length = n ∧ ∀ a ∈ as, Q a
-  | 0, t, as, t', h => by simp [readMany] at h; obtain ⟨rfl, -⟩ := h; simp
-  | n + 1, t, as, t', h => by
-    simp only [readMany] at h
-    split at h
-    · rename_i a t1 hrt
-      obtain ⟨⟨as', t''⟩, h1, h2⟩ := Option.map_eq_some_iff.mp h
-      simp only [Prod.mk.injEq] at h2
-      obtain ⟨rfl, rfl⟩ := h2
-      obtain ⟨hl, hq⟩ := readMany_shape r Q hr n t1 as' t'' h1
-      refine ⟨by simp [hl], ?_⟩
-      intro b hb
-      rcases List.mem_cons.mp hb with rfl | hb
-      · exact hr _ _ _ hrt
-      · exact hq b hb
-    · simp at h
-
-/-- What `readOpening` returns has the fixed shape: `depth` levels of `A - 1` 32-byte digests. -/
-theorem readOpening_shape (o : OShape) (t : Tape) (leaf : List K) (path : List (List Digest))
-    (t' : Tape) (h : readOpening cfg o t = some (leaf, path, t')) :
-    path.length = cfg.depth o ∧ ∀ lev ∈ path, LevelOK cfg lev := by
-  simp only [readOpening] at h
-  split at h
-  · obtain ⟨⟨ps, t''⟩, h1, h2⟩ := Option.map_eq_some_iff.mp h
-    simp only [Prod.mk.injEq] at h2
-    obtain ⟨-, rfl, -⟩ := h2
-    exact readMany_shape _ (LevelOK cfg) (fun t lev t' hlev =>
-      readMany_shape _ (fun d : Digest => d.length = 32)
-        (fun t d t' hd => by simpa using takeN_length 32 t [] d t' hd) _ t lev t' hlev) _ _ _ _ h1
-  · simp at h
-
-/-- **Merkle binding at a fixed depth, without a leaf/node tag (S3-A2).** Two openings that
-`runQ` would accept for the same oracle shape, root and leaf position (read from any two tapes)
-carry the same leaf, unless the configured hash has a collision. -/
-theorem opening_binding (o : OShape) (r : Digest) (l : ℕ) (t u t' u' : Tape)
-    (leaf leaf' : List K) (path path' : List (List Digest))
-    (h1 : readOpening cfg o t = some (leaf, path, t'))
-    (h2 : readOpening cfg o u = some (leaf', path', u'))
-    (v1 : verifyPath cfg r l leaf path = true) (v2 : verifyPath cfg r l leaf' path' = true) :
-    leaf = leaf' ∨ Collision cfg := by
-  obtain ⟨hl1, hp1⟩ := readOpening_shape cfg o t leaf path t' h1
-  obtain ⟨hl2, hp2⟩ := readOpening_shape cfg o u leaf' path' u' h2
-  exact verifyPath_binding cfg r l leaf leaf' path path' (hl1.trans hl2.symm) hp1 hp2 v1 v2
+-- `Collision`, `LevelOK`, `climb_binding`, `verifyPath_binding`, `readOpening_shape` and
+-- `opening_binding` moved to `RecursionFast/Library/Compile.lean` (S9 fix pass, S9D-m5).
 
 /-! ## Canonical encodings -/
 
@@ -228,7 +108,7 @@ theorem decode_kat :
 
 end RecursionFast.S3Review
 
-#print axioms RecursionFast.S3Review.opening_binding
+#print axioms RecursionFast.opening_binding
 #print axioms RecursionFast.S3Review.kList_bytes
 #print axioms RecursionFast.S3Review.key_digest_is_node
 #print axioms RecursionFast.S3Review.decode_kat

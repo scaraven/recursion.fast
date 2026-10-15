@@ -15,8 +15,9 @@ child), the key checks of a node child, distinct keys and the satisfiability thr
 * `nodeStmt_kat`: the aggregate statement of `x0`, `x1` is the Python reference's `xN` (slots: the
   key digest twice, `cfg2.hash.run` of `x0 ‖ x1` (BLAKE2s-256, S5-A8), the tags `(0, 0, 0, 0)`,
   zeros). `treeKat`: the statement tree of depth 2 over `x0, x1, x0, x1` is the Python reference's
-  `xT`. `digestToSlot_kat` (data file): the key digest's bytes `0f4c678b…` as the limbs
-  `0x30e57aba8b674c0f, …`.
+  `xT`. `nodeStmt_kat_keys` (S9D-m2): with distinct keys (`vkc2` recursion, `vkK` leaf) the
+  statement is `xNK`, `d0 ≠ d1`. `digestToSlot_kat` (data file): the key digest's bytes `0f4c678b…`
+  as the limbs `0x30e57aba8b674c0f, …`.
 * Negatives, each one change to `nwN` or `xN`: `child_tape_flip` (bit 0 of byte 40 of the second
   child's tape, a leaf of its oracle 1: the Merkle path fails), `wrong_d1` (bit 0 of `d1`),
   `nonzero_d3` (element 14, the third limb of `d3`, set to `1`), `nonzero_d4` (element 16, `d4`'s
@@ -48,6 +49,11 @@ theorem x1Runs : NARG cfg2 cmpToy vkc2 x1 tapeX1 = true ∧
 
 /-- Known answer: the aggregate statement of `x0`, `x1` is the Python reference's `xN`. -/
 theorem nodeStmt_kat : nodeStmt cfg2 vkc2 vkc2 .leaf .leaf x0 x1 = xN := by decide +kernel
+
+/-- Known answer with distinct keys (S9D-m2): `d0` is the recursion key's digest and `d1` the leaf
+key's, which `xN` (one key) cannot show; the runner's selftest checks its `node_stmt` against
+`xNK`, so a swapped `d0`/`d1` fails there. -/
+theorem nodeStmt_kat_keys : nodeStmt cfg2 vkc2 vkK .leaf .leaf x0 x1 = xNK := by decide +kernel
 
 /-- Known answer: the node over two copies of `xN` is the Python reference's tree root `xT`. -/
 theorem treeKat : nodeStmt cfg2 vkc2 vkc2 .node .node xN xN = xT := by decide +kernel

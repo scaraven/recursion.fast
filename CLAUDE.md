@@ -27,22 +27,34 @@ Read-only references (never edit, never build inside):
 
 Lean **v4.34.1**, Mathlib v4.34.1, ArkLib `7653a90`, CompPoly `572f997`, VCVio `a4232d0`,
 PolyFun `41d3b21`. `.lake/packages` is a symlink to the prebuilt shared tree
-`/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages` (local-only, gitignored). A clean
-clone removes the symlink and runs `lake exe cache get`.
+`/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages` (local-only, gitignored).
+
+A fresh clone (S9 fix pass, measured): `scripts/setup-clean.sh [LOCAL_CLEAN_CHECKOUT]` (offline with
+a local checkout, e.g. `/home/devops/Verified-zkEVM/recursion.fast/ext/Clean`), then
+`mkdir -p .lake && ln -s /home/devops/CambridgePQ/recursion.fast/contract/.lake/packages .lake/packages`.
+Elsewhere, `lake exe cache get` supplies Mathlib only; CompPoly's cone and Clean are then built. The
+comparator and nanoda are external: set `COMPARATOR_HOME` and `COMPARATOR_NANODA` (defaults, pins and
+build commands in `scripts/tools.env`; `scripts/harness.sh` stops with a message naming them when
+they are missing).
 
 Clean (`42fe4b26`) is an **untrusted** dependency of the non-default library `RecursionFastClean`
-(`RecursionFast/Clean/`, design §9): the workspace requires it by path (`ext/Clean`, gitignored), so a
-fresh clone must run `scripts/setup-clean.sh` before any `lake` command. `scripts/org-build.sh` drops
-it from the organiser package. It is never imported by `Contract/`, `Library/`, `Controls/` or the
-harness.
+(`RecursionFast/Clean/`, design §9), required by path (`ext/Clean`, gitignored). Submissions may
+import Clean's 39 modules and the bridge for their circuit proofs, never on the badge path (gate
+rules 8/9). It is never imported by `Contract/`, `Library/`, `Controls/` or the harness tools.
 
 ```sh
-lake build                                     # default targets: RiscvZkvm, Contract, Library, Controls (≈ 40 s warm)
-lake build RecursionFastBridge gate axiomaudit # the rest
+lake build                         # default targets: 5 min cold (the kernel-evaluated controls), 4 s warm
+lake build RecursionFastBridge RecursionFastClean gate axiomaudit   # the rest
 lake env lean RecursionFast/Controls/Layout.lean   # one file
-python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean   # trusted line budget
+scripts/org-build.sh .lake/org     # organiser package: ≈ 5 min 30 s cold (Clean's cone included)
+scripts/ci.sh /home/devops/Verified-zkEVM/riscv-zkvm   # full CI: 15 min warm; ≈ 22 min from a fresh clone
+HARNESS=1 ORG=.lake/org MANIFEST=scripts/olean-manifest.sha256 submissions/baseline/scripts/check.sh   # ≈ 6 min
+python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/Blake2s.lean   # trusted line budget
 scripts/check-vendor.sh /home/devops/Verified-zkEVM/riscv-zkvm   # vendored Rv64 is byte-identical
 ```
+
+After any change to a trusted file, regenerate `scripts/olean-manifest.sha256` from a clean
+organiser build (command in `harness/README.md`); CI step 3 requires equality.
 
 ## Trust layers
 

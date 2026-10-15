@@ -1,27 +1,29 @@
 /-
 # Contract: round shapes, transcripts, oracles                                  (TRUSTED)
 
-A protocol is a list of **contract-fixed round shapes** (DESIGN §3, A2-C1/C2/C3):
-* `msg o`: the prover sends a raw vector `Fin 2^o.logLen → K` (an oracle, read by QUERY in
-  leaves of `2^o.logLeaf` elements). No submitter types, no serializer: every raw vector is a
-  possible message, so `Agrees` (∀ transcripts) covers every string an adversary can commit to.
+A protocol is a list of **contract-fixed round shapes** (DESIGN §3.1, A2-C1/C2/C3):
+* `msg o`: the prover sends a vector of `2^o.logLen` elements of `K` (an oracle). The verifier
+  reads it only through `QProg.query` (`Protocol.lean`), a leaf of `2^o.logLeaf` elements at a
+  time. Every vector of that length is a possible message: there is no submitter type and no
+  serialiser, so the security statements quantify over every string an adversary can commit to.
 * `chal nE idx`: the verifier sends `nE` uniform elements of E and, for each `b` in `idx`, a
   uniform `b`-bit index. No K-valued challenges.
 
-Lengths and leaves are powers of two (DESIGN §7: "`leaf_j | ℓ_j` (powers of 2)"), stored by
-their exponents. A transcript prefix of length `m` is a dependent function on `Fin m`, as in
-ArkLib's `ProtocolSpec.Transcript` (so the bridge is definitional).
+Lengths and leaves are powers of two (DESIGN §3.1), stored by their exponents. A transcript
+prefix of length `m` is a dependent function on `Fin m`, as in ArkLib's
+`ProtocolSpec.Transcript`. Carried over from v0.3 verbatim minus deletions (S9-A1:
+`FullTranscript.tapeWords`, `Inhabited Oracle`) and with these docstrings updated (S9-A3).
 -/
 import RecursionFast.Contract.Field
 import Mathlib.Data.Fin.Tuple.Basic
 
 namespace RecursionFast
 
-/-- Contract round cap (DESIGN §3/§5): every protocol and reduction has at most `2^14` rounds. -/
+/-- Contract round cap (DESIGN §3.1): every protocol has at most `2^14` rounds. -/
 def roundCap : ℕ := 2 ^ 14
 
 /-- Shape of an oracle: `2^logLen` elements of K, read in leaves of `2^logLeaf` elements, so a
-QUERY opens one of `2^(logLen - logLeaf)` leaves (Merkle depth `logLen - logLeaf`). -/
+query opens one of `2^(logLen - logLeaf)` leaves (Merkle depth `logLen - logLeaf`). -/
 structure OShape where
   logLen : ℕ
   logLeaf : ℕ
@@ -71,14 +73,13 @@ abbrev ChallengeIdx := {m : Fin n // (sh m).isMsg = false}
 /-- A choice of all challenges. -/
 abbrev Challenges := (c : ChallengeIdx sh) → (sh c.1).Ty
 
-/-- An oracle as the machine sees it: a shape and contents. -/
+/-- An oracle as the verifier's query program sees it: a shape and contents. -/
 structure Oracle where
   shape : OShape
   data : OVal shape
 
-instance : Inhabited Oracle := ⟨⟨⟨0, 0⟩, fun _ => 0⟩⟩
-
-/-- Element `p` of an oracle (`0` beyond its length; QUERY never reads there). -/
+/-- Element `p` of an oracle (`0` beyond its length; `QProg.eval` reads only leaves below
+`leaves`, so never there). -/
 def Oracle.get (o : Oracle) (p : ℕ) : K := if h : p < 2 ^ o.shape.logLen then o.data ⟨p, h⟩ else 0
 
 /-- Number of leaves, `2^(logLen - logLeaf)`. -/
@@ -93,8 +94,9 @@ def Round.oracles : (r : Round) → r.Ty → List Oracle
   | .msg o, v => [⟨o, v⟩]
   | .chal _ _, _ => []
 
-/-- The tape words a round contributes: E elements as 3 limbs each, then each index
-zero-extended to one word (`b ≤ 64` is an admission rule). Prover rounds contribute none. -/
+/-- The words a challenge round contributes to the extractor's tape (`Extractor.lean`): E
+elements as 3 limbs each, then each index zero-extended to one word (`b ≤ 64` is a shape cap,
+`Round.Admissible`). Prover rounds contribute none. -/
 def Round.tapeWords : (r : Round) → r.Ty → List Word
   | .msg _, _ => []
   | .chal nE idx, (es, is) =>
@@ -104,9 +106,5 @@ def Round.tapeWords : (r : Round) → r.Ty → List Word
 /-- The prover messages of a transcript, as oracles `1, 2, …` in round order. -/
 def FullTranscript.oracles {sh : Fin n → Round} (tr : FullTranscript sh) : List Oracle :=
   (List.ofFn fun i => (sh i).oracles (tr i)).flatten
-
-/-- The challenges of a transcript, as tape words in round order. -/
-def FullTranscript.tapeWords {sh : Fin n → Round} (tr : FullTranscript sh) : List Word :=
-  (List.ofFn fun i => (sh i).tapeWords (tr i)).flatten
 
 end RecursionFast

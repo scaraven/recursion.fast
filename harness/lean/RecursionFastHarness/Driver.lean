@@ -10,7 +10,11 @@ read: `NARG`'s first conjunct is `t.length ≤ tapeCap`.
 
 `index LAYOUT.json VKC_OUT` runs the compiled indexer `index cfg P L` (untimed indexing, §6.3 step
 2) on a layout JSON (`LayoutJson.parse`), writes the key bytes and prints the key digest
-`VKc.digest cfg` (DESIGN §5.1, S3-A8) as hex.
+`VKc.digest cfg` (DESIGN §5.1, S3-A8) as hex. `index --certified-C VKC_OUT` indexes instead the
+layout `C` compiled into the executable (S9D-m4): for board R the harness renders the claim's `C`
+into the index main with the challenge renderer (`{{layout:C}}`, the same rendering as the
+certified `C` of the challenge), so the recursion key is indexed from that `C` and the layout
+file is read by one reader only (`harness/render-layout.py`), not also by `LayoutJson.parse`.
 
 Both are built against a submission module given at build time (`harness/lean/Main.lean.in`,
 `harness/badge-main.py`, `harness/README.md`) and take `cfg`, `P` from the twin (`Twin.lean`).
@@ -60,11 +64,17 @@ def verifyMain {k : ℕ} (cfg : Cfg) (P : Protocol k) (args : List String) : IO 
   IO.println "REJECT"; return 1
 
 /-- `index LAYOUT.json VKC_OUT`: write `index cfg P L`'s bytes, print its digest. -/
-def indexMain {k : ℕ} (cfg : Cfg) (P : Protocol k) (args : List String) : IO UInt32 := do
-  let [layoutF, outF] := args
-    | IO.eprintln "usage: index LAYOUT.json VKC_OUT"; return 2
-  match LayoutJson.parse (← IO.FS.readFile layoutF) with
-  | .error e => IO.eprintln s!"index: {layoutF}: {e}"; return 2
+def indexMain {k : ℕ} (cfg : Cfg) (P : Protocol k) (certC : Option (Layout K)) (args : List String) :
+    IO UInt32 := do
+  let [src, outF] := args
+    | IO.eprintln "usage: index LAYOUT.json VKC_OUT | index --certified-C VKC_OUT"; return 2
+  let text ← if src == "--certified-C" then pure none else some <$> IO.FS.readFile src
+  let parsed : Except String (Layout K) := match text, certC with
+    | none, some C => .ok C
+    | none, none => .error "no certified C was compiled into this executable"
+    | some t, _ => LayoutJson.parse t
+  match parsed with
+  | .error e => IO.eprintln s!"index: {src}: {e}"; return 2
   | .ok L =>
     let vkc := index cfg P L
     IO.FS.writeBinFile outF ⟨vkc.toBytes.toArray⟩

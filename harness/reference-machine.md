@@ -9,7 +9,8 @@ machine changes, and the scoreboard shows the hardware id next to every number. 
 
 | Field | Value _(season)_ | Notes |
 |---|---|---|
-| Season, hardware id | | printed next to every score |
+| Season, hardware id | | printed next to every score; the bench configuration's `hardware_id` (in every result; `record` and `compare` refuse results of different ids, S9I-m5) |
+| Bench configuration | | one per season, fixed: its `config_sha256` (every result carries it) |
 | CPU SKU, cores, SMT | | DESIGN §6.4: x86-64, ≥ 32 cores. **Requirement: carry-less multiply present** (`pclmulqdq` on x86-64, ideally also `vpclmulqdq`/`gfni`; Zbc on RISC-V): the field is GF(2^64). Check: `grep -c pclmulqdq /proc/cpuinfo` > 0 |
 | Frequency policy | | governor `performance`; turbo on or off, stated; no frequency capping |
 | Memory | | ≥ 64 GB. **Requirement: per-step memory cgroups** (cgroup v2 with the memory controller delegated to the evaluating user, so that `systemd-run --user --scope -p MemoryMax=…` works); the runner refuses to run without it (S6b-m1). Check: `systemd-run --user --scope -q -p MemoryMax=64M true` |
@@ -27,8 +28,16 @@ machine changes, and the scoreboard shows the hardware id next to every number. 
 ## 2. One-time setup per machine and toolchain
 
 - `scripts/setup-clean.sh` (Clean at the pinned rev, `ext/Clean`), then `scripts/org-build.sh
-  ORG` (organiser package with Clean and the bridge; ≈ 5 min cold) and
-  `scripts/olean-manifest.py check --org ORG scripts/olean-manifest.sha256`.
+  ORG` (organiser package with Clean and the bridge; ≈ 5 min 40 s cold) and
+  `scripts/olean-manifest.py check --org ORG scripts/olean-manifest.sha256`. The manifest covers
+  exactly the trusted closure (S9F-M2: the toolchain, the package modules of the import allowlist
+  and of the frontend closure, the contract and the vendored machine), so it does not depend on
+  whatever else a shared packages directory holds. On the machine of record, after a clean
+  organiser build, regenerate it (`olean-manifest.py gen --closure …`, harness/README.md) and
+  commit it; CI checks that it equals the closure.
+- The external tools (`scripts/tools.env`, S9F-m2): the comparator (leanprover/comparator at
+  `d03acab`, `lake build`, with its lean4export) and nanoda (ammkrn/nanoda_lib at `3a24072`,
+  `cargo build --release`); set `COMPARATOR_HOME` and `COMPARATOR_NANODA` to them.
 - **Prebuild every Mathlib object file** (S6b-A18), so that a submission may import any Mathlib
   module and its badge executables still link in the read-only sandbox:
   `(cd ORG && lake build mathlib/Mathlib:static)`. Measured here: 3 min 35 s wall, 29 min CPU for
@@ -46,9 +55,16 @@ machine changes, and the scoreboard shows the hardware id next to every number. 
   here with the minimal root) is inside it, the cgroup's (`systemd-run`, about 0.04 s) is not. Building (`lake build`, the native prover's build), indexing and the
   organiser's own bookkeeping (copying inputs, computing statements) are outside it.
 - **What a score adds up.** A step's score is the prover's wall time plus the verifier's wall time
-  on the step's output proof (two processes). `S_rec` is the median over the node steps with two
-  node children (levels ≥ 2), `S_wrap` over the level-1 steps, `S_leaf` over the leaf chains; each
-  is the median of the per-run medians over 3 runs (DESIGN §6.2, §6.3).
+  on the step's output proof (two processes). The ranked score (board R only, S9I-M1) is `S_rec`,
+  the slowest level group (S9I-M2): the max over level 2, level 3 and levels 4–6 (pooled) of the
+  median over runs of the per-run median step time. `S_wrap` (level-1 steps) and `S_leaf` (the
+  leaf chains) are published, unranked; each is the median of the per-run medians over 3 runs
+  (DESIGN §6.2, §6.3).
+- **Budgets** (S9F-M5). The per-step caps are the policy: `leaf_s` 120 s, `step_s` 600 s,
+  `root_s` 60 s, `verify_s` 60 s, `index_total_s` 1 h (the indexing cost of a large `C_V` is
+  being reduced in the contract, S9F-M4; the cap stays). The whole-evaluation cap is derived from
+  them (every process at its cap, plus 600 s and 2 s per process; `budget` in the result), so it
+  never rejects an entry that keeps the per-step caps. A real evaluation is far below it.
 - **Start-up is inside.** A Lean executable initialises every imported module (about 0.07 s for
   the contract's and the organiser's modules, §4) and the sandbox adds a few milliseconds; a
   native prover's start-up likewise. Every entry pays them.
@@ -63,13 +79,33 @@ machine changes, and the scoreboard shows the hardware id next to every number. 
 
 ## 4. Record rule and re-runs
 
-- **Record rule** (`is_record` in `harness/run-benchmark.py`; `run-benchmark.py record NEW
-  STANDING`): a score is a new record iff it is at most `0.97 ×` the standing record (it beats it
-  by at least 3 %, above the measured noise).
+- **Screening** (`run-benchmark.py record NEW.json STANDING.json`): a ranked `S_rec` at most
+  `0.97 ×` the standing record's is a **tentative** record. The two results must share the
+  season's `config_sha256` and `hardware_id` and be different entries (`entry_id`).
+- **Confirmation** (S9I-M3; `run-benchmark.py compare --standing STD --challenger NEW`): the
+  standing entry and the challenger are re-run in **one session**, on **one fresh set of
+  instances**, interleaved run by run (standing, challenger, standing, …), **5 pairs**; the
+  challenger is the record iff the median over pairs of `S_rec(challenger) / S_rec(standing)` is
+  at most `0.97`. The ratio cancels the session's drift, which dominates the noise measured here
+  (§5: `S` moved 1.8–5.9 % between evaluations; per-step noise alone would leave ≈ 0.8 %). Ties
+  within the margin go to the incumbent. Every evaluation is published; there is no best-of-k.
+- **Calibration of the margin** (O-6, once per season on the season's machine): run
+  `compare --calibrate` with **≥ 10 self-pairs** of one realistic entry (until one exists: the
+  smoke protocol with a fixed multi-threaded 5–30 s prover workload). It reports σ, the sd of the
+  per-pair log ratio, and the pairs a margin `m` needs, `R ≥ (3.75·σ/m)²` (the median's 3 sd
+  below the margin). For `m = 3 %` that is 5 pairs at σ = 1.5 % and 10 at σ = 2.5 %. Keep
+  `m = 3 %` if that `R` is affordable, otherwise raise `m`; record `σ`, `R` and `m` in §1.
+- **Sybil limit.** One ranked entry per submitter per season (`submitter` in the configuration,
+  carried in the result); a resubmission replaces the submitter's previous entry, it does not add
+  one. Entries with the same `entry_id` (same executables, prover, claim and layout) are one
+  entry; `record` and `compare` refuse to compare an entry with itself. At most one confirmation
+  per submitter per week.
 - **Re-runs.** Every standing record is re-measured each season and whenever the machine changes;
   a re-run re-ranks, it never invalidates a record. The hardware id is published with each number.
-- **Instances.** Fresh random chain starts per evaluation (`run-benchmark.py secrets`); the three
-  runs of one evaluation use the same instances.
+- **Instances.** Fresh random chain starts per evaluation and per confirmation session, drawn from
+  the OS by the runner itself and never read from a file (S9I-m4: proofs of an earlier
+  evaluation cannot be replayed); the runs of one evaluation, and both entries of a confirmation,
+  use the same instances.
 - **Prover nondeterminism** is allowed; every instance must succeed in every run.
 
 ## 5. First noise measurement (Stage 6b, this development machine, 2026-10-15): the placeholder for O-6

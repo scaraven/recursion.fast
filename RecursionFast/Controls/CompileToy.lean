@@ -87,6 +87,13 @@ def cfg2 : Cfg := ⟨.blake2s, 2, by decide⟩
 /-- BLAKE2s, arity 4. -/
 def cfg4 : Cfg := ⟨.blake2s, 4, by decide⟩
 
+/-- BLAKE2s, arity 16. -/
+def cfg16 : Cfg := ⟨.blake2s, 16, by decide⟩
+
+/-- A mostly-zero oracle: 64 elements in leaves of 2, zero except element 5 (`7`) and 40 (`9`). -/
+def sparseO : Oracle :=
+  ⟨⟨6, 1⟩, fun p => if p.val = 5 then ⟨7⟩ else if p.val = 40 then ⟨9⟩ else 0⟩
+
 /-- A layout (the toy ignores it). -/
 def L0 : Layout K := ⟨[], fun _ => .eq, 0⟩
 /-- A statement with distinct elements: `x i = 257 i`. -/
@@ -196,6 +203,16 @@ def cheatTape : Tape :=
   "98e95b1c35effb70feff3a94086128c479694d71b124fa76d7286d52c126d2b6b2fb65000000000000007467493a" ++
   "66d2f96a698027ab869dedce371e0d36d0ae2643371baf3f693876da" ++
   String.ofList (List.replicate 128 '0'))
+-- The sparse `commit` (S9F-M4) on a mostly-zero, padded oracle: 64 elements in 32 leaves of 2,
+-- zero except elements 5 (= 7) and 40 (= 9). At arity 2 empty subtrees are read off the tower; at
+-- arity 4 and 16 the tree also has all-padding subtrees (64 and 256 positions). The roots equal
+-- the dense recursion's (`commitDense`) and the independent encoder's
+-- (`probes/s3/indep_encoder.py`, `root`; `logs/S3/s9-sparse-roots.log`).
+#guard [cfg2, cfg4, cfg16].map (fun c => toHex (commit c sparseO)) =
+  ["a2707ffc5447414f983efcb66eb81bfd9b6f2f3d6b9b42dab01c7580aa43f130",
+   "832818ef69d620ff683b64c0888b5183b40725270035f3f4e1d527887fc41455",
+   "48e8bd545bbd01129f0937320cf43fb56458a7f64db721ab5b2b09d6c7aa533d"]
+#guard [cfg2, cfg4, cfg16].all fun c => commit c sparseO == commitDense c sparseO
 -- Merkle roots of the 4-leaf oracle `p ↦ p + 7` (quoted in the S3 RESULT; Python agrees).
 #eval (toHex (commit cfg2 ⟨⟨2, 0⟩, fun p => ⟨BitVec.ofNat 64 (p.val + 7)⟩⟩),
   toHex (commit cfg4 ⟨⟨2, 0⟩, fun p => ⟨BitVec.ofNat 64 (p.val + 7)⟩⟩))

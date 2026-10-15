@@ -29,10 +29,9 @@ def main():
     rb = runner_module()
     work = os.path.realpath(tempfile.mkdtemp(prefix="rf-noise-"))
     sandbox = a.sandbox and os.path.realpath(a.sandbox)        # steps run in their own directory
-    cfg = {"sandbox": sandbox, "budgets": {"eval_s": 1e9, "mem_kb": 10 ** 12},
+    cfg = {"sandbox": sandbox, "budgets": {"mem_kb": 10 ** 12},
            "verify": [a.cmd[0]], "index": [a.cmd[0]], "prover": a.cmd}   # the argv's files readable
-    secrets = os.path.join(work, ".none"); open(secrets, "w").close()
-    R = rb.Runner(cfg, work, secrets, print)
+    R = rb.Runner(cfg, work, print)
     walls, rss = [], []
     try:
         for i in range(a.repeats):

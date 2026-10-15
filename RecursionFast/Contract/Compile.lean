@@ -26,10 +26,16 @@ and `A^depth` positions at height 0: position `p` is `H(bytes of leaf p)` if `p`
 the zero digest (32 zero bytes). Node `p` at height `h + 1` is `H(n_{A·p} ‖ … ‖ n_{A·p + A - 1})`,
 the `A` nodes `A·p, …, A·p + A - 1` at height `h`; this holds for every internal node, including
 one whose children are all padding (at height 1 it is `H(0^(32·A))`, not the zero digest). The
-root is node 0 at height `depth`. There is no leaf/node tag (S3-A2): binding at a fixed depth
+root is node 0 at height `depth`. `commit` computes this root without hashing a subtree whose
+positions are all padding, or all leaves whose elements are all zero: such a subtree's digest is
+the same at every place, the tower `H(A copies of the one below)` above the zero digest or above
+`H(the all-zero leaf)` (S9F-M4; `commit_eq_commitDense` in `Library/Compile.lean` proves the root
+equal to the dense recursion). There is no leaf/node tag (S3-A2): binding at a fixed depth
 reduces to collision resistance, as the depth and the input length at every level are fixed by
-the shape. Absorb and squeeze inputs have length `1 mod 8` and tree inputs `0 mod 8`; the key
-digest `D` is in the tree's length domain, which is harmless because the indexer fixes its input.
+the shape (`opening_binding`, `Library/Compile.lean`: two accepted openings of one position under
+one root carry the same leaf, or the hash has a collision). Absorb and squeeze inputs have length
+`1 mod 8` and tree inputs `0 mod 8`; the key digest `D` is in the tree's length domain, which is
+harmless because the indexer fixes its input.
 
 **Sponge** (a hash chain; S3-A3). The state is a digest. `s₀ = D`, then `x` is absorbed. Absorbing
 `m`: `s ← H(0x00 ‖ s ‖ m)`. Squeezing `b` bytes: `⌈b/32⌉` times `s ← H(0x01 ‖ s)`; the output is
@@ -153,15 +159,35 @@ def Cfg.depth (cfg : Cfg) (o : OShape) : ℕ :=
 /-- The digest of a leaf: the hash of its bytes. -/
 def leafHash (cfg : Cfg) (leaf : List K) : Digest := cfg.hash.run (leaf.flatMap K.bytes)
 
-/-- Node `p` at height `h` of the Merkle tree of `o`: at height 0 the digest of leaf `p` (the zero
-digest beyond the last leaf), above it the hash of its `A` children `A·p, …, A·p + A - 1`. -/
-def node (cfg : Cfg) (o : Oracle) : ℕ → ℕ → Digest
-  | 0, p => if p < o.shape.leaves then leafHash cfg (o.leaf p) else zeroDigest
-  | h + 1, p =>
-    cfg.hash.run ((List.range cfg.arity).flatMap fun i => node cfg o h (cfg.arity * p + i))
+/-- The digests of a uniform subtree at heights `0, 1, …, n - 1`, from its height-0 digest `d`:
+each is the hash of `A` copies of the one below. -/
+def tower (cfg : Cfg) (d : Digest) : ℕ → List Digest
+  | 0 => []
+  | n + 1 => d :: tower cfg (cfg.hash.run (List.replicate cfg.arity d).flatten) n
 
-/-- The Merkle root of an oracle. -/
-def commit (cfg : Cfg) (o : Oracle) : Digest := node cfg o (cfg.depth o.shape) 0
+/-- Node `p` at height `h` of the Merkle tree of `o` (the header's tree), and whether it is
+**empty**: every position below it is a leaf of `o` whose elements are all zero. An empty node's
+digest is read from `tE` (the tower of the all-zero leaf's digest), an all-padding node's from
+`tZ` (the tower of the zero digest); only the other nodes are hashed. -/
+def nodeS (cfg : Cfg) (o : Oracle) (tE tZ : List Digest) : ℕ → ℕ → Digest × Bool
+  | 0, p =>
+    if p < o.shape.leaves then
+      let lf := o.leaf p
+      if lf.all (· == 0) then (tE.getD 0 [], true) else (leafHash cfg lf, false)
+    else (tZ.getD 0 [], false)
+  | h + 1, p =>
+    if o.shape.leaves ≤ cfg.arity ^ (h + 1) * p then (tZ.getD (h + 1) [], false) else
+      let cs := (List.range cfg.arity).map fun i => nodeS cfg o tE tZ h (cfg.arity * p + i)
+      if cs.all (·.2) then (tE.getD (h + 1) [], true)
+      else (cfg.hash.run (cs.map (·.1)).flatten, false)
+
+/-- The Merkle root of an oracle: node 0 at height `depth`. It costs the reads of `o` plus at most
+`depth` hashes per non-empty leaf and per level of the padding boundary, whatever the oracle's
+size (S9F-M4); its value is the dense tree's (`Library/Compile.lean`, `commit_eq_commitDense`). -/
+def commit (cfg : Cfg) (o : Oracle) : Digest :=
+  let d := cfg.depth o.shape
+  (nodeS cfg o (tower cfg (leafHash cfg (List.replicate (2 ^ o.shape.logLeaf) 0)) (d + 1))
+    (tower cfg zeroDigest (d + 1)) d 0).1
 
 /-- Climb an authentication path from digest `d` at position `p`: at each level insert `d` among
 the `A - 1` siblings at position `p mod A`, hash the `A` digests, and move to position `p / A`. -/
@@ -295,7 +321,9 @@ def runQ (cfg : Cfg) (vs : Array View) : QProg Bool → Tape → Option Bool
 
 /-- **The compiled verifier.** Accept iff the tape is within the cap, the key's index root has 32
 bytes, the rounds section parses, and the query program, on the Fiat–Shamir challenges, accepts
-against the openings with no bytes left over. `vkc` is the indexer's output (`index`). -/
+against the openings with no bytes left over. `vkc` is any compiled key: on the badge path it is
+the indexer's output (`index`); in `aggOK` it is a key from the node's witness, bound to the
+statement only by its digest. -/
 def NARG (cfg : Cfg) {k : ℕ} (P : Protocol k) (vkc : VKc P.vkLen) (x : Stmt) (t : Tape) : Bool :=
   decide (t.length ≤ tapeCap) && vkc.2.length == 32 &&
     match pass cfg (List.ofFn P.shape) (seed cfg vkc x) t #[] with

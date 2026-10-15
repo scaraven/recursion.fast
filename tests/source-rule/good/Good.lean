@@ -1,21 +1,37 @@
-/- Fixture for scripts/source-rule.py (never compiled): forms a submission may use; no finding.
-Comments are skipped: #eval run_meta unsafe /- nested /- #exit -/ unsafeCast -/ initialize -/
+/- Fixture for scripts/source-rule.py (never compiled): forms a submission may use. Neither net
+reports anything: no rejected word appears even in a comment. -/
 import Mathlib.Data.Finset.Card
 import RecursionFast.Contract
+import LeanSearchClient
 open Finset Nat in
-/-- A docstring may mention `#eval`, `run_cmd`, `unsafe` and `import Lean`. -/
-def arr : Array Nat := #[1, 2, 3]  -- #eval in a line comment
+/-- A docstring. -/
+def arr : Array Nat := #[1, 2, 3]  -- a line comment
+/- a block comment /- nested -/ still a comment -/
 def vec : Vector Nat 2 := #v[1, 2]
-def str := "run_meta #eval unsafeCast \" initialize"
+def str := "a string with \" an escaped quote and { braces } that balance"
 def ch : Char := '#'
 def ch2 : Char := '\''
-def raw := r#"#eval "unsafe" run_cmd"#
-def interp := s!"value {arr.size} #eval unsafe"
+def ch3 : Char := '"'
+def ch4 : Char := '{'
+def raw := r#"a raw string with "quotes" and an unbalanced { inside"#
+def raw2 := r"plain raw"
+def interp := s!"value {arr.size} and {arr.size + 1}"
+def interp2 := s!"a nested brace {({ val := 1 } : Fin 2)}"
+def interp3 := s!"a comment {1 /- } -/} inside, read the same both ways"
+def plain := "balanced { braces } read the same both ways"
 def elabish := 0
 def runner := 0
 def run := 0
+def eval := 0
+def r : Nat := 0
+def rr := r + r
+def num := 0x1F + 1_000 + 3
+theorem use_library_names : True := by
+  have := RecursionFast.Library.run_mono   -- the Library's run_… lemmas are names, not commands
+  trivial
 @[simp, inline, specialize] def f (n : Nat) := n
 attribute [simp] f
+attribute [local simp] f
 #check f
 #print f
 #reduce f 1
@@ -30,3 +46,8 @@ structure P where
   a : Nat
   deriving Repr, DecidableEq
 noncomputable def nc := Classical.choice ⟨0⟩
+def xs := [0, 1].foldl (init := 0) (· + ·)
+def g (n : Nat) : Nat := match n with
+  | 0 => 1
+  | k + 1 => g k
+meta def m := 0

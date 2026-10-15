@@ -36,6 +36,22 @@ import RecursionFast.Library.RbrSound
 
 namespace RecursionFast
 
+/-! ## The dense Merkle tree (the header's definition)
+
+The trusted `commit` computes the root sparsely (`nodeS`, S9F-M4); `commit_eq_commitDense` proves
+it equal to this dense recursion, which hashes every node. -/
+
+/-- Node `p` at height `h` of the Merkle tree of `o`, densely: at height 0 the digest of leaf `p`
+(the zero digest beyond the last leaf), above it the hash of its `A` children
+`A·p, …, A·p + A - 1`. -/
+def node (cfg : Cfg) (o : Oracle) : ℕ → ℕ → Digest
+  | 0, p => if p < o.shape.leaves then leafHash cfg (o.leaf p) else zeroDigest
+  | h + 1, p =>
+    cfg.hash.run ((List.range cfg.arity).flatMap fun i => node cfg o h (cfg.arity * p + i))
+
+/-- The Merkle root of an oracle, densely: node 0 at height `depth`. -/
+def commitDense (cfg : Cfg) (o : Oracle) : Digest := node cfg o (cfg.depth o.shape) 0
+
 /-! ## The honest compiled prover (a specification)
 
 Moved here from `Contract/Compile.lean` (S3-m5): no trusted statement uses it. -/
@@ -63,11 +79,14 @@ def fsTranscript (cfg : Cfg) {k : ℕ} (P : Protocol k) (L : Layout K) (x : Stmt
   (fsPrefixes cfg P L x w (Fin.last P.n)).1
 
 /-- The authentication path of leaf `l` of `o`: at each height `h`, the `A` children of the parent
-of the current node `p = l / A^h`, with `p` itself removed. -/
+of the current node `p = l / A^h`, with `p` itself removed (computed sparsely, as `commit`). -/
 def pathOf (cfg : Cfg) (o : Oracle) (l : ℕ) : List (List Digest) :=
-  (List.range (cfg.depth o.shape)).map fun h =>
+  let d := cfg.depth o.shape
+  let tE := tower cfg (leafHash cfg (List.replicate (2 ^ o.shape.logLeaf) 0)) (d + 1)
+  let tZ := tower cfg zeroDigest (d + 1)
+  (List.range d).map fun h =>
     ((List.range cfg.arity).map fun i =>
-      node cfg o h (cfg.arity * (l / cfg.arity ^ h / cfg.arity) + i)).eraseIdx
+      (nodeS cfg o tE tZ h (cfg.arity * (l / cfg.arity ^ h / cfg.arity) + i)).1).eraseIdx
       (l / cfg.arity ^ h % cfg.arity)
 
 /-- The openings section of the honest run of `p` on the oracles `os`: per query, nothing for a
@@ -197,6 +216,92 @@ theorem depth_spec (o : OShape) :
 theorem leaves_le_pow_depth (o : OShape) : o.leaves ≤ cfg.arity ^ cfg.depth o :=
   (depth_spec cfg o).1
 
+/-- The parent of `A` equal children `d`. -/
+def up (d : Digest) : Digest := cfg.hash.run (List.replicate cfg.arity d).flatten
+
+theorem tower_getD (d : Digest) (n h : ℕ) (hh : h < n) :
+    (tower cfg d n)[h]?.getD [] = (up cfg)^[h] d := by
+  induction n generalizing d h with
+  | zero => omega
+  | succ n ih =>
+    cases h with
+    | zero => rfl
+    | succ h =>
+      rw [Function.iterate_succ_apply]
+      exact ih (up cfg d) h (by omega)
+
+/-- A dense subtree made of padding positions only is the tower of the zero digest. -/
+theorem node_padding (o : Oracle) (h p : ℕ) (hp : o.shape.leaves ≤ cfg.arity ^ h * p) :
+    node cfg o h p = (up cfg)^[h] zeroDigest := by
+  induction h generalizing p with
+  | zero => simp [node, show ¬ p < o.shape.leaves by simpa using hp]
+  | succ h ih =>
+    have hc : ∀ i, node cfg o h (cfg.arity * p + i) = (up cfg)^[h] zeroDigest := fun i =>
+      ih _ (hp.trans (by rw [pow_succ, Nat.mul_assoc, Nat.mul_add]; omega))
+    simp [node, List.flatMap_def, hc, Function.iterate_succ_apply', up, List.map_const']
+
+/-- A leaf all of whose elements are zero is the all-zero leaf. -/
+theorem leaf_eq_zero (o : Oracle) (p : ℕ) (h : (o.leaf p).all (· == 0) = true) :
+    o.leaf p = List.replicate (2 ^ o.shape.logLeaf) 0 := by
+  refine List.eq_replicate_iff.mpr ⟨by simp [Oracle.leaf], fun a ha => ?_⟩
+  simpa using List.all_eq_true.mp h a ha
+
+/-- **The sparse node is the dense node** (and an empty node is the tower of the all-zero leaf's
+digest), at every height up to the towers' length. -/
+theorem nodeS_eq (o : Oracle) (n : ℕ) (h p : ℕ) (hh : h < n) :
+    let E0 := leafHash cfg (List.replicate (2 ^ o.shape.logLeaf) 0)
+    (nodeS cfg o (tower cfg E0 n) (tower cfg zeroDigest n) h p).1 = node cfg o h p ∧
+      ((nodeS cfg o (tower cfg E0 n) (tower cfg zeroDigest n) h p).2 = true →
+        node cfg o h p = (up cfg)^[h] E0) := by
+  intro E0
+  induction h generalizing p with
+  | zero =>
+    by_cases hp : p < o.shape.leaves
+    · by_cases hz : (o.leaf p).all (· == 0) = true
+      · simp [nodeS, node, hp, tower_getD cfg _ n 0 hh, leaf_eq_zero o p hz, E0]
+      · simp [nodeS, node, hp, hz]
+    · simp [nodeS, node, hp, tower_getD cfg _ n 0 hh]
+  | succ h ih =>
+    by_cases hpad : o.shape.leaves ≤ cfg.arity ^ (h + 1) * p
+    · simp [nodeS, hpad, tower_getD cfg _ n _ hh, node_padding cfg o _ _ hpad]
+    have ihc := fun i => ih (cfg.arity * p + i) (by omega)
+    have hmap : ((List.range cfg.arity).map fun i =>
+        (nodeS cfg o (tower cfg E0 n) (tower cfg zeroDigest n) h (cfg.arity * p + i)).1) =
+        (List.range cfg.arity).map fun i => node cfg o h (cfg.arity * p + i) :=
+      List.map_congr_left fun i _ => (ihc i).1
+    by_cases hall : ((List.range cfg.arity).map fun i =>
+        nodeS cfg o (tower cfg E0 n) (tower cfg zeroDigest n) h (cfg.arity * p + i)).all (·.2)
+    · have hch : ∀ i ∈ List.range cfg.arity,
+          node cfg o h (cfg.arity * p + i) = (up cfg)^[h] E0 := fun i hi =>
+        (ihc i).2 (by simpa using List.all_eq_true.mp hall _ (List.mem_map_of_mem hi))
+      have hnode : node cfg o (h + 1) p = (up cfg)^[h + 1] E0 := by
+        simp only [node, List.flatMap_def, List.map_congr_left hch, List.map_const',
+          List.length_range, Function.iterate_succ_apply', up]
+      simp only [nodeS, hpad, ↓reduceIte, hall, List.getD_eq_getElem?_getD,
+        tower_getD cfg _ n _ hh, hnode, and_self, implies_true]
+    · refine ⟨?_, fun h' => by simp [nodeS, hpad, hall] at h'⟩
+      simp only [nodeS, hpad, ↓reduceIte, hall, Bool.false_eq_true, List.map_map,
+        Function.comp_def]
+      rw [hmap, node, List.flatMap_def]
+
+/-- **The trusted sparse `commit` computes the dense Merkle root** (S9F-M4: same root, same
+paths, same tapes). -/
+theorem commit_eq_commitDense (o : Oracle) : commit cfg o = commitDense cfg o :=
+  (nodeS_eq cfg o _ _ 0 (Nat.lt_succ_self _)).1
+
+theorem commit_length (o : Oracle) : (commit cfg o).length = 32 := by
+  rw [commit_eq_commitDense]; exact node_length cfg o _ _
+
+/-- The honest path, with the dense tree's nodes. -/
+theorem pathOf_eq_dense (o : Oracle) (l : ℕ) :
+    pathOf cfg o l = (List.range (cfg.depth o.shape)).map fun h =>
+      ((List.range cfg.arity).map fun i =>
+        node cfg o h (cfg.arity * (l / cfg.arity ^ h / cfg.arity) + i)).eraseIdx
+        (l / cfg.arity ^ h % cfg.arity) :=
+  List.map_congr_left fun h hh => by
+    rw [List.map_congr_left fun i _ =>
+      (nodeS_eq cfg o _ h _ (Nat.lt_succ_of_lt (List.mem_range.mp hh))).1]
+
 /-- Insert the node back among its siblings: the parent's children. -/
 private theorem insert_eraseIdx {α : Type} (l : List α) (r : ℕ) (hr : r < l.length) :
     (l.eraseIdx r).take r ++ l[r] :: (l.eraseIdx r).drop r = l := by
@@ -217,7 +322,7 @@ private theorem climb_honest (o : Oracle) (l : ℕ) (hl : l < cfg.arity ^ cfg.de
   induction j with
   | zero =>
     rintro h (rfl : h = _)
-    simp [climb, commit, Nat.div_eq_of_lt hl]
+    simp [climb, commit_eq_commitDense, commitDense, Nat.div_eq_of_lt hl]
   | succ j ih =>
     intro h hh
     rw [List.range'_succ, List.map_cons, climb]
@@ -233,7 +338,7 @@ private theorem climb_honest (o : Oracle) (l : ℕ) (hl : l < cfg.arity ^ cfg.de
 /-- **Merkle path correctness**: the honest path of a leaf climbs to the root. -/
 theorem climb_pathOf (o : Oracle) (l : ℕ) (hl : l < o.shape.leaves) :
     climb cfg (leafHash cfg (o.leaf l)) l (pathOf cfg o l) = commit cfg o := by
-  simpa [node, hl, pathOf, List.range_eq_range'] using
+  simpa [node, hl, pathOf_eq_dense, List.range_eq_range'] using
     climb_honest cfg o l (hl.trans_le (leaves_le_pow_depth cfg o.shape)) _ 0 (Nat.zero_add _)
 
 theorem verifyPath_pathOf (o : Oracle) (l : ℕ) (hl : l < o.shape.leaves) :
@@ -262,6 +367,7 @@ theorem readOpening_honest (o : Oracle) (l : ℕ) (t : Tape) :
   have hlev : ∀ lev ∈ pathOf cfg o l, ∀ t, readMany (fun t => takeN 32 t []) (cfg.arity - 1)
       (lev.flatten ++ t) = some (lev, t) := by
     intro lev hlev t
+    rw [pathOf_eq_dense] at hlev
     obtain ⟨h, -, rfl⟩ := List.mem_map.mp hlev
     have hlen := List.length_eraseIdx_of_lt (l := (List.range cfg.arity).map fun i =>
       node cfg o h (cfg.arity * (l / cfg.arity ^ h / cfg.arity) + i))
@@ -272,7 +378,7 @@ theorem readOpening_honest (o : Oracle) (l : ℕ) (t : Tape) :
       exact node_length cfg o h _)) _ hlen t
     simpa using this
   have hpath := readMany_flatten _ List.flatten (pathOf cfg o l) hlev (cfg.depth o.shape)
-    (by simp [pathOf]) t
+    (by simp [pathOf_eq_dense]) t
   rw [List.flatten_flatten, readOpening,
     takeN_append' _ _ (by rw [flatMap_bytes_length, Oracle.leaf_length])]
   simp [hpath, kList_flatMap]
@@ -440,7 +546,7 @@ private theorem ofFn_eq_map_range {α : Type} {n : ℕ} (f : Fin n → α) (d : 
 theorem msgLen_tapeBytes (o : OShape) (v : OVal o) :
     ((Round.msg o).tapeBytes cfg v).length = msgLen o := by
   simp only [Round.tapeBytes, msgLen, apply_ite List.length, flatMap_bytes_length, List.length_ofFn,
-    commit, node_length]
+    commit_length]
 
 theorem stepOK_of (r : Round) (v : r.Ty) (s s' : Digest) (e : List UInt8)
     (hm : r.isMsg = true → e = r.tapeBytes cfg v ∧ s' = absorb cfg s (r.tapeBytes cfg v))
@@ -528,7 +634,7 @@ theorem narg_complete (t : Tape) (ht : prove cfg P L x w = some t)
         ((viewOf cfg true ⟨P.idxShape, P.IDX L⟩ :: tr.oracles.map (viewOf cfg false)).toArray)[j]? =
           some (viewOf cfg (j == 0) o) := by
       rintro (_ | j) o hj <;> simp_all [os]
-    have hroot : (index cfg P L).2.length = 32 := node_length cfg _ _ _
+    have hroot : (index cfg P L).2.length = 32 := commit_length cfg _
     rw [NARG, decide_eq_true hcap, hroot, pass_honest]
     dsimp only
     rw [index, chals_honest, views_honest, runQ_record cfg os _ hvs _ op hrec, heval]; rfl
@@ -681,5 +787,140 @@ theorem narg_local {k : ℕ} (cfg : Cfg) (P : Protocol k) (vkc : VKc P.vkLen) (x
 theorem narg_oversize {k : ℕ} (cfg : Cfg) (P : Protocol k) (vkc : VKc P.vkLen) (x : Stmt) (t : Tape)
     (h : tapeCap < t.length) : NARG cfg P vkc x t = false := by
   simp [NARG, Nat.not_le.mpr h]
+
+/-! ## Merkle binding (S9D-m5)
+
+From the S3 review (`probes/s3/RevBinding.lean`), now checked in CI: at the fixed depth the shape
+gives, two openings that `runQ` accepts for the same root and position carry the same leaf unless
+the hash has a collision (`opening_binding`). This is the binding argument the header of
+`Contract/Compile.lean` cites for "no leaf/node tag" (S3-A2). -/
+
+section Binding
+variable (cfg : Cfg)
+
+/-- A collision of the configured hash. -/
+def Collision : Prop := ∃ m m' : List UInt8, m ≠ m' ∧ cfg.hash.run m = cfg.hash.run m'
+
+/-- A well-formed path level: `A - 1` digests of 32 bytes. -/
+def LevelOK (lev : List Digest) : Prop := lev.length = cfg.arity - 1 ∧ ∀ d ∈ lev, d.length = 32
+
+theorem flatten_length_32 (s : List Digest) (hs : ∀ e ∈ s, e.length = 32) :
+    s.flatten.length = 32 * s.length := by
+  induction s with
+  | nil => rfl
+  | cons a s ih =>
+    simp only [List.flatten_cons, List.length_append, List.length_cons,
+      hs a List.mem_cons_self, ih fun e he => hs e (List.mem_cons_of_mem _ he)]
+    ring
+
+/-- The inserted digest is recovered from the flattened level. -/
+theorem flatten_insert (s : List Digest) (d : Digest) (q : ℕ)
+    (hs : ∀ e ∈ s, e.length = 32) (hd : d.length = 32) :
+    ((s.take q ++ d :: s.drop q).flatten.drop (32 * (s.take q).length)).take 32 = d := by
+  have hl := flatten_length_32 (s.take q) fun e he => hs e (List.mem_of_mem_take he)
+  rw [List.flatten_append, List.flatten_cons, ← hl, List.drop_left]
+  simp [hd]
+
+theorem climb_binding (path path' : List (List Digest)) (d d' : Digest) (p : ℕ)
+    (hd : d.length = 32) (hd' : d'.length = 32) (hlen : path.length = path'.length)
+    (hp : ∀ lev ∈ path, LevelOK cfg lev) (hp' : ∀ lev ∈ path', LevelOK cfg lev)
+    (h : climb cfg d p path = climb cfg d' p path') : d = d' ∨ Collision cfg := by
+  induction path generalizing path' d d' p with
+  | nil =>
+    cases path' with
+    | nil => exact Or.inl (by simpa [climb] using h)
+    | cons _ _ => simp at hlen
+  | cons s path ih =>
+    cases path' with
+    | nil => simp at hlen
+    | cons s' path' =>
+      simp only [climb] at h
+      have hA := cfg.two_le_arity
+      have hs := hp s List.mem_cons_self
+      have hs' := hp' s' List.mem_cons_self
+      rcases ih path' _ _ (p / cfg.arity) (HashId.run_length _ _) (HashId.run_length _ _)
+          (by simpa using hlen) (fun l hl => hp l (List.mem_cons_of_mem _ hl))
+          (fun l hl => hp' l (List.mem_cons_of_mem _ hl)) h with he | hc
+      · by_cases hm : (s.take (p % cfg.arity) ++ d :: s.drop (p % cfg.arity)).flatten =
+            (s'.take (p % cfg.arity) ++ d' :: s'.drop (p % cfg.arity)).flatten
+        · left
+          have hq : p % cfg.arity ≤ s.length := by rw [hs.1]; have := Nat.mod_lt p (by omega : 0 < cfg.arity); omega
+          have hq' : p % cfg.arity ≤ s'.length := by rw [hs'.1]; have := Nat.mod_lt p (by omega : 0 < cfg.arity); omega
+          have e1 := flatten_insert s d (p % cfg.arity) hs.2 hd
+          have e2 := flatten_insert s' d' (p % cfg.arity) hs'.2 hd'
+          rw [List.length_take_of_le hq] at e1
+          rw [List.length_take_of_le hq', ← hm] at e2
+          rw [← e1, ← e2]
+        · exact Or.inr ⟨_, _, hm, he⟩
+      · exact Or.inr hc
+
+theorem verifyPath_binding (r : Digest) (l : ℕ) (leaf leaf' : List K)
+    (path path' : List (List Digest)) (hlen : path.length = path'.length)
+    (hp : ∀ lev ∈ path, LevelOK cfg lev) (hp' : ∀ lev ∈ path', LevelOK cfg lev)
+    (h : verifyPath cfg r l leaf path = true) (h' : verifyPath cfg r l leaf' path' = true) :
+    leaf = leaf' ∨ Collision cfg := by
+  simp only [verifyPath, beq_iff_eq] at h h'
+  rcases climb_binding cfg path path' _ _ l (HashId.run_length _ _) (HashId.run_length _ _) hlen
+      hp hp' (h.trans h'.symm) with he | hc
+  · by_cases hb : leaf.flatMap K.bytes = leaf'.flatMap K.bytes
+    · left; rw [← kList_flatMap leaf, ← kList_flatMap leaf', hb]
+    · exact Or.inr ⟨_, _, hb, he⟩
+  · exact Or.inr hc
+
+theorem takeN_length : ∀ (n : ℕ) (t acc b t' : List UInt8),
+    takeN n t acc = some (b, t') → b.length = n + acc.length
+  | 0, t, acc, b, t', h => by simp [takeN] at h; obtain ⟨rfl, -⟩ := h; simp
+  | n + 1, [], acc, b, t', h => by simp [takeN] at h
+  | n + 1, c :: t, acc, b, t', h => by
+    have := takeN_length n t (c :: acc) b t' h; simp at this; omega
+
+theorem readMany_shape {α : Type} (r : Tape → Option (α × Tape)) (Q : α → Prop)
+    (hr : ∀ t a t', r t = some (a, t') → Q a) :
+    ∀ (n : ℕ) (t : Tape) (as : List α) (t' : Tape), readMany r n t = some (as, t') →
+      as.length = n ∧ ∀ a ∈ as, Q a
+  | 0, t, as, t', h => by simp [readMany] at h; obtain ⟨rfl, -⟩ := h; simp
+  | n + 1, t, as, t', h => by
+    simp only [readMany] at h
+    split at h
+    · rename_i a t1 hrt
+      obtain ⟨⟨as', t''⟩, h1, h2⟩ := Option.map_eq_some_iff.mp h
+      simp only [Prod.mk.injEq] at h2
+      obtain ⟨rfl, rfl⟩ := h2
+      obtain ⟨hl, hq⟩ := readMany_shape r Q hr n t1 as' t'' h1
+      refine ⟨by simp [hl], ?_⟩
+      intro b hb
+      rcases List.mem_cons.mp hb with rfl | hb
+      · exact hr _ _ _ hrt
+      · exact hq b hb
+    · simp at h
+
+/-- What `readOpening` returns has the fixed shape: `depth` levels of `A - 1` 32-byte digests. -/
+theorem readOpening_shape (o : OShape) (t : Tape) (leaf : List K) (path : List (List Digest))
+    (t' : Tape) (h : readOpening cfg o t = some (leaf, path, t')) :
+    path.length = cfg.depth o ∧ ∀ lev ∈ path, LevelOK cfg lev := by
+  simp only [readOpening] at h
+  split at h
+  · obtain ⟨⟨ps, t''⟩, h1, h2⟩ := Option.map_eq_some_iff.mp h
+    simp only [Prod.mk.injEq] at h2
+    obtain ⟨-, rfl, -⟩ := h2
+    exact readMany_shape _ (LevelOK cfg) (fun t lev t' hlev =>
+      readMany_shape _ (fun d : Digest => d.length = 32)
+        (fun t d t' hd => by simpa using takeN_length 32 t [] d t' hd) _ t lev t' hlev) _ _ _ _ h1
+  · simp at h
+
+/-- **Merkle binding at a fixed depth, without a leaf/node tag (S3-A2).** Two openings that
+`runQ` would accept for the same oracle shape, root and leaf position (read from any two tapes)
+carry the same leaf, unless the configured hash has a collision. -/
+theorem opening_binding (o : OShape) (r : Digest) (l : ℕ) (t u t' u' : Tape)
+    (leaf leaf' : List K) (path path' : List (List Digest))
+    (h1 : readOpening cfg o t = some (leaf, path, t'))
+    (h2 : readOpening cfg o u = some (leaf', path', u'))
+    (v1 : verifyPath cfg r l leaf path = true) (v2 : verifyPath cfg r l leaf' path' = true) :
+    leaf = leaf' ∨ Collision cfg := by
+  obtain ⟨hl1, hp1⟩ := readOpening_shape cfg o t leaf path t' h1
+  obtain ⟨hl2, hp2⟩ := readOpening_shape cfg o u leaf' path' u' h2
+  exact verifyPath_binding cfg r l leaf leaf' path path' (hl1.trans hl2.symm) hp1 hp2 v1 v2
+
+end Binding
 
 end RecursionFast

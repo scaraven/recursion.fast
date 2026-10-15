@@ -4,7 +4,7 @@ import RecursionFast.Controls.CompileToy
 open RecursionFast RecursionFast.Controls.Compile
 
 def cfg8 : Cfg := ⟨.blake2s, 8, by decide⟩
-def cfg16 : Cfg := ⟨.blake2s, 16, by decide⟩
+-- `cfg16` is `Controls.Compile.cfg16` since the S9 fix pass.
 
 #eval [cfg2, cfg4, cfg8, cfg16].map fun c =>
   (c.arity, (prove c cmpToy L0 x0 []).map (fun t => (t.length, toHex t)),

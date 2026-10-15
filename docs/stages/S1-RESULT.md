@@ -323,3 +323,82 @@ Code lines are from `scripts/loc.py` (`logs/S1/loc-all-fix.log`).
 | `Controls/Toy.lean` | 81 | query-program verifier, caps |
 | `Controls/Negative.lean` | 85 | `rejectAll_not_secure` over query programs |
 | `Controls/Hit.lean`, `Controls/FieldSpec.lean` | 101, 13 | **new**, verbatim v0.3 (S1-m4) |
+
+## S9 cleanup (2026-10-15; `docs/reviews/S9-definitions.md`, `S9-feasibility.md`)
+
+**Scope.** Edited: `Field`, `Shapes`, `Security`, `Protocol` (trusted); `Library/Field.lean`;
+`Bridge/`; and one harness line forced by a deletion (`Twin.lean`). Not edited: `Compile`,
+`Recursion`, `Certificate`, `Extractor`, `Machine`. Nothing is committed. The amendments are
+S9-A1 … S9-A5 in `docs/DESIGN-AMENDMENTS.md`.
+
+### S9D-m1: deletions (S9-A1)
+
+- **What was deleted.** Nine trusted declarations that certify nothing:
+  - `K`'s `Sub` and `Neg`;
+  - `E`'s `Zero`, `One`, `Add`, `Mul` and `E.toBytes`;
+  - `FullTranscript.tapeWords`;
+  - `Inhabited Oracle`.
+- **Where they went.** They moved, unchanged, to `Library/Field.lean`.
+- **What stayed.** Everything a challenge type or the extractor tape depends on: `E`, `E.toWords`,
+  `Round.Ty`, `Round.tapeWords`.
+- **Results.**
+  - The contract builds without them.
+  - The certificate-cone probe now lists 8 declarations outside the cone (it listed 17). Seven
+    of these are in `Compile`/`Recursion`; the eighth is `unpack`, which is load-bearing through
+    the rendered image.
+  - The contract has 1,071 constants (it had 1,080).
+
+### S9D-m3 and S9D-m6 (S9-A2, S9-A3)
+
+- **S9D-m3.** The `Protocol.lean` header, `Protocol.Secure` (rewrite 2) and `Security.lean`'s
+  reading guide now state two things:
+  - a secure verifier must reject non-admissible layouts, which it learns only through `VK L`;
+  - the error is per challenge round, so the total is at most `2^14 · 2^-128 = 2^-114`.
+- **S9D-m6.** The stale v0.3 docstrings in `Shapes` and `Security` are rewritten (rewrites 1
+  and 5, plus `RbrKS`'s finiteness reference). The `Protocol.lean` header's computable list now
+  matches gate rule 4.
+
+### The ArkLib bridge (S9-A4)
+
+- **Port.** v0.3's `Bridge/ArkLib.lean` is ported verbatim apart from its header and one import,
+  and it compiles against v2's `Security`.
+- **New.** `Protocol.secure_toArk`: a `Secure` protocol is ArkLib worst-case RBR knowledge sound
+  for `relK k`, with the image's extractor.
+- **Control.** `Bridge/ArkLibToy.lean`, `toy20_arkRbrKS`.
+- **Gaps, stated in the header.** The bridge goes contract → ArkLib only. It forgets `B(k)`. It
+  does not restate completeness.
+
+### S9D-m7 (S9-A5)
+
+Analysis only. Copying the live part of `execInstrBr` into `Machine.lean` would cost about 140
+trusted lines and remove about 340 lines from the reading. The recommendation is to document
+now and split upstream later.
+
+### Numbers
+
+| Measure | Before | After |
+|---|---:|---|
+| Trusted code, all files | 739 | **724** from this pass; the tree measures **737**, because the `Compile.lean` owner's concurrent edit adds 13 lines (`logs/S1/loc-trusted-s9.log`) |
+| Trusted code, excluding `Compile`/`Hash` | 543 | **528** |
+| `Field.lean` | 36 | **24** |
+| `Shapes.lean` | 50 | **47** |
+| `Protocol.lean` | 45 | 45 (comments only) |
+| `Security.lean` | 55 | 55 (comments only) |
+
+### Checks
+
+- **Builds.** With this pass's edits the default `lake build`, `lake build RecursionFastBridge
+  gate axiomaudit`, and the other targets (`RecursionFastCandidate`, `RecursionFastHarness`,
+  `harness-linkcheck`, `RecursionFastSmoke`, `smoke-verify`, `smoke-index`, `RecursionFastClean`)
+  were green.
+- **Default build now red, but not from this pass.** At hand-off the default build fails in
+  `Library/Recursion.lean:219, 230` (`node_length` against `index`). The cause is the
+  `Compile.lean`/`Library/Compile.lean` owner's concurrent, uncommitted edit. Every module this
+  pass owns, and `RecursionFastBridge`, still build green.
+- **Axioms.** The audit reports PASS (`logs/S1/axiomaudit-s9.log`).
+- **Hygiene.** OK.
+- **Organiser build.** `scripts/org-build.sh .lake/org` succeeds, and the regenerated import
+  allowlist and frontend list are identical to the committed ones.
+- **Manifest.** `olean-manifest.py check` fails on exactly the 4 changed contract `.olean`s. It
+  must be regenerated once all S9 trusted edits are in. I did not regenerate it, because other
+  owners are editing trusted files and `olean-manifest.py` concurrently.

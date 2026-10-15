@@ -8,18 +8,22 @@
 #       the source rule's fixtures (tests/source-rule/: each rejected form reported, the allowed pass)
 #   2   organiser build (contract, library, controls, bridge, gate, axiomaudit, harness driver,
 #       harness-linkcheck: built, which prebuilds the badge executables' object files, and run)
-#   3   organiser .olean manifest
+#   3   organiser .olean manifest: matches the build, and is exactly the trusted closure (S9F-M2:
+#       regenerated from the organiser's import closures and compared with the committed file)
 #   4   axiom audit, trusted line budget
 #   5   reference tests: BLAKE2s against hashlib (probes/s2/Diff.lean, 8,432 cases), L_chain against
 #       its Python oracle at n = 16 (harness/check-chain.py experiments), the benchmark runner's
-#       self-test (its statement tree against the kernel-checked treeKat/rootOK_xT)
+#       self-test (its statement tree against the kernel-checked treeKat/rootOK_xT/nodeStmt_kat_keys)
 #   6   renderer tests (malformed claims rejected), the L and R stubs elaborate (dummy claims, and R
-#       with L_chain(16) as C), the indexer's layout reader = the renderer (probes/s6b/layout)
+#       with L_chain(16) as C), the indexer's layout reader = the renderer (probes/s6b/layout); the
+#       keyword sweep of the source rule (scripts/TokenSweep.lean: every keyword of the allowed
+#       closure is rejected or reviewed, tests/source-rule/reviewed-tokens.txt; S9D-M1)
 #   7   the v2 toy (audit/, board L) through the production harness: comparator first (Lean kernel
 #       and nanoda, fresh tree, bwrap sandbox), gate, badge executables built in the gate tree and
 #       run; the negative toy (one image word changed) rejected; the source rule (S6b-M3) passes the
-#       toy and rejects ForgeRaw before any build; a claim that does not render the challenge is
-#       rejected (S6b-M2); stage 3b's plumbing with the claim-derived configuration
+#       toy and rejects ForgeRaw and the S9 bypass ForgeRawR before any build (S9D-M1); a claim that
+#       does not render the challenge is rejected (S6b-M2), `--secrets` is refused (S9I-m4); stage
+#       3b's plumbing with the claim-derived configuration
 #   8   gate probes in a scratch directory: v2 rule 4 (probes/s6b/gate/GateV2.lean: positives pass,
 #       each negative rejected at exactly its field), the S7-M1 forgeries (rules 3, 6, 7; the forgery
 #       does not elaborate within the allowed imports), the A4 probes (v2 ports), leanchecker
@@ -28,7 +32,11 @@
 #       harness/smoke, the benchmark runner end to end (64 leaves, 63 steps, 3 repeats), and its
 #       rejections (S5-A13 digests, a bad proof, a timeout, no proof, the board-L cap; fix pass: no
 #       sandbox (S6b-M1), a layout file not the claimed one (S6b-M2), the cgroup memory cap
-#       (S6b-m1)) and the minimal sandbox root (S6b-m3)
+#       (S6b-m1)) and the minimal sandbox root (S6b-m3); S9 fix pass: the result's ranked board R,
+#       S_rec by level group, the derived budget, the identity fields, canaries and DoS under both
+#       keys (S9I-M1/M2/m3/m5, S9F-M5); an accept-all verifier rejected by the canaries; the key
+#       indexed from the certified C whatever the layout file (S9D-m4); `compare` (a faster entry
+#       confirmed, a slower one not; calibration) and `record` refusals (S9I-M3, S9I-m5)
 #   11  the Clean frontend (S8-A12), in the repository tree, never in the organiser package, and the
 #       axiom audit of RecursionFast.Clean*
 #   12  organiser .olean manifest re-check
@@ -39,16 +47,15 @@
 # time. Step 10's timed benchmark run starts after every job has ended and runs alone.
 #
 #   scripts/ci.sh [RISCV_ZKVM_CHECKOUT]
-# Environment: COMPARATOR_HOME, COMPARATOR_NANODA (scripts/harness.sh; the local defaults below
-# are this machine's read-only checkouts), CI_ORG. Logs: logs/S6b/ci/.
+# Environment: COMPARATOR_HOME, COMPARATOR_NANODA (defaults: scripts/tools.env, shared with
+# scripts/harness.sh), CI_ORG. Logs: logs/S6b/ci/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 HERE=$PWD
 ORG=${CI_ORG:-$HERE/.lake/org}
 MAN=$HERE/scripts/olean-manifest.sha256
 AL=$HERE/scripts/import-allowlist.txt; FR=$HERE/scripts/import-frontend.txt
-export COMPARATOR_HOME=${COMPARATOR_HOME:-/home/devops/CambridgePQ/recursion.fast/contract/tools/comparator}
-export COMPARATOR_NANODA=${COMPARATOR_NANODA:-/home/devops/CambridgePQ/recursion.fast/contract-v03/tools/ext/nanoda_lib/target/release/nanoda_bin}
+source "$HERE/scripts/tools.env"
 LOG=$HERE/logs/S6b/ci; mkdir -p "$LOG"
 T=$(mktemp -d); trap 'wait; rm -rf "$T"' EXIT
 step() { echo "== [${SECONDS}s] $*"; }
@@ -71,8 +78,17 @@ tests/source-rule/check.sh | tee "$LOG/source-rule.log"
 step "2 organiser build in $ORG"
 scripts/org-build.sh "$ORG" | tee "$LOG/org-build.log"
 
-step "3 organiser .olean manifest; the gate's import allowlist (rule 6) is current"
+step "3 organiser .olean manifest (= the trusted closure); the gate's import allowlist (rule 6) is current"
 python3 -I scripts/olean-manifest.py check --org "$ORG" "$MAN" | tee "$LOG/manifest.log"
+# S9F-M2: the manifest is exactly the trusted closure: regenerated from the organiser's import
+# closures (every entry a module of the allowlist or the frontend closure, every such module built)
+python3 -I scripts/olean-manifest.py gen --org "$ORG" --closure "$ORG/import-allowlist.txt" \
+  --closure "$ORG/frontend-closure.txt" "$T/manifest-closure.sha256" > "$LOG/manifest-closure.log"
+if ! cmp -s <(grep -v '^#' "$T/manifest-closure.sha256") <(grep -v '^#' "$MAN"); then
+  diff <(grep -v '^#' "$MAN" | awk '{print $2}') <(grep -v '^#' "$T/manifest-closure.sha256" | awk '{print $2}') | head -5
+  echo "scripts/olean-manifest.sha256 is not exactly the trusted closure (S9F-M2): regenerate it (harness/README.md)"; exit 1
+fi
+echo "olean manifest = the trusted closure: $(grep -vc '^#' "$MAN") files of the import allowlist and the frontend closure (S9F-M2)"
 for f in import-allowlist import-frontend; do
   cmp -s "$ORG/$f.txt" "scripts/$f.txt" || { echo "scripts/$f.txt is stale (cp $ORG/$f.txt)"; exit 1; }
 done
@@ -105,10 +121,18 @@ render_tests() {
   done | tee "$LOG/stubs.log"
 }
 layout_check() { probes/s6b/layout/check.sh "$ORG" | tee "$LOG/layout-check.log"; }
+token_sweep() {  # S9D-M1: every keyword of the allowed closure is rejected by the source rule or reviewed
+  (cd "$ORG" && lake env lean --run "$HERE/scripts/TokenSweep.lean" import-allowlist.txt import-frontend.txt) \
+    > "$T/tokens.txt" 2> "$LOG/token-sweep.err" || { tail -5 "$LOG/token-sweep.err"; exit 1; }
+  grep -h "^TokenSweep" "$LOG/token-sweep.err"
+  python3 -I tests/source-rule/sweep.py scripts/source-rule.py "$T/tokens.txt" tests/source-rule/reviewed-tokens.txt \
+    | tee "$LOG/token-sweep.log"
+}
 job 5 titled "5 reference tests (BLAKE2s vs hashlib, L_chain vs its oracle at n = 16, runner self-test)" reference_tests
 job 6-render titled "6 renderer tests and stubs (L, R; R with L_chain(16)); layout reader = renderer" render_tests
 job 6-layout layout_check
-join 5 6-render 6-layout
+job 6-sweep token_sweep
+join 5 6-render 6-layout 6-sweep
 
 # ---- steps 7, 8, 9 and step 10's builds (solution-like code), concurrent ----------------------
 step "7 the v2 toy through the production harness (comparator first, fresh trees, sandbox, gate, badge build)"
@@ -142,8 +166,12 @@ json.dump({"k": 24, "boards": ["L"], "prover": ["python3", "-I", here + "/harnes
            "gen": here + "/harness/gen-chain-layout.py", "sandbox": here + "/scripts/bwrap-landrun.sh",
            "tree": {"n": 16, "leaves": 2}, "leafboard": {}, "classes": {"16": 20}, "repeats": 1,
            "dos": {"tapes": 0}, "budgets": {"index_total_s": 5}}, open(sys.argv[1], "w"))' "$T/toy-bench.json" "$HERE"
-  python3 -I harness/run-benchmark.py secrets 2 "$T/toy-secrets.txt"
-  if scripts/harness.sh --org "$ORG" --work "$T/h-bench" "${TOY[@]}" --bench "$T/toy-bench.json" --secrets "$T/toy-secrets.txt" \
+  # S9I-m4: the runner generates the secrets; the harness refuses a secrets file
+  if scripts/harness.sh --org "$ORG" --secrets /dev/null audit/ToyChallenge.lean "$T/toysol" audit/comparator.json \
+      > "$LOG/harness-secrets.log" 2>&1; then echo "harness accepted --secrets"; exit 1; fi
+  grep -q "secrets is refused" "$LOG/harness-secrets.log" || { cat "$LOG/harness-secrets.log"; exit 1; }
+  echo "harness refuses --secrets (S9I-m4): $(cat "$LOG/harness-secrets.log")"
+  if scripts/harness.sh --org "$ORG" --work "$T/h-bench" "${TOY[@]}" --bench "$T/toy-bench.json" \
       --claim "$T/toy/toy-claim.json" --stub RecursionFast/Challenge/L.lean.in \
       audit/ToyChallenge.lean "$T/toysol" audit/comparator.json > "$LOG/harness-toy-bench.log" 2>&1; then
     tail -20 "$LOG/harness-toy-bench.log"; echo "harness --bench ACCEPTED the infeasible toy"; exit 1; fi
@@ -154,23 +182,27 @@ json.dump({"k": 24, "boards": ["L"], "prover": ["python3", "-I", here + "/harnes
   mkdir -p "$T/badclaim"; cp "$T/toy/firstmsg.code" "$T/toy/firstmsg.data" "$T/badclaim/"
   python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); d["arity"] = 4; json.dump(d, open(sys.argv[2], "w"))' \
     "$T/toy/toy-claim.json" "$T/badclaim/claim.json"
-  if scripts/harness.sh --org "$ORG" --work "$T/h-claim" "${TOY[@]}" --bench "$T/toy-bench.json" --secrets "$T/toy-secrets.txt" \
+  if scripts/harness.sh --org "$ORG" --work "$T/h-claim" "${TOY[@]}" --bench "$T/toy-bench.json" \
       --claim "$T/badclaim/claim.json" --stub RecursionFast/Challenge/L.lean.in \
       audit/ToyChallenge.lean "$T/toysol" audit/comparator.json > "$LOG/harness-claim-mismatch.log" 2>&1; then
     echo "harness ACCEPTED a claim that does not render the challenge"; exit 1; fi
   grep -q "HARNESS: REJECT (the challenge is not the rendering of the stub with the claim)" "$LOG/harness-claim-mismatch.log" \
     || { tail -10 "$LOG/harness-claim-mismatch.log"; exit 1; }
   echo "harness rejects a claim that does not render the challenge (S6b-M2): $(grep -h 'HARNESS:' "$LOG/harness-claim-mismatch.log")"
-  # S6b-M3: ForgeRaw (the raw forgery, which the gate passes) is rejected by the source rule before any build
-  mkdir -p "$T/forgeraw"; cp probes/s6b/gate/ForgeRaw.lean "$T/forgeraw/"
-  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); d["solution_module"] = "ForgeRaw"; json.dump(d, open(sys.argv[2], "w"))' \
-    audit/comparator.json "$T/forgeraw.json"
-  if scripts/harness.sh --org "$ORG" --work "$T/h-raw" "${TOY[@]}" audit/ToyChallenge.lean "$T/forgeraw" "$T/forgeraw.json" \
-      > "$LOG/harness-forgeraw.log" 2>&1; then echo "harness ACCEPTED ForgeRaw"; exit 1; fi
-  grep -q "HARNESS: REJECT (source rule: 1 files, [0-9]* finding(s))" "$LOG/harness-forgeraw.log" \
-    || { tail -12 "$LOG/harness-forgeraw.log"; echo "ForgeRaw: not rejected by the source rule"; exit 1; }
-  ! grep -q "^TIME \|Exporting\|Building" "$LOG/harness-forgeraw.log" || { echo "ForgeRaw: something was built before the source rule"; exit 1; }
-  echo "harness rejects ForgeRaw by the source rule before any build (S6b-M3): $(grep -h 'source-rule: ForgeRaw' "$LOG/harness-forgeraw.log" | sed 's/source-rule: ForgeRaw.lean://' | tr '\n' ' ')"
+  # S6b-M3, S9D-M1: ForgeRaw (the raw forgery, which the gate passes) and ForgeRawR (its S9 variant,
+  # which the first lexer read as a raw string) are rejected by the source rule before any build
+  local f
+  for f in ForgeRaw ForgeRawR; do
+    mkdir -p "$T/$f"; cp "tests/source-rule/forge/$f.lean" "$T/$f/"
+    python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); d["solution_module"] = sys.argv[3]; json.dump(d, open(sys.argv[2], "w"))' \
+      audit/comparator.json "$T/$f.json" "$f"
+    if scripts/harness.sh --org "$ORG" --work "$T/h-$f" "${TOY[@]}" audit/ToyChallenge.lean "$T/$f" "$T/$f.json" \
+        > "$LOG/harness-$f.log" 2>&1; then echo "harness ACCEPTED $f"; exit 1; fi
+    grep -q "HARNESS: REJECT (source rule: 1 files, [0-9]* finding(s))" "$LOG/harness-$f.log" \
+      || { tail -12 "$LOG/harness-$f.log"; echo "$f: not rejected by the source rule"; exit 1; }
+    ! grep -q "^TIME \|Exporting\|Building" "$LOG/harness-$f.log" || { echo "$f: something was built before the source rule"; exit 1; }
+    echo "harness rejects $f by the source rule before any build: $(grep -h "source-rule: $f.lean:[0-9]*: [^(]*$" "$LOG/harness-$f.log" | sed "s/source-rule: $f.lean://" | tr '\n' ' ')"
+  done
 }
 toy_bad() {
   if scripts/harness.sh --org "$ORG" --work "$T/h-bad" audit/ToyChallenge.lean "$T/toybad" audit/comparator-bad.json \
@@ -298,10 +330,11 @@ smoke_build() {
     python3 -I harness/badge-main.py "$T/Smoke-$e.lean" RecursionFastSmoke RecursionFastSmoke.submission $e
     cmp -s "$T/Smoke-$e.lean" "harness/smoke/Smoke${e^}.lean" || { echo "harness/smoke/Smoke${e^}.lean is stale (harness/badge-main.py)"; exit 1; }
   done
-  for v in submission keyed; do
-    harness/badge-build.sh --org "$ORG" --work "$B/$v" harness/smoke RecursionFastSmoke RecursionFastSmoke.$v > /dev/null \
-      || { tail -20 "$B/$v/badge-build.log"; exit 1; }
-  done
+  harness/badge-build.sh --org "$ORG" --work "$B/submission" harness/smoke RecursionFastSmoke RecursionFastSmoke.submission \
+    > /dev/null || { tail -20 "$B/submission/badge-build.log"; exit 1; }
+  # S9D-m4: the keyed index executable also carries a certified C (L_chain(16), as the harness renders it)
+  harness/badge-build.sh --org "$ORG" --work "$B/keyed" --certified-c harness/examples/chain-n16.layout.json \
+    harness/smoke RecursionFastSmoke RecursionFastSmoke.keyed > /dev/null || { tail -20 "$B/keyed/badge-build.log"; exit 1; }
   echo "smoke executables built (sandboxed, organiser package read-only): $BIN, $KBIN"
 }
 
@@ -315,7 +348,6 @@ join 7-toy 7-bench 7-bad 8-a4 8-v2 8-s7 9-cmpproj 9-gateproj 9-bindproj 10-build
 
 # ---- step 10, timed: the benchmark run alone, then the runner's rejections ----------------------
 step "10 (continued) the benchmark run (timed, alone) and the runner's rejections"
-python3 -I harness/run-benchmark.py secrets 96 "$T/secrets.txt"
 python3 -I harness/gen-chain-layout.py layout --n 1024 "$T/L1024.json" > /dev/null
 D=$("$BIN/harness-index" harness/examples/chain-n16.layout.json "$T/vk-plain")
 DK16=$("$KBIN/harness-index" harness/examples/chain-n16.layout.json "$T/vk-k16")
@@ -333,12 +365,24 @@ cfg.update(json.loads(extra))
 json.dump(cfg, open(sys.argv[1], "w"), indent=1)' "$@"
 }
 mkcfg "$T/bench.json" "$HERE" "$BIN" "$D" "$D" '{}'
-python3 -I harness/run-benchmark.py run --config "$T/bench.json" --secrets "$T/secrets.txt" --out "$LOG/bench-smoke.json" \
+python3 -I harness/run-benchmark.py run --config "$T/bench.json" --out "$LOG/bench-smoke.json" \
   --workdir "$T/bench" | tee "$LOG/bench-smoke.log"
+# S9I-M1/M2/m3/m5, S9F-M5: what the result says
+python3 -I -c 'import json, sys
+r = json.load(open(sys.argv[1])); s = r["scores"]
+assert s["R"]["ranked"] and not s["L"]["ranked"] and not s["W"]["ranked"], s
+g = s["R"]["S_rec_by_group"]; assert set(g) == {"2", "3", "4+"} and s["R"]["S_rec"] == max(g.values()), s["R"]
+assert set(s["R"]["S_by_level"]) == {"2", "3", "4", "5", "6"}, s["R"]["S_by_level"]
+assert r["budget"]["eval_s"] > 0 and r["budget"]["derived_from"]["runs"] == 3, r["budget"]
+assert s["DoS"]["by_key"] == {"leaf key": 50, "recursion key": 50} and s["DoS"]["accepted"] == 0, s["DoS"]
+assert s["canaries"]["verify_runs"] > 0 and r["instances"]["secrets"].startswith("fresh"), (s["canaries"], r["instances"])
+assert all(len(r[k]) == 64 for k in ("config_sha256", "entry_id")) and r["entry"]["verify_sha256"], r["entry"]
+R, B, C, Q, E = s["R"]["S_rec"], r["budget"]["eval_s"], s["canaries"]["verify_runs"], s["DoS"]["by_key"], r["entry_id"]
+print(f"result: board R ranked, S_rec = max of the level groups {g} = {R:.4f} s; L, W unranked; "
+      f"derived budget {B:.0f} s; {C} canaries rejected; DoS {Q}; entry {E[:12]}")' "$LOG/bench-smoke.json"
 SMALL='"tree": {"n": 16, "leaves": 2}, "leafboard": {}, "repeats": 1, "dos": {"tapes": 0}, "classes": {"8": 20, "16": 20, "32": 21, "1024": 24}'
-python3 -I harness/run-benchmark.py secrets 2 "$T/secrets2.txt"
 expect_reject() {  # name, pattern, config
-  if python3 -I harness/run-benchmark.py run --config "$3" --secrets "$T/secrets2.txt" --out "$T/$1.json" --workdir "$T/bench" \
+  if python3 -I harness/run-benchmark.py run --config "$3" --out "$T/$1.json" --workdir "$T/bench" \
       > "$T/$1.log" 2>&1; then cat "$T/$1.log"; echo "runner ACCEPTED $1"; exit 1; fi
   grep -q -- "$2" "$T/$1.json" || { cat "$T/$1.log"; echo "runner $1: rejected, but not for: $2"; exit 1; }
   echo "runner rejects $1: $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "$T/$1.json")"
@@ -352,9 +396,17 @@ expect_reject() {  # name, pattern, config
   mkcfg "$T/c2.json" "$HERE" "$KBIN" "$DKC" "$DK16" "{$SMALL, \"tree\": {\"n\": 1024, \"leaves\": 2}, \"boards\": [\"R\"]}"
   expect_reject digestL-of-Lchain16 "declared digestL" "$T/c2.json"
   mkcfg "$T/c2ok.json" "$HERE" "$KBIN" "$DKC" "$DK1024" "{$SMALL, \"tree\": {\"n\": 1024, \"leaves\": 2}, \"boards\": [\"R\"]}"
-  python3 -I harness/run-benchmark.py run --config "$T/c2ok.json" --secrets "$T/secrets2.txt" --out "$T/c2ok.out.json" \
+  python3 -I harness/run-benchmark.py run --config "$T/c2ok.json" --out "$T/c2ok.out.json" \
     --workdir "$T/bench" > "$T/c2ok.log" 2>&1 || { cat "$T/c2ok.log"; echo "keyed smoke with the right digests REJECTED"; exit 1; }
   echo "runner accepts the keyed smoke protocol with the indexer's digests of C_V and L_chain(2^10)"
+  # S9D-m4: the certified C compiled into the keyed index (L_chain(16)) gives the layout file's key,
+  # and with index_C = certified the key does not depend on the layout file at all
+  DCERT=$("$KBIN/harness-index" --certified-C "$T/vk-cert")
+  [[ "$DCERT" == "$DKC" ]] || { echo "certified C: digest $DCERT, layout file: $DKC"; exit 1; }
+  mkcfg "$T/c2cert.json" "$HERE" "$KBIN" "$DKC" "$DK1024" "{$SMALL, \"tree\": {\"n\": 1024, \"leaves\": 2}, \"boards\": [\"R\"], \"index_C\": \"certified\", \"layouts\": {\"C\": \"$HERE/harness/examples/chain-n1.layout.json\"}}"
+  python3 -I harness/run-benchmark.py run --config "$T/c2cert.json" --out "$T/c2cert.out.json" \
+    --workdir "$T/bench" > "$T/c2cert.log" 2>&1 || { cat "$T/c2cert.log"; echo "certified C: REJECTED"; exit 1; }
+  echo "runner (index_C = certified, S9D-m4): the recursion key is the certified C's ($DCERT = the layout file's), whatever layouts.C says (here chain-n1)"
   P='"prover": ["bash", "-c", "python3 -I '$HERE'/harness/smoke/toy_prover.py $0 && printf x >> proof.bin"]'
   mkcfg "$T/c3.json" "$HERE" "$BIN" "$D" "$D" "{$SMALL, $P}"
   expect_reject bad-proof "does not verify" "$T/c3.json"
@@ -377,7 +429,7 @@ if sys.argv[-1] == "leaf" and n == 8: sys.exit(3)
 sys.exit(subprocess.run([sys.executable, "-I", "$HERE/harness/smoke/toy_prover.py", sys.argv[-1]]).returncode)
 PY
   mkcfg "$T/c8.json" "$HERE" "$BIN" "$D" "$D" "{$SMALL, \"k\": 20, \"leafboard\": {\"8\": 2, \"32\": 2}, \"prover\": [\"python3\", \"-I\", \"$T/failsmall.py\"]}"
-  python3 -I harness/run-benchmark.py run --config "$T/c8.json" --secrets "$T/secrets.txt" --out "$T/c8.out.json" \
+  python3 -I harness/run-benchmark.py run --config "$T/c8.json" --out "$T/c8.out.json" \
     --workdir "$T/bench" > "$T/c8.log" 2>&1 || { cat "$T/c8.log"; echo "board separation: the run was rejected as a whole"; exit 1; }
   python3 -I -c 'import json, sys
 r = json.load(open(sys.argv[1]))["scores"]
@@ -398,9 +450,35 @@ print("runner: board L REJECT (" + r["L"]["reason"] + "), boards R and W ACCEPT;
   # S6b-m3: a step cannot read the repository (only /usr, /etc, its directory and the declared paths)
   P='"prover": ["bash", "-c", "test -r '$HERE'/CLAUDE.md && exit 7; python3 -I '$HERE'/harness/smoke/toy_prover.py $0"]'
   mkcfg "$T/c12.json" "$HERE" "$BIN" "$D" "$D" "{$SMALL, $P}"
-  python3 -I harness/run-benchmark.py run --config "$T/c12.json" --secrets "$T/secrets2.txt" --out "$T/c12.out.json" \
+  python3 -I harness/run-benchmark.py run --config "$T/c12.json" --out "$T/c12.out.json" \
     --workdir "$T/bench" > "$T/c12.log" 2>&1 || { cat "$T/c12.log"; echo "minimal root: a step could read the repository (or failed)"; exit 1; }
   echo "runner: a step cannot read the repository (minimal sandbox root, S6b-m3); the run is accepted"
+  # S9I-m3: an executable that accepts everything passes every honest proof, and the canaries reject it
+  mkdir -p "$T/acceptall"; printf '#!/bin/sh\necho ACCEPT\nexit 0\n' > "$T/acceptall/harness-verify"; chmod +x "$T/acceptall/harness-verify"
+  mkcfg "$T/c13.json" "$HERE" "$BIN" "$D" "$D" "{$SMALL, \"verify\": [\"$T/acceptall/harness-verify\"]}"
+  expect_reject accept-all "ACCEPTED a canary" "$T/c13.json"
+  # S9I-M3: compare (one session, interleaved pairs, fresh instances shared by both entries)
+  CMPT='"tree": {"n": 16, "leaves": 4}, "leafboard": {}, "dos": {"tapes": 0}, "classes": {"16": 20}, "canaries": {"per_kind": 1}'
+  mkcfg "$T/s-slow.json" "$HERE" "$BIN" "$D" "$D" "{$CMPT, \"prover\": [\"python3\", \"-I\", \"$HERE/harness/smoke/toy_prover.py\", \"--spin\", \"0.3\"]}"
+  mkcfg "$T/s-fast.json" "$HERE" "$BIN" "$D" "$D" "{$CMPT}"
+  python3 -I harness/run-benchmark.py compare --standing "$T/s-slow.json" --challenger "$T/s-fast.json" --pairs 3 \
+    --out "$T/cmp-fast.json" --workdir "$T/bench" > "$T/cmp-fast.log" 2>&1 || { cat "$T/cmp-fast.log"; echo "compare: a faster challenger was not confirmed"; exit 1; }
+  echo "compare: faster challenger: $(tail -1 "$T/cmp-fast.log" | sed 's/^compare: //')"
+  if python3 -I harness/run-benchmark.py compare --standing "$T/s-fast.json" --challenger "$T/s-slow.json" --pairs 2 \
+      --out "$T/cmp-slow.json" --workdir "$T/bench" > "$T/cmp-slow.log" 2>&1; then cat "$T/cmp-slow.log"; echo "compare: a slower challenger was confirmed"; exit 1; fi
+  grep -q '"verdict": "NOT A RECORD"' "$T/cmp-slow.json" || { cat "$T/cmp-slow.log"; exit 1; }
+  echo "compare: slower challenger: $(tail -1 "$T/cmp-slow.log" | sed 's/^compare: //')"
+  python3 -I harness/run-benchmark.py compare --calibrate --standing "$T/s-fast.json" --pairs 3 \
+    --out "$T/cmp-cal.json" --workdir "$T/bench" > "$T/cmp-cal.log" 2>&1 || { cat "$T/cmp-cal.log"; echo "compare --calibrate failed"; exit 1; }
+  echo "compare --calibrate (self-pairs): $(tail -1 "$T/cmp-cal.log" | sed 's/^compare: //')"
+  # S9I-M3, S9I-m5: record refuses the same entry and results of another season configuration
+  rc=0; python3 -I harness/run-benchmark.py record "$LOG/bench-smoke.json" "$LOG/bench-smoke.json" > "$T/rec1.log" || rc=$?
+  [[ $rc -eq 2 ]] && grep -q "the same entry" "$T/rec1.log" || { cat "$T/rec1.log"; echo "record: the same entry was compared"; exit 1; }
+  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); d["config_sha256"] = "0" * 64; d["entry_id"] = "1" * 64; json.dump(d, open(sys.argv[2], "w"))' \
+    "$LOG/bench-smoke.json" "$T/other-season.json"
+  rc=0; python3 -I harness/run-benchmark.py record "$LOG/bench-smoke.json" "$T/other-season.json" > "$T/rec2.log" || rc=$?
+  [[ $rc -eq 2 ]] && grep -q "config_sha256" "$T/rec2.log" || { cat "$T/rec2.log"; echo "record: another season's result was compared"; exit 1; }
+  echo "record refuses: $(cat "$T/rec1.log"); $(cat "$T/rec2.log" | cut -c1-90)…"
 } | tee "$LOG/bench-negatives.log"
 
 step "11 Clean frontend (S8-A12; repository tree, never the organiser package)"

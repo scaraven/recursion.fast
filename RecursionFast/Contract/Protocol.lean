@@ -9,9 +9,16 @@ from `VK L`, the statement and the challenges it reads the oracles (oracle 0 is 
 exactly what the compiled argument opens (a leaf plus an authentication path, §3.2). It never
 sees the layout `L` itself. Security is `Security.lean`'s, unchanged, over the class-`k` relation
 `relK k`, with the extractor image's round-by-round extractor (`Contract/Extractor.lean`, Q1).
-"Computable" (no `noncomputable`, `implemented_by`, `extern`, `csimp` in the closure of `VK`,
-`IDX`, `verify` and the image) is checked by the harness gate, not by Lean; the image must also be
-the literal rendered from the claim.
+
+What `Secure` asks (S9-A2): soundness ranges over **every** statement `(L, x)`, admissible or not,
+and admissibility is a conjunct of `relK k`, so a secure verifier must reject non-admissible
+layouts, which it sees only through `VK L` and `IDX L` (the toy and `P_triv` key one element,
+`[L.Admissible k]`). The error `ε c` bounds each challenge round; the protocol's knowledge error is
+at most `Σ_c ε c ≤ n · 2^-128 ≤ 2^14 · 2^-128 = 2^-114` (union bound over rounds).
+
+"Computable" (compiled code for the badge-path fields `n`, `shape`, `vkLen`, `VK`, `idxShape`,
+`IDX`, `verify` and the extractor image; gate rule 4, S6b-A1) is checked by the harness gate, not
+by Lean; the image must also be the literal rendered from the claim.
 -/
 import RecursionFast.Contract.Extractor
 
@@ -94,10 +101,14 @@ def specVerifier : PureVerifier P.shape (Layout K × Stmt) Unit := fun s tr =>
   if (P.verify (P.VK s.1) s.2 (chalOf tr)).eval (⟨P.idxShape, P.IDX s.1⟩ :: tr.oracles) = some true
   then some () else none
 
-/-- **Security of a protocol**: perfect completeness for `relK k`, worst-case RBR knowledge
-soundness with the extractor of the image (`B(k)` steps in all over its `n + 1` calls) at the
-declared errors, and `ε ≤ 2^-128` in every round (the round cap `n ≤ 2^14`, the key cap and
-the shape caps are fields of `Protocol`). -/
+/-- **Security of a protocol.** (1) Perfect completeness: on every admissible layout at class
+`k`, every statement and satisfying witness (`relK k`), and every challenge vector, the verifier
+accepts the honest transcript. (2) Round-by-round knowledge soundness with the image's extractor
+(`B(k)` steps in all over its `n + 1` calls), at **every** statement `(L, x)`, admissible or not:
+a secure verifier therefore rejects non-admissible layouts, which it sees only through `VK L` and
+`IDX L`. (3) Each challenge round's error is at most `2^-128`, so the protocol's knowledge error is
+at most `n · 2^-128 ≤ 2^-114`. The round cap, the key cap and the shape caps are fields of
+`Protocol`. -/
 def Secure : Prop :=
   SecureWith (relK k) Set.univ P.prover P.specVerifier (P.extractor.toExtractor P.shape) P.ε
 

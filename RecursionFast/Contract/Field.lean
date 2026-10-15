@@ -1,18 +1,24 @@
 /-
-# Contract: the fields K = GF(2^64) and E = GF(2^192)            (TRUSTED, Lean core only)
+# Contract: the field K = GF(2^64) and the challenge set E         (TRUSTED, Lean core only)
 
 `K = GF(2)[x] / (x^64 + x^4 + x^3 + x + 1)`, in the polynomial basis: bit `i` of a 64-bit word
 is the coefficient of `x^i`. Every 64-bit word is an element, so every 8-byte string is a
 canonical encoding.
 
-`E = K[y] / (y^3 + y + 1) = GF(2^192)`, three K-limbs `c0 + c1·y + c2·y²`. E is the only
-challenge field (DESIGN §2–3): a K-valued challenge has error `≥ 2^-64` and cannot meet the cap.
+`E`: challenges are drawn from the `2^192` triples of K-limbs `c0 + c1·y + c2·y²` (`Round.Ty`),
+and `RbrKS` counts bad challenges over all of them (DESIGN §3.1, §4): a K-valued challenge has
+error `≥ 2^-64` and cannot meet the cap. The contract fixes only this set and its encoding
+(`toWords`). The field `E = K[y]/(y^3 + y + 1) = GF(2^192)` (its `0, 1, +, *`) is library
+arithmetic (`Library/Field.lean`, S9-A1): no certificate multiplies challenges, so a verifier may
+compute with them as it likes, and its proofs are about what it uses.
 
 Nothing here is a claim to be believed: the field axioms, `|K| = 2^64`, `|E| = 2^192`, the
 irreducibility of both moduli and the identification with Mathlib's `AdjoinRoot` and with
 CompPoly's `BF64`/`BF64.Ext3` (by `rfl`) are theorems of the untrusted library
 (`RecursionFast/Library/Field.lean`). The arithmetic is CompPoly's `carryLessMul`/`foldStep`/
-`reduce` restated, so the bridge is definitional.
+`reduce` restated, so the bridge is definitional. Carried over from v0.3 verbatim minus
+deletions (S9-A1): `K`'s `-` and negation, `E`'s `0, 1, +, *` and `E.toBytes` moved to the
+library.
 -/
 
 namespace RecursionFast
@@ -41,10 +47,8 @@ def reduce (t : BitVec 128) : Word := (fold (fold t)).setWidth 64
 
 instance : Zero K := ⟨⟨0⟩⟩
 instance : One K := ⟨⟨1⟩⟩
-/-- Addition = subtraction = xor (characteristic 2); negation is the identity. -/
+/-- Addition is xor (characteristic 2). -/
 instance : Add K := ⟨fun a b => ⟨a.bits ^^^ b.bits⟩⟩
-instance : Sub K := ⟨fun a b => ⟨a.bits ^^^ b.bits⟩⟩
-instance : Neg K := ⟨fun a => a⟩
 /-- Multiplication: carry-less product, then reduction. -/
 instance : Mul K := ⟨fun a b => ⟨reduce (clmul a.bits b.bits)⟩⟩
 
@@ -54,30 +58,15 @@ def toBytes (a : K) : List (BitVec 8) := List.ofFn fun i : Fin 8 => (a.bits >>> 
 
 end K
 
-/-- An element `c0 + c1·y + c2·y²` of `E = K[y]/(y^3 + y + 1) = GF(2^192)`. -/
+/-- A challenge element: three K-limbs, read as `c0 + c1·y + c2·y²` in
+`E = K[y]/(y^3 + y + 1) = GF(2^192)` (its arithmetic is in the library). -/
 structure E where
   c0 : K
   c1 : K
   c2 : K
   deriving DecidableEq
 
-namespace E
-
-instance : Zero E := ⟨⟨0, 0, 0⟩⟩
-instance : One E := ⟨⟨1, 0, 0⟩⟩
-instance : Add E := ⟨fun a b => ⟨a.c0 + b.c0, a.c1 + b.c1, a.c2 + b.c2⟩⟩
-/-- Schoolbook product folded by `y^3 = y + 1`, `y^4 = y^2 + y` (9 products in K). -/
-instance : Mul E := ⟨fun a b =>
-  let p3 := a.c1 * b.c2 + a.c2 * b.c1
-  let p4 := a.c2 * b.c2
-  ⟨a.c0 * b.c0 + p3, a.c0 * b.c1 + a.c1 * b.c0 + p3 + p4, a.c0 * b.c2 + a.c1 * b.c1 + a.c2 * b.c0 + p4⟩⟩
-
-/-- Canonical encoding as words: limbs `c0, c1, c2` in this order (24 bytes, each limb LE). -/
-def toWords (a : E) : List Word := [a.c0.bits, a.c1.bits, a.c2.bits]
-
-/-- Canonical 24-byte encoding: limbs `c0, c1, c2`, each 8 bytes little-endian. -/
-def toBytes (a : E) : List (BitVec 8) := a.c0.toBytes ++ a.c1.toBytes ++ a.c2.toBytes
-
-end E
+/-- Canonical encoding of a challenge element as words: limbs `c0, c1, c2` in this order. -/
+def E.toWords (a : E) : List Word := [a.c0.bits, a.c1.bits, a.c2.bits]
 
 end RecursionFast

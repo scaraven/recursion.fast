@@ -1,8 +1,10 @@
 /-
   RecursionFast.Library.Field  (organiser library, UNTRUSTED: kernel-checked, never read for meaning)
-  Ported from probes/r8-binary/RecursionFastLib/Field.lean (R8); E's `Neg`/`Sub` live here.
+  Ported from probes/r8-binary/RecursionFastLib/Field.lean (R8). `K`'s `-`/negation and `E`'s
+  whole arithmetic (`0, 1, +, -, *`) and byte encoding live here (S9-A1: moved out of the
+  contract, which uses neither).
 
-  * `Field K` with the contract's own `0, 1, +, -, *` as its data (pulled back along the
+  * `Field K` with the contract's own `0, 1, +, *` (and the `-` defined here) as its data (pulled back along the
     computable bijection `K → BF64` whose `+`/`*` agree with CompPoly's by `rfl`).
   * `Fintype K`, `card K = 2^64`, `CharP K 2`.
   * `K_spec`: an explicit additive-multiplicative bijection onto Mathlib's
@@ -20,6 +22,11 @@ namespace RecursionFast
 open Polynomial CompPoly.Extension
 
 namespace K
+
+/-- Subtraction is xor, as addition (characteristic 2). -/
+instance : Sub K := ⟨fun a b => ⟨a.bits ^^^ b.bits⟩⟩
+/-- Negation is the identity (characteristic 2). -/
+instance : Neg K := ⟨fun a => a⟩
 
 /-- The computable bijection to CompPoly's carrier (same bits). -/
 def toBF64 (a : K) : BF64 := BF64.ofBitVec a.bits
@@ -106,9 +113,22 @@ theorem K_spec : Irreducible f64 ∧ ∃ e : K ≃ AdjoinRoot f64,
 
 end K
 
-/-! ## E = K[y]/(y^3 + y + 1) (structure and `0, 1, +, *` in the contract) -/
+/-! ## E = K[y]/(y^3 + y + 1) (the contract has only the structure and `toWords`) -/
 
 namespace E
+
+instance : Zero E := ⟨⟨0, 0, 0⟩⟩
+instance : One E := ⟨⟨1, 0, 0⟩⟩
+instance : Add E := ⟨fun a b => ⟨a.c0 + b.c0, a.c1 + b.c1, a.c2 + b.c2⟩⟩
+/-- Schoolbook product folded by `y^3 = y + 1`, `y^4 = y^2 + y` (9 products in K). -/
+instance : Mul E := ⟨fun a b =>
+  let p3 := a.c1 * b.c2 + a.c2 * b.c1
+  let p4 := a.c2 * b.c2
+  ⟨a.c0 * b.c0 + p3, a.c0 * b.c1 + a.c1 * b.c0 + p3 + p4,
+    a.c0 * b.c2 + a.c1 * b.c1 + a.c2 * b.c0 + p4⟩⟩
+
+/-- Canonical 24-byte encoding: limbs `c0, c1, c2`, each 8 bytes little-endian. -/
+def toBytes (a : E) : List (BitVec 8) := a.c0.toBytes ++ a.c1.toBytes ++ a.c2.toBytes
 
 instance : Neg E := ⟨fun a => a⟩
 instance : Sub E := ⟨fun a b => ⟨a.c0 + b.c0, a.c1 + b.c1, a.c2 + b.c2⟩⟩
