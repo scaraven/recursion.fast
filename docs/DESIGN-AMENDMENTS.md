@@ -711,3 +711,149 @@ The implemented reference is `RecursionFast/Contract/Recursion.lean` and
     last-row pins of the G chip, `S0 … S19` and `FINAL`, and `x₄ = n`.
   - **The witness schema has one reading.** `rows` equals the number of listed rows, and K strings
     are exactly 16 lowercase hex digits. Both the checker and the renderer enforce it.
+
+## Stage 8 (Clean as the untrusted circuit frontend; design §9.3, §11 step 9)
+
+Details and measurements are in `docs/stages/S8-RESULT.md`. Every item concerns the untrusted
+library: nothing under `Contract/` changed.
+
+- **S8-A1 (location and build; §9.3, §10, O-4).**
+  - **Location.** The frontend lives in `RecursionFast/Clean/`, in the lean_lib
+    `RecursionFastClean` (not a default target), not in `Library/Clean/`. This keeps Clean out
+    of `RecursionFastLibrary` and out of the organiser package: `scripts/org-build.sh` drops the
+    `Clean` require and the lib.
+  - **Requirement.** Clean `42fe4b26` is required by path from the gitignored `ext/Clean`.
+    `scripts/setup-clean.sh` fetches it (clone at the rev, or copy a checkout at the rev), and
+    every fresh clone must run it before any root-level `lake` call.
+  - **Cost.** The cone is 39 modules; `RecursionFastClean` builds in 3 min 34 s cold and 3.9 s
+    warm. `import RecursionFast.Clean` takes 7.2 s and 3.2 GB.
+- **S8-A2 (the public input; §9.3 "the verifier table ⇒ the public chip", §5.1).**
+  - **The public chip.** The verifier is chip 0. It has `max 32 (size PublicIO)` base columns:
+    the public input, then columns constrained to `0`. A gadget constraint `[r = 0] = 1` gives
+    it exactly one row.
+  - **The statement** is `pubVec p`: the public input's elements, then zeros.
+  - **Restriction: `size PublicIO ≤ 32`.** Under it the statement determines the public input
+    (`pubVec_injective`), and `StatementPerm ens p ↔ ∃ k w, rel k (pubVec p) w`
+    (`statementPerm_iff`). With more elements the bridge still holds, but only the first 32 are
+    statement; the rest are witness.
+- **S8-A3 (direction from the syntax; §9.3 "mult = ±1 ⇒ send/receive").**
+  - **Rule.** The direction of an interaction comes from its multiplicity as written
+    (`readMult`), never from its value: in `K`, `-1 = 1`. The multiplicity `(-1) · e` (Clean's
+    `Neg`: `pull`, `pulledIf`) receives with selector `e`; any other `e` (`push`, `pushedIf`,
+    `emit`) sends with selector `e`.
+  - **Counting.** A message counts once in ℕ when its selector evaluates to `1`; otherwise it is
+    silent, as `Table.msgs` reads a selector cell.
+  - **Consequence.** A variable multiplicity meant as a count (LogUp's `emit m`) is not `m`
+    copies. Use a registered table and a `sub` bus instead.
+- **S8-A4 (gadget encoding and the degree limit; §9.3 "an assert of degree d is one CCS term").**
+  - **Not one term per assert.** That rule is not how the encoding works: a polynomial needs a
+    sum of terms.
+  - **The rewriting.** Each `assert e` becomes a sum of products of linear forms (`ofExpr`). A
+    product with a variable-free side scales instead of multiplying; the sides of any other
+    product are merged first, so a linear side is one factor.
+  - **The gadget.** A chip's constraints form one gadget with `Q` terms of degree `D` and
+    `Q · D` matrices, where `D` is the longest product and `Q` the most products of one
+    constraint (`gadgetOf`, `holds_gadgetOf`).
+  - **The degree limit.** Every product of `assert e` has at most `max 1 (degreeBound e)`
+    factors (`length_ofExpr_le`), `degreeBound` being Clean's syntactic degree (variable 1,
+    constant 0, sum max, product sum). So the cap `|S_i| ≤ 8` holds when every assertion and
+    every auxiliary message expression has `degreeBound ≤ 8`.
+  - **Auxiliary columns.** A message coordinate or selector that is not a row variable gets an
+    auxiliary column constrained to equal it.
+- **S8-A5 (channels; §9.3).**
+  - **Names.** A channel is its name, as in leanerVM: Clean's `RawChannel` carries propositions
+    and has no decidable equality. Bus `b < nch` is `ens.channels[b]` (kind `eq`).
+  - **Completeness** needs distinct names (`Supported`). Interactions on unlisted channels
+    produce no port, since Clean balances listed channels only.
+- **S8-A6 (lookups; §9.3 "Lookup ⇒ sub bus; ProverData tables ⇒ fixed tables").**
+  - **Static tables.** A lookup into a table registered in `tabs` (by name and arity) receives
+    on a `sub` bus. A fixed chip holding the table's rows sends them on it.
+  - **Faithfulness.** `LookupsFaithful` (Clean's `Contains` is membership in the rows, for every
+    prover data) is a hypothesis of the bridge. A lookup into an unregistered table goes to a
+    bus nobody sends on.
+  - **Not covered: tables that depend on the prover data.** In Clean `42fe4b26`, `ProverData`
+    is witness, so "ProverData tables ⇒ fixed tables" holds only after Clean commits the data
+    (Clean PR #446). Until then such lookups are outside the bridge (S8 open question 2).
+- **S8-A7 (finding: Clean's balance is vacuous over `K`; §9.2).**
+  - `BalancedInteractions l` requires `l.length < ringChar F`. Over `K` it rejects every list of
+    two or more interactions (`clean_balance_vacuous`). So Clean's own `Ensemble.Statement` over
+    `K` holds only when every channel has at most one interaction in total.
+  - `StatementPerm` (Clean's statement with the ℕ-multiset balance `BalancedPerm`) replaces it.
+    The bridge `toLayout_rel_iff` is proved for it in both directions, with explicit witness maps.
+- **S8-A8 (finding: the BLAKE2s port; §9.3 item 3, §11 step 9).**
+  - **It builds unmodified.** leanerVM's BLAKE2s table (13 modules, `485d0465`) builds on our
+    pins and translates, through the generic `toLayout`, to one chip: 60 cells per row (37 row
+    plus 23 auxiliary), 23 constraints, degree 2.
+  - **It is not admissible.** It has **22 ports**, against the cap of `2^4`; every other cap
+    holds.
+  - **A faithful port needs:**
+    - (a) a channel-to-bus key, because leanerVM's direction is the channel (`st.pull`/`st.push`
+      pairs);
+    - (b) the ports cap raised to `2^5`, or the row split across chips;
+    - (c) a transport from leanerVM's `BF64` to our `K`;
+    - (d) the compression gadget itself, which the table does not constrain (Flock proves it in
+      leanerVM).
+  - **Effort.** (a) to (c) are about a stage-day; (d) belongs with Stage 6a's G chip.
+
+## Stage 5 fix pass (after the S5 review, 2026-10-15)
+
+- **S5-A10 (S5-M1: `live` at the indexer's keys; §5.3; supersedes S5-A7's wording).**
+  `live : ∃ L x' nw, nw.vkC = index cfg P C ∧ nw.vkL = index cfg P L ∧ aggOK cfg P x' nw = true`.
+  - **Why.** `Secure` constrains `P.verify` only on keys `P.VK L`. Under the S5-A7 form a secure
+    protocol could meet `live` with a "magic" key that no layout has, while accepting nothing under
+    any indexer key (the review's `toyCM`). `complete` would then constrain `C` only on
+    magic-key nodes, which need three hashes and no verification.
+  - **Controls.** `magic_not_live`, `magic_no_entry` (`Controls/MagicKey.lean`, adopted from the
+    review's probe): `toyCM` is secure (`toyCM_secure`) and meets the S5-A7 form
+    (`magic_old_live`), but no node with indexer keys is accepted, so it fails `live` for every `C`.
+    Positive: `cmpToy_live` (`Controls/Recursion.lean`). `live_of_secure` (`Library/Recursion.lean`)
+    proves the field from one instance of `relK k` whose honest proof fits the cap;
+    `aggOK_sat_of_secure` and `aggOK_sat_of_complete` produce this form.
+  - **Remaining gap (the review's wording, in the field's docstring).** "A protocol that
+    special-cases the key of a trivially satisfiable layout can still meet `live` without accepting
+    any proof of a hard layout; that the benchmark's nodes are provable is shown by the benchmark
+    run (§6.3)." A `live` at `L_chain` itself would close it, but needs a completeness theorem for
+    whole chains, which does not exist.
+- **S5-A11 (S5-m1: tags in the statement; §5.1, supersedes S5-A4's last bullet).**
+  `nodeStmt cfg vkC vkL t₁ t₂ x₁ x₂` has `d3 = tagSlot t₁ t₂ = (tagK t₁, tagK t₂, 0, 0)`, with
+  `tagK leaf = 0`, `tagK node = 1`, and `d4 … d7 = 0`; `aggOK` compares `x'` with it. The binding
+  of tags to positions is now contract-level for every leaf layout (by induction from the
+  recomputed root: `d2` fixes each child, `d3` its tag), not a property of `L_chain`'s public chip.
+  - **Cost.** No hash anywhere; in `C_V` one linear constraint per tag (the tags are already the
+    witness bits that select the keys).
+  - **Controls.** `mistag_rejected` (the review's `mistag`: the level-2 node with its node child
+    tagged leaf, at `xR`, is rejected); `nonzero_d3` now sets limb 2 of `d3`, and `nonzero_d4`
+    sets `d4`.
+  - **Numbers.** `xN` (tags `leaf, leaf`) is unchanged; `xR` (`node, leaf`) has element 12 = 1.
+    `probes/s5/recursion_ref.py` and the kernel KATs are updated.
+  - **§5.1 table.** The node row gets `d3 = (t₁, t₂, 0, 0)`, `d4 … d7 = 0`.
+- **S5-A12 (S5-m3: the statement tree is trusted; §5.1, §6.3 step 5).** `pairUp` (one level:
+  adjacent statements, tagged `t`, aggregated in order; `none` on an odd count) and
+  `treeRoot cfg vkC vkL d xs` (depth `d`, level 1 over leaves, above over nodes) are trusted
+  definitions in `Contract/Recursion.lean` (now 67 code lines). `rootOK cfg P C L d xs x` is
+  `treeRoot cfg (index cfg P C) (index cfg P L) d xs = some x`: it pins `d0`, `d1`, `d2` and `d3`.
+  For the benchmark, `d = 6` and `xs` the 64 leaf statements in order.
+  - **Library.** `rootOK_iff`, `treeRoot_one`, `treeRoot_two`, `treeRoot_node`, and
+    `keys_of_root` (restated for a tree of depth `≥ 1`).
+  - **Controls.** `rootOK_xT` (positive, the depth-2 tree over `x0, x1, x0, x1`, KAT `treeKat`
+    against Python's `xT`), `rootOK_leaf`, `rootOK_other_key`, `rootOK_odd`.
+- **S5-A13 (S5-m5: the harness's key digests; for Stage 6b/7; §6.3, §7.4).** The harness
+  1. computes `(index S.cfg S.P S.entry.C).digest S.cfg` with the compiled indexer from the
+     submitted `S.entry.C`, never from a layout the prover supplies;
+  2. computes `(index S.cfg S.P (L_chain 1024)).digest S.cfg` (the recursion tree's `n = 2^10`,
+     not the rendered `L_chain(16)`);
+  3. rejects a claim whose `digestC` or `digestL` differs;
+  4. uses its own values in `rootOK` and as the key of every node's and leaf's `NARG` run, never
+     the declared ones.
+
+  Stage 6b/7 negative controls: a claim with one flipped bit in `digestC` is rejected, and so is
+  a claim whose `digestL` is that of `L_chain(16)`. `DeclaredR.digestL`'s docstring now says
+  `L_chain(2^10)`.
+- **Wording (S5-m2, S5-m4, S5-m6; §5.3).**
+  - `complete` ranges over every accepted node, whatever its keys: `verify` must bound its own
+    work and its tape on every key (e.g. reject keys outside the format of `VK`).
+  - A node child's statement is pinned by its parent's `d2` (collision resistance) and by its own
+    proof (the `C_V` relation), not by `aggOK`.
+  - `complete`: every accepted node is decoded from a satisfying witness, so every accepted
+    statement has a witness of at most `2^k` cells (`decode` may also read cells outside
+    `rows × cols`).

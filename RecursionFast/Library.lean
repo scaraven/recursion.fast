@@ -6,3 +6,6 @@ import RecursionFast.Library.Layout
 import RecursionFast.Library.R1CS
 import RecursionFast.Library.Codec
 import RecursionFast.Library.Blake2s
+import RecursionFast.Library.Compile
+import RecursionFast.Library.Extractor
+import RecursionFast.Library.Recursion

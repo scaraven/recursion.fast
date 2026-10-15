@@ -1,0 +1,1 @@
+Review probes of Stage 5, written against the PRE-fix signatures (before S5-A10..A13). Kept as the record of the review; they do not compile against the current contract and are not built. The attacks they exhibit (magic key, mistag, distinct keys, 33-byte root) are now negative controls in RecursionFast/Controls/{MagicKey,Recursion,RecursionNode}.lean.
