@@ -32,6 +32,70 @@ query patterns, folding, prover engineering.
 Non-goals: zero knowledge; a proved cost model for the verifier; proving the native prover
 correct; a composition theorem across recursion levels (ROM heuristic, §6.6).
 
+### Architecture at a glance
+
+```
+                         R e c u r s i o n . f a s t   (v2)
+
+ Interactive          ┌──────┐   oracles/queries   ┌──────┐     ① completeness      (Lean thm, kernel)
+ (Lean, proved)       │ P_I  │ <================>  │ V_I  │     ② RBR knowledge-     (Lean thm, kernel)
+                      └──┬───┘                     └──┬───┘        soundness, ε ≤ 2^-128/round
+                         │   spec only                │  QProg      ↳ extractor E = RV64 image,
+                         │   (never run)              │  (reads      run by the trusted emulator,
+                    ╔════╧═════════════════════╗      │   leaves)    total fuel B(k)=2^(2k+16)
+                    ║  compile cfg  (organiser) ║      │             → "knowledge" has content
+                    ║  Merkle + Fiat–Shamir     ║      │
+                    ╚════╤═════════════════════╝      │ ③ narg_complete (proved, general):
+                         ▼                            ▼    V_I accepts honest ⇒ V_N accepts tape
+ Non-interactive      ┌──────┐   tape π (≤1 MiB)   ┌──────┐
+ (executed, timed)    │ P_N  │ ------------------> │ V_N  │ := NARG cfg V_I : VKc × x × π → {acc,rej}
+                      └──────┘                     └──────┘
+                      native (Rust…)                compiled Lean, linked from the
+                      measured, not proved          comparator-verified build (gate)
+
+ Recursion (verifier-as-circuit)                     node statement x' (8 digests):
+                      ┌──────────────────────┐          d0 = D(vk_C)   d1 = D(vk_L)
+   (x1,π1) (x2,π2) ──>│  C_V  : Layout       │──> x'    d2 = H(x1‖x2) d3 = (tag1,tag2)
+                      │  "V_N accepts both"  │          proved: sound / complete / live
+                      └──────────────────────┘          fixed point: cells(C_V) ≤ 2^k, V_I handles class k
+
+ Submission:  V_I, P_I, E, cfg, C_V + decode, proofs ①②③·sound·complete·live   : Lean
+              P_N                                                                : native
+              (V_N is derived by compile; never submitted)
+
+ Checks:   • comparator (Lean kernel + nanoda) replays every proof against the rendered claim
+           • gate: badge-path fields computable, no implemented_by/extern/…, source rule, allowlist
+           • benchmark: 64 chains → leaf proofs → 32 wraps → 16·8·4·2·1 nodes → root check (treeRoot)
+             score S_rec = max over levels {2, 3, 4+} of median(prover + V_N wall time)
+             canaries (byte added/removed, bit flipped, wrong key) must be rejected
+```
+
+**The relation.** There is one relation, `R = Layout.rel`, and two layouts of it do the work:
+
+```
+ R(L, x; w):   L = layout = list of chips; each chip = a CCS row gadget (sparse, degree ≤ 8)
+                   applied to every row of its table (sees row r, row r+1, and cells 1,[r=0],[r=last]),
+                   ports that put (sel=1)-rows' message tuples on buses;
+               w = one table per chip (prover picks heights, Σ cells ≤ 2^k);
+               x = 32 field elements = 8 digests, sitting in row 0 of the public chip;
+               holds ⇔ every row of every chip satisfies its gadget
+                     ∧ every `eq` bus: multiset(sent) = multiset(received)   (interaction)
+                     ∧ every `sub` bus: received ⊆ sent                       (lookup)
+                     ∧ fixed tables equal the index's, public row = x.
+
+ R_leaf = R(L_chain(n), (y, n); w):   w encodes Blake2s^n(s) = y over GF(2^64) (8-bit limb lookups);
+                                      the only secret is s — preimage-hard, so ② is not vacuous.
+
+ R_node = R(C_V, x'; w):              w contains x1,π1,x2,π2 and V_N's trace;
+                                      sound:    R(C_V,x';w) ⇒ V_N accepts both children (and x' aggregates them)
+                                      complete: V_N accepts both ⇒ ∃ w
+                                      live:     some accepted node exists under the indexer's own keys.
+```
+
+One universal verifier `V_I` proves `R` for *every* admissible layout of class k; the benchmark only
+chooses which layouts it is run on (`L_chain` at the leaves, `C_V` above them), and `C_V` being a
+layout of the same relation is what makes the recursion close.
+
 ---
 
 ## 2. Relation (trusted): chips + CCS + bus
