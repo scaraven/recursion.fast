@@ -1,6 +1,6 @@
 /-
 # recursion.fast v3: positive and negative controls for every trusted definition (CI).
-The v2 controls are in `legacy/v2/` until Stage S4 re-targets them.
+v2's controls are in git history (tag `v2-archive`); Stage S4 re-targets what is worth keeping.
 -/
 import RecursionFast.Controls.Blake2s
 import RecursionFast.Controls.Relation
