@@ -2,8 +2,8 @@
 # Controls: the machine (`Contract/Machine.lean`), positive and negative
 
 The machine is v2's, unchanged in v3 except that `clmul` moved in from the deleted `Field.lean`
-(V3-S1-A2). These controls are v2's machine controls (`Controls/Extractor.lean`, now
-`legacy/v2/RecursionFast/Controls/Extractor.lean`), copied verbatim except `spin_run_100`, whose
+(V3-S1-A2). These controls are v2's machine controls (v2's `Controls/Extractor.lean`, in git history at the
+tag `v2-archive`), copied verbatim except `spin_run_100`, whose
 v2 tape is now a plain list. Images are assembled from `tests/asm/*.S`.
 
 * Positive: `wzbc_run` (the W-op sign-extends a 32-bit sum; `clmulh` is the high word of the

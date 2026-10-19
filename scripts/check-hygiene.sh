@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hygiene scan of our own Lean sources (not vendored, not audit/): no `sorry`, `admit`,
+# Hygiene scan of our own Lean sources (not vendored): no `sorry`, `admit`,
 # `native_decide`, declaration-local `maxRecDepth`/`maxHeartbeats` (A3-M3: comparator replay
 # ignores them), `implemented_by`/`extern`/`csimp`, or new `axiom`s. Comments are stripped first.
 set -euo pipefail

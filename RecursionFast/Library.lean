@@ -1,7 +1,7 @@
 /-
 # recursion.fast v3: the organiser's untrusted, kernel-checked library.
-The v2 library (field, layouts, codecs, compiled argument, recursion) is in `legacy/v2/` until
-Stage S4 re-targets it.
+The v2 library (field, layouts, codecs, compiled argument, recursion) is in git history (tag
+`v2-archive`); Stage S4 re-targets what is worth keeping.
 -/
 import RecursionFast.Library.Blake2s
 import RecursionFast.Library.Oracle

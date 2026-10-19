@@ -9,7 +9,7 @@
   `run_none_of_le`).
 
   Copied verbatim from v2's `Library/Extractor.lean`, section "Machine: symbolic execution"
-  (now `legacy/v2/RecursionFast/Library/Extractor.lean`), plus `length_readWords` from the same
+  (git history, tag `v2-archive`), plus `length_readWords` from the same
   file; the machine is unchanged in v3, so the proofs are.
 -/
 import RecursionFast.Contract.Machine

@@ -3,8 +3,8 @@
 
   lake exe axiomaudit      (or: lake env lean --run scripts/AxiomAudit.lean, interpreted, slower)
 
-Imports the contract, library and controls (V3-S1: the ArkLib bridge is deferred to S4, in
-`legacy/v2/`), and for **every** constant declared in a
+Imports the contract, library and controls (the ArkLib bridge is deferred to S4; v2's is in git
+history at the tag `v2-archive`), and for **every** constant declared in a
 `RecursionFast.*` module computes the axioms of its dependency closure (`#print axioms` for all
 of them at once, memoised). Fails unless every one is within `propext`, `Classical.choice`,
 `Quot.sound`; also fails on `sorryAx`/`Lean.ofReduceBool`/`Lean.ofReduceNat`/`Lean.trustCompiler`.

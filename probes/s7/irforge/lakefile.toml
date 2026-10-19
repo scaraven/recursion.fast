@@ -1,7 +1,0 @@
-name = "irforge"
-[[lean_lib]]
-name = "IrForge"
-roots = ["IrForge"]
-[[lean_exe]]
-name = "irforge"
-root = "Main"

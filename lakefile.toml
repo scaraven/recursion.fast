@@ -1,9 +1,10 @@
-# recursion.fast v3 contract (a non-interactive argument in the ROM over digest statements, whole-tree
-# wall time). Design: docs/DESIGN-v3.md (v2's docs/DESIGN.md is superseded).
-# Pins: Lean v4.34.1, Mathlib v4.34.1, ArkLib 7653a90, CompPoly 572f997, VCVio a4232d0.
-# Stage V3-S1 left only the targets that build: the default three and the gate and axiom-audit
-# executables. The targets commented out below import v2 modules (now in legacy/v2/) and are
-# restored by the stage named on each.
+# recursion.fast v3: the trusted core of a Lean-checked autoresearch competition (a non-interactive
+# argument in the random-oracle model over digest statements; whole-tree wall time). Design:
+# docs/DESIGN-v3.md. Entries, the baseline first, live in the submissions repository
+# (https://github.com/scaraven/recursion.fast-submissions), never here.
+# Pins: Lean v4.34.1, Mathlib v4.34.1, ArkLib 7653a90, CompPoly 572f997, VCVio a4232d0,
+# PolyFun 41d3b21. The v2 tree (contract, harness, probes, baseline) is in git history at the tag
+# `v2-archive`; its lake targets are gone with it (DESIGN-AMENDMENTS V3-S1-A27).
 name = "RecursionFast"
 defaultTargets = ["RecursionFastContract", "RecursionFastLibrary", "RecursionFastControls"]
 
@@ -17,9 +18,10 @@ scope = "leanprover-community"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "v4.34.1"
 
-# Untrusted library and bridge only (the contract imports Lean core + Mathlib + vendored Rv64). No
-# V3-S1 module imports these four; S2 (CompPoly's BF64, DESIGN-v3 §7.4) and S4 (the ArkLib bridge)
-# will. Kept pinned so the manifest and the shared package tree do not change.
+# Pinned, untrusted dependencies of the organiser's library (the contract imports Lean core,
+# Mathlib and the vendored Rv64 only). No v3 module imports them yet: the baseline's field
+# (CompPoly's BF64, DESIGN-v3 §7.4) and the ArkLib bridge (stage S4) will. Kept pinned so the
+# manifest and the shared package tree do not change.
 [[require]]
 name = "CompPoly"
 git = "https://github.com/Verified-zkEVM/CompPoly"
@@ -41,7 +43,7 @@ git = "https://github.com/Verified-zkEVM/PolyFun"
 rev = "41d3b21dcc99817fe4f9f24ca7b2b58f0578083d"
 
 # riscv-zkvm `Rv64` hand model, vendored byte-identically from 6810fc1 (scripts/check-vendor.sh).
-# TRUSTED (the extractor's cost model), not counted in the contract's own line budget.
+# TRUSTED (the extractor's machine), not counted in the contract's own line budget.
 [[lean_lib]]
 name = "RiscvZkvm"
 srcDir = "RecursionFast/Vendor"
@@ -61,20 +63,15 @@ name = "RecursionFastLibrary"
 roots = ["RecursionFast.Library"]
 globs = ["RecursionFast.Library.*"]
 
-# DEFERRED to S4 (library: the ArkLib bridge re-targeted; sources in legacy/v2/RecursionFast/Bridge/).
-## UNTRUSTED bridge to ArkLib's RBR knowledge soundness.
-# [[lean_lib]]
-# name = "RecursionFastBridge"
-# roots = ["RecursionFast.Bridge"]
-# globs = ["RecursionFast.Bridge.*"]
-
 # Kernel-checked positive / negative controls (CI).
 [[lean_lib]]
 name = "RecursionFastControls"
 roots = ["RecursionFast.Controls"]
 globs = ["RecursionFast.Controls.*"]
 
-# Harness tools (trusted, Lean core only): environment-level gate and axiom audit.
+# Harness tools (trusted, Lean core only): the environment-level gate and the axiom audit. The
+# gate's allowlist, the olean manifest, the organiser build, the challenge stubs and the renderer
+# are rebuilt for v3 by stage S3 (DESIGN-v3 §11).
 [[lean_exe]]
 name = "gate"
 srcDir = "scripts"
@@ -86,76 +83,3 @@ name = "axiomaudit"
 srcDir = "scripts"
 root = "AxiomAudit"
 supportInterpreter = true
-
-# DEFERRED to S4 (the Clean frontend bridge; sources in legacy/v2/RecursionFast/Clean/). No v3
-# target imports Clean, so the path requirement is off and `ext/Clean` is not needed.
-# [[require]]
-## UNTRUSTED circuit frontend (DESIGN §9.3, §11 step 9; Stage 8). Clean 42fe4b26 by path, fetched
-## into the gitignored `ext/Clean` by `scripts/setup-clean.sh`; the root's mathlib/CompPoly pins
-## override Clean's own v4.33.1 requires. Only `RecursionFastClean` imports Clean (the
-## `Clean.Air.FlatEnsemble` cone); it is not a default target and the contract never mentions it.
-## `scripts/org-build.sh` keeps both blocks (Stage 6b decision, S6b-A17): Clean is hash-pinned and
-## importable by circuit proofs, never by a badge root's module (gate rule 8).
-# name = "Clean"
-# path = "ext/Clean"
-
-# DEFERRED to S4 (the Clean bridge; sources in legacy/v2/RecursionFast/Clean/).
-# [[lean_lib]]
-## UNTRUSTED Clean bridge: `FiniteField K`, `toLayout`, `toLayout_rel_iff`, examples (Stage 8).
-# name = "RecursionFastClean"
-# roots = ["RecursionFast.Clean"]
-# globs = ["RecursionFast.Clean.*"]
-## Clean's modules use the module system, ours and the contract's do not (knowingly mixed).
-# allowNonModules = true
-
-# DEFERRED to S2 (the baseline moves to the submissions repository, DESIGN-v3 §7.7, V3-12).
-# [[lean_lib]]
-## UNTRUSTED baseline submission (DESIGN §7.3, Stage 7): `P_triv`, `triv_secure`, the leaf-board
-## certificate. Built as a submitter's package (imports the contract and the Library, never the
-## Controls). Not a default target; `scripts/org-build.sh` drops it from the organiser package.
-# name = "RecursionFastCandidate"
-# srcDir = "submissions/baseline"
-# roots = ["RecursionFastCandidate"]
-# globs = ["RecursionFastCandidate.*"]
-
-# DEFERRED to S3 (the harness driver re-targeted to the v3 contract).
-# [[lean_lib]]
-## Organiser harness driver (Stage 6b, DESIGN §7.4): the badge executables' entry points (`verify`,
-## `index`), the executable twin of a submission and the layout JSON reader (harness/README.md).
-## Untrusted harness code (not in the olean manifest); built into the organiser package
-## (scripts/org-build.sh), against which the gate tree links its badge executables.
-# name = "RecursionFastHarness"
-# srcDir = "harness/lean"
-# roots = ["RecursionFastHarness"]
-# globs = ["RecursionFastHarness.*"]
-
-# DEFERRED to S3 (imports the v2 harness driver).
-# [[lean_exe]]
-## Organiser link and start-up check (Stage 6b): imports every organiser library; org-build.sh
-## builds it (prebuilding the object files a badge executable links) and runs it (an organiser
-## closed term that is expensive to evaluate at start-up fails here).
-# name = "harness-linkcheck"
-# srcDir = "harness/lean"
-# root = "LinkCheck"
-
-# DEFERRED to S3 (the v2 smoke protocol `cmpToy`).
-# [[lean_lib]]
-## NOT SECURE smoke-test protocol for the badge path (Stage 6b): `cmpToy` (O-10), not a
-## `Submission`. Never in the organiser package (org-build.sh drops it and the smoke executables).
-# name = "RecursionFastSmoke"
-# srcDir = "harness/smoke"
-# roots = ["RecursionFastSmoke"]
-
-# DEFERRED to S3 (built against the v2 smoke protocol).
-# [[lean_exe]]
-## `verify` built against the smoke protocol (generated by harness/badge-main.py); dropped by org-build.sh.
-# name = "smoke-verify"
-# srcDir = "harness/smoke"
-# root = "SmokeVerify"
-
-# DEFERRED to S3 (built against the v2 smoke protocol).
-# [[lean_exe]]
-## `index` built against the smoke protocol (generated by harness/badge-main.py); dropped by org-build.sh.
-# name = "smoke-index"
-# srcDir = "harness/smoke"
-# root = "SmokeIndex"
