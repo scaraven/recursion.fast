@@ -155,10 +155,12 @@ is not a relation property in v3; it is an admission measurement on `V` (§6.5).
 
 ### 2.3 Controls (`Controls/Relation.lean`, CI)
 
-Positive: a chain of length 1, 2 and 16 against `hashlib` known answers; a node with two leaf
-children under a verifier that recomputes chains. Negative: a wrong chain end; a leaf with the
-node tag (`leafStmt ≠ nodeStmt` on equal bytes); a node whose second child is rejected; a proof
-above `proofCap`. Every negative control is a kernel-checked `¬ Rel …` or a `decide`-free `rfl` on
+Positive: chains of length 1, 2, 16 and `chainCap` against `hashlib` known answers (the commands in
+the docstrings); a node with two leaf children under a verifier that recomputes chains. Negative:
+a wrong chain end; a chain of `chainCap + 1`; the four tags are pairwise distinct and each
+preimage starts with its own; a node whose first or second child is rejected, and a node whose
+statement does not match its accepted children; a proof above `proofCap`; a known-gap control,
+`Controls/Backdoor.lean`, certifies a verifier that recognises the deployment oracle (§5.4, O-25). Every negative control is a kernel-checked `¬ Rel …` or a `decide`-free `rfl` on
 a concrete digest.
 
 ---
@@ -174,7 +176,7 @@ inductive OProg (α : Type) | ret (a : α) | query (q : ByteArray) (k : Digest �
 def OProg.run (H : ByteArray → Digest) : OProg α → α                      -- any oracle function
 abbrev Log := List (ByteArray × Digest)                                   -- a partial oracle table
 def OProg.runLog (L : Log) : OProg α → Option α   -- answers from `L` only; `none` on a miss
-def OProg.queries : OProg α → (ByteArray → Digest) → List ByteArray       -- what a run asked
+def OProg.queries (H : ByteArray → Digest) : OProg α → List ByteArray       -- what a run asked
 ```
 
 `OProg` is inductive, so every program terminates; the query count of `V` is bounded by the
@@ -192,7 +194,7 @@ structure Submission where
   img : Image                                  -- the extractor as a RISC-V image (Q1)
   ε   : ℝ≥0                                    -- per-fresh-query knowledge error (§4.2)
   qV  : ℕ                                      -- verifier query bound
-  fuel : ℕ → ℕ → ℕ                             -- step budget of `img` as a function of |π|, |L| (≤ B)
+  fuel : ℕ → ℕ                                 -- step budget of `img` as a function of the tape length (≤ B)
 
 /-- `V` with the oracle instantiated: the function the relation and the harness use. -/
 def Submission.Vb (S : Submission) : Digest → Proof → Bool :=
@@ -202,7 +204,7 @@ structure Certificate (S : Submission) : Prop where
   secure   : KS (Rel S.Vb) S.V S.E S.ε S.qV             -- §4.2
   complete : Complete (Rel S.Vb) S.P S.V                 -- §4.3
   computes : ImageComputes S.img S.E S.fuel              -- §4.4
-  cap      : S.ε ≤ errorCap ∧ S.qV ≤ 2^16 ∧ ∀ p l, S.fuel p l ≤ B p l
+  cap      : S.ε ≤ errorCap ∧ S.qV ≤ 2^16 ∧ (∀ t, S.fuel t ≤ B t) ∧ S.img.byteSize ≤ 2^20
 ```
 
 `Declared` and `CertificateR` carry over from v2 (S5-A13, S9-A41): the image literal and the
@@ -440,7 +442,8 @@ succinctness cap of §6.5 is what rules that out at the root, where it matters.
 8. **Extractor liveness** (untimed): at `r = 1`, `n = 16`, the harness runs the compiled
    Lean prover `P` with a logging Blake2s wrapper, feeds `(c, π, L)` to `img` on the contract
    machine (the riscv-zkvm emulator, differential-tested against `Machine.run` as in v0.3), and
-   requires the serialised witness within `fuel |π| |L|` steps, for one leaf and one node.
+   requires an output decoding to the witness within `fuel t` steps, `t` the tape length, for one
+   leaf and one node; the log must contain the verifier's queries as well as the prover's.
 9. **Repeat** steps 3 to 6 three times on the same instances; `T_tree` and `T_root` are medians.
 10. **DoS column** as in v2 §6.3 item 7, on the root digest.
 
@@ -500,7 +503,7 @@ compressions, a SNARK verifier does polylogarithmic work. So:
 | verifier queries `qV` | ≤ 2^16 (certificate) |
 | per-query knowledge error `ε` | ≤ 2^-128 (`errorCap`) |
 | completeness error `δ` (counted form) | ≤ 2^-64 |
-| extractor steps | `B p l = 2^40 + 2^8·(p + l)`, declared split `fuel ≤ B` |
+| extractor steps | `B t = 2^40 + 2^8·t`, `t` the tape length in words; declared `fuel t ≤ B t` |
 | extractor image | ≤ 2^20 bytes; output ≤ 2^24 words |
 | native prover build + setup | ≤ 1 h, in the sandbox |
 | tree run `tree_s` | ≤ 4 h |
@@ -524,7 +527,7 @@ compressions, a SNARK verifier does polylogarithmic work. So:
 | Reusing one child proof for both children | leaves are distinct with probability `1 − 2^-255` |
 | A prover that writes invalid inner proofs | root check under the theorem; sample checks; canaries |
 | A slow verifier under `T_V` | priced in the node's proving time (§5.2); the cap only excludes linear work |
-| Exploiting Blake2s where the relation hashes | tags `tagLeaf`, `tagNode`, `tagRO` (§3.4) |
+| Exploiting Blake2s where the relation hashes | four tags with distinct first bytes: `tagChain`, `tagLeaf`, `tagNode`, `tagRO` (§3.4) |
 | Grinding / proof of work | allowed through the counted completeness form; costs prover time |
 | Level-aware verifiers (cheaper checks for leaf children) | allowed; the proof may carry hints, the digest does not |
 | Field choice | free; the machine has carry-less multiply and no GPU (§6.4) |
@@ -651,7 +654,7 @@ dispatch to the reference machine.
 | `Contract/Oracle.lean` (§3.1) | 25 | **new** |
 | `Contract/Relation.lean` (§2) | 35 | **new**, replaces `Layout.lean` (80) and `Protocol.lean` (45) |
 | `Contract/Security.lean` (§4.2, §4.3) | 70 | **rewritten** over logs; was 55 over rounds |
-| `Contract/Extractor.lean` (§4.4) | 45 | byte serialisation; budget `B p l`; was 65 |
+| `Contract/Extractor.lean` (§4.4) | 45 | byte serialisation; budget `B t` over the tape; was 65 |
 | `Contract/Machine.lean` | 109 | unchanged |
 | `Contract/Tree.lean` (§5.1) | 15 | **new**, replaces `Recursion.lean` (67) |
 | `Contract/Certificate.lean` (§3.2) | 30 | rewritten |
@@ -739,7 +742,7 @@ characteristic 2 plus an additive-NTT basis) is the natural reference IOP for an
 | v2 | v3 |
 |---|---|
 | `Hash/Blake2s.lean`, `Machine.lean`, vendored Rv64, `Certificate` shape, `Declared`/`img` rendering | unchanged |
-| `Extractor.lean` (image, fuel, tape) | kept; input re-serialised as bytes; budget `B p l` |
+| `Extractor.lean` (image, fuel, tape) | kept; input re-serialised as bytes; budget `B t` over the tape |
 | `Security.lean` (RBR over rounds) | rewritten over query logs (§4) |
 | `Field.lean`, `Shapes.lean`, `Layout.lean`, `Protocol.lean`, `Compile.lean`, `Recursion.lean` | deleted from the contract; `Compile`'s shape and `Layout` move to the library as worked examples |
 | Gate rules 1–9, source rule, comparator order, manifest, axiom audit, renderer, sandbox, cgroups | unchanged; rule 4's fields become `V`, `P`, `E`, `img`; allowlist gains CompPoly `BF64` |
@@ -797,7 +800,7 @@ dispatch depends on O-6.
 | O-18 | **Succinctness cap as a deterministic step count** of an organiser-compiled image of `Vb` (§6.5 upgrade path) | organiser |
 | O-19 | **The BCS library theorem** for one fixed compiler (§9.2): wait for ArkLib #1267–#1283 to merge, then glue | organiser |
 | O-20 | **VCVio bump** to `d606eab` or later for the ROM union-bound lemma (§9.1); re-pin, manifest, Clean patches re-verified | organiser |
-| O-21 | **Error caps and budgets**: `errorCap = 2^-128` per fresh query gives `2^-64` against `2^64` queries (§4.5); decide whether to tighten to `2^-160` (Blake2s allows it; agents' challenge fields decide what they can meet). The extractor budget `B p l = 2^40 + 2^8·(p + l)` (§4.4) is a placeholder for Stage S1 to justify against a straight-line extractor's real cost | user / contract |
+| O-21 | **Error caps and budgets**: `errorCap = 2^-128` per fresh query gives `2^-64` against `2^64` queries (§4.5); decide whether to tighten to `2^-160` (Blake2s allows it; agents' challenge fields decide what they can meet). The extractor budget `B t = 2^40 + 2^8·t` over the tape length (§4.4) is a placeholder for a later stage to justify against a straight-line extractor's real cost | user / contract |
 | O-22 | Whether ArkLib's Binary Basefold (#383 port) accepts `BF64`'s pentanomial basis | library |
 | O-23 | **Counted-error completeness** (§4.3): the exact form over answer vectors, and whether `δ ≤ 2^-64` is the right cap | contract / user |
 | O-24 | **Intake** (§7.7, stage S7): the submissions repository, pull-request intake with durable verdicts, the protected-file pin and contract id, `records.json`, and the dispatch of the benchmark to the reference machine | organiser |

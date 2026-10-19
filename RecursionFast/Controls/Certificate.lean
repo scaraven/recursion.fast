@@ -1,79 +1,100 @@
 /-
-# Controls: submissions and certificates (`Contract/Certificate.lean`)
+# Controls: the certificate (`Contract/Certificate.lean`), positive and negative  (DESIGN-v3 §3.2)
 
-* `toy_certificate` (positive): the toy protocol (`Controls/Toy.lean`, secure at every class in
-  range) at class 20 with BLAKE2s at arity 2 is a leaf-board submission with a certificate for the
-  declared claim `⟨20, blake2s, 2, firstMsgImg⟩`; `toy_certificate_arity` (negative): none for
-  arity 4; `toy_certificate_img` (negative, S7-A1): none for another extractor image.
-* `toy_no_entry` (negative, S5-A2 → S5-A7): the toy's one message is sent in the clear,
-  `8·2^30` bytes, beyond the tape cap, so `NARG` accepts no tape (`toy_narg`) and `aggOK` no node
-  (`toy_aggOK`). Before S5-A7 this made a vacuous recursion entry: with the unsatisfiable layout
-  `unsat`, `fits`, `sound` and `complete` all hold (`toy_vacuous_fields`), and the toy is secure.
-  The field `live` now excludes it: the toy has no recursion entry at all, whatever the layout and
-  decoder. `live` must also name the indexer's keys (S5-A10, `Controls/MagicKey.lean`). The
-  positive side of `live` is `cmpToy_live` in `Controls/Recursion.lean` and the library's
-  `live_of_secure`; there is no positive entry (§7.3).
+Positive:
+* `ws_certificate`: the witness-sending submission (`Library/WitnessSending.lean`) has a
+  `Certificate`: every clause (knowledge soundness, completeness, the image computing the
+  extractor, the caps) is proved.
+* `ws_certificateR`: and against a claim rendered the way a challenge renders it (the image as a
+  literal, error `0`, no verifier query, fuel 8).
+* `blake2sOracle_kat`: the instantiated oracle on the query `01 02 03` against `hashlib`
+  (`BLAKE2s-256(tagRO ‖ q)`; the runner, the native prover and the liveness wrapper reproduce it).
+
+Negative:
+* `flipped_image`: the claim with one bit of one instruction flipped is not certified (the image
+  binding).
+* `fuel_7_claim`: a claim of fuel 7 is not certified (the declared fuel is a bound the
+  submission's fuel must meet); `fuel_over_budget_claim`: a declared fuel above the budget is not
+  certified either (the harness runs the image with the declared fuel).
+* `rejectAll_no_certificate`: a submission whose verifier rejects everything has no certificate
+  (completeness), whatever its other fields.
+* `acceptAll_no_certificate`: a submission whose verifier accepts everything and whose extractor
+  returns nothing has no certificate (knowledge soundness with the named extractor).
+* `error_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_image_no_certificate`: a
+  submission declaring error `1`, a fuel of `2^41` steps, or an image of `2^18 + 1` instructions
+  has no certificate (the three caps).
+The certificate does **not** exclude a verifier that recognises the deployment oracle: see
+`Controls/Backdoor.lean` (O-25).
 -/
-import RecursionFast.Contract.Certificate
-import RecursionFast.Controls.Toy
-import RecursionFast.Controls.Negative
-import RecursionFast.Controls.CompileToy
+import RecursionFast.Controls.Security
+import RecursionFast.Controls.Blake2s
+
+open scoped NNReal
 
 namespace RecursionFast.Controls.Certificate
-open RecursionFast RecursionFast.Controls RecursionFast.Controls.Compile
+open RecursionFast RecursionFast.WitnessSending
+open RecursionFast.Controls.Blake2s (hex)
 
-/-- Class 20 is in range. -/
-theorem h20 : 20 ≤ 20 ∧ 20 ≤ 28 := ⟨le_rfl, by decide⟩
+theorem ws_certificate : Certificate submission := certificate
 
-/-- The toy protocol at class 20, compiled with BLAKE2s at arity 2. -/
-def toySub : Submission 20 := ⟨toy 20 h20, cfg2, toy_secure 20 h20⟩
+/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'R'+bytes([1,2,3])).hexdigest())"` -/
+theorem blake2sOracle_kat : (blake2sOracle ⟨#[1, 2, 3]⟩).toList =
+    hex "5d32eaa721251d8e473bc410cf953591949de810e935f6e06caa3f8d5ae9cf84" := by decide +kernel
 
-/-- **Positive**: the toy submission has a certificate for its declared claim. -/
-theorem toy_certificate : Certificate ⟨20, .blake2s, 2, firstMsgImg⟩ toySub := ⟨⟨rfl, rfl⟩, rfl⟩
+/-- The claim of the witness-sending submission, as a challenge renders it. -/
+def declared : Declared where
+  img := ⟨[0x00100313, 0x03f31313, 0x02033583, 0x00758593, 0x0035d593, 0x02830513, 0x00000293,
+    0x00000073], []⟩
+  ε := 0
+  qV := 0
+  fuel _ := 8
 
-/-- No certificate for a claim with another arity. -/
-theorem toy_certificate_arity : ¬ Certificate ⟨20, .blake2s, 4, firstMsgImg⟩ toySub :=
-  fun h => absurd h.cfg.2 (by decide)
+theorem ws_certificateR : CertificateR declared submission :=
+  ⟨certificate, rfl, le_rfl, le_rfl,
+    fun _ => ⟨le_rfl, Nat.le_add_right_of_le (by decide : 8 ≤ 2 ^ 40)⟩⟩
 
-/-- No certificate for a claim with another extractor image (S7-A1): here the first code word of
-`firstMsgImg` changed (`addi t1, zero, 1` to `addi t1, zero, 0`), the data words kept. -/
-theorem toy_certificate_img :
-    ¬ Certificate ⟨20, .blake2s, 2, ⟨0x00000313 :: firstMsgImg.code.tail, []⟩⟩ toySub :=
-  fun h => absurd (congrArg Image.code h.img) (by decide)
+/-- The claim with bit 0 of the third instruction flipped (`ld a1, 32(t1)` becomes an illegal
+word). -/
+def flipped : Declared :=
+  { declared with
+    img := ⟨[0x00100313, 0x03f31313, 0x02033582, 0x00758593, 0x0035d593, 0x02830513, 0x00000293,
+      0x00000073], []⟩ }
 
-/-! ## The toy accepts no node, so it has no recursion entry (S5-A2, S5-A7) -/
+theorem flipped_image : ¬ CertificateR flipped submission := fun h => by
+  simpa [submission, img, flipped] using h.img
 
-/-- Reading `n` bytes from a shorter tape fails. -/
-theorem takeN_short : ∀ (n : ℕ) (t acc : List UInt8), t.length < n → takeN n t acc = none
-  | 0, _, _, h => absurd h (Nat.not_lt_zero _)
-  | _ + 1, [], _, _ => rfl
-  | n + 1, _ :: t, _, h => takeN_short n t _ (Nat.lt_of_succ_lt_succ h)
+theorem fuel_7_claim : ¬ CertificateR { declared with fuel := fun _ => 7 } submission :=
+  fun h => absurd (h.bounds.2.2 0).1 (by simp [submission, fuel])
 
-/-- The compiled toy accepts no tape: its plain message alone exceeds the tape cap. -/
-theorem toy_narg (vkc : VKc 1) (x : Stmt) (t : Tape) : NARG cfg2 (toy 20 h20) vkc x t = false := by
-  by_cases ht : t.length ≤ tapeCap
-  · simp [NARG, toy, toyShape, pass, takeN_short (msgLen ⟨30, 30⟩) t [] (ht.trans_lt (by decide))]
-  · simp [NARG, ht]
+theorem fuel_over_budget_claim :
+    ¬ CertificateR { declared with fuel := fun _ => 2 ^ 41 } submission :=
+  fun h => absurd (h.bounds.2.2 0).2 (by simp [extractorBudget])
 
-/-- So the compiled toy's `aggOK` accepts no node. -/
-theorem toy_aggOK (x' : Stmt) (nw : NodeWitness 1) : aggOK cfg2 (toy 20 h20) x' nw = false := by
-  cases h : nw.t₂ <;> simp [aggOK, child, h, toy_narg]
+theorem rejectAll_no_certificate (S : Submission) (hV : S.V = Security.rejectAll) :
+    ¬ Certificate S := fun h =>
+  Security.rejectAll_not_complete S.Vb S.P (hV ▸ h.complete)
 
-/-- With the unsatisfiable layout `unsat`, every field of a recursion entry for the toy but
-`live` holds, for any decoder: `fits`, and `sound` and `complete` vacuously. -/
-theorem toy_vacuous_fields (decode : List (Table K) → NodeWitness 1) :
-    unsat.Admissible 20 ∧
-    (∀ x' w, unsat.rel 20 x' w → aggOK cfg2 (toy 20 h20) x' (decode w) = true) ∧
-    (∀ x' nw, aggOK cfg2 (toy 20 h20) x' nw = true → ∃ w, unsat.rel 20 x' w ∧ decode w = nw) :=
-  ⟨unsat_admissible_of 20, fun x' w hw => absurd hw (unsat_neg 20 x' w),
-    fun x' nw h => absurd h (Bool.ne_true_of_eq_false (toy_aggOK x' nw))⟩
+theorem acceptAll_no_certificate (S : Submission) (hV : S.V = acceptAll)
+    (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
+  (Security.acceptAll_no_kstate_none S.Vb).false (hV ▸ hE ▸ h.secure.1.choose)
 
-/-- **Negative (S5-A7, S5-A10)**: but `live` fails, so the toy has no recursion entry. -/
-theorem toy_no_entry (e : RecursionEntry (toy 20 h20) cfg2) : False :=
-  let ⟨_, x', nw, _, _, h⟩ := e.live; Bool.ne_true_of_eq_false (toy_aggOK x' nw) h
+theorem error_one_no_certificate (S : Submission) (hε : S.ε = 1) : ¬ Certificate S := fun h =>
+  (hε ▸ h.cap.1).not_gt errorCap_lt_one
 
-/-- Hence no recursion-board submission is built on the toy at class 20 with `cfg2`. -/
-theorem toy_no_submissionR (S : SubmissionR 20) (hP : S.P = toy 20 h20) (hc : S.cfg = cfg2) :
-    False := toy_no_entry (hP ▸ hc ▸ S.entry)
+theorem fuel_over_budget_no_certificate (S : Submission) (hf : S.fuel = fun _ => 2 ^ 41) :
+    ¬ Certificate S := fun h => absurd (hf ▸ h.cap.2.2.1 0) (by simp [extractorBudget])
+
+/-- The byte size of an image of `n` instructions and no data (symbolic: no list is built). -/
+theorem byteSize_replicate (n : ℕ) (w : BitVec 32) :
+    Image.byteSize ⟨List.replicate n w, []⟩ = 4 * n := by simp [Image.byteSize]
+
+/-- An image of `2^18 + 1` instructions (`2^20 + 4` bytes). -/
+def bigImg : Image := ⟨List.replicate (2 ^ 18 + 1) 0x00000073, []⟩
+
+theorem big_image_no_certificate (S : Submission) (hi : S.img = bigImg) : ¬ Certificate S :=
+  fun h => by
+    have := h.cap.2.2.2
+    rw [hi, bigImg, byteSize_replicate, imageCap] at this
+    omega
 
 end RecursionFast.Controls.Certificate

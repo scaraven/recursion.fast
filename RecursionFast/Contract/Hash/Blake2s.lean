@@ -1,9 +1,10 @@
 /-
 # Contract: the hash BLAKE2s (RFC 7693)                          (TRUSTED, Lean core only)
 
-The contract's hash. It defines `D`, the digest of a verification key (DESIGN §5.1), the
-aggregate statement digest in `aggOK` (§5.2), and `cfg.hash = blake2s` in `compile` (§3.2). It
-is pure, total and computable: the executed verifier runs this function, compiled by Lean.
+The contract's hash (DESIGN-v3 §3.4). It is the chain step and the statement hash of the
+relation (`Relation.lean`) and the instantiation of the oracle (`Certificate.lean`,
+`blake2sOracle`). It is pure, total and computable: the executed verifier runs this function,
+compiled by Lean.
 
 `blake2s key nn msg` is BLAKE2s of RFC 7693 §3.3: 32-bit words, ten rounds, rotations
 `(16, 12, 8, 7)` (§2.1), an `nn`-byte digest, an optional key. `blake2s256` is the unkeyed

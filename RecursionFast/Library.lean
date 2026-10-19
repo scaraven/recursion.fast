@@ -1,11 +1,12 @@
-/- Untrusted, kernel-checked organiser library (docs/DESIGN.md §8). Populated stage by stage. -/
-import RecursionFast.Library.Field
-import RecursionFast.Library.Challenges
-import RecursionFast.Library.RbrSound
-import RecursionFast.Library.Layout
-import RecursionFast.Library.R1CS
-import RecursionFast.Library.Codec
+/-
+# recursion.fast v3: the organiser's untrusted, kernel-checked library.
+The v2 library (field, layouts, codecs, compiled argument, recursion) is in `legacy/v2/` until
+Stage S4 re-targets it.
+-/
 import RecursionFast.Library.Blake2s
-import RecursionFast.Library.Compile
-import RecursionFast.Library.Extractor
-import RecursionFast.Library.Recursion
+import RecursionFast.Library.Oracle
+import RecursionFast.Library.Security
+import RecursionFast.Library.Machine
+import RecursionFast.Library.Words
+import RecursionFast.Library.Tree
+import RecursionFast.Library.WitnessSending

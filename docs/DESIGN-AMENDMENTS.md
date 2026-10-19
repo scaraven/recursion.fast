@@ -1830,3 +1830,199 @@ contract passes use S9-A1 …). Evidence: `docs/stages/S6b-RESULT.md`, "S9 fix p
   - baseline `HARNESS=1` check: **CHECK OK** in 5 min 54 s.
 
   Details are in `docs/stages/S6b-RESULT.md`, "S9 fix pass", and the logs in `logs/S9/fresh/`.
+
+## V3-S1 (the v3 contract and its controls; DESIGN-v3 §11 step 1, 2026-10-19)
+
+For the orchestrator to patch into `docs/DESIGN-v3.md`. The implemented Lean is the reference;
+`docs/stages/V3-S1-RESULT.md` has the measurements. Items marked **open** need a decision.
+
+- **V3-S1-A1 (file order; §1.1, §8).** `Oracle.lean` uses `Digest`, so the reading order is
+  `Hash/Blake2s` · `Relation` · `Oracle` · `Security` · `Machine` · `Extractor` · `Tree` ·
+  `Certificate` (`RecursionFast/Contract.lean`). §8 table: 320 code lines in all (`scripts/loc.py`):
+  Contract.lean 8, Hash/Blake2s 68, Relation 22, Oracle 19, Security 23, Machine 110,
+  Extractor 33, Tree 7, Certificate 30.
+- **V3-S1-A2 (Machine; §8, §10).** `Machine.lean` imported the deleted `Field.lean` for `Word` and
+  `K.clmul`. `clmul` moved into `Machine.lean` verbatim (namespace `K` dropped); `Word` is the
+  vendored model's global notation for `BitVec 64` (v2's `abbrev` denoted the same type, and a
+  new `abbrev Word` cannot be declared after the vendored import). The header's tape paragraph no
+  longer describes field elements. No instruction semantics changed; the v2 machine controls are
+  re-run (`Controls/Machine.lean`). §8: "unchanged" → "unchanged semantics, `clmul` moved in"
+  (109 → 110 code lines).
+- **V3-S1-A3 (hashing a byte string to a digest; §2.1, §3.2).** `Hash/Blake2s.lean` is unchanged
+  (`blake2s256 : List UInt8 → List UInt8`). The relation and the oracle hash through
+  `blake2sDigest : List UInt8 → Digest` (`Relation.lean`). §2.1's code reads
+  `blake2sDigest (tagLeaf :: h.toList ++ enc64 n)`, `blake2sDigest (tagNode :: c₁.toList ++ c₂.toList)`,
+  `chainEnd s n = (fun d => blake2sDigest d.toList)^[n] s`; §3.2's `Vb` uses
+  `blake2sOracle q = blake2sDigest (tagRO :: q.data.toList)`.
+- **V3-S1-A4 (Digest representation; §2.1).** `abbrev Digest := Vector UInt8 32`, not
+  `Fin 32 → UInt8`. A function-typed digest is a closure that compiled code re-evaluates on every
+  byte read, so a chain step costs 32 evaluations of the previous step: measured (interpreter)
+  600 ms for 2 steps and 15.5 s for 3 steps, i.e. `32^n` (`logs/V3-S1/digest-probe/`); the
+  vector computes 1,000 steps in 428 ms and is faster in the kernel too (16-step chain: 28.7 s
+  against 35.5 s). `Nat.card Digest = 2^256` is a library theorem (`Library/Security.lean`,
+  `card_digest`), not part of the contract.
+- **V3-S1-A5 (tags and encodings; §2.1, §3.4).** One-byte prefix tags `tagLeaf = 0x4C` ('L'),
+  `tagNode = 0x4E` ('N'), `tagRO = 0x52` ('R'); `enc64 n` = the 8 little-endian bytes of
+  `n mod 2^64`. Preimages: leaf 41 bytes, node 65 bytes, oracle query `1 + |q|` bytes.
+- **V3-S1-A6 (open: chain steps are not domain-separated from oracle queries; §3.4).** §3.4 says
+  "the proof system never queries a string the relation hashes". Chain steps hash untagged
+  32-byte strings, so an oracle query of 31 bytes (instantiated input `tagRO ‖ q`, 32 bytes)
+  equals the chain step of every digest whose first byte is `0x52`. No prefix scheme avoids a
+  32-byte oracle input. Options: (a) tag the chain, `chainEnd` hashes `tagChain ‖ d` (33 bytes,
+  still one compression, no cost; the leaf workload becomes a tagged chain); (b) instantiate the
+  oracle with keyed BLAKE2s (separated at the parameter block from every unkeyed call; one extra
+  compression per query); (c) accept and say so in §3.4/§5.4 (it touches only the ROM heuristic,
+  not the theorem). Recommendation: (a). Not implemented: `Rel` is "exactly as §2.1".
+- **V3-S1-A7 (extractor tape and output; §4.4).** Normative formats, in `Extractor.lean`'s header.
+  - Input `extractorInput c π L`: `c` (4 words), `|π|`, π packed, `|L|`, then per entry `|q|`, q
+    packed, the answer (4 words). Bytes are packed 8 per word little-endian (`packBytes`); every
+    field is word-aligned; numbers are their low 64 bits.
+  - **Deviation.** `ImageComputes` does not require the output to *equal* a serialisation of
+    `E c π L`; the output must **denote** it through the contract's total decoder `decodeWit`
+    (`[]` and unknown tags: `none`; tag 0 leaf: start, length word; tag 1 node: two digests and
+    two length-prefixed proofs). Reason: §7.3's baseline image "copies its input to its output".
+    With an exact serialisation the image must validate the proof and print `[]` on garbage; with
+    the decoder, the witness-sending extractor `E := decodeWit ∘ packBytes` is computed by an
+    8-instruction image that outputs the proof's words in place (`tests/asm/proofwords.S`). The
+    encoder `witWords` and `decodeWit (witWords w) = some w` are library facts
+    (`Library/Words.lean`).
+  - A leaf length is one output word, so an output denotes only `n < 2^64`. Nothing is lost: a
+    leaf statement with `n ≥ 2^64` also has the witness `(chainEnd s (n − n mod 2^64), n mod 2^64)`
+    (`enc64` reads `n mod 2^64`; `WitnessSending.rel_norm`).
+- **V3-S1-A8 (tree convention; §5.1).** `treeLevel` pairs adjacent digests with `nodeStmt` and
+  carries an odd last digest up unhashed; `treeRoot cs = (treeLevel^[|cs|] cs).headD 0`: one
+  digest is its own root, the empty list has the zero digest. The runner always has `2^r` leaves
+  (r ≥ 0) and the Python twin must follow the same definition; known answer for four leaves in
+  `Controls/Tree.lean` (`treeRoot_kat`).
+- **V3-S1-A9 (`CompleteWithError` not in the contract; §4.3, O-23).** Only perfect completeness
+  is defined. The counted form and its cap `δ ≤ 2^-64` wait for O-23; a submission needing
+  grinding cannot be certified until then.
+- **V3-S1-A10 (`Declared`, `CertificateR`; §3.2).** `Declared = {img, ε, qV, fuel}` (the image a
+  literal rendered from the submitted files, the numbers rendered from the claim; `fuel` a
+  rendered function of `(|π|, |L|)`). `CertificateR D S` extends `Certificate S` with
+  `S.img = D.img` and `S.ε ≤ D.ε ∧ S.qV ≤ D.qV ∧ ∀ p l, S.fuel p l ≤ D.fuel p l`: the record
+  reports the declared numbers as bounds that hold. The harness's liveness check may run the image
+  with `D.fuel`, since more fuel does not change a halting run (`Library/Machine.lean`,
+  `run_mono`).
+- **V3-S1-A11 (`ImageComputes` domain, output cap, image cap; §4.4, §6.6).** (1) The domain adds
+  "the input tape has at most `2^60` words": the machine addresses `2^60` tape words, so no image
+  could answer for a longer tape (queries are unbounded, so `L ≤ 2^24` entries does not bound the
+  tape). (2) The output cap is a conjunct: the output has at most `outCap = 2^24` words.
+  (3) The image cap `imageCap = 2^20` bytes is the fourth conjunct of `Certificate.cap`
+  (§3.2 has three).
+- **V3-S1-A12 (budget; §4.4, O-21).** `extractorBudget p l = 2^40 + 2^8 · (p + l)` with `p` the
+  proof's bytes and `l` the log's entries (as in §4.4). Justification and its limit, in
+  `Extractor.lean`'s header: `2^8` steps per entry suffice to index the log by answer (32-byte
+  keys) and `2^40` covers a quasi-linear decoder of a `2^20`-byte proof; an extractor that compares
+  query *contents* entry by entry can exceed the budget on an adversarial log of `2^24` long
+  queries. If O-21 wants robustness to that, make `l` the log's size in words.
+- **V3-S1-A13 (the accept-everything control; §4.2 "Vacuity controls").** "A verifier that
+  accepts everything admits no `KState` (final fails on a statement with no witness)" cannot be
+  kernel-checked for `Rel`: it needs a digest outside the images of `leafStmt` and `nodeStmt`, and
+  if `nodeStmt` is onto (2^512 inputs, 2^256 outputs) there is none, and then the accept-all
+  verifier has a knowledge state with an unbounded (choice) extractor. The control proves the
+  exact statement (`Controls/Security.lean`, `acceptAll_kstate_iff`: a knowledge state exists for
+  some extractor iff every statement has a witness) and the two instances that hold (empty
+  relation; extractor returning nothing). What excludes the accept-all verifier is `computes`:
+  an image within `B p l` steps would have to invert BLAKE2s. §4.2's reading should say that
+  `KState` makes knowledge soundness and `ImageComputes` makes it efficient, and the second is
+  load-bearing.
+- **V3-S1-A14 (open: completeness over every chain length; §2.1, §2.2, §4.3).** `Complete`
+  quantifies over every `Rel` witness, so over leaves of every length `n ∈ ℕ`, while §2.2 calls
+  `2^4 … 2^20` the range of `n`. A SNARK whose leaf circuit covers a range of `n` must accept
+  honest proofs for every other `n` too, by a fallback (e.g. sending the witness); then `Vb`
+  accepts fallback proofs, a node's children may be fallback proofs, and the node circuit (which
+  cannot recompute an unbounded chain) needs a fallback as well. The witness-sending argument is
+  complete for every `n` (`rel_norm`). Options: (a) bound `n` in `Rel`'s leaf clause, e.g.
+  `n ≤ 2^20` (then also `n < 2^64`, and V3-S1-A7's remark disappears); (b) keep `Rel` and supply a
+  library fallback combinator (S4). Recommendation: (a).
+- **V3-S1-A15 (the witness-sending argument is a library module; §7.3, V3-9).**
+  `Library/WitnessSending.lean` is the argument of §7.3 with a full `Certificate` (`certificate`;
+  `ε = 0`, `qV = 0`, `fuel = 8`, an 8-instruction image). Its proof of `w` is the bytes of
+  `witWords w`; a proof over `r` levels has `136 · 2^r − 88` bytes (34,728 at `r = 8`; it passes
+  `proofCap` at `r = 13`, `Controls/Relation.lean`, `deep_accepted_but_capped`). Its prover
+  normalises `n` (V3-S1-A7). Here it is the certificate's positive control (a harness fixture,
+  like v2's toy), not an entry (V3-12); the baseline entry that S2 builds in the submissions
+  repository (§7.7) can import it from the library or copy it.
+- **V3-S1-A16 (for S3, the harness).** (1) The extractor's log in the liveness check must contain
+  the verifier's queries as well as the prover's (the `final` law reads `V` from the log;
+  `Library/Oracle.lean`, `runLog_eq_run`). (2) The Python decoder of the output is `decodeWit`.
+  (3) `scripts/AxiomAudit.lean` imports `RecursionFast.Bridge`, which is deferred: `lake exe
+  axiomaudit` fails until S4 or until its module list drops it (V3-S1 ran a copy over
+  Contract, Library, Controls: PASS). (4) The gate's allowlist and manifest still name the v2
+  contract modules; the challenge stubs `RecursionFast/Challenge/*.lean.in` and the renderer are
+  v2's.
+- **V3-S1-A17 (legacy and deferred targets; §10, §11).** The v2 Library and Controls modules that
+  no longer build moved unchanged to `legacy/v2/` (not a lake target; `legacy/v2/README.md`);
+  `Library/Blake2s.lean` and `Controls/Blake2s.lean` stay; the machine lemmas and controls were
+  re-homed (`Library/Machine.lean`, `Controls/Machine.lean`). `RecursionFast/Bridge/` and
+  `RecursionFast/Clean/` stay in place with their lake entries. Deferred targets:
+  `RecursionFastCandidate` (S2: the baseline moves to the submissions repository, §7.7),
+  `RecursionFastHarness`, `RecursionFastSmoke`,
+  `harness-linkcheck` (S3), `RecursionFastBridge`, `RecursionFastClean` (S4).
+- **V3-S1-A18 (note: `Complete` is about `V`, `Rel` about `Vb`; §4.3).** A verifier that accepts
+  only proofs above `proofCap` can be certified (its `Vb` rejects everything, so no node witness
+  exists and completeness is about leaves only), but no run scores, since the root check uses
+  `Vb`. Requiring `|P c w| ≤ proofCap` in `Complete` would close this and would also exclude the
+  witness-sending baseline (a node's honest proof can exceed the cap even when both children are
+  under it), so it is not done.
+
+## V3-S1 fix pass (after the review `docs/reviews/V3-S1-review.md` and the orchestrator's decisions, 2026-10-19)
+
+The design text of `54140d1` already carries decisions (a)–(d) and O-25; these items record what
+the Lean does and where it differs from that text.
+
+- **V3-S1-A19 (decision c: the chain step is tagged; closes A6).** `tagChain = 0x43` ('C');
+  `chainStep d = blake2sDigest (tagChain :: d.toList)` (33 bytes, one compression);
+  `chainEnd s n = chainStep^[n] s`. Four tags with distinct first bytes (0x43, 0x4C, 0x4E, 0x52):
+  no chain, leaf or node preimage is an oracle input; the relation hashes oracle inputs only
+  inside `Vb` in the node clause (the recursion). Control `tags_separate` states this
+  structurally (review m7). All chain known answers recomputed with `b'C'+d`.
+- **V3-S1-A20 (decision b: `chainCap`; closes A14).** `chainCap = 2^20` in `Relation.lean`; the
+  leaf clause is `n ≤ chainCap ∧ c = leafStmt (chainEnd s n) n`, the bound first. `enc64` is kept
+  (injective on the admitted range). The library's normalisation (`norm`, `rel_norm`,
+  `enc64_mod`, `chainEnd_chainEnd`) is deleted: every witness of the relation fits the output
+  format (`WitnessSending.fits_of_rel`), and the honest prover sends the witness unchanged. Also
+  closes the submissions agent's finding that a proof declaring a huge `n` could drive a
+  chain-recomputing verifier past its time cap.
+- **V3-S1-A21 (decision d and review M3: the budget is over the tape; no entry bound).**
+  `extractorBudget t = 2^40 + 2^8 · t`, `t` the input tape's length in words;
+  `Submission.fuel`, `Declared.fuel : ℕ → ℕ` of the tape length; `ImageComputes` runs the image
+  with `fuel (extractorInput c π L).length` and quantifies over every log whose tape fits the
+  machine's `2^60` words (the `2^24`-entry bound is gone, so efficient extraction covers up to
+  `2^58` entries); `Certificate.cap` reads `∀ t, S.fuel t ≤ extractorBudget t`. Review m9:
+  `CertificateR.bounds` also requires `D.fuel t ≤ extractorBudget t`, since the harness runs the
+  image with the declared fuel. The name `CertificateR` is kept ("the certificate against the
+  rendered claim"); its v2 meaning (recursion board) is gone, which S3's gate, renderer and stubs
+  must not carry over. **Design text still to align:** §3.2's code block (`fuel : ℕ → ℕ → ℕ`,
+  `∀ p l, S.fuel p l ≤ B p l`), §8's table (`B p l`) and O-21's text.
+- **V3-S1-A22 (review m5: `decodeWit` caps child lengths).** A node output whose child length
+  exceeds `proofCap` denotes `none`, so no 10-word output denotes a `2^63`-byte proof (a
+  memory-exhaustion vector for the Python twin). No witness of the relation is lost. `Wit.Fits`
+  for a node is now "both proofs within `proofCap`". The extractor header now says that the
+  decoder's leniency on malformed proofs (zero reads, ignored trailing words) is what lets the
+  witness-sending image output its proof in place (the submissions agent's finding).
+- **V3-S1-A23 (decision a and review M1: what the certificate does not exclude).** The
+  `Security.lean` and `Certificate.lean` headers now say: `KState` alone excludes little
+  (`acceptAll_kstate_iff`, now in `Library/Security.lean`); the knowledge content is `KS` with the
+  named extractor, its image and budget; and a `V` that recognises the deployment oracle is
+  certified (O-25). `Controls/Backdoor.lean` is the review's `Probe.Backdoor2`, adapted, as a
+  known-gap control: `backdoor : Certificate S ∧ ∀ c, S.Vb c (magic c) = true ∧
+  (magic c).size = 32`, kernel-checked.
+- **V3-S1-A24 (`OProg.queries` argument order; §3.1).** `queries (H) : OProg α → List ByteArray`,
+  the oracle first, as `run H` and `runLog L` (the golf report's note). Every use reads
+  `(V c π).queries H` and is unchanged; §3.1's signature line should follow.
+- **V3-S1-A25 (review M4: the committed state builds what it lists).** `RecursionFast/Bridge*`
+  and `RecursionFast/Clean*` moved to `legacy/v2/` (`git mv`). In `lakefile.toml` nine blocks are
+  commented out, each with the stage that restores it: `RecursionFastBridge`, the `Clean` path
+  requirement, `RecursionFastClean` (S4); `RecursionFastCandidate` (S2, the baseline moves to the
+  submissions repository); `RecursionFastHarness`, `harness-linkcheck`, `RecursionFastSmoke`,
+  `smoke-verify`, `smoke-index` (S3). `lake-manifest.json` is unchanged and nothing needs
+  `ext/Clean`. `scripts/AxiomAudit.lean` no longer imports the Bridge; `lake exe axiomaudit`
+  passes as shipped. **S3 owes:** the olean manifest regenerated from a v3 organiser build,
+  `scripts/org-build.sh` and `scripts/ci.sh` for v3 (steps 2, 3, 5–12 fail today), the gate's
+  allowlist, the renderer and the challenge stubs.
+- **V3-S1-A26 (trusted text and library).** Stale headers of `Hash/Blake2s.lean` and
+  `Machine.lean` rewritten and three long lines wrapped (no definition changed; review m8, m12);
+  `Library/Tree.lean` proves `treeRoot`'s docstring (`|cs|` levels suffice, and the root of two or
+  more digests is the root of the level above).

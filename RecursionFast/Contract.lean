@@ -1,18 +1,15 @@
 /-
-# recursion.fast v2: the trusted contract, in reading order.
-Carried over from v0.3 verbatim: Field, Shapes, Security (one header sentence reworded, S4-A11).
-New in v2 (docs/DESIGN.md §2–§5):
-Layout, Machine (trimmed from v0.3), Extractor, Protocol (over Layout), Hash.Blake2s, Compile,
-Recursion, Certificate.
+# recursion.fast v3: the trusted contract, in reading order (docs/DESIGN-v3.md §8).
+
+Hash.Blake2s (v2, unchanged) · Relation (§2) · Oracle (§3.1) · Security (§4.2–4.3) ·
+Machine (v2; `Word`, `clmul` moved in from the deleted `Field`) · Extractor (§4.4) · Tree (§5.1) ·
+Certificate (§3.2). No field anywhere (V3-1).
 -/
-import RecursionFast.Contract.Field
-import RecursionFast.Contract.Layout
-import RecursionFast.Contract.Shapes
+import RecursionFast.Contract.Hash.Blake2s
+import RecursionFast.Contract.Relation
+import RecursionFast.Contract.Oracle
 import RecursionFast.Contract.Security
 import RecursionFast.Contract.Machine
 import RecursionFast.Contract.Extractor
-import RecursionFast.Contract.Protocol
-import RecursionFast.Contract.Hash.Blake2s
-import RecursionFast.Contract.Compile
-import RecursionFast.Contract.Recursion
+import RecursionFast.Contract.Tree
 import RecursionFast.Contract.Certificate
