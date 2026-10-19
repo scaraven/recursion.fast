@@ -71,7 +71,7 @@ namespace RecursionFast
 
 /-- The digests are finite, as the images of the functions `Fin 32 → Fin 256`, so `step` can sum
 over them. (Every `Fintype` instance lists each digest exactly once.) -/
-instance : Fintype Digest :=
+noncomputable instance : Fintype Digest :=
   Fintype.ofSurjective (fun f : Fin 32 → Fin 256 => Vector.ofFn fun i => UInt8.ofFin (f i))
     fun d => ⟨fun i => d[i].toFin, by ext i hi; simp⟩
 
