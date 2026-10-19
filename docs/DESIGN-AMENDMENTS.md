@@ -244,3 +244,85 @@ the Lean does and where it differs from that text.
     `Library/Machine.lean`, `Controls/Machine.lean`, `scripts/AxiomAudit.lean`) now name the tag.
     No trusted file changed. The stage records (`docs/stages/V3-S1-RESULT.md`, the V3-S1 review
     and golf reports) are history and still say `legacy/v2/`; read that as the tag.
+
+## V3-KS (the potential knowledge state and the log-length guard; branch `v3/ks-potential`, 2026-10-19)
+
+A contract amendment from the submissions repository's SNARK-baseline ideation (its
+`docs/snark-baseline/notes/F1-ks-feasibility.md` §1, §2, §4, kernel-confirmed by
+`notes/ADV1-rules-review.md` ADV-M2, ADV-M3 with the probes in its `logs/adv-probes/`). The S1
+counting form is unsatisfiable at `errorCap` for every Merkle-committing verifier (unbounded logs:
+collision and late-preimage bad sets grow with the log) and for every query phase whose
+positions span several answers (one bad set per answer charges the largest conditional). The
+implemented Lean is the reference; `docs/stages/V3-S2-KS-RESULT.md` has the measurements. For the
+orchestrator to patch into `docs/DESIGN-v3.md` (and its master in the design workspace).
+
+- **V3-KS-A1 (the potential form; §1.1 figure, §4.1, §4.2).** `KState R V E ε` is a structure
+  with a potential `μ : Log → ℝ≥0` and three laws: `empty : μ [] = 0`; `step : ∀ L q,
+  L.length < logCap → μ L < 1 → q ∉ L.map Prod.fst → ∑ a : Digest, μ (L ++ [(q, a)]) ≤
+  (μ L + ε) * Fintype.card Digest`; `final : ∀ L c π, L.length ≤ logCap → μ L < 1 →
+  (V c π).runLog L = some true → ∃ w, E c π L = some w ∧ R c w`. The error is a parameter of the
+  structure; `KState.Bounded` is gone; `KS R V E ε qV := Nonempty (KState R V E ε) ∧
+  ∀ H c π, ((V c π).queries H).length ≤ qV`. `Certificate` and `Complete` are unchanged.
+  - **`Fintype Digest` in the contract** (Mathlib has none for core `Vector`): one instance,
+    `Fintype.ofSurjective` of `Vector.ofFn ∘ UInt8.ofFin` from `Fin 32 → Fin 256`, three lines.
+    Chosen over summing over `Fin 32 → Fin 256` in `step` because the law then reads as the
+    average over the answers, and because any `Fintype` instance lists each digest exactly once
+    (`Fintype` is a subsingleton), so the instance carries no trust. The bound is written with
+    `Fintype.card Digest` (as S1 wrote `Nat.card Digest`), so no constant is trusted;
+    `Library/Security.lean` proves it is `2^256` (`fintype_card_digest`).
+  - §4.1's "a state predicate on logs and a bad-answer predicate … the union bound" becomes "a
+    potential on logs whose average rise per fresh query is at most `ε` …; a stopped
+    supermartingale and Markov's inequality are the paper theorem". §4.2's code block is the
+    contract's text; its **Reading** paragraph: "`μ L` measures how close the table `L` is to
+    admitting an accepted-but-unextractable proof; `final` is the promise below `1`; `step` says
+    that, below `1` and within `logCap`, the average over the `2^256` answers to a fresh query of
+    the next potential is at most `μ L + ε`. A boolean state (`good`, `bad`, at most `ε·2^256` bad
+    answers) is the potential `0`/`1` (`KState.ofBool`); the potential also prices a challenge
+    spread over several answers, which no boolean state can (`Controls/Potential.lean`)." The
+    controls sentence: "`bad := True` is `Bounded` only at `ε ≥ 1`" becomes "a potential that is
+    `1` off the empty log needs `ε ≥ 1`"; the witness-sending argument's state is `μ := 0`.
+  - §8 table: `Contract/Security.lean` 26 code lines (S1: 23); the contract 331 (S1 fix pass:
+    328). Trust statement item 5: "the paper union bound of §4.5 from the counting form" → "the
+    paper bound of §4.5 from the potential form (a stopped supermartingale and Markov)".
+- **V3-KS-A2 (the log-length guard; §4.2, §4.5, §6.6).** `logCap = 2^64` (`Security.lean`).
+  `step` constrains logs of fewer than `logCap` entries, `final` logs of at most `logCap`.
+  Reason: a Merkle commitment binds only up to collisions and late preimages, whose bad sets have
+  one element per earlier digest of the log; over unbounded logs no state exists at `errorCap`
+  (`Controls/Potential.lean`, `collision_no_bool_kstate`, the ADV1 probe), while the theorem
+  says nothing once `Q + qV ≥ 1/ε`. Within the guard the charge is about `2^-192` per query
+  (`colBool_below`). §4.5 becomes: "For every adversary making `Q` oracle queries with
+  `Q + qV ≤ logCap`, the probability over the random oracle that it outputs `(c, π)` with
+  `V^H c π = true` and `E c π L ∉ Rel c` is at most `(Q + qV)·ε`: along the fresh queries,
+  `min 1 μ`, stopped when `μ` first reaches `1`, rises by at most `ε` in expectation per query
+  (`step`), so it reaches `1` with probability at most `(Q + qV)·ε` (Markov); otherwise the final
+  log is within `logCap` with potential below `1`, and `final` extracts. At the caps an adversary
+  with `2^64 − 2^16` queries has advantage `≤ 2^-64`." §6.6 gains a row: "log length covered by
+  the knowledge laws | `logCap = 2^64` (contract constant; the adversary's query budget)". The
+  extractor's tape bound (`2^60` words, V3-S1-A21) already presupposes fewer than `2^58` entries
+  for *efficient* extraction; `logCap` bounds the logs the laws cover, not the image's input.
+- **V3-KS-A3 (library; §9).** `Library/Security.lean`: `BoolKState` (the S1 structure) with
+  `Bounded` (the S1 bound), `BoundedBelow` (the same on logs shorter than `logCap`),
+  `Bounded.below`, `bounded_of_not_bad`, `Bounded.mono`, `one_le_of_bounded`; `KState.ofBool`
+  (a `BoundedBelow ε` boolean state is the potential `0` on good logs, `1` elsewhere, at error
+  `ε`), `KState.ofBool_μ_eq_zero`; `KState.zero` (potential `0` when every accepted proof is
+  extracted on every log, at every error), `KState.mono`; `step_of_hits` (a rise of at most `1`,
+  only on a set `T` with `|T| ≤ ε·2^256`, discharges `step`); `KState.one_le_of_jump`;
+  `fintype_card_digest`, `card_digest`; `no_kstate_of_empty` and `acceptAll_kstate_iff` now at
+  every error. `Library/WitnessSending.lean`: `kstate := KState.zero 0 …`.
+- **V3-KS-A4 (controls).** Every S1 control is ported with its meaning (the RESULT's table).
+  New, `Controls/Potential.lean`: `twoLucky` (two fixed queries, accept iff both answers start
+  with 12 zero bytes, empty relation; ROM error `2^-192`): a potential at `ε = 2^-192`
+  (`twoLucky_kstate`, `twoLucky_ks` at the cap with `qV = 2`), and no boolean state below
+  `2^-96`, even on short logs (`twoLucky_bool_ge`, `twoLucky_no_bool_kstate`): the potential, not
+  the guard, is what admits it. `Vcol` (accept a proof naming two distinct queries with equal
+  answers; ROM error `≤ (Q+2)²/2^257`): no boolean state at `errorCap` over unbounded logs
+  (`collision_no_bool_kstate`), the boolean state "answers distinct" bounded at `2^-192` within
+  the guard (`colBool_below`) and so a potential at the cap (`colState`, `collision_ks`): the guard
+  is what admits it. **Simplified:** F1's `merkleToy` (dangling Fiat–Shamir transcripts, then a
+  hit on one of `2^128 + 1` committed roots) is not built; `Vcol` is its collision half. Not
+  kernel-checked: that a *potential* for `Vcol` (not only a boolean state) needs the guard at
+  `errorCap` (F1 §4.1, third row). `Backdoor.lean` is unchanged in substance (`KState.ofBool` of
+  its S1 state; the O-25 gap is unchanged).
+- **V3-KS-A5 (documents outside this repository).** The submissions repository's `AGENTS.md` §4
+  and `docs/baseline/BASELINE-TASK.md` §0 and §5 describe `good`/`bad`/`Bounded`; they follow the
+  pin move (the baseline's state becomes `KState.zero 0 …`, `μ := 0`). `docs/DESIGN-v3.md` here and its master are left to the orchestrator (this ledger).

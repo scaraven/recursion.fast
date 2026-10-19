@@ -22,8 +22,9 @@
   * **Extractor.** `E c π L := decode π`, and the image `img` (`tests/asm/proofwords.S`, 8
     instructions) outputs the proof's packed words in place (`run_img`), so it computes `E` in 8
     steps on every input (`computes`).
-  * **Security.** `KS` with `good := True`, `bad := False`, `ε = 0`, `qV = 0` (`ks`): an accepted
-    proof decodes to a witness of the relation, by the definition of `check` (`check_sound`).
+  * **Security.** `KS` with the potential `μ := 0`, `ε = 0`, `qV = 0` (`ks`, `KState.zero`): an
+    accepted proof decodes to a witness of the relation, by the definition of `check`
+    (`check_sound`), on every log.
 -/
 import RecursionFast.Contract.Certificate
 import RecursionFast.Library.Words
@@ -158,18 +159,13 @@ theorem check_encode {c : Digest} {w : Wit} (hR : Rel submission.Vb c w) (hf : w
 
 /-! ## The certificate -/
 
-/-- The knowledge state: every log is good, no answer is bad. -/
-def kstate : KState (Rel submission.Vb) V E where
-  good _ := True
-  bad _ _ _ := False
-  empty := trivial
-  step _ _ _ _ _ _ := trivial
-  final _ _ _ _ h := check_sound (Option.some.inj h)
+/-- The knowledge state: the potential `0` (every accepted proof decodes to a witness). -/
+def kstate : KState (Rel submission.Vb) V E 0 :=
+  KState.zero 0 fun _ _ _ h => check_sound (Option.some.inj h)
 
 /-- **Knowledge soundness** at error `0` with no verifier query. -/
 theorem ks : KS (Rel submission.Vb) submission.V submission.E submission.ε submission.qV :=
-  ⟨⟨kstate, kstate.bounded_of_not_bad (fun _ _ _ h => h) _⟩,
-    fun _ _ _ => le_rfl⟩
+  ⟨⟨kstate⟩, fun _ _ _ => le_rfl⟩
 
 /-- **Perfect completeness**, for every oracle function. -/
 theorem complete : Complete (Rel submission.Vb) submission.P submission.V :=

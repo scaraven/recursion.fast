@@ -76,7 +76,7 @@ theorem rejectAll_no_certificate (S : Submission) (hV : S.V = Security.rejectAll
 
 theorem acceptAll_no_certificate (S : Submission) (hV : S.V = acceptAll)
     (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
-  (Security.acceptAll_no_kstate_none S.Vb).false (hV ▸ hE ▸ h.secure.1.choose)
+  (Security.acceptAll_no_kstate_none S.Vb S.ε).false (hV ▸ hE ▸ h.secure.1.some)
 
 theorem error_one_no_certificate (S : Submission) (hε : S.ε = 1) : ¬ Certificate S := fun h =>
   (hε ▸ h.cap.1).not_gt errorCap_lt_one

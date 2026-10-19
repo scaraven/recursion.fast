@@ -1,31 +1,38 @@
 /-
 # Controls: knowledge soundness and completeness (`Contract/Security.lean`)    (DESIGN-v3 §4.2)
 
+The potential form of `KState` (V3-KS-A1). The controls that separate it from the Stage S1
+boolean form, and that show the length guard is load-bearing, are in `Controls/Potential.lean`.
+
 Positive:
 * `ws_ks`, `ws_complete`: the witness-sending argument (`Library/WitnessSending.lean`) is
-  knowledge-sound at error `0` with no verifier query, through the knowledge state with
-  `good := True`, `bad := False` (`ws_kstate_trivial`), and perfectly complete for every oracle.
+  knowledge-sound at error `0` with no verifier query, through the knowledge state with potential
+  `0` (`ws_kstate_trivial`), and perfectly complete for every oracle.
 * `rejectAll_ks`: the verifier that rejects everything is knowledge-sound (for every relation and
   extractor, at error `0`). That is correct, and is why completeness is required:
   `rejectAll_not_complete` (negative).
-* `ks1`: the verifier that asks one query and accepts has a knowledge state for the empty
-  relation (every answer bad), so in `queryThenAccept_ge_one` it is the bound that fails.
+* `ks1`: the verifier that asks one query and accepts has a knowledge state at error `1` for the
+  empty relation (the potential is `1` on every non-empty log), so in `queryThenAccept_ge_one` it
+  is the error that fails.
+* `mono_control`: a knowledge state at error `0` is one at `errorCap` (`KState.mono`).
 
 Negative:
 * `queryThenAccept_ge_one` (the `step` law, V3-S1 review M2): for a verifier that asks one query
-  and accepts, every knowledge state for the empty relation needs `ε ≥ 1`: the verifier's own
-  fresh query is charged, and `final` binds on the non-empty log `step` produces. A contract whose
-  `step` concluded `good L` would not build this control.
+  and accepts, every knowledge state for the empty relation needs `ε ≥ 1`: `final` forces the
+  potential to `1` on every one-entry log, and `step` charges that jump to the verifier's own
+  fresh query. A contract whose `step` did not average over the answers, or whose `final` did not
+  bind on non-empty logs, would not build this control.
 * Accept-everything (V3-S1-A13): `acceptAll_kstate_iff` (Library) says it has a knowledge state,
   for some extractor, exactly when every statement has a witness. So it has none for a relation
   with a witnessless statement (`acceptAll_no_kstate_empty`: the empty relation, every
-  extractor), and none with an extractor that returns no witness (`acceptAll_no_kstate_none`: the
-  contract's relation, every verifier instance). **Not shown**: a digest without a witness in
-  `Rel Vb`; none can be exhibited for BLAKE2s, and if `nodeStmt` is onto, the accept-all verifier
-  has a knowledge state with a non-constructive extractor. What excludes it is the named
-  extractor with its image and budget (`Controls/Certificate.lean`, `acceptAll_no_certificate`).
-* `bounded_ge_one`, `badAll_not_capped`: a knowledge state for which every answer is bad is
-  bounded only at `ε ≥ 1`, above `errorCap`; one exists (`badAll`), so this is not vacuous.
+  extractor and error), and none with an extractor that returns no witness
+  (`acceptAll_no_kstate_none`: the contract's relation, every verifier instance and error).
+  **Not shown**: a digest without a witness in `Rel Vb`; none can be exhibited for BLAKE2s, and if
+  `nodeStmt` is onto, the accept-all verifier has a knowledge state with a non-constructive
+  extractor. What excludes it is the named extractor with its image and budget
+  (`Controls/Certificate.lean`, `acceptAll_no_certificate`).
+* `jumpAll_ge_one`, `badAll_not_capped`: a knowledge state whose potential is `1` on every
+  non-empty log has `ε ≥ 1`, above `errorCap`; one exists (`badAll`), so this is not vacuous.
 * `oneQuery_not_KS`: a verifier that asks one query is not knowledge-sound with the query bound
   `qV = 0`, for every relation, extractor and error (the query conjunct of `KS`).
 -/
@@ -41,12 +48,17 @@ open RecursionFast
 theorem ws_ks : KS (Rel WitnessSending.submission.Vb) WitnessSending.V WitnessSending.E 0 0 :=
   WitnessSending.ks
 
-theorem ws_kstate_trivial : WitnessSending.kstate.good = (fun _ => True) ∧
-    WitnessSending.kstate.bad = (fun _ _ _ => False) := ⟨rfl, rfl⟩
+theorem ws_kstate_trivial : WitnessSending.kstate.μ = fun _ => 0 := rfl
 
 theorem ws_complete :
     Complete (Rel WitnessSending.submission.Vb) WitnessSending.P WitnessSending.V :=
   WitnessSending.complete
+
+/-- A knowledge state at error `0` is one at the cap. -/
+theorem mono_control :
+    Nonempty (KState (Rel WitnessSending.submission.Vb) WitnessSending.V WitnessSending.E
+      errorCap) :=
+  ⟨WitnessSending.kstate.mono (by positivity)⟩
 
 /-! ## Reject everything -/
 
@@ -56,9 +68,7 @@ def rejectAll (_ : Digest) (_ : Proof) : OProg Bool := .ret false
 /-- **Rejecting everything is knowledge-sound**, for every relation and extractor. -/
 theorem rejectAll_ks (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
     KS R rejectAll E 0 0 :=
-  ⟨⟨⟨fun _ => True, fun _ _ _ => False, trivial, fun _ _ _ _ _ _ => trivial,
-    fun _ _ _ _ h => nomatch h⟩, KState.bounded_of_not_bad _ (fun _ _ _ h => h) 0⟩,
-    fun _ _ _ => le_rfl⟩
+  ⟨⟨KState.zero 0 fun _ _ _ h => nomatch h⟩, fun _ _ _ => le_rfl⟩
 
 /-- **Rejecting everything is not complete**: a leaf statement has a witness, for every
 verifier instance and prover. -/
@@ -69,42 +79,55 @@ theorem rejectAll_not_complete (Vb : Digest → Proof → Bool) (P : Digest → 
 
 /-! ## Accept everything (`acceptAll`, `acceptAll_kstate_iff`: `Library/Security.lean`) -/
 
-example (R : Digest → Wit → Prop) :
-    (∃ E, Nonempty (KState R acceptAll E)) ↔ ∀ c, ∃ w, R c w := acceptAll_kstate_iff R
+example (R : Digest → Wit → Prop) (ε : ℝ≥0) :
+    (∃ E, Nonempty (KState R acceptAll E ε)) ↔ ∀ c, ∃ w, R c w := acceptAll_kstate_iff R ε
 
 /-- No knowledge state for the accept-all verifier and the empty relation, whatever the
-extractor. -/
-theorem acceptAll_no_kstate_empty (E : Digest → Proof → Log → Option Wit) :
-    IsEmpty (KState (fun _ _ => False) acceptAll E) :=
+extractor and the error. -/
+theorem acceptAll_no_kstate_empty (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) :
+    IsEmpty (KState (fun _ _ => False) acceptAll E ε) :=
   no_kstate_of_empty (c := Vector.replicate 32 0) (π := ByteArray.empty) rfl (by simp)
 
 /-- No knowledge state for the accept-all verifier and the extractor that returns nothing, for
-the relation of every verifier instance. -/
-theorem acceptAll_no_kstate_none (Vb : Digest → Proof → Bool) :
-    IsEmpty (KState (Rel Vb) acceptAll (fun _ _ _ => none)) :=
+the relation of every verifier instance, at every error. -/
+theorem acceptAll_no_kstate_none (Vb : Digest → Proof → Bool) (ε : ℝ≥0) :
+    IsEmpty (KState (Rel Vb) acceptAll (fun _ _ _ => none) ε) :=
   no_kstate_of_empty (c := Vector.replicate 32 0) (π := ByteArray.empty) rfl (by simp)
 
-/-! ## Every answer bad -/
+/-! ## A jump at every answer -/
 
-/-- A knowledge state (for the reject-all verifier) in which every answer is bad. -/
-def badAll (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
-    KState R rejectAll E where
-  good _ := True
-  bad _ _ _ := True
-  empty := trivial
-  step _ _ _ _ _ _ := trivial
-  final _ _ _ _ h := nomatch h
+/-- The potential `0` on the empty log and `1` on every other. -/
+noncomputable def jump (L : Log) : ℝ≥0 := if L = [] then 0 else 1
 
-/-- **Every answer bad**: bounded only at `ε ≥ 1`. -/
-theorem bounded_ge_one {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
-    {E : Digest → Proof → Log → Option Wit} (k : KState R V E) (hall : ∀ L q a, k.bad L q a)
-    {ε : ℝ≥0} (h : k.Bounded ε) : 1 ≤ ε :=
-  k.one_le_of_bounded h [] ByteArray.empty (hall [] _)
+/-- `jump` satisfies `step` at error `1`: below `1` the log is empty, and no answer raises the
+potential by more than `1`. -/
+theorem jump_step (L : Log) (q : ByteArray) :
+    ∑ a : Digest, jump (L ++ [(q, a)]) ≤ (jump L + 1) * Fintype.card Digest :=
+  (Finset.sum_le_sum fun a _ => show jump _ ≤ 1 by unfold jump; split_ifs <;> simp).trans <| by
+    rw [Finset.sum_const, Finset.card_univ, nsmul_eq_mul, mul_one]
+    exact le_mul_of_one_le_left (by positivity) le_add_self
 
-/-- `badAll` is bounded at no error within the cap. -/
-theorem badAll_not_capped (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit)
-    {ε : ℝ≥0} (h : (badAll R E).Bounded ε) : ¬ ε ≤ errorCap := fun hc =>
-  ((bounded_ge_one _ (fun _ _ _ => trivial) h).trans hc).not_gt errorCap_lt_one
+/-- A knowledge state (for the reject-all verifier, at error `1`) whose potential is `1` on every
+non-empty log. -/
+noncomputable def badAll (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
+    KState R rejectAll E 1 where
+  μ := jump
+  empty := by simp [jump]
+  step L q _ _ _ := jump_step L q
+  final _ _ _ _ _ h := nomatch h
+
+/-- **A potential that is `1` off the empty log** needs `ε ≥ 1`. -/
+theorem jumpAll_ge_one {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
+    {E : Digest → Proof → Log → Option Wit} {ε : ℝ≥0} (k : KState R V E ε)
+    (hall : ∀ L, L ≠ [] → k.μ L = 1) : 1 ≤ ε := by
+  simpa [k.empty] using k.one_le_of_jump (L := []) (q := ByteArray.empty) (by simp [logCap])
+    (by simp [k.empty]) (by simp) fun a => (hall _ (by simp)).ge
+
+/-- `badAll`'s potential admits no error within the cap. -/
+theorem badAll_not_capped {R : Digest → Wit → Prop} {E : Digest → Proof → Log → Option Wit}
+    {ε : ℝ≥0} (k : KState R rejectAll E ε) (hk : k.μ = (badAll R E).μ) : ¬ ε ≤ errorCap :=
+  fun hc => ((jumpAll_ge_one k fun L hL => by simp [hk, badAll, jump, hL]).trans hc).not_gt
+    errorCap_lt_one
 
 /-! ## The `step` law -/
 
@@ -112,24 +135,29 @@ theorem badAll_not_capped (R : Digest → Wit → Prop) (E : Digest → Proof �
 def queryThenAccept (_ : Digest) (_ : Proof) : OProg Bool :=
   .query ByteArray.empty fun _ => .ret true
 
-/-- **The `step` law charges the verifier's query**: for the empty relation, every answer to the
-verifier's fresh query is bad, so every bounded knowledge state has `ε ≥ 1`. -/
-theorem queryThenAccept_ge_one (E : Digest → Proof → Log → Option Wit)
-    (k : KState (fun _ _ => False) queryThenAccept E) {ε : ℝ≥0} (h : k.Bounded ε) : 1 ≤ ε := by
-  refine k.one_le_of_bounded h [] ByteArray.empty fun a => ?_
-  by_contra hb
-  obtain ⟨w, -, hw⟩ := k.final _ (Vector.replicate 32 0) ByteArray.empty
-    (k.step [] ByteArray.empty a k.empty (by simp) hb) (by simp [queryThenAccept, OProg.runLog])
-  exact hw
+/-- **The `step` law charges the verifier's query**: for the empty relation, `final` forces the
+potential to `1` on every answer to the verifier's fresh query, so every knowledge state has
+`ε ≥ 1`. -/
+theorem queryThenAccept_ge_one (E : Digest → Proof → Log → Option Wit) {ε : ℝ≥0}
+    (k : KState (fun _ _ => False) queryThenAccept E ε) : 1 ≤ ε := by
+  have hj : ∀ a, 1 ≤ k.μ ([] ++ [(ByteArray.empty, a)]) := fun a => by
+    by_contra hb
+    obtain ⟨w, -, hw⟩ := k.final _ (Vector.replicate 32 0) ByteArray.empty
+      (by simp [logCap]) (not_le.mp hb)
+      (by simp [queryThenAccept, OProg.runLog])
+    exact hw
+  simpa [k.empty] using k.one_le_of_jump (by simp [logCap]) (by simp [k.empty]) (by simp) hj
 
-/-- Such a knowledge state exists (every answer bad), so the bound is what fails, not the laws. -/
-def ks1 (E : Digest → Proof → Log → Option Wit) :
-    KState (fun _ _ => False) queryThenAccept E where
-  good L := L = []
-  bad _ _ _ := True
-  empty := rfl
-  step _ _ _ _ _ h := absurd trivial h
-  final L c π hL h := by subst hL; simp [queryThenAccept, OProg.runLog] at h
+/-- Such a knowledge state exists at error `1` (the potential is `1` on every non-empty log), so
+the error is what fails, not the laws. -/
+noncomputable def ks1 (E : Digest → Proof → Log → Option Wit) :
+    KState (fun _ _ => False) queryThenAccept E 1 where
+  μ := jump
+  empty := by simp [jump]
+  step L q _ _ _ := jump_step L q
+  final L c π _ hL h := by
+    have : L = [] := by by_contra hne; simp [jump, hne] at hL
+    subst this; simp [queryThenAccept, OProg.runLog] at h
 
 /-! ## The query bound -/
 
