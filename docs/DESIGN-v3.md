@@ -84,6 +84,7 @@ proving 2^r leaves and 2^r − 1 nodes, the last one being the root.
 | V3-9 | The baseline is the witness-sending argument with zero oracle queries, certified, listed and unranked by the succinctness cap; organiser library code that needs a field uses CompPoly's `BF64` and `Ext3` at the pinned revision (§7.4). | 2026-10-19 |
 | V3-10 | No ArkLib fork for BCS now; BCS over a fixed compiler becomes a library theorem for agents who take the IOP route, built when upstream's chain merges (§9.2, O-19). | 2026-10-19 |
 | V3-11 | v3 is written beside v2; the repository builds it as stages on a branch (§11). | 2026-10-19 |
+| V3-12 | Two repositories and pull-request intake, as ots.golf: this repository is the trusted core and holds no entry; submissions, the baseline first, live in a submissions repository and enter by pull request, verified by the harness and benchmarked on the reference machine (§7.7, O-24, stage S7). | 2026-10-19 |
 
 ---
 
@@ -530,6 +531,10 @@ unranked**: at the ranked size its root check takes about 25 s against `T_V = 2 
 v2's baseline (S7-A2), its exclusion is a measurement, not a theorem; the measurement is what
 calibrates `T_V`.
 
+**Where it lives** (V3-12). The baseline is the first entry of the submissions repository (§7.7),
+with that repository's contract pin; this repository holds no entry and keeps only the toy controls
+as harness fixtures. Stage S2 builds it there.
+
 ### 7.4 The baseline's and the library's field: CompPoly `BF64` and `Ext3` (V3-9)
 
 The contract has no field. Where organiser code needs one, in the library's worked examples, the
@@ -558,6 +563,47 @@ tree, gate in a second fresh tree bound byte for byte, then the badge path. The 
 are `verify` (the compiled `Submission.Vb`) and `prove-lean` (the compiled `P` with the logging
 oracle, used only by the liveness check); `index` is gone. Rule 4's computable fields are `V`, `P`,
 `E` and `img`. The benchmark run is §6.3.
+
+### 7.7 Intake: two repositories, pull requests and CI (V3-12, O-24, stage S7)
+
+The model is ots.golf's (`docs/reference/neighbouring-competitions.md` §1; research note R1 §1.5
+and §4), with one change forced by wall-time scoring.
+
+- **Two repositories.** This repository is the trusted core: contract, vendored machine, library,
+  controls, harness, challenge stubs, documentation, and no entry. A separate submissions
+  repository holds one flat root per entry, the baseline first, a `records.json` registry, and a
+  `.contract` submodule pinned to a core commit so that a submitter can run the harness locally.
+- **Pull-request intake.** An entry is a pull request that creates or changes only its own root.
+  The intake fetches the head commit, exports that root alone as flat regular files, lays it over
+  a copy of the trusted core, and runs the harness (§7.6) in the sandbox. Pull requests are never
+  merged: after a verdict the intake copies the verified root and its registry entry into the
+  submissions repository's `main` in its own commit. Every head is retained under a creation-only
+  tag, and the verdict comment with the commit status is the durable record, so the intake host
+  is disposable.
+- **Where each part runs.** The proof part, source rule, comparator, gate and badge build, needs no
+  particular machine and may run on a hosted runner. The benchmark (§6.3) is a measurement and
+  runs only on the reference machine (§6.4), by a self-hosted runner or a verifier service the
+  intake dispatches to, as the Proximity Prize's remote service does. Both halves report into the
+  same verdict. This is the one place the ots.golf model does not transfer: there every score is a
+  proof and the pipeline can run anywhere.
+- **Contract pin and id.** A protected-file list covers the contract, the vendored machine, the
+  lakefile and manifest, the toolchain file, the challenge stubs and the harness scripts; their
+  SHA-256 digests are pinned in one file, and the contract id is the digest of that file. Every
+  verdict and every record carries the contract id and the core commit. A change to a protected
+  file is a contract change: it re-pins, and standing records are ported or revalidated with
+  provenance, never silently kept (the record-porting procedure §6.4 names).
+- **Records.** The record rule of §6.4 (paired confirmation) applies to board T; `records.json`
+  holds, per board, the standing entry with its contract id, hardware id, `entry_id` and the
+  verdict's commit. A later identical or copied entry never takes a record.
+- **Agent-facing rules.** The submissions repository carries the rules a submitter reads: the root
+  layout, the claim file, the allowed imports, the limits, the attribution lines frozen at
+  admission, and an untrusted `NOTES.md` journal published whatever the verdict, as ots.golf does
+  and as sig.golf's "consequences that bite" does.
+
+What the trusted core already has for this: the harness order, the sandbox, the rendered claim,
+the manifest and the gate (§7.6), and the runner's instance secrets (§6.3). What stage S7 adds is
+the repository split, the intake automation, the pin file with its id, the registry, and the
+dispatch to the reference machine.
 
 ---
 
@@ -630,7 +676,7 @@ native `Interaction` framework; the open PR chain #1267–#1283 (approved, unmer
 `integration/fs-bridge-pr-base-20261004`) adds Fiat–Shamir security, Merkle transfer and a bridge
 to the legacy `OracleReduction` framework where the proof systems live. The organiser's library
 theorem, for one fixed compiler (v2's `Compile.lean` shape, moved to the library), is a gluing of
-those results, estimated at four to eight weeks after the chain stabilises. Its counting-form
+those results once that chain has merged. Its counting-form
 restatement, which is what an agent needs to discharge `KS`, reuses VCVio's deterministic
 extraction kernels and redoes the union bound, which the counting form makes a definition.
 Nothing in the contract or the baseline depends on it.
@@ -664,6 +710,7 @@ characteristic 2 plus an additive-NTT basis) is the natural reference IOP for an
 | `gen-chain-layout.py`, `check-chain.py`, `L_chain(n)` | library examples |
 | Clean bridge, ArkLib bridge | kept, untrusted; the ArkLib bridge gains the ROM instance after O-20 |
 | Baseline `triv` | re-proved against §4; unranked by measurement (§7.3) |
+| `submissions/baseline/` in this repository | moves to the submissions repository as its first entry (§7.7) |
 | Boards R (ranked), L, W | T ranked; R a column; L and W retired |
 
 ---
@@ -671,22 +718,30 @@ characteristic 2 plus an additive-NTT basis) is the natural reference IOP for an
 ## 11. Build order for the organiser (stages on a branch of the v2 repository, V3-11)
 
 The stage protocol of the repository's `CLAUDE.md` applies (implement → adversarial review + golf
-→ fix → commit). Estimates assume v2's tooling and the two-day cadence v2's nine stages took.
+→ fix → commit). Each stage says what it must leave behind.
 
 1. **S1 Contract.** `Oracle`, `Relation`, `Security`, `Extractor` (bytes), `Tree`, `Certificate`;
-   delete the six v2 files; controls of §2.3 and §4.2; `loc.py` under 500. One day.
-2. **S2 Baseline.** The witness-sending argument certified against S1; `BF64` replaces
-   `Field.lean` in the library; allowlist and manifest regenerated. Half a day.
+   delete the six v2 files; controls of §2.3 and §4.2; `loc.py` under 500.
+2. **S2 Baseline.** The witness-sending argument certified against S1, built as the first entry of
+   the submissions repository (§7.7) with its contract pin; `BF64` replaces `Field.lean` in the
+   library; allowlist and manifest regenerated. If S7 has not yet created that repository, S2
+   creates it with the baseline root alone.
 3. **S3 Harness.** Tree generator and `treeRoot` KAT, the prover interface, the succinctness
    cap, sample checks, the liveness check with `prove-lean` and the emulator, gate rule 4's new
-   fields, CI. One to two days.
+   fields, CI.
 4. **S4 Library.** v2's `Compile` shape and `Layout` as worked examples with their proofs
    re-targeted to `KS`-shaped obligations where cheap; the counting-form ⇒ probabilistic bridge
-   after O-20. Two days, the bridge excluded.
+   after O-20.
 5. **S5 Docs.** `docs/DESIGN.md` ← this file, `docs/RESULT.md` §7 updated, amendments ledger.
 6. **S6 (later, O-19/O-7).** The BCS library theorem; a reference entry over `BF64`.
+7. **S7 Intake (O-24).** The repository split; the intake automation (fetch, export, lay over the
+   core, harness, verdict, snapshot, retention tags); the protected-file pin and contract id with
+   the porting procedure; `records.json` and the record rule; the dispatch of the benchmark to
+   the reference machine; the agent-facing rules. Depends on O-6 for the benchmark half; the proof
+   half can run before the machine exists.
 
-Readiness: nothing in S1–S3 depends on upstream; S4's bridge depends on O-20.
+Readiness: nothing in S1–S3 depends on upstream; S4's bridge depends on O-20; S7's benchmark
+dispatch depends on O-6.
 
 ---
 
@@ -703,11 +758,12 @@ Readiness: nothing in S1–S3 depends on upstream; S4's bridge depends on O-20.
 | O-15 | Organiser assets, reframed: (1) a verified Blake2s gadget kit for agents' circuits, (2) a verified decoder extractor image, (3) the IOP-soundness library and the BCS theorem of O-19 | organiser / user |
 | O-16 | ZiskAccel dead arms in the vendored machine | contract / upstream |
 | O-18 | **Succinctness cap as a deterministic step count** of an organiser-compiled image of `Vb` (§6.5 upgrade path) | organiser |
-| O-19 | **The BCS library theorem** for one fixed compiler (§9.2): wait for ArkLib #1267–#1283 to merge, then glue; four to eight weeks | organiser |
+| O-19 | **The BCS library theorem** for one fixed compiler (§9.2): wait for ArkLib #1267–#1283 to merge, then glue | organiser |
 | O-20 | **VCVio bump** to `d606eab` or later for the ROM union-bound lemma (§9.1); re-pin, manifest, Clean patches re-verified | organiser |
 | O-21 | **Error caps and budgets**: `errorCap = 2^-128` per fresh query gives `2^-64` against `2^64` queries (§4.5); decide whether to tighten to `2^-160` (Blake2s allows it; agents' challenge fields decide what they can meet). The extractor budget `B p l = 2^40 + 2^8·(p + l)` (§4.4) is a placeholder for Stage S1 to justify against a straight-line extractor's real cost | user / contract |
 | O-22 | Whether ArkLib's Binary Basefold (#383 port) accepts `BF64`'s pentanomial basis | library |
 | O-23 | **Counted-error completeness** (§4.3): the exact form over answer vectors, and whether `δ ≤ 2^-64` is the right cap | contract / user |
+| O-24 | **Intake** (§7.7, stage S7): the submissions repository, pull-request intake with durable verdicts, the protected-file pin and contract id, `records.json`, and the dispatch of the benchmark to the reference machine | organiser |
 
 Resolved by v3: O-1, O-3, O-10, O-11 (the extractor budget is no longer a function of a size
 class), O-13 (rule 4 has no `Fin`-family field), O-17 (no `IDX`), the v2 fixed-point part of

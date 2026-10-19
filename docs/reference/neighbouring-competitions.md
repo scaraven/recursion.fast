@@ -231,8 +231,8 @@ Questions to ask of any change, with the neighbour that taught each.
 6. **Is a new size free?** Proof bytes, image bytes, query counts, log sizes: cap what the score
    cannot see (ots.golf's lookup tables, sig.golf's NOP padding, leanISA's `seeded_rows`).
 7. **Does the change alter what a record means?** Then it is a contract change: re-pin the
-   protected files, port or revalidate standing records, and expect a week of churn
-   (ots.golf's `record-revalidations.json`).
+   protected files, port or revalidate standing records, and expect churn after launch
+   (ots.golf re-pinned 46 times in its first ten days; its `record-revalidations.json`).
 8. **Will agents' proofs fit the check-time budget?** Agent-optimised submissions grow to every
    ceiling: files, bytes, `decide` tables, memory per module. Measure the baseline cold and warm
    after every harness change (all three; our CI step timings).
