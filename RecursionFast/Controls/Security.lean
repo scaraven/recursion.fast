@@ -35,6 +35,11 @@ Negative:
   non-empty log has `ε ≥ 1`, above `errorCap`; one exists (`badAll`), so this is not vacuous.
 * `oneQuery_not_KS`: a verifier that asks one query is not knowledge-sound with the query bound
   `qV = 0`, for every relation, extractor and error (the query conjunct of `KS`).
+
+The boolean form (library `BoolKState`, S1's statements kept): `bool_bounded_ge_one`,
+`badAllBool_not_capped` (negative: every answer bad is bounded only at `ε ≥ 1`);
+`rejectAllBool_bounded`, `rejectAllBool_μ` (positive: no bad answer is bounded at the cap, and
+embeds as the potential `0`).
 -/
 import RecursionFast.Library.WitnessSending
 
@@ -102,9 +107,10 @@ noncomputable def jump (L : Log) : ℝ≥0 := if L = [] then 0 else 1
 /-- `jump` satisfies `step` at error `1`: below `1` the log is empty, and no answer raises the
 potential by more than `1`. -/
 theorem jump_step (L : Log) (q : ByteArray) :
-    ∑ a : Digest, jump (L ++ [(q, a)]) ≤ (jump L + 1) * Fintype.card Digest :=
+    ∑ a : Digest, jump (L ++ [(q, a)]) ≤ (jump L + 1) * 2 ^ 256 :=
   (Finset.sum_le_sum fun a _ => show jump _ ≤ 1 by unfold jump; split_ifs <;> simp).trans <| by
-    rw [Finset.sum_const, Finset.card_univ, nsmul_eq_mul, mul_one]
+    rw [Finset.sum_const, Finset.card_univ, nsmul_eq_mul, mul_one, fintype_card_digest,
+      Nat.cast_pow, Nat.cast_ofNat]
     exact le_mul_of_one_le_left (by positivity) le_add_self
 
 /-- A knowledge state (for the reject-all verifier, at error `1`) whose potential is `1` on every
@@ -128,6 +134,41 @@ theorem badAll_not_capped {R : Digest → Wit → Prop} {E : Digest → Proof �
     {ε : ℝ≥0} (k : KState R rejectAll E ε) (hk : k.μ = (badAll R E).μ) : ¬ ε ≤ errorCap :=
   fun hc => ((jumpAll_ge_one k fun L hL => by simp [hk, badAll, jump, hL]).trans hc).not_gt
     errorCap_lt_one
+
+/-! ## The boolean form (`BoolKState`, library) -/
+
+/-- S1's every-answer-bad state, as a boolean state of the reject-all verifier. -/
+def badAllBool (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
+    BoolKState R rejectAll E :=
+  ⟨fun _ => True, fun _ _ _ => True, trivial, fun _ _ _ _ _ _ => trivial,
+    fun _ _ _ _ h => nomatch h⟩
+
+/-- S1's `bounded_ge_one`, on `BoolKState`: every answer bad is bounded only at `ε ≥ 1`. -/
+theorem bool_bounded_ge_one {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
+    {E : Digest → Proof → Log → Option Wit} (k : BoolKState R V E) (hall : ∀ L q a, k.bad L q a)
+    {ε : ℝ≥0} (h : k.Bounded ε) : 1 ≤ ε :=
+  k.one_le_of_bounded h [] ByteArray.empty (hall [] _)
+
+/-- `badAllBool` is bounded at no error within the cap. -/
+theorem badAllBool_not_capped (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit)
+    {ε : ℝ≥0} (h : (badAllBool R E).Bounded ε) : ¬ ε ≤ errorCap := fun hc =>
+  ((bool_bounded_ge_one _ (fun _ _ _ => trivial) h).trans hc).not_gt errorCap_lt_one
+
+/-- The boolean reject-all state with no bad answer. -/
+def rejectAllBool (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
+    BoolKState R rejectAll E :=
+  ⟨fun _ => True, fun _ _ _ => False, trivial, fun _ _ _ _ _ _ => trivial,
+    fun _ _ _ _ h => nomatch h⟩
+
+/-- No bad answer: bounded at `0`, hence at the cap (`bounded_of_not_bad`, `Bounded.mono`). -/
+theorem rejectAllBool_bounded (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
+    (rejectAllBool R E).Bounded errorCap :=
+  ((rejectAllBool R E).bounded_of_not_bad (fun _ _ _ h => h) 0).mono (by positivity)
+
+/-- Its embedding has potential `0` on every log (`KState.ofBool_μ_eq_zero`). -/
+theorem rejectAllBool_μ (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit)
+    (L : Log) : (KState.ofBool (rejectAllBool R E) (rejectAllBool_bounded R E).below).μ L = 0 :=
+  (KState.ofBool_μ_eq_zero _ _ L).mpr trivial
 
 /-! ## The `step` law -/
 

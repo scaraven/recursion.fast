@@ -7,6 +7,9 @@ work: `docs/snark-baseline/notes/F1-ks-feasibility.md` §1, §2, §4 there, conf
 V3-KS-A1 … A5 in `docs/DESIGN-AMENDMENTS.md`. Logs: the submissions repository's
 `logs/ks-amendment/` (gitignored there).
 
+**The fix pass (end of this file) supersedes** `logCap = 2^64` (now `2^96`), `Fintype.card
+Digest` in `step` (now the literal `2 ^ 256`) and the measurements below where it re-measures.
+
 ## Headline
 
 - **The contract's `KState` is a potential.** `μ : Log → ℝ≥0`, `μ [] = 0`; below `1` and within
@@ -136,3 +139,81 @@ New (`Controls/Potential.lean`):
    (F1 §4.1 row 3), or is the boolean witness (`collision_no_bool_kstate`) enough?
 4. The pin move in the submissions repository, and its `AGENTS.md` §4 and `BASELINE-TASK.md` §0,
    §5 (V3-KS-A5), follow this branch's merge.
+
+## Fix pass
+
+After the review `docs/reviews/V3-S2-KS-review.md` in the submissions repository (verdict: sound;
+one major, six minor) and the orchestrator's decisions. Logs: the submissions repository's
+`logs/ks-amendment/fix/`. Ledger: V3-KS-A6, A7 and "Answered, not changed".
+
+### The final contract text (verbatim, without docstrings)
+
+```lean
+instance : Fintype Digest :=
+  Fintype.ofSurjective (fun f : Fin 32 → Fin 256 => Vector.ofFn fun i => UInt8.ofFin (f i))
+    fun d => ⟨fun i => d[i].toFin, by ext i hi; simp⟩
+
+def logCap : ℕ := 2 ^ 96
+
+structure KState (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
+    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) where
+  μ : Log → ℝ≥0
+  empty : μ [] = 0
+  step : ∀ L q, L.length < logCap → μ L < 1 → q ∉ L.map Prod.fst →
+    ∑ a : Digest, μ (L ++ [(q, a)]) ≤ (μ L + ε) * 2 ^ 256
+  final : ∀ L c π, L.length ≤ logCap → μ L < 1 → (V c π).runLog L = some true →
+    ∃ w, E c π L = some w ∧ R c w
+
+def KS (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
+    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) (qV : ℕ) : Prop :=
+  Nonempty (KState R V E ε) ∧ ∀ H c π, ((V c π).queries H).length ≤ qV
+```
+
+### Findings
+
+| Id | Disposition |
+|---|---|
+| **M1** | **Fixed.** `logCap := 2^96` (decision). The false sentence ("says nothing once `Q + qV ≥ 1/ε`") is gone from the contract header and A2. They now say what the guard gives up (nothing is claimed beyond `logCap`, where S1 claimed every `Q`), and which collision-type events are chargeable: `t ≥ 224` bits at `2^96`, a full digest `2^-160`, an honest Merkle verifier `≈ 2^-145`. Operating points: `2^-64` at `2^64` queries, `2^-32` at `2^96`. The RESULT body above never used the false sentence; its `2^64` is superseded. **`V24` control** (`Controls/Potential.lean`): `v24_no_bool_kstate`: under `2^96` no boolean state of `V24` is bounded at `errorCap`, even on short logs, so the review's `Probe.v24_ks` (which certified it under `2^64`) no longer goes through `ofBool`. `bool24_below`, `v24_ks`: it is KS at its natural `2^-96`. **Not kernel-checked:** that no *potential* of `V24` exists at `errorCap` under `2^96`. |
+| m1 | **Not built; stated.** No control shows that the guard is needed for a *potential*. For `Vcol` it is borderline false: without the guard a potential is feasible at exactly `2^-128`. The candidate `V31` rests on a paper argument (F1 §4.1, `Δ ≥ 2`; the review's estimate). The kernel-checked facts are: the guard is needed for every *boolean* state of `Vcol` (`collision_no_bool_kstate`), and the potential is needed for `twoLucky` (`twoLucky_no_bool_kstate`). |
+| m2 | **Fixed.** `step` uses the literal `2 ^ 256` (decision). `fintype_card_digest` is `@[simp]`. The `AGENTS.md` note on tactics to avoid is in the submissions repository and is left to the orchestrator (ledger). |
+| m3 | **Kept, annotated.** The statement is unchanged. `step`'s and `final`'s docstrings say which guard is redundant. The header says that `step`'s length bound is the load-bearing restriction. The review's proofs are now library theorems: `KState.final_unguarded` and `KState.step_unstopped` (`Library/Security.lean`). |
+| m4 | **Noted** in the ledger, for S3's allowlist regeneration. |
+| m5 | **Answered.** The core's `DESIGN-v3.md` and its master are patched by the orchestrator from the ledger, whose wording A1, A2 and A6 carry. The submissions repository's `AGENTS.md` §4 and `BASELINE-TASK.md` §0, §5 are stale until the pin moves; left to the orchestrator. |
+| m6 | **Controls added** (`Controls/Security.lean`): `bool_bounded_ge_one` (S1's `bounded_ge_one`, verbatim on `BoolKState`), `badAllBool_not_capped`, `rejectAllBool_bounded` (uses `bounded_of_not_bad` and `Bounded.mono`), `rejectAllBool_μ` (uses `ofBool_μ_eq_zero`). |
+| paper theorem | **Moved into the library.** `Library/PaperTheorem.lean` is the review's `Probe.paper`, with attribution in its header. Only the constant `2^256` changed. It is a library theorem (`RecursionFast.PaperTheorem.paper`), and the contract header cites it. |
+
+### Files after the fix pass (`scripts/loc.py`, `fix/loc-*.log`)
+
+| File | Code |
+|---|---:|
+| `Contract/Security.lean` (TRUSTED) | 26 (contract total 331 / 500) |
+| `Library/Security.lean` | 166 (+ `final_unguarded`, `stopped`, `step_unstopped`) |
+| `Library/PaperTheorem.lean` | 113 (new) |
+| `Controls/Security.lean` | 96 (+ boolean-form controls) |
+| `Controls/Potential.lean` | 448 (+ `V24`: `split`, `trunc`, `bool24`, `card_bad24`, `bool24_below`, `v24_ks`, `all_bad24`, `v24_no_bound`, `v24_no_bool_kstate`) |
+
+### Measurements (`logs/ks-amendment/fix/`)
+
+- `lake build`: 2 min 00 s cold (the clone's build directory removed; the shared package tree
+  prebuilt), 4.16 GB peak, `build-cold.log`; 2.8 s warm, `build-warm.log`. The new modules take
+  2.0 s (`Contract.Security`), 4.0 s (`Library.Security`), 4.1 s (`Library.PaperTheorem`) and
+  5.4 s (`Controls.Potential`).
+- `lake exe axiomaudit`: PASS, 811 declarations (`axiomaudit.log`).
+- Hygiene: OK.
+- `scripts/ci.sh /home/devops/Verified-zkEVM/riscv-zkvm`: CI passed, 18 s warm, line budget
+  331/500 (`ci.log`).
+
+### Observation (V24 proof)
+
+The elaboration snag (m2) also hits a control. Terms that apply `split.symm` (built from
+`digestEquiv` and `Fin.appendEquiv`) to concrete arguments timed out at `whnf` until they were
+spelled out: an explicit `let`, `dsimp only` on the projection, and the bound `K` kept abstract
+(`v24_no_bound`), with `2^64` substituted only at the end. Both the trusted `step` and the
+library avoid the term `Fintype.card Digest`.
+
+### Open questions remaining
+
+1. Should `AGENTS.md` (submissions) name the tactics to avoid around the `Fintype Digest` instance
+   (m2)? This is the orchestrator's call, at the pin move.
+2. Should the potential-level guard control (`V31`, m1) be built in S4, or does the paper
+   argument suffice?
