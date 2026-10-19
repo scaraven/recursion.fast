@@ -3,7 +3,8 @@
 
   lake exe axiomaudit      (or: lake env lean --run scripts/AxiomAudit.lean, interpreted, slower)
 
-Imports the contract, library, controls and bridge, and for **every** constant declared in a
+Imports the contract, library and controls (V3-S1: the ArkLib bridge is deferred to S4, in
+`legacy/v2/`), and for **every** constant declared in a
 `RecursionFast.*` module computes the axioms of its dependency closure (`#print axioms` for all
 of them at once, memoised). Fails unless every one is within `propext`, `Classical.choice`,
 `Quot.sound`; also fails on `sorryAx`/`Lean.ofReduceBool`/`Lean.ofReduceNat`/`Lean.trustCompiler`.
@@ -38,7 +39,7 @@ partial def axiomsOf (env : Environment) (n : Name) : StateM (NameMap Ax) Ax := 
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let mods := #[`RecursionFast.Contract, `RecursionFast.Library, `RecursionFast.Controls, `RecursionFast.Bridge]
+  let mods := #[`RecursionFast.Contract, `RecursionFast.Library, `RecursionFast.Controls]
   let env ← importModules (mods.map ({ module := · })) {} (trustLevel := 0)
   let mut memo : NameMap Ax := {}
   let mut bad : Array String := #[]

@@ -4,8 +4,8 @@
 Trimmed from v0.3 (`contract-v03/RecursionFast/Contract/Machine.lean`, 473 lines; DESIGN §8,
 §10). The one contract machine: **RV64IM + all W-ops + Zbc** (`clmul`, `clmulh`, `clmulr`),
 decoded by the contract from raw 32-bit words; Harvard code space at `CODE_BASE`; naturally
-aligned accesses; every fault stops the run. In v2 it runs only the bounded extractor
-(`Extractor.lean`, DESIGN §4 item 3, decision Q1); the verifier is executed as compiled Lean.
+aligned accesses; every fault stops the run. It runs only the extractor image (`Extractor.lean`,
+DESIGN-v3 §4.4, decision Q1); the verifier is executed as compiled Lean.
 
 * **Kept from v0.3 verbatim:** `Image` (without `harts`), `unpack`, `Image.byteSize`, the
   decoder (`WordOp`, `ClOp`, `Instruction`, `decodeInstruction`), the W-op and Zbc semantics
@@ -25,11 +25,15 @@ aligned accesses; every fault stops the run. In v2 it runs only the bounded extr
 
 **Memory map.** Image data words from address 0 (then zeros); the read-only **input tape**
 from `TAPE_BASE = 2^63`: word `i` of the input at address `TAPE_BASE + 8·i` for `i < 2^60`
-(zeros beyond the input; later words are not addressable). As in v0.3 a tape word is one
-doubleword (little-endian in memory): a `K` element is its `bits`, an `E` element three limbs
-`c0, c1, c2`, an index challenge is zero-extended, a number is its low 64 bits. Stores at or
-above `TAPE_BASE` fault. Initially `sp = TAPE_BASE`, all other registers are `0` and
-`pc = CODE_BASE`.
+(zeros beyond the input; later words are not addressable). A tape word is one doubleword
+(little-endian in memory); `Extractor.lean` fixes how bytes and numbers are packed into words.
+Stores at or above `TAPE_BASE` fault. Initially `sp = TAPE_BASE`, all other registers are `0`
+and `pc = CODE_BASE`.
+
+**v3 (V3-S1-A2).** The carry-less product `clmul` moved here from the deleted `Field.lean`
+(verbatim, out of namespace `K`; the contract has no field); `Word` is the vendored model's
+notation for `BitVec 64` (v2's `abbrev` in `Field.lean` denoted the same type). The tape paragraph
+above no longer describes field elements. No instruction's semantics changed.
 
 **System call** (`ECALL`, selected by `t0` = `x5`): `t0 = 0` is **HALT**; the output is the
 `a1` doublewords at address `a0`, which must be 8-aligned (else the run faults). Every other
@@ -37,11 +41,16 @@ above `TAPE_BASE` fault. Initially `sp = TAPE_BASE`, all other registers are `0`
 -/
 import RiscvZkvm.Rv64.Execution
 import RiscvZkvm.Interpreter.Decode
-import RecursionFast.Contract.Field
 
 namespace RecursionFast
 open RiscvZkvm.Rv64 (MachineState Instr Reg execInstrBr signExtend12)
 open RiscvZkvm.Interpreter (decode regOfBits)
+
+/-- Carry-less product of two words (polynomials of degree `< 64` over GF(2)) as a 128-bit word
+(schoolbook shift-and-xor): the semantics of the Zbc instructions. -/
+def clmul (a b : Word) : BitVec 128 :=
+  Fin.foldl 64
+    (fun acc i => if a.getLsbD i then acc ^^^ (b.zeroExtend 128 <<< (i : Nat)) else acc) 0
 
 /-! ### Memory map and image -/
 
@@ -109,7 +118,8 @@ def decodeInstruction (w : BitVec 32) : Option Instruction :=
 def wordResult (op : WordOp) (a b : BitVec 32) : BitVec 32 :=
   match op with
   | .add => a + b | .sub => a - b
-  | .sll => a <<< (b.toNat % 32) | .srl => a >>> (b.toNat % 32) | .sra => a.sshiftRight (b.toNat % 32)
+  | .sll => a <<< (b.toNat % 32) | .srl => a >>> (b.toNat % 32)
+  | .sra => a.sshiftRight (b.toNat % 32)
   | .mul => a * b
   | .div => if b = 0 then BitVec.allOnes 32 else a.sdiv b
   | .divu => if b = 0 then BitVec.allOnes 32 else a / b
@@ -119,9 +129,9 @@ def wordResult (op : WordOp) (a b : BitVec 32) : BitVec 32 :=
 /-- Zbc: low, high, and reversed (bits 126..63) halves of the 128-bit carry-less product. -/
 def clResult (op : ClOp) (a b : Word) : Word :=
   match op with
-  | .clmul => (K.clmul a b).setWidth 64
-  | .clmulh => (K.clmul a b >>> 64).setWidth 64
-  | .clmulr => (K.clmul a b >>> 63).setWidth 64
+  | .clmul => (clmul a b).setWidth 64
+  | .clmulh => (clmul a b >>> 64).setWidth 64
+  | .clmulr => (clmul a b >>> 63).setWidth 64
 
 /-! ### One step -/
 
@@ -154,7 +164,8 @@ def ordinaryStep (s : MachineState) : Instruction → Option MachineState
   | .wordShift op rd rs1 sh =>
     let v := wordResult op ((s.getReg rs1).truncate 32) (sh.zeroExtend 32)
     some ((s.setReg rd (v.signExtend 64)).setPC (s.pc + 4))
-  | .cl op rd rs1 rs2 => some ((s.setReg rd (clResult op (s.getReg rs1) (s.getReg rs2))).setPC (s.pc + 4))
+  | .cl op rd rs1 rs2 =>
+    some ((s.setReg rd (clResult op (s.getReg rs1) (s.getReg rs2))).setPC (s.pc + 4))
 
 /-- Fetch at `pc` (4-aligned, at or above `CODE_BASE`) and decode. -/
 def fetch (img : Image) (s : MachineState) : Option Instruction :=
