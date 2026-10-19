@@ -96,8 +96,12 @@ proving 2^r leaves and 2^r − 1 nodes, the last one being the root.
 abbrev Digest := Fin 32 → UInt8                 -- the Blake2s output
 abbrev Proof  := ByteArray                      -- any bytes, ≤ proofCap
 
+/-- One chain step, tagged (V3-S1-A6): a 33-byte input, one compression. -/
+def chainStep (d : Digest) : Digest := blake2s256 (tagChain ++ bytes d)
 /-- The end of a hash chain of length `n` from the start `s`. -/
-def chainEnd (s : Digest) (n : ℕ) : Digest := (blake2s256 ∘ bytes)^[n] s
+def chainEnd (s : Digest) (n : ℕ) : Digest := chainStep^[n] s
+/-- Chains longer than this are not in the relation (V3-S1-A14). -/
+def chainCap : ℕ := 2^20
 
 /-- Statement digests. The tags separate the three uses of Blake2s (§3.4). -/
 def leafStmt (h : Digest) (n : ℕ) : Digest := blake2s256 (tagLeaf ++ bytes h ++ enc64 n)
@@ -109,13 +113,17 @@ inductive Wit
 
 /-- The one relation, for an instantiated verifier `Vb` (a total function on bytes). -/
 def Rel (Vb : Digest → Proof → Bool) : Digest → Wit → Prop
-  | c, .leaf s n         => c = leafStmt (chainEnd s n) n
+  | c, .leaf s n         => n ≤ chainCap ∧ c = leafStmt (chainEnd s n) n
   | c, .node c₁ c₂ π₁ π₂ => c = nodeStmt c₁ c₂ ∧ Vb c₁ π₁ = true ∧ Vb c₂ π₂ = true
 ```
 
 `Rel` is defined for any `Vb`; the submission plugs in its own verifier instantiated with Blake2s
 (§3.2). That self-application happens in the submission's theorem, not in a definition, so there
 is no circularity anywhere in the contract.
+
+**Why the chain is bounded** (V3-S1-A14, the Stage S1 review). `n ≤ chainCap` in the leaf clause
+keeps completeness from demanding proofs of chains no prover could handle, and keeps a verifier
+that recomputes chains from being driven past its time cap by a proof that declares a huge `n`.
 
 **Why digests as statements** (V3-7). One statement type, 32 bytes, at every level. Node
 statements do not grow with depth; the children's digests are in the statement and their
@@ -139,7 +147,7 @@ never contract structure.
 | Cap | Where | Value |
 |---|---|---|
 | `proofCap` | `Relation.lean`; checked by `V`'s wrapper and by the runner on every proof it verifies | 1 MiB |
-| chain length `n` | an input of the benchmark, carried in the leaf preimage | 2^4 … 2^20 (the benchmark uses 2^14, §7.1) |
+| chain length `n` | `chainCap = 2^20` in the leaf clause of `Rel`; the benchmark's `n` is an input, carried in the leaf preimage | ≤ 2^20 (the benchmark uses 2^14, §7.1) |
 | verifier queries `qV` | declared in the certificate; the error bound charges them (§4.2) | ≤ 2^16 |
 
 There are no caps on the relation itself: no size class, no cell counts, no index. Succinctness
@@ -220,11 +228,14 @@ score prices how well.
 
 Blake2s is (1) the chain hash and statement hash inside `Rel`, concretely; (2) the instantiation of
 the oracle `V` and `P` query, concretely at run time; (3) the random oracle in the theorem. Roles 1
-and 2 are separated by domain tags: `tagLeaf`, `tagNode` and a third prefix `tagRO` that the
-harness's oracle wrapper prepends to every query of `V` and `P` (`Submission.Vb` instantiates with
-`blake2s256 ∘ (tagRO ++ ·)`). So the proof system never queries a string the relation hashes.
-Role 3 is the standard heuristic: the theorem holds for a random function; deployment uses
-Blake2s. It is stated once, in §5.4, together with the tree heuristic.
+and 2 are separated by four one-byte domain tags with distinct first bytes: `tagChain` on every
+chain step, `tagLeaf` and `tagNode` on the statement preimages, and `tagRO` that `Submission.Vb`
+prepends to every query of `V` and `P` (`blake2s256 ∘ (tagRO ++ ·)`). So no chain, leaf or node
+preimage equals an oracle input (V3-S1-A6; without the chain tag a 31-byte query collided with a
+chain step). The one place the relation does hash `tagRO` strings is inside `Vb` in the node
+clause: that is the recursion itself and is not a collision. Role 3 is the standard heuristic: the
+theorem holds for a random function; deployment uses Blake2s. It is stated in §5.4, together
+with the tree heuristic and the uninstantiability gap O-25.
 
 **Menu** (V3-6, O-14 reframed). The contract fixes `blake2s256` in `Submission.Vb` and in `Rel`.
 A later season may add a second instantiation for role 2 only, by a `Cfg.hash` as in v2 §3.2,
@@ -280,11 +291,20 @@ statement fixed in advance.
 verifier's own queries are in `L`: they are charged like the prover's (`qV` of them, §4.5).
 Repeated queries are not fresh and are not charged.
 
-**Vacuity controls** (`Controls/Security.lean`): a verifier that accepts everything admits no
-`KState` (`final` fails on a statement with no witness, kernel-checked); a `KState` with `bad :=
-True` is `Bounded` only at `ε ≥ 1`, above `errorCap`; the witness-sending argument has a
-`KState` with `good := True`, `bad := False` and the identity extractor (positive). A verifier
-that rejects everything is knowledge-sound: that is correct and is why completeness is required.
+**What `KState` alone does and does not exclude** (corrected by the Stage S1 review, V3-S1-A13).
+Whether a verifier that accepts everything admits a `KState` is equivalent to every digest having
+a witness (`acceptAll_kstate_iff`, Library): no digest can be shown to have none, so the state
+exists with a non-constructive extractor, and the claim that accept-all "admits no `KState`" is
+dropped. The knowledge content of the certificate therefore sits in `ImageComputes` together with
+the named extractor and its budget: accept-all with an extractor that returns nothing is not
+certified (`final` fails), and an extractor that inverted Blake2s within budget is what accept-all
+would need. The controls (`Controls/Security.lean`, `Controls/Certificate.lean`): a `KState` with
+`bad := True` is `Bounded` only at `ε ≥ 1`, above `errorCap`; the `step` law is exercised by a
+verifier that queries once and accepts, whose any `KState` needs `ε ≥ 1`; the witness-sending
+argument has a `KState` with `good := True`, `bad := False` and the identity extractor (positive);
+reject-everything is knowledge-sound and not complete, which is why completeness is required;
+accept-everything with a nothing-returning extractor, a flipped image bit, a too-low fuel and
+`ε = 1` each fail `Certificate`.
 
 ### 4.3 Completeness
 
@@ -306,12 +326,16 @@ knowledge soundness alone is satisfied by a verifier that rejects everything.
 
 v2's image, machine and tape serialisation carry over with the input re-serialised as bytes:
 `⟦c, |π|, π, |L|, L⟧` with the log as a length-prefixed list of (query, answer). `ImageComputes
-img E fuel` says: for every `c`, `π ≤ proofCap` and `L` with at most `2^24` entries, the machine
-run on the image and that tape halts within `fuel |π| |L|` steps with output the serialisation of
-`E c π L` (the empty output for `none`). The budget is `B p l = 2^40 + 2^8 · (p + l)` steps, a
-contract constant: linear in the proof and the log with a fixed term, because the straight-line
-extractor's work is reading the log and running the agent's decoder, and a budget in a size class
-no longer exists (S4-A1's `witCap` becomes the output cap `2^24` words).
+img E fuel` says: for every `c`, `π ≤ proofCap` and every log `L` whose tape fits the machine's
+addressable words, the machine run on the image and that tape halts within `fuel t` steps, `t` the
+tape length in words, with an output that decodes (through the contract's total decoder) to
+`E c π L` (the empty output for `none`; V3-S1-A7). The budget is `B t = 2^40 + 2^8 · t` steps, a
+contract constant: linear in the tape with a fixed term, because the straight-line extractor's work
+is reading the log and running the agent's decoder, and a budget in a size class no longer exists
+(S4-A1's `witCap` becomes the output cap `2^24` words, a cap on the image, since every `Rel`
+witness fits in far fewer). The Stage S1 review removed an earlier `2^24`-entry bound on the log,
+which would have limited efficient extraction to 2^24 queries against the 2^64 of §4.5, and moved
+the budget from log entries to tape words, so that a log of huge entries cannot exhaust it (A12).
 
 ### 4.5 What the paper theorem says
 
@@ -358,6 +382,15 @@ own log.
   ROM-recursion heuristic, as in v2 §6.6 and in every deployed recursive SNARK.
 - **Blake2s is a random oracle.** The theorem holds for a random function; deployment uses
   Blake2s with the tags of §3.4.
+- **A certified `V` may recognise the deployment oracle** (the Stage S1 review's major M1, open
+  item O-25). `V`'s local computation is unrestricted, so it may compute Blake2s itself, compare
+  with the oracle's answer, and on a match accept a fixed "magic" proof; among all oracle
+  functions the match is a `2^-256` event, so `KS` and `Complete` hold, and the probe
+  `Controls/Backdoor.lean` certifies exactly such a `V` (kernel-checked). This is the
+  Canetti–Goldreich–Halevi uninstantiability of the ROM. No salt helps (the proof can carry it), a
+  secret-keyed oracle is impossible because the recursion circuit evaluates the oracle, and v2 had
+  the same exposure through recomputed Fiat–Shamir challenges. It passes every harness check of
+  §6.3. Until O-25 is resolved, board T relies on the rule of §6.7 and review of `V` at intake.
 - **The native prover's correctness**, or its completeness on statements outside the benchmark.
   Only the proofs it writes are checked.
 - **Efficiency of `E` beyond the budget**, and any security of `Vb` on proofs above `proofCap`
@@ -483,8 +516,10 @@ compressions, a SNARK verifier does polylogarithmic work. So:
 | Witness-sending argument (no proving, root verifier recomputes everything) | §6.5: root check above `T_V`; listed, unranked (§7.3) |
 | SNARK leaves, concatenation above (no recursion) | root proof `2^r · |π_leaf|` exceeds `proofCap` for `|π_leaf| ≥ 4 KiB`; root check verifies `2^r` proofs, above `T_V` at any realistic per-proof time |
 | Recursion only near the root, concatenation below | allowed; the first recursing node arithmetises `2^j` verifications and pays in `T_tree` |
-| A verifier that accepts a magic proof | contradicts `KS` on a false statement; the kernel refuses the certificate; random-proof DoS column |
+| A verifier that accepts a magic proof on any oracle | `KS` with the named extractor and `ImageComputes`: the extractor would have to produce a witness, and for a false digest none exists within budget; random-proof DoS column |
+| A verifier that accepts a magic proof only when the oracle is Blake2s (O-25) | **not closed by the contract** (§5.4). Rule: `V`'s local computation must not evaluate the oracle's instantiation; review of `V` at intake (S7); the candidate contract fix of O-25 |
 | A verifier that rejects everything | `KS` holds, `Complete` fails; no accepting proofs, no score |
+| A verifier whose `KState` is trivial | `KState` alone excludes little (§4.2); `ImageComputes` with the budget is the knowledge clause |
 | Precomputed proofs | starts are fresh per evaluation; digests depend on them; `setup` sees no instance |
 | Reusing one child proof for both children | leaves are distinct with probability `1 − 2^-255` |
 | A prover that writes invalid inner proofs | root check under the theorem; sample checks; canaries |
@@ -638,7 +673,9 @@ docstrings that say what, not how. Budget ≤ 500.
 > 4. BLAKE2s = RFC 7693, its collision resistance (the statement tree), and the heuristic that
 >    it instantiates the random oracle of the theorem, under the tags of §3.4.
 > 5. Knowledge soundness and completeness once per tree level, with no composition theorem
->    (§5.4); the paper union bound of §4.5 from the counting form.
+>    (§5.4); the paper union bound of §4.5 from the counting form; and, until O-25, that the
+>    submitted `V` does not recognise the deployment oracle (§5.4), which the contract cannot
+>    state in the ROM.
 > 6. The badge code: what Lean's compiler emitted for `Vb` and `P`, guarded by the source rule and
 >    gate rules 3, 6–9; residual O-12.
 > 7. Harness tools: `Gate.lean`, the harness order with build binding, the manifest, the axiom
@@ -764,6 +801,7 @@ dispatch depends on O-6.
 | O-22 | Whether ArkLib's Binary Basefold (#383 port) accepts `BF64`'s pentanomial basis | library |
 | O-23 | **Counted-error completeness** (§4.3): the exact form over answer vectors, and whether `δ ≤ 2^-64` is the right cap | contract / user |
 | O-24 | **Intake** (§7.7, stage S7): the submissions repository, pull-request intake with durable verdicts, the protected-file pin and contract id, `records.json`, and the dispatch of the benchmark to the reference machine | organiser |
+| O-25 | **Uninstantiability** (§5.4, Stage S1 review M1): a certified `V` may recognise the deployment oracle and accept a magic proof; the probe is a kernel-checked control. Candidate contract fix: make `V` (and `P`) polymorphic in the digest type, `V : ∀ (D : Type) [DecidableEq D], D → Tape D → OProg D Bool`, with statements and the proof's digest slots injected by the contract's wrapper and structured queries `List (ByteArray ⊕ D)` serialised by the contract; such a `V` can compare oracle answers only with each other, never with a value it computed, so no instantiation is recognisable, and the gate checks `V`'s type. Costs: a contract-defined proof grammar with digest slots, a structured query type, about thirty trusted lines, and the agent's arithmetisation at `D := Digest`. Alternatives: a rule plus review at intake (weak against obfuscation); a textual check for the Blake2s constants in `V`'s code (raises the bar only). **User decision** | user / contract |
 
 Resolved by v3: O-1, O-3, O-10, O-11 (the extractor budget is no longer a function of a size
 class), O-13 (rule 4 has no `Fin`-family field), O-17 (no `IDX`), the v2 fixed-point part of
