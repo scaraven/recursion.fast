@@ -8,8 +8,14 @@
     string that is the bytes of some words packs back to exactly those words.
   * **The output format.** `witWords` writes a witness in the format `decodeWit` reads, and
     `decodeWit_witWords` reads it back when the leaf length fits in a word and the two proofs in
-    `proofCap` (`Wit.Fits`). `witWords` is the encoder an extractor image implements; the contract
-    itself needs only the decoder.
+    `proofCap` (`Wit.Fits`). `witWords` is the encoder an extractor program implements; the
+    contract itself needs only the decoder.
+  * **Linear-time twins** (#10, from the S2a entry's `BaselineV3.lean`). The compiled code of the
+    contract's `packBytes` and `bytesAt` is quadratic in the length (a list re-read from its start
+    for every word or byte; 563 s to reject a random 1 MiB proof). `packFast`, `bytesAtF`,
+    `decodeWitF` and `witWordsF` compute the same functions in linear time (`packFast_eq`,
+    `bytesAtF_eq`, `decodeWitF_eq`, `witWordsF_eq`); a verifier runs them, and its proofs rewrite
+    them back.
 -/
 import RecursionFast.Contract.Extractor
 import Mathlib.Data.List.GetD
@@ -52,6 +58,16 @@ theorem packBytes_length (b : List UInt8) : (packBytes b).length = (b.length + 7
   simp [packBytes]
 
 theorem toNat_toWord {a : ℕ} (h : a < 2 ^ 64) : (toWord a).toNat = a := Nat.mod_eq_of_lt h
+
+theorem toWord_add_one (a : ℕ) : toWord a + 1 = toWord (a + 1) := by
+  simp [toWord, BitVec.ofNat_add]
+
+theorem toWord_lt_toWord {a b : ℕ} (ha : a < 2 ^ 64) (hb : b < 2 ^ 64) :
+    toWord a < toWord b ↔ a < b := by
+  rw [BitVec.lt_def, toNat_toWord ha, toNat_toWord hb]
+
+theorem toWord_eq_zero {a : ℕ} (ha : a < 2 ^ 64) : toWord a = 0 ↔ a = 0 := by
+  rw [← BitVec.toNat_inj, toNat_toWord ha]; rfl
 
 /-- Byte `i` of `packBytes b` is byte `i` of `b`, and `0` past its end. -/
 theorem wordByte_packBytes (b : List UInt8) (i : ℕ) : wordByte (packBytes b) i = b.getD i 0 := by
@@ -208,5 +224,61 @@ theorem decodeWit_witWords (w : Wit) (h : w.Fits) : decodeWit (witWords w) = som
       digestAt_append, digestAt_zero, bytesAt_cons, bytesAt_append, bytesAt_zero, bytesAt_nil,
       List.getElem?_append_right, List.getElem?_cons, ite_eq_right, Nat.mod_eq_of_lt,
       packBytes_digest_length, h₁, h₂]
+
+/-! ## Linear-time twins -/
+
+/-- `packBytes`, eight bytes at a time. -/
+def packFast : List UInt8 → List Word
+  | [] => []
+  | b@(_ :: _) => toWord (ofLE (b.take 8)) :: packFast (b.drop 8)
+termination_by b => b.length
+
+theorem packFast_eq (b : List UInt8) : packFast b = packBytes b := by
+  fun_induction packFast b with
+  | case1 => rfl
+  | case2 x xs ih =>
+    rw [ih, packBytes, packBytes, List.length_drop, List.length_cons,
+      show (xs.length + 1 + 7) / 8 = (xs.length + 1 - 8 + 7) / 8 + 1 by omega,
+      List.range_succ_eq_map]
+    simp [Nat.mul_succ, Nat.add_comm (8 * _) 8, ← List.drop_drop]
+
+/-- `bytesAt`, through an array of the unpacked bytes. -/
+def bytesAtF (o : List Word) (k n : ℕ) : Proof :=
+  let a := (wordsBytes (o.drop k)).toArray
+  ⟨((List.range n).map fun i => a.getD i 0).toArray⟩
+
+theorem wordByte_eq_getD (ws : List Word) (i : ℕ) :
+    wordByte ws i = (wordsBytes ws).getD i 0 := by
+  rw [← wordByte_packBytes, packBytes_wordsBytes]
+
+theorem bytesAtF_eq (o : List Word) (k n : ℕ) : bytesAtF o k n = bytesAt o k n := by
+  simp [bytesAtF, bytesAt, wordByte_eq_getD, List.getD_eq_getElem?_getD]
+
+/-- `decodeWit` with `bytesAtF` for `bytesAt`. -/
+def decodeWitF : List Word → Option Wit
+  | [] => none
+  | o@(t :: _) =>
+    let w (k : ℕ) := (o.getD k 0).toNat
+    let m := (w 9 + 7) / 8
+    if t = 0 then some (.leaf (digestAt o 1) (w 5))
+    else if t = 1 ∧ w 9 ≤ proofCap ∧ w (10 + m) ≤ proofCap then
+      some (.node (digestAt o 1) (digestAt o 5) (bytesAtF o 10 (w 9))
+        (bytesAtF o (11 + m) (w (10 + m))))
+    else none
+
+theorem decodeWitF_eq (o : List Word) : decodeWitF o = decodeWit o := by
+  cases o with
+  | nil => rfl
+  | cons t r => simp only [decodeWitF, decodeWit, bytesAtF_eq]
+
+/-- `witWords` with `packFast` for `packBytes`. -/
+def witWordsF : Wit → List Word
+  | .leaf s n => toWord 0 :: packFast s.toList ++ [toWord n]
+  | .node c₁ c₂ π₁ π₂ => toWord 1 :: packFast c₁.toList ++ packFast c₂.toList ++
+      (toWord π₁.data.toList.length :: packFast π₁.data.toList) ++
+      (toWord π₂.data.toList.length :: packFast π₂.data.toList)
+
+theorem witWordsF_eq (w : Wit) : witWordsF w = witWords w := by
+  cases w <;> simp only [witWordsF, witWords, bytesWords, packFast_eq]
 
 end RecursionFast

@@ -3,26 +3,27 @@
 
 Positive:
 * `ws_certificate`: the witness-sending submission (`Library/WitnessSending.lean`) has a
-  `Certificate`: every clause (knowledge soundness, completeness, the image computing the
-  extractor, the caps) is proved.
-* `ws_certificateR`: and against a claim rendered the way a challenge renders it (the image as a
-  literal, error `0`, no verifier query, fuel 8).
+  `Certificate`: every clause (knowledge soundness, completeness with error `0`, the program
+  computing the extractor within its fuel, the caps) is proved.
+* `ws_certificateR`: and against a claim rendered the way a challenge renders it (both errors `0`,
+  no verifier query, fuel `8 · t`).
 * `blake2sOracle_kat`: the instantiated oracle on the query `01 02 03` against `hashlib`
   (`BLAKE2s-256(tagRO ‖ q)`; the runner, the native prover and the liveness wrapper reproduce it).
 
 Negative:
-* `flipped_image`: the claim with one bit of one instruction flipped is not certified (the image
-  binding).
-* `fuel_7_claim`: a claim of fuel 7 is not certified (the declared fuel is a bound the
+* `fuel_low_claim`: a claim of constant fuel 25 is not certified (the declared fuel is a bound the
   submission's fuel must meet); `fuel_over_budget_claim`: a declared fuel above the budget is not
-  certified either (the harness runs the image with the declared fuel).
+  certified either (the harness runs the program with the declared fuel).
 * `rejectAll_no_certificate`: a submission whose verifier rejects everything has no certificate
-  (completeness), whatever its other fields.
+  (completeness, at any error the cap admits), whatever its other fields.
 * `acceptAll_no_certificate`: a submission whose verifier accepts everything and whose extractor
   returns nothing has no certificate (knowledge soundness with the named extractor).
-* `error_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_image_no_certificate`: a
-  submission declaring error `1`, a fuel of `2^41` steps, or an image of `2^18 + 1` instructions
-  has no certificate (the three caps).
+* `error_one_no_certificate`, `delta_one_no_certificate`, `fuel_over_budget_no_certificate`,
+  `big_program_no_certificate`: a submission declaring knowledge error `1`, completeness error
+  `1`, a fuel of `2^49` steps, or a program of `2^20 + 1` statements has no certificate (the four
+  caps).
+The claim no longer renders an image literal (V3-S2R-A3), so v2's `flipped_image` control has no
+counterpart: the program is the submission's own term, and gate rule 4 requires it computable.
 The certificate does **not** exclude a verifier that recognises the deployment oracle: see
 `Controls/Backdoor.lean` (O-25).
 -/
@@ -43,36 +44,27 @@ theorem blake2sOracle_kat : (blake2sOracle ⟨#[1, 2, 3]⟩).toList =
 
 /-- The claim of the witness-sending submission, as a challenge renders it. -/
 def declared : Declared where
-  img := ⟨[0x00100313, 0x03f31313, 0x02033583, 0x00758593, 0x0035d593, 0x02830513, 0x00000293,
-    0x00000073], []⟩
   ε := 0
+  δ := 0
   qV := 0
-  fuel _ := 8
+  fuel t := 8 * t
 
 theorem ws_certificateR : CertificateR declared submission :=
-  ⟨certificate, rfl, le_rfl, le_rfl,
-    fun _ => ⟨le_rfl, Nat.le_add_right_of_le (by decide : 8 ≤ 2 ^ 40)⟩⟩
+  ⟨certificate, le_rfl, le_rfl, le_rfl, fun t => ⟨le_rfl, by
+    simp only [declared, extractorBudget]; omega⟩⟩
 
-/-- The claim with bit 0 of the third instruction flipped (`ld a1, 32(t1)` becomes an illegal
-word). -/
-def flipped : Declared :=
-  { declared with
-    img := ⟨[0x00100313, 0x03f31313, 0x02033582, 0x00758593, 0x0035d593, 0x02830513, 0x00000293,
-      0x00000073], []⟩ }
-
-theorem flipped_image : ¬ CertificateR flipped submission := fun h => by
-  simpa [submission, img, flipped] using h.img
-
-theorem fuel_7_claim : ¬ CertificateR { declared with fuel := fun _ => 7 } submission :=
-  fun h => absurd (h.bounds.2.2 0).1 (by simp [submission, fuel])
+theorem fuel_low_claim : ¬ CertificateR { declared with fuel := fun _ => 25 } submission :=
+  fun h => absurd (h.bounds.2.2.2 4).1 (by simp [submission, fuel])
 
 theorem fuel_over_budget_claim :
-    ¬ CertificateR { declared with fuel := fun _ => 2 ^ 41 } submission :=
-  fun h => absurd (h.bounds.2.2 0).2 (by simp [extractorBudget])
+    ¬ CertificateR { declared with fuel := fun _ => 2 ^ 49 } submission :=
+  fun h => absurd (h.bounds.2.2.2 0).2 (by simp [extractorBudget])
 
 theorem rejectAll_no_certificate (S : Submission) (hV : S.V = Security.rejectAll) :
     ¬ Certificate S := fun h =>
-  Security.rejectAll_not_complete S.Vb S.P (hV ▸ h.complete)
+  Security.rejectAll_not_complete S.Vb S.P
+    (h.cap.2.1.trans_lt (pow_lt_one₀ (by positivity) (by norm_num) (by norm_num)))
+    (hV ▸ h.complete)
 
 theorem acceptAll_no_certificate (S : Submission) (hV : S.V = acceptAll)
     (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
@@ -81,20 +73,26 @@ theorem acceptAll_no_certificate (S : Submission) (hV : S.V = acceptAll)
 theorem error_one_no_certificate (S : Submission) (hε : S.ε = 1) : ¬ Certificate S := fun h =>
   (hε ▸ h.cap.1).not_gt errorCap_lt_one
 
-theorem fuel_over_budget_no_certificate (S : Submission) (hf : S.fuel = fun _ => 2 ^ 41) :
-    ¬ Certificate S := fun h => absurd (hf ▸ h.cap.2.2.1 0) (by simp [extractorBudget])
+theorem delta_one_no_certificate (S : Submission) (hδ : S.δ = 1) : ¬ Certificate S := fun h =>
+  (hδ ▸ h.cap.2.1).not_gt (pow_lt_one₀ (by positivity) (by norm_num) (by norm_num))
 
-/-- The byte size of an image of `n` instructions and no data (symbolic: no list is built). -/
-theorem byteSize_replicate (n : ℕ) (w : BitVec 32) :
-    Image.byteSize ⟨List.replicate n w, []⟩ = 4 * n := by simp [Image.byteSize]
+theorem fuel_over_budget_no_certificate (S : Submission) (hf : S.fuel = fun _ => 2 ^ 49) :
+    ¬ Certificate S := fun h => absurd (hf ▸ h.cap.2.2.2.1 0) (by simp [extractorBudget])
 
-/-- An image of `2^18 + 1` instructions (`2^20 + 4` bytes). -/
-def bigImg : Image := ⟨List.replicate (2 ^ 18 + 1) 0x00000073, []⟩
+/-- `n + 1` constant statements in a row: `2n + 1` statements in all. -/
+def rep : ℕ → XStmt
+  | 0 => .const 0 0
+  | n + 1 => .seq (.const 0 0) (rep n)
 
-theorem big_image_no_certificate (S : Submission) (hi : S.img = bigImg) : ¬ Certificate S :=
-  fun h => by
-    have := h.cap.2.2.2
-    rw [hi, bigImg, byteSize_replicate, imageCap] at this
-    omega
+theorem size_rep (n : ℕ) : (rep n).size = 2 * n + 1 := by
+  induction n with
+  | zero => rfl
+  | succ n ih => simp only [rep, XStmt.size, ih]; omega
+
+theorem big_program_no_certificate (S : Submission) (hp : S.ext.body = rep (2 ^ 19)) :
+    ¬ Certificate S := fun h => by
+  have := h.cap.2.2.2.2
+  rw [hp, size_rep, progCap] at this
+  omega
 
 end RecursionFast.Controls.Certificate

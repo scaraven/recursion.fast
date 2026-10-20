@@ -12,7 +12,7 @@ enables initializer execution) and walks the transitive dependency closure of th
 `THEOREM` (types and values; inductives with their constructors and recursors).
 
 **Trust is by content hash** (A6-G2), never by name, location or import graph: a module is
-*trusted* (Lean core, Mathlib and its dependencies, the contract, the vendored `RiscvZkvm`) or
+*trusted* (Lean core, Mathlib and its dependencies, the contract) or
 *pinned* (CompPoly, ArkLib, VCVio, PolyFun) iff every one of its `.olean` files
 (`.olean`, `.olean.server`, `.olean.private`) hashes (sha256) to the organiser's manifest
 `FILE` (`scripts/olean-manifest.py gen` on a clean organiser build, before any solution code ran).
@@ -40,23 +40,19 @@ It rejects (exit code 1) if:
    equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
    others; these are reported;
 4. with `--computable N`, a **badge-path field** of `N` has no compiled code (A7-M2, S5-A9,
-   DESIGN §3.3, §7.4). In v2 the badge path executes the compiled verifier `NARG cfg P` (round
-   shapes, key length, `verify`), the compiled indexer (`VK`, `IDX`, the index shape) and nothing
-   else of the submission; the extractor image is executed by the contract machine and must be the
-   rendered literal (S4-A2). `badgeFields`: `Submission`: `P`, `cfg`; `SubmissionR`: also `entry`
-   (`toSubmission` is its `Submission`); `Protocol`: `n`, `shape`, `vkLen`, `VK`, `idxShape`,
-   `IDX`, `verify`, `extractor`; `ExtractorImage`: `img` (its `fuel` split is data);
-   `RecursionEntry`: `C`, `decode`. If `N` itself has compiled code, every field has. Otherwise
-   `N` is unfolded (`whnf`, all transparency) to its constructor, `Fin k`-indexed families are
-   checked member by member, and each badge-path field term is **compiled in this process** as an
-   auxiliary definition; it passes iff the compiler emits code for it. Every other field
-   (`prover`, `ε`, the proofs `secure`, `fits`, `sound`, `complete`, `live`, the bounds) is
-   specification data: it is never executed and may be `noncomputable` (e.g. `ε := fun _ =>
-   errorCap`). "Computable" means *executable* (Lean has compiled code), not *feasible*: a
-   brute-force indexer is computable. Feasibility is enforced only by the badge path's time and
-   memory budget (A7-M1). No imported extension code runs: environment extensions keep their
-   initial state except the pure-data ones the compiler needs (`pureExts`), and initializer
-   execution is never enabled;
+   DESIGN §3.3, §7.4; v3: V3-S2R-A3). The v3 badge path executes the compiled verifier `Vb` (the
+   field `V`), the compiled prover `P` with the logging oracle (liveness) and the compiled contract
+   interpreter on the extractor program `ext` (liveness), and nothing else of the submission.
+   `badgeFields`: `Submission`: `V`, `P`, `ext`. If `N` itself has compiled code, every field has.
+   Otherwise `N` is unfolded (`whnf`, all transparency) to its constructor, and each badge-path
+   field term is **compiled in this process** as an auxiliary definition; it passes iff the
+   compiler emits code for it. Every other field (the extractor's specification `E`, `ε`, `δ`,
+   `qV`, `fuel`) is specification data: it is never executed and may be `noncomputable` (e.g.
+   `ε := errorCap`). "Computable" means *executable* (Lean has compiled code), not *feasible*: a
+   brute-force verifier is computable. Feasibility is enforced by the badge path's time and memory
+   budget (A7-M1) and, for the extractor, by the certificate's proved step bound. No imported
+   extension code runs: environment extensions keep their initial state except the pure-data ones
+   the compiler needs (`pureExts`), and initializer execution is never enabled;
 5. an organiser module of the environment does not match the manifest (above);
 6. (S7-M1, with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
    is neither untrusted itself nor in FILE. FILE is the import closure of the organiser's roots
@@ -243,17 +239,14 @@ def frontendRefs (env : Environment) (front stop : NameSet) (e : Expr) : Array N
 
 open Meta
 
-/-- The computational fields the **badge path executes**, per contract structure (v2, S5-A9):
-`NARG cfg P` reads the round shapes (`n`, `shape`), the key length and `verify`; the indexer reads
-`VK`, `idxShape`, `IDX`; the extractor image must be a computable literal (S4-A2); a recursion
-entry's layout and decoder (DESIGN §7.4). Fields of a nested structure listed here are checked
-recursively. Everything else (`prover`, `ε`, proofs, the `fuel` split) is specification data. -/
+/-- The computational fields the **badge path executes**, per contract structure (v3,
+V3-S2R-A3; v2's list is at the tag `v2-archive`): the verifier `V` (the badge `verify` is the
+compiled `Submission.Vb`), the prover `P` (`prove-lean`, the liveness check) and the extractor
+program `ext` (run by the compiled contract interpreter in the liveness check). Fields of a nested
+structure listed here are checked recursively. Everything else (`E`, `ε`, `δ`, `qV`, `fuel`) is
+specification data. -/
 def badgeFields : List (Name × List Name) :=
-  [(`RecursionFast.Protocol, [`n, `shape, `vkLen, `VK, `idxShape, `IDX, `verify, `extractor]),
-   (`RecursionFast.ExtractorImage, [`img]),
-   (`RecursionFast.Submission, [`P, `cfg]),
-   (`RecursionFast.SubmissionR, [`toSubmission, `entry]),
-   (`RecursionFast.RecursionEntry, [`C, `decode])]
+  [(`RecursionFast.Submission, [`V, `P, `ext])]
 
 /-- Persistent extensions whose imported state `whnf` and the compiler need here (matcher info,
 so that `match` in a field term compiles). Their `addImportedFn` is core code over plain data.

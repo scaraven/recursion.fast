@@ -8,6 +8,7 @@
     theorem (DESIGN-v3 §4.5) from the knowledge state's `final` law, which reads the verifier's
     decision from the log, to the verifier actually run against the random oracle.
   * `runLog_queries`: the log of a program's own run is such a log.
+  * `run_bind`: a composed program's result under `H` (completeness, V3-S2R-A2).
 -/
 import RecursionFast.Contract.Oracle
 
@@ -34,5 +35,12 @@ theorem runLog_eq_run {H : ByteArray → Digest} {L : Log} (p : OProg α)
 theorem runLog_queries (H : ByteArray → Digest) (p : OProg α) :
     p.runLog ((p.queries H).map fun q => (q, H q)) = some (p.run H) :=
   runLog_eq_run p (by simp) (by simp)
+
+/-- Running `p.bind f` under `H` runs `p`, then `f` on its result. -/
+theorem run_bind {β : Type} (H : ByteArray → Digest) (p : OProg α) (f : α → OProg β) :
+    (p.bind f).run H = (f (p.run H)).run H := by
+  induction p with
+  | ret a => rfl
+  | query q k ih => exact ih (H q)
 
 end RecursionFast.OProg

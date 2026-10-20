@@ -16,7 +16,7 @@ Scope (every `*.olean`, `*.olean.server`, `*.olean.private` file of):
                           written by scripts/org-build.sh. Without `--closure` (the mini projects of
                           the CI regressions, `--packages ''`) every package file is in scope.
   project/<rel>           the organiser package's own build (`<org>/.lake/build/lib/lean`), restricted
-                          to the trusted modules: `RecursionFast.Contract(.*)`, `RiscvZkvm(.*)`
+                          to the trusted modules: `RecursionFast.Contract(.*)`
                           (`--prefix` replaces this list, for the mini projects of the CI regressions)
 `<rel>` is the module's path, e.g. `Mathlib/Order/Basic.olean`. Line format: `<sha256>  <tag>/<rel>`.
 
@@ -37,8 +37,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 TRUSTED_PKGS = ["mathlib", "batteries", "aesop", "Qq", "plausible", "proofwidgets", "importGraph",
                 "LeanSearchClient"]
-PINNED_PKGS = ["CompPoly", "Arklib", "VCVio", "PolyFun", "Clean"]
-DEFAULT_PREFIXES = ["RecursionFast.Contract", "RiscvZkvm"]
+PINNED_PKGS = ["CompPoly", "Arklib", "VCVio", "PolyFun"]
+DEFAULT_PREFIXES = ["RecursionFast.Contract"]
 EXTS = (".olean", ".olean.server", ".olean.private")
 
 def olean_files(root):

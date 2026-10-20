@@ -14,13 +14,14 @@ magic proofs). Among all oracle functions that match is a `2^-256` event, so:
 * `KS` holds at error `errorCap` with one query: the potential is `1` on the logs that answer the
   empty query with the deployment value and `0` elsewhere (`KState.ofBool` of a boolean state
   whose good logs are the others, and whose one bad answer is that value);
-* `Complete` holds: the honest branch accepts the honest proof under every oracle;
-* the image, its fuel and the caps are the witness-sending ones.
+* completeness holds at error `0`: the honest branch accepts the honest proof under every oracle
+  (`Complete`, embedded by `complete_withError_zero`, V3-S2R-A2);
+* the extractor program, its fuel and the caps are the witness-sending ones.
 
 `backdoor`: `S` is certified (`Certificate S`), and its instantiated verifier `S.Vb` accepts the
 32-byte magic proof of every statement. Every harness check of DESIGN-v3 §6.3 passes with no
-proving at all. Nothing in the contract excludes this: KS and Complete quantify over all oracle
-functions, and no definition can see that `V` evaluates the instantiation (the
+proving at all. Nothing in the contract excludes this: KS and completeness are about a random
+oracle, and no definition can see that `V` evaluates the instantiation (the
 Canetti–Goldreich–Halevi uninstantiability of the random-oracle model). Until O-25 is resolved,
 the rule that `V` must not recognise the deployment oracle, and review of `V` at intake (S7),
 are what exclude it.
@@ -65,13 +66,14 @@ decreasing_by
 def V (c : Digest) (π : Proof) : OProg Bool :=
   .query q0 fun a => .ret ((decide (a = trigger) && decide (π = magic c)) || check c π)
 
-/-- The backdoored submission: the witness-sending prover, extractor, image and fuel. -/
+/-- The backdoored submission: the witness-sending prover, extractor, program and fuel. -/
 noncomputable def S : Submission where
   V := V
   P := WitnessSending.P
   E := WitnessSending.E
-  img := WitnessSending.img
+  ext := WitnessSending.ext
   ε := errorCap
+  δ := 0
   qV := 1
   fuel := WitnessSending.fuel
 
@@ -148,7 +150,7 @@ theorem check_encode {c : Digest} {w : Wit} (hR : Rel S.Vb c w) :
     rw [Vb_eq] at h₁ h₂
     simp_all
 
-theorem complete : Complete (Rel S.Vb) S.P V := by
+theorem complete_perfect : Complete (Rel S.Vb) S.P V := by
   intro H c w hR
   simp only [S, WitnessSending.P, OProg.run, V]
   rw [check_encode hR]
@@ -156,10 +158,10 @@ theorem complete : Complete (Rel S.Vb) S.P V := by
 
 theorem certified : Certificate S where
   secure := ⟨⟨kstate⟩, fun _ _ _ => by simp [S, V, OProg.queries]⟩
-  complete := complete
+  complete := complete_withError_zero complete_perfect
   computes := WitnessSending.computes
-  cap := ⟨le_rfl, by decide, fun _ => Nat.le_add_right_of_le (by decide : 8 ≤ 2 ^ 40),
-    by decide⟩
+  cap := ⟨le_rfl, zero_le, by decide, fun t => by
+    simp only [S, WitnessSending.fuel, extractorBudget]; omega, by decide⟩
 
 /-- **The known gap (O-25)**: certified, and the deployed verifier accepts the 32-byte magic proof
 of every statement, which the prover computes without any witness. -/

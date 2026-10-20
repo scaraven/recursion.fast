@@ -1,209 +1,125 @@
 /-
-# Contract: the machine of the extractor                                         (TRUSTED)
+# Contract: the extractor's machine, a step-counting word language                (TRUSTED)
 
-Trimmed from v0.3 (`contract-v03/RecursionFast/Contract/Machine.lean`, 473 lines; DESIGN §8,
-§10). The one contract machine: **RV64IM + all W-ops + Zbc** (`clmul`, `clmulh`, `clmulr`),
-decoded by the contract from raw 32-bit words; Harvard code space at `CODE_BASE`; naturally
-aligned accesses; every fault stops the run. It runs only the extractor image (`Extractor.lean`,
-DESIGN-v3 §4.4, decision Q1); the verifier is executed as compiled Lean.
+The user's decision of 2026-10-20 (handoff §2.5, issue #7; ledger V3-S2R-A1) replaces the RISC-V
+image and the vendored Rv64 model. The extractor is a **program of this machine**: a statement
+tree over 64-bit words, given as data. Its meaning is the interpreter `XStmt.exec` below, which
+consumes one unit of fuel for every statement it executes, so a proved fuel bound is a proved step
+bound (`Extractor.lean`).
 
-* **Kept from v0.3 verbatim:** `Image` (without `harts`), `unpack`, `Image.byteSize`, the
-  decoder (`WordOp`, `ClOp`, `Instruction`, `decodeInstruction`), the W-op and Zbc semantics
-  (`wordResult`, `clResult`), `memAccess`, `ordinaryStep` (up to the memory check), `fetch`,
-  `initState` (up to the memory map). Base instruction semantics (`Instr`, `MachineState`,
-  `execInstrBr`) and the base decoder (`decode`) are riscv-zkvm's hand model at `6810fc1`,
-  vendored byte-identically (`Vendor/RiscvZkvm`, `scripts/check-vendor.sh`).
-* **Changed:** the memory map spans all `2^64` addresses, so v0.3's `inMemory`/`writable` become
-  one check (a store lands below the tape); `HALT` returns output words instead of a decision;
-  the fuel is an argument of `run`; `readOut` reads the region named by `a0`, `a1`.
-* **Removed:** the 18 counters (`CostVec`, `Kind`, `tick`, `kind`, `latency`), first-touch
-  accounting (`Acct`, `key`, `touch`), the pipeline timer (`Timer.lean`, `tock`, `opOf`,
-  `ecallOp`, `rawAt`), harts (`SPAWN`/`JOIN`, `Region`, `Child`, `Ctx`, `allows`, `access`), the
-  QUERY system call (the extractor has no oracles: its inputs are on the tape), `Final`,
-  `runFull`, `OUT_BASE`, `FUEL`, `TAPE_CAP`, `MEM_BYTES`, and `deriving DecidableEq` on the
-  decoded instructions.
+**Why the shape is what it is (the review `V3-S2R-handoff-review.md`).**
+* **Deep, not shallow (H-M1).** The syntax has no function-typed field. A program cannot run Lean
+  code of its own: the only computation a program causes is the interpreter's, one statement per
+  step. (A monad whose bind takes a Lean continuation would let that continuation compute for
+  free.)
+* **Three-address code (H-M2).** An operation reads two memory cells and writes one, a branch or a
+  loop tests one cell, and no statement contains a sub-expression. Each step is a bounded amount
+  of word-RAM work: one `XOp` (one instruction on the reference machine; `clmul`/`clmulh` are
+  `pclmulqdq` or Zbc, V3-1), one memory or input access, one output word, or one push or pop of the
+  statement stack.
+* **Memory is charged (H-m5).** A program declares `mem` zero-initialised words, and `run` charges
+  one step per word before the first statement.
 
-**Memory map.** Image data words from address 0 (then zeros); the read-only **input tape**
-from `TAPE_BASE = 2^63`: word `i` of the input at address `TAPE_BASE + 8·i` for `i < 2^60`
-(zeros beyond the input; later words are not addressable). A tape word is one doubleword
-(little-endian in memory); `Extractor.lean` fixes how bytes and numbers are packed into words.
-Stores at or above `TAPE_BASE` fault. Initially `sp = TAPE_BASE`, all other registers are `0`
-and `pc = CODE_BASE`.
+**State.** The memory `M` is an array of `mem` words, named by indices. A read outside it is `0`
+and a write outside it is lost. The input tape `I` is read-only (a read past its end is `0`). The
+output is a list of words, appended to. A stack holds the statements still to run. The run halts
+when the stack is empty, and returns the output.
 
-**v3 (V3-S1-A2).** The carry-less product `clmul` moved here from the deleted `Field.lean`
-(verbatim, out of namespace `K`; the contract has no field); `Word` is the vendored model's
-notation for `BitVec 64` (v2's `abbrev` in `Field.lean` denoted the same type). The tape paragraph
-above no longer describes field elements. No instruction's semantics changed.
-
-**System call** (`ECALL`, selected by `t0` = `x5`): `t0 = 0` is **HALT**; the output is the
-`a1` doublewords at address `a0`, which must be 8-aligned (else the run faults). Every other
-`t0` traps.
+`clmul` (the carry-less product, v2's Zbc semantics) is unchanged from the RISC-V machine. `Word`
+was the vendored model's notation for `BitVec 64` and is defined here.
 -/
-import RiscvZkvm.Rv64.Execution
-import RiscvZkvm.Interpreter.Decode
 
 namespace RecursionFast
-open RiscvZkvm.Rv64 (MachineState Instr Reg execInstrBr signExtend12)
-open RiscvZkvm.Interpreter (decode regOfBits)
+
+/-- A 64-bit machine word. -/
+abbrev Word := BitVec 64
 
 /-- Carry-less product of two words (polynomials of degree `< 64` over GF(2)) as a 128-bit word
-(schoolbook shift-and-xor): the semantics of the Zbc instructions. -/
+(schoolbook shift-and-xor). -/
 def clmul (a b : Word) : BitVec 128 :=
   Fin.foldl 64
     (fun acc i => if a.getLsbD i then acc ^^^ (b.zeroExtend 128 <<< (i : Nat)) else acc) 0
 
-/-! ### Memory map and image -/
+/-- The word operations of the machine; each is one instruction of the reference machine. -/
+inductive XOp where
+  | add | sub | mul | mulhu | divu | remu | and | or | xor | shl | shr | ltu | eq | clmul | clmulh
 
-/-- Address of the first instruction (separate code space: loads and stores never reach it). -/
-def CODE_BASE : Nat := 0x1000
-/-- Start of the read-only input tape; data memory is `[0, TAPE_BASE)`. -/
-def TAPE_BASE : Nat := 2 ^ 63
+/-- What an operation computes: arithmetic modulo `2^64`, `mulhu` the high word of the product,
+`x / 0 = 0` and `x % 0 = x`, shifts by the low 6 bits of `b`, `ltu`/`eq` as `1` or `0`, and the
+low and high words of the carry-less product. -/
+def XOp.eval : XOp → Word → Word → Word
+  | .add, a, b => a + b
+  | .sub, a, b => a - b
+  | .mul, a, b => a * b
+  | .mulhu, a, b => ((a.zeroExtend 128 * b.zeroExtend 128) >>> 64).setWidth 64
+  | .divu, a, b => a / b
+  | .remu, a, b => a % b
+  | .and, a, b => a &&& b
+  | .or, a, b => a ||| b
+  | .xor, a, b => a ^^^ b
+  | .shl, a, b => a <<< (b.toNat % 64)
+  | .shr, a, b => a >>> (b.toNat % 64)
+  | .ltu, a, b => if a < b then 1 else 0
+  | .eq, a, b => if a = b then 1 else 0
+  | .clmul, a, b => (RecursionFast.clmul a b).setWidth 64
+  | .clmulh, a, b => (RecursionFast.clmul a b >>> 64).setWidth 64
 
-/-- A program: raw instruction words (at `CODE_BASE`) and data words (at address 0). -/
-structure Image where
-  code : List (BitVec 32)
-  data : List Word
+/-- A statement of the machine (three-address code; `M[i]` is memory cell `i`). -/
+inductive XStmt where
+  /-- `M[d] := M[a] ∘ M[b]`. -/
+  | op (o : XOp) (d a b : Nat)
+  /-- `M[d] := w`. -/
+  | const (d : Nat) (w : Word)
+  /-- `M[d] := M[M[a]]`. -/
+  | load (d a : Nat)
+  /-- `M[M[a]] := M[s]`. -/
+  | store (a s : Nat)
+  /-- `M[d] :=` input word `M[a]`. -/
+  | input (d a : Nat)
+  /-- Append `M[s]` to the output. -/
+  | out (s : Nat)
+  /-- `p`, then `q`. -/
+  | seq (p q : XStmt)
+  /-- `p` if `M[c] ≠ 0`, else `q`. -/
+  | ite (c : Nat) (p q : XStmt)
+  /-- `p` while `M[c] ≠ 0`. -/
+  | loop (c : Nat) (p : XStmt)
 
-/-- `k` little-endian `w`-bit words packed into the natural `x` (how the challenge renderer
-encodes the submitted image files). -/
-def unpack (w : Nat) : Nat → Nat → List Nat
-  | 0, _ => []
-  | k + 1, x => x % 2 ^ w :: unpack w k (x / 2 ^ w)
+/-- The number of statements in `p`. -/
+def XStmt.size : XStmt → Nat
+  | .seq p q | .ite _ p q => p.size + q.size + 1
+  | .loop _ p => p.size + 1
+  | _ => 1
 
-/-- Size in bytes (contract cap `imageCap`, `Extractor.lean`). -/
-def Image.byteSize (img : Image) : Nat := 4 * img.code.length + 8 * img.data.length
+/-- An extractor program: `mem` zero-initialised memory words and the statement to run. -/
+structure XProg where
+  /-- The number of memory words. -/
+  mem : Nat
+  /-- The statement. -/
+  body : XStmt
 
-/-! ### Decoding (v0.3 verbatim) -/
+/-- Run the statement stack `ks` (top first) on input `I`, memory `M` and output `o` for at most
+`n` statements: the output once the stack is empty, `none` if the fuel runs out first. -/
+def XStmt.exec (I : Array Word) : Nat → Array Word → Array Word → List XStmt → Option (List Word)
+  | _, _, o, [] => some o.toList
+  | 0, _, _, _ :: _ => none
+  | n + 1, M, o, s :: ks =>
+    match s with
+    | .op f d a b => exec I n (M.setIfInBounds d (f.eval (M.getD a 0) (M.getD b 0))) o ks
+    | .const d w => exec I n (M.setIfInBounds d w) o ks
+    | .load d a => exec I n (M.setIfInBounds d (M.getD (M.getD a 0).toNat 0)) o ks
+    | .store a v => exec I n (M.setIfInBounds (M.getD a 0).toNat (M.getD v 0)) o ks
+    | .input d a => exec I n (M.setIfInBounds d (I.getD (M.getD a 0).toNat 0)) o ks
+    | .out v => exec I n M (o.push (M.getD v 0)) ks
+    | .seq p q => exec I n M o (p :: q :: ks)
+    | .ite c p q => exec I n M o ((if M.getD c 0 = 0 then q else p) :: ks)
+    | .loop c p => exec I n M o (if M.getD c 0 = 0 then ks else p :: .loop c p :: ks)
 
-/-- W-suffixed operations (upstream decodes only `ADDIW`). -/
-inductive WordOp where
-  | add | sub | sll | srl | sra | mul | div | divu | rem | remu
-
-/-- Zbc carry-less multiplications. -/
-inductive ClOp where
-  | clmul | clmulh | clmulr
-
-/-- A decoded instruction: upstream's, a W-op (register or immediate shift), or Zbc. -/
-inductive Instruction where
-  | base (i : Instr)
-  | word (op : WordOp) (rd rs1 rs2 : Reg)
-  | wordShift (op : WordOp) (rd rs1 : Reg) (shamt : BitVec 5)
-  | cl (op : ClOp) (rd rs1 rs2 : Reg)
-
-/-- Decode a raw word: `ECALL` exactly (no `EBREAK`, no CSR), Zbc (`OP`, `funct7 = 5`,
-`funct3 = 1/3/2`), the W-ops (`OP-32`, and `OP-IMM-32` shifts), then upstream `decode`. -/
-def decodeInstruction (w : BitVec 32) : Option Instruction :=
-  let opcode := (w.extractLsb' 0 7).toNat
-  let rd := regOfBits (w.extractLsb' 7 5)
-  let rs1 := regOfBits (w.extractLsb' 15 5)
-  let rs2 := regOfBits (w.extractLsb' 20 5)
-  let f3 := (w.extractLsb' 12 3).toNat
-  let f7 := (w.extractLsb' 25 7).toNat
-  if opcode = 0x73 then (if w = 0x00000073 then some (.base .ECALL) else none)
-  else if opcode = 0x33 ∧ f7 = 5 then
-    (match f3 with | 1 => some ClOp.clmul | 3 => some .clmulh | 2 => some .clmulr | _ => none).map
-      fun op => .cl op rd rs1 rs2
-  else if opcode = 0x3b then
-    (match f7, f3 with
-      | 0, 0 => some WordOp.add | 0x20, 0 => some .sub | 0, 1 => some .sll | 0, 5 => some .srl
-      | 0x20, 5 => some .sra | 1, 0 => some .mul | 1, 4 => some .div | 1, 5 => some .divu
-      | 1, 6 => some .rem | 1, 7 => some .remu | _, _ => none).map fun op => .word op rd rs1 rs2
-  else if opcode = 0x1b ∧ f3 ≠ 0 then
-    (match f7, f3 with
-      | 0, 1 => some WordOp.sll | 0, 5 => some .srl | 0x20, 5 => some .sra | _, _ => none).map
-      fun op => .wordShift op rd rs1 (w.extractLsb' 20 5)
-  else (decode w).map .base
-
-/-- 32-bit result of a W-op (RISC-V: shifts use 5 bits; `x/0 = -1`, `x % 0 = x`). -/
-def wordResult (op : WordOp) (a b : BitVec 32) : BitVec 32 :=
-  match op with
-  | .add => a + b | .sub => a - b
-  | .sll => a <<< (b.toNat % 32) | .srl => a >>> (b.toNat % 32)
-  | .sra => a.sshiftRight (b.toNat % 32)
-  | .mul => a * b
-  | .div => if b = 0 then BitVec.allOnes 32 else a.sdiv b
-  | .divu => if b = 0 then BitVec.allOnes 32 else a / b
-  | .rem => if b = 0 then a else a.srem b
-  | .remu => if b = 0 then a else a % b
-
-/-- Zbc: low, high, and reversed (bits 126..63) halves of the 128-bit carry-less product. -/
-def clResult (op : ClOp) (a b : Word) : Word :=
-  match op with
-  | .clmul => (clmul a b).setWidth 64
-  | .clmulh => (clmul a b >>> 64).setWidth 64
-  | .clmulr => (clmul a b >>> 63).setWidth 64
-
-/-! ### One step -/
-
-/-- Address, width and direction (`true` = store) of each load and store. -/
-def memAccess (s : MachineState) : Instr → Option (Word × Nat × Bool)
-  | .LD _ r o => some (s.getReg r + signExtend12 o, 8, false)
-  | .LW _ r o | .LWU _ r o => some (s.getReg r + signExtend12 o, 4, false)
-  | .LH _ r o | .LHU _ r o => some (s.getReg r + signExtend12 o, 2, false)
-  | .LB _ r o | .LBU _ r o => some (s.getReg r + signExtend12 o, 1, false)
-  | .SD r _ o => some (s.getReg r + signExtend12 o, 8, true)
-  | .SW r _ o => some (s.getReg r + signExtend12 o, 4, true)
-  | .SH r _ o => some (s.getReg r + signExtend12 o, 2, true)
-  | .SB r _ o => some (s.getReg r + signExtend12 o, 1, true)
-  | _ => none
-
-/-- One non-`ECALL` instruction; `none` is a fault (misaligned access, store into the tape,
-`EBREAK`/CSR/pseudo-instructions, which the decoder never produces anyway). -/
-def ordinaryStep (s : MachineState) : Instruction → Option MachineState
-  | .base .ECALL | .base .EBREAK | .base (.CSRS _ _) | .base (.LI _ _) | .base (.MV _ _)
-  | .base .NOP => none
-  | .base i =>
-    match memAccess s i with
-    | some (a, width, store) =>
-      if a.toNat % width = 0 && (!store || a.toNat < TAPE_BASE) then some (execInstrBr s i)
-      else none
-    | none => some (execInstrBr s i)
-  | .word op rd rs1 rs2 =>
-    let v := wordResult op ((s.getReg rs1).truncate 32) ((s.getReg rs2).truncate 32)
-    some ((s.setReg rd (v.signExtend 64)).setPC (s.pc + 4))
-  | .wordShift op rd rs1 sh =>
-    let v := wordResult op ((s.getReg rs1).truncate 32) (sh.zeroExtend 32)
-    some ((s.setReg rd (v.signExtend 64)).setPC (s.pc + 4))
-  | .cl op rd rs1 rs2 =>
-    some ((s.setReg rd (clResult op (s.getReg rs1) (s.getReg rs2))).setPC (s.pc + 4))
-
-/-- Fetch at `pc` (4-aligned, at or above `CODE_BASE`) and decode. -/
-def fetch (img : Image) (s : MachineState) : Option Instruction :=
-  if CODE_BASE ≤ s.pc.toNat ∧ s.pc.toNat % 4 = 0 then
-    (img.code[(s.pc.toNat - CODE_BASE) / 4]?).bind decodeInstruction
+/-- **The machine**: run `p` on the input tape for at most `fuel` steps, one per memory word and
+one per statement executed; the output words, or `none` if the fuel runs out. -/
+def XProg.run (p : XProg) (input : List Word) (fuel : Nat) : Option (List Word) :=
+  if p.mem ≤ fuel then
+    XStmt.exec input.toArray (fuel - p.mem) (Array.replicate p.mem 0) #[] [p.body]
   else none
-
-/-! ### Execution -/
-
-/-- The output at `HALT`: the `a1` doublewords from address `a0` upwards. -/
-def readOut (s : MachineState) : List Word := s.readWords (s.getReg .x10) (s.getReg .x11).toNat
-
-/-- Run for at most `fuel` steps (an `ECALL` is one step). `some out` iff a `HALT` with an
-8-aligned `a0` is reached, `out = readOut`; a fault, a trap (other `t0`, undecodable word, `pc`
-off the code) and fuel exhaustion (the `0` case) are all `none`. -/
-def execute (img : Image) : Nat → MachineState → Option (List Word)
-  | 0, _ => none
-  | fuel + 1, s =>
-    match fetch img s with
-    | none => none
-    | some (.base .ECALL) =>
-      if s.getReg .x5 = 0 ∧ (s.getReg .x10).toNat % 8 = 0 then some (readOut s) else none
-    | some i =>
-      match ordinaryStep s i with
-      | some s' => execute img fuel s'
-      | none => none
-
-/-- Initial state: data words from address 0, the input tape from `TAPE_BASE` (both zero
-beyond their length), `sp = TAPE_BASE`, all other registers 0, `pc = CODE_BASE`. -/
-def initState (img : Image) (input : List Word) : MachineState where
-  regs := fun r => match r with | .x2 => BitVec.ofNat 64 TAPE_BASE | _ => 0
-  mem := fun a => if TAPE_BASE ≤ a.toNat then input.getD ((a.toNat - TAPE_BASE) / 8) 0
-    else img.data.getD (a.toNat / 8) 0
-  pc := BitVec.ofNat 64 CODE_BASE
-
-/-- **The machine**: run `img` on the input tape `input` for at most `fuel` steps; the output
-words at `HALT`, or `none` on a fault, a trap or fuel exhaustion. -/
-def run (img : Image) (input : List Word) (fuel : Nat) : Option (List Word) :=
-  execute img fuel (initState img input)
 
 end RecursionFast

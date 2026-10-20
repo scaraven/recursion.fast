@@ -217,3 +217,11 @@ library avoid the term `Fintype.card Digest`.
    (m2)? This is the orchestrator's call, at the pin move.
 2. Should the potential-level guard control (`V31`, m1) be built in S4, or does the paper
    argument suffice?
+
+## Note (V3-S2R, 2026-10-20): commit `05fde28`
+
+After this RESULT was written, commit `05fde28` made the contract's `instance : Fintype Digest`
+**`noncomputable`**. Every verbatim block above shows the computable form. As a computable closed
+term the instance made every compiled binary that imports the contract enumerate `256^32`
+functions at start-up. Ledger entry: V3-KS-A8. The review of this stage is copied in as
+`docs/reviews/V3-S2-KS-review.md`.

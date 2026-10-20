@@ -371,3 +371,116 @@ orchestrator to patch into `docs/DESIGN-v3.md` (and its master in the design wor
   `Fintype.card Digest`, m2). m6: the four unused boolean lemmas now have controls
   (`Controls/Security.lean`: `bool_bounded_ge_one`, S1's `bounded_ge_one` verbatim on
   `BoolKState`; `badAllBool_not_capped`; `rejectAllBool_bounded`; `rejectAllBool_μ`).
+- **V3-KS-A8 (commit `05fde28`; recorded by V3-S2R, handoff §2.1 item 2, §2.13).** The contract's
+  `instance : Fintype Digest` is `noncomputable`. As a computable closed term it made every
+  compiled binary that imports the contract enumerate the `256^32` functions `Fin 32 → Fin 256`
+  at start-up (a hello-world reached 22.9 GB in 20 s without printing; with `noncomputable` it
+  starts in 0.20 s with 86 MB; the submissions repository's
+  `logs/spartan-chain/oracle-merkle-transcript/init-blowup.log`, PLAN D-9, the #5 comment item 4).
+  Nothing proved changes: the instance is used only inside `step`'s sum, which is a `Prop`. Do not
+  make it computable and do not mark it irreducible (an attribute in the trusted base). The
+  verbatim blocks of `V3-S2-KS-RESULT.md`, written before the commit, show the computable form;
+  the RESULT now carries a note.
+
+## V3-S2R (the rules handoff; branch `v3/rules-handoff` on `05fde28`, 2026-10-20)
+
+Input: the submissions repository's `docs/snark-baseline/CORE-HANDOFF.md` (cited "handoff §n"),
+issues #4–#10, PR #11, and the user's decisions of 2026-10-20: (a) the extractor is a computable
+Lean function with a proved step bound, (b) completeness with a small error over a uniformly random
+oracle, cap `2^-128` recommended, (c) O-25 must be closed, on a separate track. The pre-implementation
+review is `docs/reviews/V3-S2R-handoff-review.md` (findings `V3-S2R-H-M<i>`, `-m<i>`); the stage
+record is `docs/stages/V3-S2R-RESULT.md`. The implemented Lean is the reference. O-25 (handoff §2.2,
+#4) is **not** in this stage.
+
+- **V3-S2R-A1 (the extractor program; #7, handoff §2.5, H-M1, H-M2, H-m2 … m5, m11, m13, m15).**
+  `Contract/Machine.lean` is a step-counting word language: `XOp` (15 word operations: `add sub mul
+  mulhu divu remu and or xor shl shr ltu eq clmul clmulh`), `XStmt` (three-address statements `op`,
+  `const`, `load`, `store`, `input`, `out` and the control statements `seq`, `ite`, `loop`; no
+  function-typed field), `XProg` (`mem` zero-initialised words and a body), and the interpreter
+  `XStmt.exec` / `XProg.run`, which consumes one unit of fuel per memory word and per statement
+  executed. `Extractor.lean`: `Computes p E fuel` replaces `ImageComputes`, with the domain `π.size ≤
+  proofCap` and tapes of at most `2^64` words (the input address is a word); `extractorBudget t =
+  2^48 + 2^16·t`; `progCap = 2^20` statements replaces `imageCap`. `Submission.img : Image` becomes
+  `Submission.ext : XProg`. The RISC-V machine (`Contract/Machine.lean` of v2), the vendored Rv64
+  model (`RecursionFast/Vendor/RiscvZkvm`, its lake target, `scripts/check-vendor.sh`, CI step 1),
+  `Library/Machine.lean`'s symbolic execution and `tests/asm/` leave the tree (in git at `05fde28`).
+  The contract imports Lean core and Mathlib only. Trusted lines: 288 (was 331).
+  Design text: §1 (pitch: "supply the extractor as a program of the contract's step-counting
+  machine"), §1.1 (figure rows `Machine.lean` and `Extractor.lean`), §3.2 (the structure), §4.4
+  (rewritten: the language, why deep and three-address, the domain, the budget and its derivation),
+  §5.4 (the efficiency bullet), §6.3 step 8 (liveness: the compiled contract interpreter; a node is
+  run only when its declared fuel at that tape length is at most a liveness cap, H-M3), §6.6 (the
+  extractor and image rows), §8 (table, items 2, 3, 8), §10, §12 (O-15(2) reframed as an organiser
+  decoder *program*; O-16 moot; O-21's budget clause).
+- **V3-S2R-A2 (completeness with error; O-23, #8 (2), #9 item 10, handoff §2.6, H-M4, H-m1,
+  m7, m8, m9).** `Oracle.lean` gains `OProg.bind`. `Security.lean`: `failProb p L` (the probability
+  that `p` returns `false` under a lazily sampled random oracle started from the table `L`),
+  `CompleteWithError R P V δ := ∀ c w, R c w → failProb ((P c w).bind (V c)) [] ≤ δ`, and
+  `completenessCap = 2^-128` (the user's recommended value; `2^-96` was the alternative, and the
+  design's `2^-64` is superseded). `Complete` (perfect, ∀ H) moves to `Library/Completeness.lean`
+  with `complete_withError_zero : Complete R P V → CompleteWithError R P V 0`, and
+  `failProb_eq_prob` identifies `failProb` with the paper theorem's lazy-sampling `prob`.
+  `Submission` gains `δ`, `Certificate.complete` is `CompleteWithError (Rel S.Vb) S.P S.V S.δ`, and
+  `Certificate.cap` gains `S.δ ≤ completenessCap`. Design text: §1.2 V3-4 ("completeness with error
+  `δ ≤ 2^-128` over a random oracle; perfect completeness is the case `δ = 0`"), §3.1 (`bind`),
+  §4.3 (rewritten), §5.4 (new bullet: honest proofs verifying under BLAKE2s is no longer a theorem;
+  the root, sample, smoke and liveness checks are the guarantee), §6.3 (a prover that fails to
+  produce an accepted proof is a failed evaluation; the native prover is not bound by the Lean
+  `P`'s fuel), §6.6 (`δ` row), §6.7 (grinding row operative), §12 (O-23 resolved).
+- **V3-S2R-A3 (the rendered claim and gate rule 4; #9 item 4, handoff §2.8, H-m6).** `Declared` is
+  `ε, δ, qV, fuel`; `CertificateR` drops `img` and gains `S.δ ≤ D.δ`. The program is the
+  submission's own term, executed by the compiled interpreter. `scripts/Gate.lean`: `badgeFields =
+  [(Submission, [V, P, ext])]`, so `E` is specification data. Fixtures: the witness-sending
+  submission passes as a whole; the backdoor submission (noncomputable as a whole, `ε := errorCap`)
+  passes field by field; a submission with a noncomputable `ext` is rejected. Design text: §3.2,
+  §7.6 ("rule 4's computable fields are `V`, `P` and `ext`").
+- **V3-S2R-A4 (the S3 harness, recorded; handoff §2.7, §2.8, §2.11 items 1, 2, H-M3, H-m17).** At
+  this commit the core has no stub, renderer, allowlist, manifest or driver; stage S3 must:
+  (1) render the v3 stub with `Declared = {ε, δ, qV, fuel}` and no image literal (the renderer's
+  `image` kind goes); (2) allowlist and pin by hash the CompPoly `BF64`/`Ext3` closure (`rf-core-s2a`
+  `09668b5`'s `org-closure.sh` roots); (3) generate the manifest from a reference organiser build,
+  not from the tree under test; (4) drop `RecursionFast.Controls` from the entries' allowlist;
+  (5) run liveness on the compiled contract interpreter with a liveness cap (proposed `2^36`
+  steps) and on the **native prover's** proofs with a query log it emits (the harness checks the
+  log's hashes and that it contains `V`'s queries, then decides `Rel` for a leaf, `Vb` on the
+  extracted children for a node); (6) give every repetition of §6.3 step 9 a fresh step directory,
+  the only writable path; (7) cap the comparator with both kernels under a cgroup and a timeout,
+  measured on the reference machine over the full closure (proposed default 16 GB, 30 min), with a
+  fixture: S2b's original `spread_getLsbD` rejected with "nanoda budget exceeded", the rewrite
+  accepted. Done here: `scripts/olean-manifest.py`'s `PINNED_PKGS` no longer lists Clean;
+  `scripts/tools.env` (comparator `d03acab`, lean4export `076e8e5`, nanoda `3a24072`) is restored
+  from `v2-archive` so a submitter can run the same two kernels. Design text: §6.3 steps 8 and 9,
+  §6.6 (a kernel row).
+- **V3-S2R-A5 (the library; #10, handoff §2.10).** `Library/WitnessSending.check` is strict: a leaf
+  proof must be the canonical encoding too (`check_canonical`), so the appended-byte and truncated
+  canaries reject. It runs linear-time twins (`Library/Words.lean`: `packFast`, `bytesAtF`,
+  `decodeWitF`, `witWordsF`, each with an `_eq` theorem; `decodeF`, `encodeF`), from the S2a
+  entry. The extractor is a 21-statement program with fuel `8·t`. Controls:
+  `Controls/WitnessSending.lean`. The contract's `packBytes`/`bytesAt` are marked as specifications
+  in `Extractor.lean`'s header.
+- **V3-S2R-A6 (design text that was false at `05fde28`, independently of this stage).** §2.1:
+  `abbrev Digest := Vector UInt8 32` (#9 item 3). §4.5: the claim is for `Q + qV ≤ logCap`, and
+  efficient extraction for tapes of at most `2^64` words, about `2^61` log entries (#9 item 6,
+  H-m3). §5.3: "a prover cannot flatten the tree" is false; knowledge soundness gives valid child
+  proofs, not proofs produced by recursion (#6 (b)). §6.5: the trivial root check measured 20.7–21.2 s
+  sequentially, 1.2–1.3 s with `Task.spawn`, and 37–43 ms with an unrolled BLAKE2s and `Task.spawn`
+  (development VM, not the reference machine), so "22–29 s … margin 10×" is withdrawn (#6 (a)).
+  §6.7: "pays in `T_tree`" is false for witness-sending below level `j` (#6 (b)). §8 item 6: name
+  core `extern`s with Lean reference bodies on the badge path (`Task.spawn`/`Task.get`, the
+  `Array`/`ByteArray` primitives) (#9 item 5). §1: accumulation (ARC, WARP) is not expressible by
+  the node clause (#8 (4)); pending the user's decision, §1 says "full recursion, every
+  intermediate proof succinct and fully verified".
+- **V3-S2R-A7 (proposed rules awaiting a value; #6, handoff §2.3, §2.4, H-m10).** Succinctness: the
+  root check's **CPU time** (user + system) on one pinned core, calibrated against the organiser's
+  best compiled-Lean chain checker, which interleaves at least 8 chains: `T_V ≤ T_triv,best / 10`.
+  The value is set on the reference machine once the benchmark shape is fixed (REPORT §6 Q7). A
+  step-count `T_V` (O-18) would need `V` written as a deep program with an oracle primitive
+  (H-M1): `OProg`'s continuations are uncharged. Recursion incentive: either the same cap on every
+  sampled proof, or column R ranked beside T. This is the user's decision; until then §5.3 and §6.7
+  carry A6's corrections.
+- **Answered, not changed (open decisions, recorded in the RESULT).** `logCap` stays `2^96` (Q2).
+  The extractor budget's value is this stage's derivation (A1), and the user may revise it.
+  `completenessCap = 2^-128`. Not in this stage: §2.9a (proofCap and the hash menu), §2.9b (the
+  indexer, after O-25 fixes `V`'s type), §2.9c (accumulation), §2.12 (the caterpillar DoS), §2.14,
+  §2.15 (library upstreaming, S4), §2.16 and the PR #11 body (GitHub writes), `V31` (§2.13), and
+  the ArkLib policy (#9 item 8).

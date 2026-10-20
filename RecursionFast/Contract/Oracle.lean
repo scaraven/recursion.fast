@@ -6,7 +6,9 @@ that ask one oracle `ByteArray → Digest` and return a value. `OProg` is induct
 program terminates and asks finitely many queries. A program is run against a full oracle
 function (`run`; the theorem quantifies over every function, the harness instantiates BLAKE2s,
 `Certificate.lean`) or against a partial table of answers (`runLog`; the knowledge-soundness
-laws of `Security.lean` read a verifier's decision from the query log alone).
+laws of `Security.lean` read a verifier's decision from the query log alone). `bind` runs one
+program after another, so that completeness can run the prover and then the verifier against one
+oracle (`Security.lean`, V3-S2R-A2).
 -/
 import RecursionFast.Contract.Relation
 
@@ -40,6 +42,11 @@ def runLog (L : Log) : OProg α → Option α
 def queries (H : ByteArray → Digest) : OProg α → List ByteArray
   | ret _ => []
   | query q k => q :: (k (H q)).queries H
+
+/-- The program that runs `p` and then `f` on its result, against the same oracle. -/
+def bind {β : Type} : OProg α → (α → OProg β) → OProg β
+  | ret a, f => f a
+  | query q k, f => query q fun d => (k d).bind f
 
 end OProg
 

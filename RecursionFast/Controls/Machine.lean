@@ -1,74 +1,175 @@
 /-
-# Controls: the machine (`Contract/Machine.lean`), positive and negative
+# Controls: the extractor's machine (`Contract/Machine.lean`), positive and negative
 
-The machine is v2's, unchanged in v3 except that `clmul` moved in from the deleted `Field.lean`
-(V3-S1-A2). These controls are v2's machine controls (v2's `Controls/Extractor.lean`, in git history at the
-tag `v2-archive`), copied verbatim except `spin_run_100`, whose
-v2 tape is now a plain list. Images are assembled from `tests/asm/*.S`.
+The step-counting word language of V3-S2R-A1 (it replaced v2's RISC-V machine and its controls,
+which are at `05fde28`).
 
-* Positive: `wzbc_run` (the W-op sign-extends a 32-bit sum; `clmulh` is the high word of the
-  carry-less square, so `clmul` moved without change), `tape_below_ok` (a store below the tape),
-  `halt_reads` (data words at address 0).
-* Negative: `tape_readonly` (a store into the tape faults), `halt_misaligned` (`HALT` with
-  `a0 = 4`), `ecall_trap` (`t0 ≠ 0` traps), `spin_run_100` and `spin_run` (an image that loops never
-  halts, at any fuel).
+Positive:
+* `eval_kat`: known answers of the word operations, including the edge cases the docstring names
+  (wrap-around, `x / 0 = 0`, `x % 0 = x`, shifts by the low 6 bits, the high words of the integer
+  and carry-less products: `clmulh` of `2^64 - 1` with itself is `0x5555…`, as v2's Zbc control).
+* `straight_run`: a straight-line program's output, with exactly `mem + statements` fuel
+  (`straight_exact`).
+* `bounds_run`: a read outside memory is `0`, a write outside it is lost, and an input read past
+  the tape's end is `0`.
+* `indirect_run`: `store` and `load` address memory through a cell.
+* `count_run`: the program that counts a cell down from `k` halts in exactly `2k + 7` steps, for
+  every `k < 2^64`.
+
+Negative:
+* `straight_short`: with one step less, the straight-line program does not halt.
+* `count_short`: **a program that loops `k` times needs more than `2k + 6` steps**, for every
+  `k < 2^64`; nothing in the language runs an iteration for free.
+* `mem_charged`: a program with `m` memory words does not run with `m` fuel, for every `m`: the
+  zero-initialised memory is charged.
+* `spin_run`: a program whose loop condition never clears halts at no fuel.
 -/
 import RecursionFast.Library.Machine
+import RecursionFast.Library.Words
 
 namespace RecursionFast.Controls.Machine
-open RecursionFast
+open RecursionFast XStmt
 
-/-! ## The machine: semantics kept from v0.3, and faults -/
+/-! ## Operations -/
 
-/-- `tests/asm/wzbc.S`: `addw` and `clmulh` of `2^64 - 1` with itself, stored and output. -/
-def wzbcImage : Image :=
-  ⟨[0xfff00313, 0x00630e3b, 0x0a633eb3, 0x01c03023, 0x01d03423, 0x00200593, 0x00000293,
-    0x00000073], []⟩
-
-/-- The W-op sign-extends a 32-bit sum; `clmulh` is the high word of the carry-less square. -/
-theorem wzbc_run : run wzbcImage [] 100 = some [0xfffffffffffffffe, 0x5555555555555555] := by
+theorem eval_kat :
+    XOp.add.eval (-1) 2 = 1 ∧ XOp.sub.eval 0 1 = -1 ∧ XOp.mul.eval (2 ^ 63) 2 = 0 ∧
+    XOp.mulhu.eval (2 ^ 63) 4 = 2 ∧ XOp.divu.eval 7 0 = 0 ∧ XOp.remu.eval 7 0 = 7 ∧
+    XOp.divu.eval 7 2 = 3 ∧ XOp.remu.eval 7 2 = 1 ∧ XOp.and.eval 6 3 = 2 ∧ XOp.or.eval 6 3 = 7 ∧
+    XOp.xor.eval 6 3 = 5 ∧ XOp.shl.eval 1 65 = 2 ∧ XOp.shr.eval (2 ^ 63) 63 = 1 ∧
+    XOp.ltu.eval 1 (-1) = 1 ∧ XOp.ltu.eval (-1) 1 = 0 ∧ XOp.eq.eval 5 5 = 1 ∧
+    XOp.eq.eval 5 6 = 0 ∧ XOp.clmul.eval 3 3 = 5 ∧
+    XOp.clmulh.eval (-1) (-1) = 0x5555555555555555 := by
   decide +kernel
 
-/-- A store into the tape faults (`tests/asm/tapestore.S`). -/
-theorem tape_readonly :
-    run ⟨[0x00100313, 0x03f31313, 0x00033023, 0x00000293, 0x00000073], []⟩ [1, 2] 100 = none := by
+/-! ## Straight-line programs, bounds, indirection -/
+
+/-- `M[0] := 2^64 - 1`, output `M[0] + M[0]` and `clmulh(M[0], M[0])`. -/
+def straight : XProg := ⟨3, seqs (.const 0 (-1))
+  [.op .add 1 0 0, .out 1, .op .clmulh 2 0 0, .out 2]⟩
+
+theorem straight_run : straight.run [] 100 = some [0xfffffffffffffffe, 0x5555555555555555] := by
   decide +kernel
 
-/-- The same program halts when the store goes below the tape (`slli t1, t1, 62`). -/
-theorem tape_below_ok :
-    run ⟨[0x00100313, 0x03e31313, 0x00033023, 0x00000293, 0x00000073], []⟩ [1, 2] 100 =
-      some [] := by
+/-- 3 memory words, 5 statements and 4 `seq` nodes: 12 steps. -/
+theorem straight_exact : straight.run [] 12 = some [0xfffffffffffffffe, 0x5555555555555555] := by
   decide +kernel
 
-/-- `HALT` with `a0 = 4` (not 8-aligned) faults (`tests/asm/misaligned.S`). -/
-theorem halt_misaligned : run ⟨[0x00400513, 0x00000293, 0x00000073], []⟩ [] 100 = none := by
-  decide +kernel
+theorem straight_short : straight.run [] 11 = none := by decide +kernel
 
-/-- `ECALL` with `t0 = 1` (v0.3's QUERY, removed) traps (`tests/asm/trap.S`). -/
-theorem ecall_trap : run ⟨[0x00100293, 0x00000073], []⟩ [] 100 = none := by
-  decide +kernel
+/-- One memory word: write `7` to cell 5 (lost), output cell 5 (`0`), read input word 9 of a
+two-word tape (`0`) and output it. -/
+def bounds : XProg := ⟨1, seqs (.const 5 7) [.out 5, .const 0 9, .input 0 0, .out 0]⟩
 
-/-- The image's data words are at address 0: output its two data words in place. -/
-theorem halt_reads : run ⟨[0x00000293, 0x00200593, 0x00000073], [7, 8]⟩ [] 100 = some [7, 8] := by
-  decide +kernel
+theorem bounds_run : bounds.run [1, 2] 100 = some [0, 0] := by decide +kernel
 
-/-! ## Fuel exhaustion -/
+/-- `M[0] := 3; M[1] := 42; M[M[0]] := M[1]; M[2] := M[M[0]]`; output `M[2]` and `M[3]`. -/
+def indirect : XProg := ⟨4, seqs (.const 0 3)
+  [.const 1 42, .store 0 1, .load 2 0, .out 2, .out 3]⟩
 
-/-- `tests/asm/spin.S`: `j .` -/
-def spinImg : Image := ⟨[0x0000006f], []⟩
+theorem indirect_run : indirect.run [] 100 = some [42, 42] := by decide +kernel
 
-theorem spin_run_100 : run spinImg [1, 2, 3] 100 = none := by
-  decide +kernel
+/-! ## Counting down: a loop of `k` iterations costs `2k + 7` steps -/
 
-/-- The looping image never halts, at any fuel and on any tape. -/
-theorem spin_run (t : List Word) (f : ℕ) : run spinImg t f = none := by
-  suffices ∀ f s, s.pc = BitVec.ofNat 64 CODE_BASE → execute spinImg f s = none from
-    this f _ rfl
-  intro f s hs
-  induction f generalizing s with
-  | zero => rfl
-  | succ f ih =>
-    rw [execute_step (i := .base (.JAL .x0 0)) _ ((fetch_eq 0 (by decide) hs).trans rfl) rfl]
-    exact ih _ (by simp [RiscvZkvm.Rv64.execInstrBr, hs, RiscvZkvm.Rv64.signExtend21])
+/-- The loop body: `M[0] := M[0] - M[1]`. -/
+def dec : XStmt := .op .sub 0 0 1
+
+/-- Count `M[0]` down from `k` to `0` with `M[1] = 1`. -/
+def count (k : ℕ) : XProg := ⟨2, .seq (.const 0 (toWord k)) (.seq (.const 1 1) (.loop 0 dec))⟩
+
+theorem exec_dec {I M o : Array Word} {n : ℕ} {ks : List XStmt} :
+    exec I (n + 1) M o (dec :: ks) = exec I n (M.setIfInBounds 0 (M.getD 0 0 - M.getD 1 0)) o ks :=
+  rfl
+
+theorem dec_mem {j : ℕ} : (#[toWord (j + 1), 1] : Array Word).setIfInBounds 0
+    ((#[toWord (j + 1), 1] : Array Word).getD 0 0 - (#[toWord (j + 1), 1] : Array Word).getD 1 0) =
+      #[toWord j, 1] := by
+  simp [← toWord_add_one, BitVec.add_sub_cancel]
+
+theorem count_loop (I : Array Word) (o : Array Word) (f : ℕ) :
+    ∀ j, j < 2 ^ 64 → exec I (f + 2 * j + 1) #[toWord j, 1] o [.loop 0 dec] = some o.toList := by
+  intro j
+  induction j with
+  | zero => intro _; rw [exec_loop_eq (by decide)]; simp
+  | succ j ih =>
+    intro hj
+    have hne : (#[toWord (j + 1), 1] : Array Word).getD 0 0 ≠ 0 := by
+      simpa using (toWord_eq_zero hj).not.mpr (by omega)
+    rw [show f + 2 * (j + 1) + 1 = (f + 2 * j + 1 + 1) + 1 by ring, exec_loop_ne hne, exec_dec,
+      dec_mem]
+    exact ih (by omega)
+
+theorem count_loop_none (I : Array Word) (o : Array Word) :
+    ∀ j, j < 2 ^ 64 → exec I (2 * j) #[toWord j, 1] o [.loop 0 dec] = none := by
+  intro j
+  induction j with
+  | zero => intro _; rfl
+  | succ j ih =>
+    intro hj
+    have hne : (#[toWord (j + 1), 1] : Array Word).getD 0 0 ≠ 0 := by
+      simpa using (toWord_eq_zero hj).not.mpr (by omega)
+    rw [show 2 * (j + 1) = (2 * j + 1) + 1 by ring, exec_loop_ne hne, exec_dec, dec_mem]
+    exact ih (by omega)
+
+theorem count_mem (k : ℕ) (I : Array Word) (n : ℕ) :
+    exec I (n + 4) (Array.replicate 2 0) #[] [(count k).body] =
+      exec I n #[toWord k, 1] #[] [.loop 0 dec] := by
+  rw [show Array.replicate 2 (0 : Word) = #[0, 0] from rfl]
+  simp [count, exec]
+
+/-- **Counting down from `k` takes exactly `2k + 7` steps.** -/
+theorem count_run (k : ℕ) (hk : k < 2 ^ 64) (t : List Word) :
+    (count k).run t (2 * k + 7) = some [] := by
+  unfold XProg.run
+  simp only [count, show 2 ≤ 2 * k + 7 by omega, ↓reduceIte]
+  rw [show 2 * k + 7 - 2 = (0 + 2 * k + 1) + 4 by omega]
+  exact (count_mem k _ _).trans (count_loop _ _ 0 k hk)
+
+/-- **Not with fewer**: a loop of `k` iterations needs more than `2k + 6` steps. -/
+theorem count_short (k : ℕ) (hk : k < 2 ^ 64) (t : List Word) {f : ℕ} (hf : f ≤ 2 * k + 6) :
+    (count k).run t f = none := by
+  unfold XProg.run
+  split
+  · apply exec_none_of_le (n' := 2 * k + 4) _ (by simp only [count] at *; omega)
+    rw [show 2 * k + 4 = 2 * k + 4 from rfl]
+    exact (count_mem k _ _).trans (count_loop_none _ _ k hk)
+  · rfl
+
+/-! ## The memory charge; a loop that never ends -/
+
+/-- **Memory is charged**: `m` memory words and one statement do not run in `m` steps. -/
+theorem mem_charged (m : ℕ) (t : List Word) : (⟨m, .const 0 0⟩ : XProg).run t m = none := by
+  simp [XProg.run]
+
+/-- `M[0] := 1`, then loop while `M[0] ≠ 0` writing cell 1. -/
+def spin : XProg := ⟨1, .seq (.const 0 1) (.loop 0 (.const 1 0))⟩
+
+theorem spin_loop (I : Array Word) (o : Array Word) :
+    ∀ n, exec I n #[1] o [.loop 0 (.const 1 0)] = none := by
+  intro n
+  induction n using Nat.strong_induction_on with
+  | _ n ih =>
+    match n with
+    | 0 => rfl
+    | 1 => rfl
+    | n + 2 =>
+      rw [exec_loop_ne (by decide)]
+      simpa [exec] using ih n (by omega)
+
+/-- **A loop that never ends halts at no fuel**, on every tape. -/
+theorem spin_run (t : List Word) (f : ℕ) : spin.run t f = none := by
+  unfold XProg.run
+  split
+  · rename_i h
+    simp only [spin] at h ⊢
+    obtain ⟨n, hn⟩ : ∃ n, f - 1 = n := ⟨_, rfl⟩
+    rw [hn]
+    match n with
+    | 0 => rfl
+    | 1 => rfl
+    | n + 2 =>
+      rw [show Array.replicate 1 (0 : Word) = #[0] from rfl]
+      simpa [exec] using spin_loop _ _ n
+  · rfl
 
 end RecursionFast.Controls.Machine

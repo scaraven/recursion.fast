@@ -7,10 +7,11 @@ boolean form, and that show the length guard is load-bearing, are in `Controls/P
 Positive:
 * `ws_ks`, `ws_complete`: the witness-sending argument (`Library/WitnessSending.lean`) is
   knowledge-sound at error `0` with no verifier query, through the knowledge state with potential
-  `0` (`ws_kstate_trivial`), and perfectly complete for every oracle.
+  `0` (`ws_kstate_trivial`), and complete at error `0` (V3-S2R-A2), through perfect completeness
+  for every oracle (`ws_complete_perfect`, `Library/Completeness.lean`).
 * `rejectAll_ks`: the verifier that rejects everything is knowledge-sound (for every relation and
   extractor, at error `0`). That is correct, and is why completeness is required:
-  `rejectAll_not_complete` (negative).
+  `rejectAll_not_complete` (negative: at no error below `1`, whatever the prover asks).
 * `ks1`: the verifier that asks one query and accepts has a knowledge state at error `1` for the
   empty relation (the potential is `1` on every non-empty log), so in `queryThenAccept_ge_one` it
   is the error that fails.
@@ -55,8 +56,12 @@ theorem ws_ks : KS (Rel WitnessSending.submission.Vb) WitnessSending.V WitnessSe
 
 theorem ws_kstate_trivial : WitnessSending.kstate.μ = fun _ => 0 := rfl
 
-theorem ws_complete :
+theorem ws_complete_perfect :
     Complete (Rel WitnessSending.submission.Vb) WitnessSending.P WitnessSending.V :=
+  WitnessSending.complete_perfect
+
+theorem ws_complete :
+    CompleteWithError (Rel WitnessSending.submission.Vb) WitnessSending.P WitnessSending.V 0 :=
   WitnessSending.complete
 
 /-- A knowledge state at error `0` is one at the cap. -/
@@ -75,12 +80,12 @@ theorem rejectAll_ks (R : Digest → Wit → Prop) (E : Digest → Proof → Log
     KS R rejectAll E 0 0 :=
   ⟨⟨KState.zero 0 fun _ _ _ h => nomatch h⟩, fun _ _ _ => le_rfl⟩
 
-/-- **Rejecting everything is not complete**: a leaf statement has a witness, for every
-verifier instance and prover. -/
-theorem rejectAll_not_complete (Vb : Digest → Proof → Bool) (P : Digest → Wit → OProg Proof) :
-    ¬ Complete (Rel Vb) P rejectAll := fun h =>
-  Bool.false_ne_true
-    (h (fun _ => Vector.replicate 32 0) _ (.leaf (Vector.replicate 32 0) 0) ⟨Nat.zero_le _, rfl⟩)
+/-- **Rejecting everything is not complete** at any error below `1`: a leaf statement has a
+witness, for every verifier instance and prover, and the rejection has probability `1`. -/
+theorem rejectAll_not_complete (Vb : Digest → Proof → Bool) (P : Digest → Wit → OProg Proof)
+    {δ : ℝ≥0} (hδ : δ < 1) : ¬ CompleteWithError (Rel Vb) P rejectAll δ := fun h =>
+  absurd ((failProb_bind_false _ []).symm.trans_le
+    (h _ (.leaf (Vector.replicate 32 0) 0) ⟨Nat.zero_le _, rfl⟩)) (not_le.mpr hδ)
 
 /-! ## Accept everything (`acceptAll`, `acceptAll_kstate_iff`: `Library/Security.lean`) -/
 

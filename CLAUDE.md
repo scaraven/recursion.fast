@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The **recursion.fast v3 trusted core**: the Lean 4 rules of an autoresearch competition in which
 agents submit a non-interactive argument in the random-oracle model (a verifier `V` and an honest
-prover `P` as Lean query programs over bytes, an extractor `E` with a RISC-V image that computes
-it), prove in Lean that `V` is knowledge-sound (a local counting form, query by query over the
-oracle's log) and that `P` is complete, for one relation over 32-byte digests (hash-chain leaves and
+prover `P` as Lean query programs over bytes, an extractor `E` with a program of the contract's
+step-counting word language that computes it within a proved step bound), prove in Lean that `V`
+is knowledge-sound (a potential over the oracle's query log) and that `P` is complete with error
+`δ ≤ 2^-128` over a random oracle, for one relation over 32-byte digests (hash-chain leaves and
 two-child nodes, parameterised by the submitted verifier), and are ranked by the measured wall time
 of their native prover on a whole recursion tree. Plus the organiser's untrusted library, the
 positive and negative controls, and the harness tools.
@@ -45,24 +46,22 @@ Elsewhere, `lake exe cache get` supplies Mathlib; CompPoly, ArkLib, VCVio and Po
 built, although no v3 module imports them yet.
 
 ```sh
-lake build                          # default targets: contract, library, controls (about 2 min cold, 3 s warm)
+lake build                          # default targets: contract, library, controls (1 min 48 s cold, 3 s warm; V3-S2R)
 lake build gate axiomaudit          # the harness tools
 lake exe axiomaudit                 # PASS: every RecursionFast.* declaration within propext, Classical.choice, Quot.sound
 lake env lean RecursionFast/Controls/Backdoor.lean   # one file
-scripts/ci.sh [RISCV_ZKVM_CHECKOUT] # vendor, hygiene, the source rule's fixtures, build, axiom audit, line budget
+scripts/ci.sh                       # hygiene, the source rule's fixtures, build, axiom audit, line budget
 python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/Blake2s.lean   # trusted line budget
-scripts/check-vendor.sh /home/devops/Verified-zkEVM/riscv-zkvm   # vendored Rv64 is byte-identical
 ```
 
 ## Trust layers
 
 | Layer | Path | Rule |
 |---|---|---|
-| Contract | `RecursionFast/Contract/*.lean`: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine`, `Extractor`, `Tree`, `Certificate` (DESIGN-v3 §8) | **TRUSTED.** Imports Lean core, Mathlib, vendored Rv64 only; never ArkLib/CompPoly/VCVio/PolyFun. No field (V3-1). Budget ≤ 500 code lines for `Contract.lean`, `Contract/*.lean` and `Hash/Blake2s.lean` together (`scripts/loc.py`; 328 after the V3-S1 fix pass). Every definition has a docstring saying what it means, not how it is written. |
-| Vendored Rv64 | `RecursionFast/Vendor/RiscvZkvm/` | **TRUSTED**, byte-identical to riscv-zkvm `6810fc1`. Never edit. |
-| Library | `RecursionFast/Library/` | Untrusted, kernel-checked helpers for submitters: oracle and security lemmas, machine symbolic execution, tape and output formats, the tree, the witness-sending argument. |
+| Contract | `RecursionFast/Contract/*.lean`: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine` (the extractor's step-counting word language), `Extractor`, `Tree`, `Certificate` (DESIGN-v3 §8) | **TRUSTED.** Imports Lean core and Mathlib only; never ArkLib/CompPoly/VCVio/PolyFun. No field (V3-1). Budget ≤ 500 code lines for `Contract.lean`, `Contract/*.lean` and `Hash/Blake2s.lean` together (`scripts/loc.py`; 288 after V3-S2R). Every definition has a docstring saying what it means, not how it is written. The vendored Rv64 model left with the RISC-V extractor image (V3-S2R-A1; in git at `05fde28`). |
+| Library | `RecursionFast/Library/` | Untrusted, kernel-checked helpers for submitters: oracle, security and completeness lemmas, the paper theorem, reasoning about extractor programs (`Runs`), tape and output formats with linear-time twins, the tree, the witness-sending argument. |
 | Controls | `RecursionFast/Controls/` | Positive **and** negative controls for every trusted definition; run in CI. `Backdoor.lean` is the known gap O-25, kept on purpose. |
-| Harness tools | `scripts/`, `tests/source-rule/` | `Gate.lean` (the environment gate, rules 1–9), `source-rule.py` with its fixtures and `TokenSweep.lean`, `AxiomAudit.lean`, `olean-manifest.py`, `bwrap-landrun.sh` (the sandbox shim), `check-vendor.sh`, `check-hygiene.sh`, `loc.py`, `ci.sh`. Carried over from v2 unchanged (design §10). The gate's allowlist, the olean manifest, the organiser build, the challenge stubs, the renderer and the full harness order are stage S3's. |
+| Harness tools | `scripts/`, `tests/source-rule/` | `Gate.lean` (the environment gate, rules 1–9; rule 4's v3 fields `V`, `P`, `ext`), `source-rule.py` with its fixtures and `TokenSweep.lean`, `AxiomAudit.lean`, `olean-manifest.py`, `bwrap-landrun.sh` (the sandbox shim), `check-hygiene.sh`, `loc.py`, `ci.sh`, `tools.env` (the comparator and nanoda pins). Carried over from v2 (design §10). The gate's allowlist, the olean manifest, the organiser build, the challenge stubs, the renderer and the full harness order are stage S3's (DESIGN-AMENDMENTS V3-S2R-A4 lists what S3 must do). |
 
 Hard rules for anything trusted: no `sorry`; axioms only `propext`, `Classical.choice`, `Quot.sound`;
 no `native_decide`, `implemented_by`, `extern`, `csimp`; statements are non-vacuous (a negative
@@ -97,12 +96,10 @@ golfing; `lean4:lean4` for any Lean work.
 
 ```
 RecursionFast/Contract/   Hash/Blake2s · Relation · Oracle · Security · Machine · Extractor · Tree · Certificate
-RecursionFast/Vendor/     RiscvZkvm (trusted, vendored)
 RecursionFast/Library/    untrusted helpers (WitnessSending is the baseline argument)
 RecursionFast/Controls/   CI controls (Backdoor is the known gap O-25)
 scripts/                  harness tools: Gate.lean · AxiomAudit.lean · source-rule.py · TokenSweep.lean ·
-                          olean-manifest.py · bwrap-landrun.sh · check-vendor.sh · check-hygiene.sh · loc.py · ci.sh
-tests/asm/                assembled images for the controls (riscv64-unknown-elf-as -march=rv64im_zbc)
+                          olean-manifest.py · bwrap-landrun.sh · check-hygiene.sh · loc.py · ci.sh · tools.env
 tests/source-rule/        the source rule's fixtures
 docs/                     DESIGN-v3.md · DESIGN-AMENDMENTS.md · stages/V3-S<n>-RESULT.md · reviews/ · reference/
 ```

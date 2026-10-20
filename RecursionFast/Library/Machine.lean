@@ -1,120 +1,155 @@
 /-
   RecursionFast.Library.Machine  (UNTRUSTED, kernel-checked)
 
-  Symbolic execution of a concrete image on the contract machine (`Contract/Machine.lean`), one
-  instruction at a time, on a symbolic tape: simp lemmas on registers and the initial state,
-  `execute_step` (an ordinary instruction), `execute_halt` (a `HALT`), `fetch_eq` (the `idx`-th
-  instruction), `ordinaryStep_ld`/`ordinaryStep_sd` (aligned doubleword accesses), `readWords_eq`
-  (the output as a map over offsets), and fuel monotonicity (`execute_mono`, `run_mono`,
-  `run_none_of_le`).
+  Reasoning about programs of the contract's step-counting machine (`Contract/Machine.lean`).
 
-  Copied verbatim from v2's `Library/Extractor.lean`, section "Machine: symbolic execution"
-  (git history, tag `v2-archive`), plus `length_readWords` from the same
-  file; the machine is unchanged in v3, so the proofs are.
+  * `XStmt.Runs I s M o n M' o'`: the statement `s` runs from memory `M` and output `o` in exactly
+    `n` steps to `M'` and `o'`, whatever follows it on the stack. One lemma per statement
+    (`runs_op` … `runs_loop_step`) composes runs, so a program's step count is the sum of its
+    parts. `XProg.run_of_runs` turns a run of the body into a result of `XProg.run`.
+  * `exec_mono`: more fuel does not change a halting run. `exec_none_of_le`: less fuel does not
+    make a failing run halt.
+  * `XStmt.seqs`: a list of statements run in order (`runs_seqs`).
 -/
 import RecursionFast.Contract.Machine
-import Mathlib.Tactic.IntervalCases
-import Mathlib.Data.List.GetD
+import Mathlib.Tactic.Ring
 
-namespace RecursionFast
-open RiscvZkvm.Rv64 (MachineState Instr Reg execInstrBr signExtend12)
+namespace RecursionFast.XStmt
+open RecursionFast
 
+variable (I : Array Word)
 
-@[simp] theorem pc_setPC (s : MachineState) (v : Word) : (s.setPC v).pc = v := rfl
-@[simp] theorem getReg_x0 (s : MachineState) : s.getReg .x0 = 0 := rfl
-@[simp] theorem getReg_setReg (s : MachineState) (r r' : Reg) (v : Word) :
-    (s.setReg r v).getReg r' = if r' = r ∧ r ≠ .x0 then v else s.getReg r' := by
-  obtain rfl | h := eq_or_ne r' r
-  · cases r' <;> rfl
-  · rw [ite_eq_right fun h' => h h'.1, MachineState.getReg_setReg_ne s r r' v h.symm]
-@[simp] theorem getReg_initState (img : Image) (t : List Word) (r : Reg) :
-    (initState img t).getReg r = if r = .x2 then BitVec.ofNat 64 TAPE_BASE else 0 := by
-  cases r <;> rfl
-@[simp] theorem pc_initState (img : Image) (t : List Word) :
-    (initState img t).pc = BitVec.ofNat 64 CODE_BASE := rfl
-/-- The initial memory (not a simp lemma: on a symbolic address `simp` would expand `toNat`). -/
-theorem getMem_initState (img : Image) (t : List Word) (a : Word) :
-    (initState img t).getMem a = if TAPE_BASE ≤ a.toNat then t.getD ((a.toNat - TAPE_BASE) / 8) 0
-      else img.data.getD (a.toNat / 8) 0 := rfl
+/-- `s` runs from `(M, o)` in exactly `n` steps to `(M', o')`, whatever statements follow it. -/
+def Runs (s : XStmt) (M o : Array Word) (n : ℕ) (M' o' : Array Word) : Prop :=
+  ∀ m ks, exec I (n + m) M o (s :: ks) = exec I m M' o' ks
 
-/-- Tape word `i < 2^60` is at `TAPE_BASE + 8·i`. -/
-theorem getMem_initState_tape (img : Image) (t : List Word) {i : ℕ} (hi : i < 2 ^ 60) :
-    (initState img t).getMem (BitVec.ofNat 64 (TAPE_BASE + 8 * i)) = t.getD i 0 := by
-  rw [getMem_initState, BitVec.toNat_ofNat, Nat.mod_eq_of_lt (by unfold TAPE_BASE; omega),
-    ite_eq_left (Nat.le_add_right _ _), Nat.add_sub_cancel_left,
-    Nat.mul_div_cancel_left _ (by omega)]
+variable {I}
 
-/-- A step of an ordinary instruction. -/
-theorem execute_step {img : Image} {s s' : MachineState} {i : Instruction} (f : ℕ)
-    (hf : fetch img s = some i) (hs : ordinaryStep s i = some s') :
-    execute img (f + 1) s = execute img f s' := by
-  simp only [execute, hf]
-  split
-  · cases ‹some i = none›
-  · cases ‹some i = some (.base .ECALL)›; simp [ordinaryStep] at hs
-  · cases ‹some i = some _›; simp [hs]
+@[simp] theorem exec_nil (n : ℕ) (M o : Array Word) : exec I n M o [] = some o.toList := by
+  cases n <;> rfl
 
-/-- A `HALT`. -/
-theorem execute_halt {img : Image} {s : MachineState} (f : ℕ)
-    (hf : fetch img s = some (.base .ECALL)) (h5 : s.getReg .x5 = 0)
-    (h10 : (s.getReg .x10).toNat % 8 = 0) : execute img (f + 1) s = some (readOut s) := by
-  simp [execute, hf, h5, h10]
+@[simp] theorem exec_zero_cons (M o : Array Word) (s : XStmt) (ks : List XStmt) :
+    exec I 0 M o (s :: ks) = none := rfl
 
 /-- More fuel does not change a halting run. -/
-theorem execute_mono {img : Image} {s : MachineState} {f : ℕ} {o : List Word}
-    (h : execute img f s = some o) (d : ℕ) : execute img (f + d) s = some o := by
-  fun_induction execute img f s <;> simp_all [execute, Nat.add_right_comm _ 1 d]
+theorem exec_mono {n : ℕ} {M o : Array Word} {ks : List XStmt} {r : List Word}
+    (h : exec I n M o ks = some r) (d : ℕ) : exec I (n + d) M o ks = some r := by
+  induction n generalizing M o ks with
+  | zero => cases ks with
+    | nil => simpa using h
+    | cons => cases h
+  | succ n ih =>
+    cases ks with
+    | nil => simpa using h
+    | cons s ks =>
+      rw [Nat.add_right_comm]
+      cases s <;> simp only [exec] at h ⊢ <;> exact ih h
 
 /-- Less fuel does not make a failing run halt. -/
-theorem run_none_of_le {img : Image} {t : List Word} {f f' : ℕ}
-    (h : run img t f' = none) (hf : f ≤ f') : run img t f = none := by
-  cases h' : run img t f with
+theorem exec_none_of_le {n n' : ℕ} {M o : Array Word} {ks : List XStmt}
+    (h : exec I n' M o ks = none) (hn : n ≤ n') : exec I n M o ks = none := by
+  cases h' : exec I n M o ks with
   | none => rfl
-  | some o =>
-    obtain ⟨d, rfl⟩ := Nat.exists_eq_add_of_le hf
-    rw [show run img t (f + d) = execute img (f + d) _ from rfl, execute_mono h' d] at h
-    cases h
+  | some r =>
+    obtain ⟨d, rfl⟩ := Nat.exists_eq_add_of_le hn
+    rw [exec_mono h' d] at h; cases h
 
-/-- More fuel does not change a halting run of `run`. -/
-theorem run_mono {img : Image} {t : List Word} {f f' : ℕ} {o : List Word}
-    (h : run img t f = some o) (hf : f ≤ f') : run img t f' = some o := by
-  obtain ⟨d, rfl⟩ := Nat.exists_eq_add_of_le hf
-  exact execute_mono h d
+theorem runs_op (f : XOp) (d a b : ℕ) (M o : Array Word) :
+    Runs I (.op f d a b) M o 1 (M.setIfInBounds d (f.eval (M.getD a 0) (M.getD b 0))) o :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-/-- Fetch at the `idx`-th instruction. -/
-theorem fetch_eq {img : Image} {s : MachineState} (idx : ℕ) (hi : CODE_BASE + 4 * idx < 2 ^ 64)
-    (hpc : s.pc = BitVec.ofNat 64 (CODE_BASE + 4 * idx)) :
-    fetch img s = (img.code[idx]?).bind decodeInstruction := by
-  have : s.pc.toNat = CODE_BASE + 4 * idx := by rw [hpc, BitVec.toNat_ofNat, Nat.mod_eq_of_lt hi]
-  simp only [fetch, this]
-  simp [CODE_BASE]
+theorem runs_const (d : ℕ) (w : Word) (M o : Array Word) :
+    Runs I (.const d w) M o 1 (M.setIfInBounds d w) o :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-/-- An aligned doubleword load. -/
-theorem ordinaryStep_ld {s : MachineState} {rd rs : Reg} {o : BitVec 12}
-    (h : (s.getReg rs + signExtend12 o).toNat % 8 = 0) :
-    ordinaryStep s (.base (.LD rd rs o)) =
-      some ((s.setReg rd (s.getMem (s.getReg rs + signExtend12 o))).setPC (s.pc + 4)) := by
-  simp only [ordinaryStep, memAccess, h]
-  rfl
+theorem runs_load (d a : ℕ) (M o : Array Word) :
+    Runs I (.load d a) M o 1 (M.setIfInBounds d (M.getD (M.getD a 0).toNat 0)) o :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-/-- An aligned doubleword store below the tape. -/
-theorem ordinaryStep_sd {s : MachineState} {rs1 rs2 : Reg} {o : BitVec 12}
-    (h : (s.getReg rs1 + signExtend12 o).toNat % 8 = 0)
-    (ht : (s.getReg rs1 + signExtend12 o).toNat < TAPE_BASE) :
-    ordinaryStep s (.base (.SD rs1 rs2 o)) =
-      some ((s.setMem (s.getReg rs1 + signExtend12 o) (s.getReg rs2)).setPC (s.pc + 4)) := by
-  simp only [ordinaryStep, memAccess, h, ht]
-  rfl
+theorem runs_store (a v : ℕ) (M o : Array Word) :
+    Runs I (.store a v) M o 1 (M.setIfInBounds (M.getD a 0).toNat (M.getD v 0)) o :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-/-- `readWords` as a map over the offsets. -/
-theorem readWords_eq (s : MachineState) (base : Word) (n : ℕ) :
-    s.readWords base n = (List.range n).map fun j => s.getMem (base + BitVec.ofNat 64 (8 * j)) := by
-  induction n generalizing base <;> simp [*, List.range_succ_eq_map, Nat.mul_succ,
-    BitVec.ofNat_add, BitVec.add_assoc, BitVec.add_comm 8#64]
+theorem runs_input (d a : ℕ) (M o : Array Word) :
+    Runs I (.input d a) M o 1 (M.setIfInBounds d (I.getD (M.getD a 0).toNat 0)) o :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-/-- `readWords` reads `n` words. -/
-theorem length_readWords (s : MachineState) (base : Word) (n : ℕ) :
-    (s.readWords base n).length = n := by
-  simp [readWords_eq]
+theorem runs_out (v : ℕ) (M o : Array Word) : Runs I (.out v) M o 1 M (o.push (M.getD v 0)) :=
+  fun m ks => by rw [Nat.add_comm]; rfl
 
-end RecursionFast
+theorem runs_seq {p q : XStmt} {M o M₁ o₁ M₂ o₂ : Array Word} {n₁ n₂ : ℕ}
+    (hp : Runs I p M o n₁ M₁ o₁) (hq : Runs I q M₁ o₁ n₂ M₂ o₂) :
+    Runs I (.seq p q) M o (n₁ + n₂ + 1) M₂ o₂ := fun m ks => by
+  rw [show n₁ + n₂ + 1 + m = (n₁ + (n₂ + m)) + 1 by omega]
+  simp only [exec]
+  rw [hp, hq]
+
+theorem runs_ite_true {c : ℕ} {p q : XStmt} {M o M' o' : Array Word} {n : ℕ}
+    (hc : M.getD c 0 ≠ 0) (hp : Runs I p M o n M' o') : Runs I (.ite c p q) M o (n + 1) M' o' :=
+  fun m ks => by
+    rw [show n + 1 + m = (n + m) + 1 by omega]
+    simp only [exec, hc, ↓reduceIte]
+    exact hp m ks
+
+theorem runs_ite_false {c : ℕ} {p q : XStmt} {M o M' o' : Array Word} {n : ℕ}
+    (hc : M.getD c 0 = 0) (hq : Runs I q M o n M' o') : Runs I (.ite c p q) M o (n + 1) M' o' :=
+  fun m ks => by
+    rw [show n + 1 + m = (n + m) + 1 by omega]
+    simp only [exec, hc, ↓reduceIte]
+    exact hq m ks
+
+theorem runs_loop_zero {c : ℕ} {p : XStmt} {M o : Array Word} (hc : M.getD c 0 = 0) :
+    Runs I (.loop c p) M o 1 M o := fun m ks => by
+  rw [Nat.add_comm]; simp only [exec, hc, ↓reduceIte]
+
+theorem runs_loop_step {c : ℕ} {p : XStmt} {M o M₁ o₁ M₂ o₂ : Array Word} {n n' : ℕ}
+    (hc : M.getD c 0 ≠ 0) (hp : Runs I p M o n M₁ o₁) (hl : Runs I (.loop c p) M₁ o₁ n' M₂ o₂) :
+    Runs I (.loop c p) M o (n + n' + 1) M₂ o₂ := fun m ks => by
+  rw [show n + n' + 1 + m = (n + (n' + m)) + 1 by omega]
+  simp only [exec, hc, ↓reduceIte]
+  rw [hp, hl]
+
+theorem exec_seq {p q : XStmt} {M o : Array Word} {n : ℕ} {ks : List XStmt} :
+    exec I (n + 1) M o (.seq p q :: ks) = exec I n M o (p :: q :: ks) := rfl
+
+theorem exec_out {v : ℕ} {M o : Array Word} {n : ℕ} {ks : List XStmt} :
+    exec I (n + 1) M o (.out v :: ks) = exec I n M (o.push (M.getD v 0)) ks := rfl
+
+theorem exec_loop_ne {c : ℕ} {p : XStmt} {M o : Array Word} {n : ℕ} {ks : List XStmt}
+    (hc : M.getD c 0 ≠ 0) :
+    exec I (n + 1) M o (.loop c p :: ks) = exec I n M o (p :: .loop c p :: ks) := by
+  simp only [exec, hc, ↓reduceIte]
+
+theorem exec_loop_eq {c : ℕ} {p : XStmt} {M o : Array Word} {n : ℕ} {ks : List XStmt}
+    (hc : M.getD c 0 = 0) : exec I (n + 1) M o (.loop c p :: ks) = exec I n M o ks := by
+  simp only [exec, hc, ↓reduceIte]
+
+theorem runs_mono_eq {s : XStmt} {M o M' o' : Array Word} {n n' : ℕ}
+    (h : Runs I s M o n M' o') (hn : n = n') : Runs I s M o n' M' o' := hn ▸ h
+
+/-- Statements run in order: `seqs s [t₁, …, tₖ] = seq s (seq t₁ (… tₖ))`. -/
+def seqs : XStmt → List XStmt → XStmt
+  | s, [] => s
+  | s, t :: ts => .seq s (seqs t ts)
+
+end RecursionFast.XStmt
+
+namespace RecursionFast.XProg
+open RecursionFast XStmt
+
+/-- **A run of the body is a result of the program**, with any fuel that covers the memory and
+the steps. -/
+theorem run_of_runs {p : XProg} {input : List Word} {n f : ℕ} {M' o' : Array Word}
+    (h : Runs input.toArray p.body (Array.replicate p.mem 0) #[] n M' o')
+    (hf : p.mem + n ≤ f) : p.run input f = some o'.toList := by
+  unfold run
+  simp only [show p.mem ≤ f by omega, ↓reduceIte]
+  rw [show f - p.mem = n + (f - p.mem - n) by omega, h]
+  simp
+
+/-- With less fuel than the memory, the program does not run. -/
+theorem run_lt_mem {p : XProg} {input : List Word} {f : ℕ} (h : f < p.mem) :
+    p.run input f = none := by
+  unfold run; simp only [show ¬ p.mem ≤ f by omega, ↓reduceIte]
+
+end RecursionFast.XProg

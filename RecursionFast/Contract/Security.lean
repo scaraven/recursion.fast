@@ -52,13 +52,22 @@ queries and `2^-64` at `2^64` (V3-KS-A6; `Controls/Potential.lean`, `v24_no_bool
 **What this file does not exclude (V3-S1-A13, A23).** `KState` alone excludes little: a verifier
 that accepts everything has one exactly when every statement has some witness, which no digest
 can be shown to lack (`Library/Security.lean`, `acceptAll_kstate_iff`). The knowledge content of a
-certificate is `KS` **with the named extractor**, which `Extractor.lean` requires an image to
-compute within a budget (decision Q1). Nor does anything here constrain how `V` behaves on one
-particular oracle function: a `V` that recognises the deployment oracle (BLAKE2s,
+certificate is `KS` **with the named extractor**, which `Extractor.lean` requires a program of the
+contract's machine to compute within a step budget (decision Q1, V3-S2R-A1). Nor does anything
+here constrain how `V` behaves on one particular oracle function: a `V` that recognises the deployment oracle (BLAKE2s,
 `Certificate.lean`) and accepts a magic proof there is certified (O-25, `Controls/Backdoor.lean`).
 
-**Completeness (`Complete`)** is perfect, over every oracle function. The counted-error form of
-§4.3 (`CompleteWithError`) is not in the contract yet (O-23, V3-S1-A9).
+**Completeness (`CompleteWithError`, V3-S2R-A2, O-23; the user's decision of 2026-10-20).** On
+every statement and witness of the relation, the honest prover's proof, produced and then verified
+against one **uniformly random** oracle, is rejected with probability at most `δ`, a declared
+number at most `completenessCap = 2^-128` (`Certificate.lean`). The oracle is sampled lazily
+(`failProb`): a fresh query, the prover's or the verifier's, is answered uniformly over the `2^256`
+digests and recorded, and a repeated one is answered from the record, so the verifier sees the
+answers the prover saw. This admits grinding and challenge-dependent exceptional cases, which
+perfect completeness over every oracle function (S1's `Complete`, now `Library/Security.lean`)
+forbids; `Complete` implies `CompleteWithError` at `δ = 0`. Nothing here says that an honest proof
+verifies under the one deployed oracle, BLAKE2s; the harness's concrete checks do (DESIGN-v3
+§5.4, V3-S2R-H-M4).
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs
@@ -105,10 +114,23 @@ def KS (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
     (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) (qV : ℕ) : Prop :=
   Nonempty (KState R V E ε) ∧ ∀ H c π, ((V c π).queries H).length ≤ qV
 
-/-- **Perfect completeness** over every oracle function: on every statement and witness in `R`,
-the verifier accepts the honest prover's proof. -/
-def Complete (R : Digest → Wit → Prop) (P : Digest → Wit → OProg Proof)
-    (V : Digest → Proof → OProg Bool) : Prop :=
-  ∀ (H : ByteArray → Digest) c w, R c w → (V c ((P c w).run H)).run H = true
+/-- The probability that `p` returns `false` when each query not in the table `L` is answered
+uniformly at random and recorded, and a repeated query is answered from the table (first match):
+a lazily sampled random oracle. -/
+noncomputable def failProb : OProg Bool → Log → ℝ≥0
+  | .ret b, _ => if b then 0 else 1
+  | .query q k, L =>
+    match L.find? fun e => e.1 = q with
+    | some e => failProb (k e.2) L
+    | none => (2 ^ 256)⁻¹ * ∑ a : Digest, failProb (k a) (L ++ [(q, a)])
+
+/-- **Completeness with error `δ`**: on every statement and witness of `R`, the honest prover's
+proof, produced and verified against one random oracle, is rejected with probability at most `δ`. -/
+def CompleteWithError (R : Digest → Wit → Prop) (P : Digest → Wit → OProg Proof)
+    (V : Digest → Proof → OProg Bool) (δ : ℝ≥0) : Prop :=
+  ∀ c w, R c w → failProb ((P c w).bind (V c)) [] ≤ δ
+
+/-- The contract's cap on the completeness error: `2^-128`. -/
+noncomputable def completenessCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 128
 
 end RecursionFast

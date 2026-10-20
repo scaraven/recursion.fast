@@ -42,16 +42,8 @@ name = "PolyFun"
 git = "https://github.com/Verified-zkEVM/PolyFun"
 rev = "41d3b21dcc99817fe4f9f24ca7b2b58f0578083d"
 
-# riscv-zkvm `Rv64` hand model, vendored byte-identically from 6810fc1 (scripts/check-vendor.sh).
-# TRUSTED (the extractor's machine), not counted in the contract's own line budget.
-[[lean_lib]]
-name = "RiscvZkvm"
-srcDir = "RecursionFast/Vendor"
-roots = ["RiscvZkvm"]
-globs = ["RiscvZkvm.+"]
-moreLeanArgs = ["--tstack=400000"]
-
-# TRUSTED contract (Lean core + Mathlib + vendored Rv64 only).
+# TRUSTED contract (Lean core + Mathlib only). The vendored riscv-zkvm Rv64 model, which served
+# the RISC-V extractor image, left with it (V3-S2R-A1; in git history at 05fde28).
 [[lean_lib]]
 name = "RecursionFastContract"
 roots = ["RecursionFast.Contract"]

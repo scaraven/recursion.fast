@@ -192,7 +192,7 @@ private theorem deepProof_check_succ {k : ℕ} (h : check (deepStmt k) (deepProo
     check (deepStmt (k + 1)) (deepProof (k + 1)) = true := by
   have hV : submission.Vb (deepStmt k) (deepProof k) = true := by rw [Vb_eq, h]; simpa using hcap
   rw [deepProof, deepStmt]
-  exact check_encode ⟨rfl, hV, hV⟩ ⟨hcap, hcap⟩
+  exact check_encode ⟨rfl, hV, hV⟩
 
 theorem deepProof_check (k : ℕ) (hk : k ≤ 12) : check (deepStmt k) (deepProof k) = true := by
   induction k with
