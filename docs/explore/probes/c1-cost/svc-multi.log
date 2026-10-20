@@ -1,0 +1,11 @@
+ 17:31:44 up 14 days, 22:21,  3 users,  load average: 3.49, 2.48, 1.74
+KAT keyed blake2s(00..1f,'abc') = a281f725754969a702f6fe36fc591b7def866e4b70173ece402fc01c064d6b65
+== K channels
+multi spin K= 4 clients x W=2 servers B= 1024 len=  65 :     8.44 Mcalls/s aggregate    0.55 GB/s
+multi spin K= 8 clients x W=1 servers B= 1024 len=  65 :     8.07 Mcalls/s aggregate    0.52 GB/s
+multi spin K= 8 clients x W=2 servers B= 1024 len=  65 :    12.46 Mcalls/s aggregate    0.81 GB/s
+multi spin K=12 clients x W=1 servers B= 1024 len=  65 :    11.31 Mcalls/s aggregate    0.74 GB/s
+multi spin K=16 clients x W=1 servers B= 1024 len=  65 :    11.61 Mcalls/s aggregate    0.75 GB/s
+multi spin K= 8 clients x W=2 servers B=  256 len=2049 :     0.80 Mcalls/s aggregate    1.63 GB/s
+multi spin K=12 clients x W=1 servers B=  256 len=2049 :     0.89 Mcalls/s aggregate    1.81 GB/s
+multi spin K=16 clients x W=1 servers B=  256 len=2049 :     0.66 Mcalls/s aggregate    1.36 GB/s

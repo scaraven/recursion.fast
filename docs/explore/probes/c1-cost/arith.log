@@ -1,0 +1,53 @@
+t_rust per compression ns 128.2958984375
+WS r8: simd-many 191 ms, rust 538 ms, lean 633-688 ms
+cols 669500 merkle 13000 absorb bytes 794527 absorbs 85 squeezes 390 fs compr 12499.484375
+spartan h_V compressions 25890 queries 5156
+D4 list bytes 1812332 -> 28318 compressions, ratio 1.094
+node query ratio: 1-block real 1.56, 2-block real 0.79
+h_V=  5100: concat 256*hv=1.31M, deferral 511*hv=2.61M compr, ratio to WS 2^22: concat 0.31 deferral 0.62; WS/deferral compression 1.61
+h_V=  9200: concat 256*hv=2.36M, deferral 511*hv=4.70M compr, ratio to WS 2^22: concat 0.56 deferral 1.12; WS/deferral compression 0.89
+h_V= 10000: concat 256*hv=2.56M, deferral 511*hv=5.11M compr, ratio to WS 2^22: concat 0.61 deferral 1.22; WS/deferral compression 0.82
+h_V= 25890: concat 256*hv=6.63M, deferral 511*hv=13.23M compr, ratio to WS 2^22: concat 1.58 deferral 3.15; WS/deferral compression 0.32
+WS r4n20: simd 766 ms rust 2152 ms lean 2651 ms
+ r4 deferral hv=6400: 198400 compr = 25 ms at 128ns; WS/def compr 84.6
+ r4 deferral hv=12000: 372000 compr = 48 ms at 128ns; WS/def compr 45.1
+ r4 deferral hv=14000: 434000 compr = 56 ms at 128ns; WS/def compr 38.7
+IVC WS 2^20 serial: 130 ms (blake2s_simd serial), 166 ms lean
+ IVC k=     1: deferral root queries (2^20/k)*10k = 1.05e+10, time at 128ns 1.35e+03 s; WS/def 0.0001; recursion overhead h/k 1e+04
+ IVC k=  1024: deferral root queries (2^20/k)*10k = 1.02e+07, time at 128ns 1.31 s; WS/def 0.102; recursion overhead h/k 9.77
+ IVC k= 16384: deferral root queries (2^20/k)*10k = 6.4e+05, time at 128ns 0.0821 s; WS/def 1.64; recursion overhead h/k 0.61
+ IVC k=131072: deferral root queries (2^20/k)*10k = 8e+04, time at 128ns 0.0103 s; WS/def 13.1; recursion overhead h/k 0.0763
+charge spartan per query: h/n=0.315 ; per tree 510*h/n*T_leaf vs 256 T_leaf -> ratio 0.63
+charge spartan per compression: h/n=1.580 ; per tree 510*h/n*T_leaf vs 256 T_leaf -> ratio 3.15
+charge leanVM child: h/n=0.562 ; per tree 510*h/n*T_leaf vs 256 T_leaf -> ratio 1.12
+charge WHIR UD+FS ~: h/n=0.732 ; per tree 510*h/n*T_leaf vs 256 T_leaf -> ratio 1.46
+t_hash: spartan n=16 11.44 ms, 1024 0.690 ms, 2^14 0.468 ms; flock devVM 0.870 ms; flock M4 2.06 us
+fixed t=2.06e-06 s: per node 2*hv_sc*t = 0.107 s = 0.0139 x T_leaf
+fixed t=0.000468 s: per node 2*hv_sc*t = 24.2 s = 3.16 x T_leaf
+leanVM 2->1: compr 2^14.169=18420; at flock rate 38.0 ms of 394 ms = 9.6%
+stwo rows plonk 231881 poseidon 164040 poseidon cell share 69.4%
+R1CS bits node: hash rows 8.48e+08 field rows 6.2e+07 share 93.2%
+R1CS bits node: hash rows 3.28e+08 field rows 1.2e+06 share 99.6%
+non-native: 3.1e7 K-mul * 4096 = 1.27e+11 rows vs hash 8.48e+08
+prover leaf: calls 262619, compressions 4.47M, bytes 277.9 MB; rate over 7.67 s: 34240 calls/s 36.2 MB/s
+tree leaves: calls 6.72e+07, bytes 71.1 GB
+table memory: full queries leaves 71.1 GB; fingerprint 128B/entry x 2*256*calls = 17.2 GB; WHIR-like 2^20 calls/leaf x 512 proofs x128B = 68.7 GB
+R1CS-bits (node=2*h_V/n leaves): tree work 1061.9 vs flat 256.0 -> 4.15x
+WHIR-class: tree work 629.5 vs flat 256.0 -> 2.46x
+leanVM-class (Flock leaf 2^14 at 485k/s, node 0.394s): tree work 109.1 vs flat 8.6 -> 12.62x
+r4n20 leanVM-class: tree 40.5 s flat 34.6 s ratio 1.17
+1e6 x n=2^14 spartan: 7.67e+06 s = 88.8 days = 2130.6 h
+1e6 x n=16 spartan: 1.83e+05 s = 2.1 days = 50.8 h
+1e6 x n=1024 spartan: 7.07e+05 s = 8.2 days = 196.4 h
+1e6 x Lean P n=16: 3.49e+07 s = 403.9 days = 9694.4 h
+1e6 x Flock devVM 2^14: 1.42e+07 s = 164.9 days = 3958.3 h
+1e6 x Flock M4 2^14: 3.38e+04 s = 0.4 days = 9.4 h
+CV spartan 2^14 0.037
+ CV 0.030 precision 0.010 -> N=14
+ CV 0.030 precision 0.005 -> N=57
+ CV 0.037 precision 0.010 -> N=22
+ CV 0.037 precision 0.005 -> N=86
+ CV 0.063 precision 0.010 -> N=62
+ CV 0.063 precision 0.005 -> N=249
+WOTS+ w16: avg 556 worst 1059
+SPHINCS per sig 532, XMSS per sig 145

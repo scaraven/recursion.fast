@@ -1,0 +1,47 @@
+ 17:29:29 up 14 days, 22:18,  3 users,  load average: 1.76, 1.22, 1.25
+32
+KAT keyed blake2s(00..1f,'abc') = a281f725754969a702f6fe36fc591b7def866e4b70173ece402fc01c064d6b65
+== in-process, one thread
+inproc T=1 len=  33 :   245.3 ns/call   245.3 ns/compression (1 blocks)   0.135 GB/s
+inproc T=1 len=  63 :   239.0 ns/call   239.0 ns/compression (1 blocks)   0.264 GB/s
+inproc T=1 len=  64 :   234.7 ns/call   234.7 ns/compression (1 blocks)   0.273 GB/s
+inproc T=1 len=  65 :   453.6 ns/call   226.8 ns/compression (2 blocks)   0.143 GB/s
+inproc T=1 len=  97 :   457.2 ns/call   228.6 ns/compression (2 blocks)   0.212 GB/s
+inproc T=1 len=2049 :  8853.4 ns/call   268.3 ns/compression (33 blocks)   0.231 GB/s
+== in-process, T threads (aggregate)
+inproc T= 1 len=  65 :     2.08 Mcalls/s   240.4 ns/compression/thread
+inproc T= 2 len=  65 :     4.16 Mcalls/s   240.7 ns/compression/thread
+inproc T= 4 len=  65 :     6.85 Mcalls/s   291.8 ns/compression/thread
+inproc T= 8 len=  65 :    13.40 Mcalls/s   298.5 ns/compression/thread
+inproc T=16 len=  65 :    22.28 Mcalls/s   359.1 ns/compression/thread
+inproc T=24 len=  65 :    32.82 Mcalls/s   365.6 ns/compression/thread
+inproc T=32 len=  65 :    38.20 Mcalls/s   418.9 ns/compression/thread
+inproc T= 1 len=2049 :    0.129 Mcalls/s    0.26 GB/s
+inproc T= 2 len=2049 :    0.238 Mcalls/s    0.49 GB/s
+inproc T= 4 len=2049 :    0.468 Mcalls/s    0.96 GB/s
+inproc T= 8 len=2049 :    0.814 Mcalls/s    1.67 GB/s
+inproc T=16 len=2049 :    1.387 Mcalls/s    2.84 GB/s
+inproc T=24 len=2049 :    2.002 Mcalls/s    4.10 GB/s
+inproc T=32 len=2049 :    2.414 Mcalls/s    4.95 GB/s
+== shared-memory service (client process <-> server process, W server threads)
+service futex W= 1 B=    1 len=  65 :   37376.7 ns/call     0.027 Mcalls/s    0.00 GB/s query bytes (acc 170)
+service spin  W= 1 B=    1 len=  65 :    1038.9 ns/call     0.963 Mcalls/s    0.06 GB/s query bytes (acc 42)
+service spin  W= 1 B=   16 len=  65 :     623.9 ns/call     1.603 Mcalls/s    0.10 GB/s query bytes (acc 14)
+service spin  W= 1 B=  256 len=  65 :     555.7 ns/call     1.799 Mcalls/s    0.12 GB/s query bytes (acc 121)
+service spin  W= 1 B= 4096 len=  65 :     661.8 ns/call     1.511 Mcalls/s    0.10 GB/s query bytes (acc 224)
+service futex W= 1 B=   16 len=  65 :    3098.4 ns/call     0.323 Mcalls/s    0.02 GB/s query bytes (acc 14)
+service futex W= 1 B=  256 len=  65 :     888.1 ns/call     1.126 Mcalls/s    0.07 GB/s query bytes (acc 121)
+service futex W= 1 B= 4096 len=  65 :     857.4 ns/call     1.166 Mcalls/s    0.08 GB/s query bytes (acc 224)
+service spin  W= 4 B= 4096 len=  65 :     261.5 ns/call     3.824 Mcalls/s    0.25 GB/s query bytes (acc 184)
+service spin  W= 8 B= 4096 len=  65 :     187.9 ns/call     5.321 Mcalls/s    0.35 GB/s query bytes (acc 184)
+service spin  W=16 B= 4096 len=  65 :     115.5 ns/call     8.659 Mcalls/s    0.56 GB/s query bytes (acc 184)
+service spin  W=24 B= 4096 len=  65 :      96.9 ns/call    10.321 Mcalls/s    0.67 GB/s query bytes (acc 184)
+service futex W= 4 B= 4096 len=  65 :     373.9 ns/call     2.674 Mcalls/s    0.17 GB/s query bytes (acc 184)
+service futex W= 8 B= 4096 len=  65 :     239.0 ns/call     4.184 Mcalls/s    0.27 GB/s query bytes (acc 184)
+service futex W=16 B= 4096 len=  65 :     201.9 ns/call     4.954 Mcalls/s    0.32 GB/s query bytes (acc 184)
+service futex W=24 B= 4096 len=  65 :     225.6 ns/call     4.432 Mcalls/s    0.29 GB/s query bytes (acc 184)
+service spin  W= 1 B=  256 len=2049 :    8265.5 ns/call     0.121 Mcalls/s    0.25 GB/s query bytes (acc 121)
+service spin  W= 4 B= 1024 len=2049 :    3225.0 ns/call     0.310 Mcalls/s    0.64 GB/s query bytes (acc 78)
+service spin  W= 8 B= 1024 len=2049 :    1666.9 ns/call     0.600 Mcalls/s    1.23 GB/s query bytes (acc 78)
+service spin  W=16 B= 1024 len=2049 :     983.7 ns/call     1.017 Mcalls/s    2.08 GB/s query bytes (acc 78)
+service spin  W=24 B= 1024 len=2049 :     811.9 ns/call     1.232 Mcalls/s    2.52 GB/s query bytes (acc 78)

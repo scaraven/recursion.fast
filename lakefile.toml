@@ -83,3 +83,10 @@ name = "axiomaudit"
 srcDir = "scripts"
 root = "AxiomAudit"
 supportInterpreter = true
+
+# EXPLORATION (branch explore/relativized-nark): probes for the relativized-NARK and attested-oracle
+# designs. Untrusted, not part of the default targets; build with `lake build RecursionFastExplore`.
+[[lean_lib]]
+name = "RecursionFastExplore"
+roots = ["RecursionFast.Explore"]
+globs = ["RecursionFast.Explore.*"]
