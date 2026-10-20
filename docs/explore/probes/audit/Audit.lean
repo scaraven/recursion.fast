@@ -1,0 +1,29 @@
+import RecursionFast.Explore
+open RecursionFast.Explore
+#print axioms Relativized.compose
+#print axioms Relativized.paper_tree
+#print axioms Relativized.compose_flat
+#print axioms Relativized.V3.v3_no_compose
+#print axioms Relativized.ws_ksRel
+#print axioms Relativized.concatState
+#print axioms Relativized.Backdoor.backdoor
+#print axioms Relativized.lazy_no_kstate
+#print axioms Relativized.lazy_extractor_collides
+#print axioms Relativized.deferState
+#print axioms Attested.attState
+#print axioms Attested.calls_node
+#print axioms Attested.att_W1
+#print axioms Attested.compose_all
+#print axioms Attested.acceptAll_choice
+#print axioms Attested.hashList_not_coll
+#print axioms Attested.encList_inj
+#print axioms TwoChannel.Merkle.merkleState
+#print axioms TwoChannel.Merkle.col_no_kstate
+#print axioms TwoChannel.Merkle.pure_no_kstate
+#print axioms TwoChannel.Merkle.merkle_eps_ge
+#print axioms TwoChannel.Backdoor.bd_no_kstate
+#print axioms TwoChannel.Backdoor.bdSecW_kstate
+#print axioms Lift.lift
+#print axioms Lift.lift_runner_ws
+#print axioms Lift.reask
+#print axioms Lift.flip_reask

@@ -17,3 +17,6 @@ import RecursionFast.Explore.Relativized.Compose
 import RecursionFast.Explore.Relativized.Concat
 import RecursionFast.Explore.Relativized.Backdoor
 import RecursionFast.Explore.Relativized.Lazy
+import RecursionFast.Explore.Attested.All
+import RecursionFast.Explore.TwoChannel.Backdoor
+import RecursionFast.Explore.Lift.All
