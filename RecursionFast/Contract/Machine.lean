@@ -17,13 +17,16 @@ bound (`Extractor.lean`).
   of word-RAM work: one `XOp` (one instruction on the reference machine; `clmul`/`clmulh` are
   `pclmulqdq` or Zbc, V3-1), one memory or input access, one output word, or one push or pop of the
   statement stack.
-* **Memory is charged (H-m5).** A program declares `mem` zero-initialised words, and `run` charges
-  one step per word before the first statement.
+* **Memory is charged (H-m5) and affine in the input (V3-S2R-A8).** A program declares
+  `mem + memPerWord · t` zero-initialised words on a tape of `t` words, two numbers given as data,
+  and `run` charges one step per word before the first statement, so steps bound memory. Memory
+  that grows with the tape lets an extractor index the log it reads (`Extractor.lean`'s budget),
+  and a short tape (a leaf's) gets a small memory.
 
-**State.** The memory `M` is an array of `mem` words, named by indices. A read outside it is `0`
-and a write outside it is lost. The input tape `I` is read-only (a read past its end is `0`). The
-output is a list of words, appended to. A stack holds the statements still to run. The run halts
-when the stack is empty, and returns the output.
+**State.** The memory `M` is an array of `mem + memPerWord · t` words, named by indices. A read
+outside it is `0` and a write outside it is lost. The input tape `I` is read-only (a read past its
+end is `0`). The output is a list of words, appended to. A stack holds the statements still to
+run. The run halts when the stack is empty, and returns the output.
 
 `clmul` (the carry-less product, v2's Zbc semantics) is unchanged from the RISC-V machine. `Word`
 was the vendored model's notation for `BitVec 64` and is defined here.
@@ -91,12 +94,18 @@ def XStmt.size : XStmt → Nat
   | .loop _ p => p.size + 1
   | _ => 1
 
-/-- An extractor program: `mem` zero-initialised memory words and the statement to run. -/
+/-- An extractor program: `mem + memPerWord · t` zero-initialised memory words on an input tape of
+`t` words, and the statement to run. -/
 structure XProg where
-  /-- The number of memory words. -/
+  /-- The memory words on every input. -/
   mem : Nat
+  /-- The further memory words per input word. -/
+  memPerWord : Nat
   /-- The statement. -/
   body : XStmt
+
+/-- The memory words of `p` on an input tape of `t` words. -/
+def XProg.memFor (p : XProg) (t : Nat) : Nat := p.mem + p.memPerWord * t
 
 /-- Run the statement stack `ks` (top first) on input `I`, memory `M` and output `o` for at most
 `n` statements: the output once the stack is empty, `none` if the fuel runs out first. -/
@@ -118,8 +127,9 @@ def XStmt.exec (I : Array Word) : Nat → Array Word → Array Word → List XSt
 /-- **The machine**: run `p` on the input tape for at most `fuel` steps, one per memory word and
 one per statement executed; the output words, or `none` if the fuel runs out. -/
 def XProg.run (p : XProg) (input : List Word) (fuel : Nat) : Option (List Word) :=
-  if p.mem ≤ fuel then
-    XStmt.exec input.toArray (fuel - p.mem) (Array.replicate p.mem 0) #[] [p.body]
+  if p.memFor input.length ≤ fuel then
+    XStmt.exec input.toArray (fuel - p.memFor input.length)
+      (Array.replicate (p.memFor input.length) 0) #[] [p.body]
   else none
 
 end RecursionFast

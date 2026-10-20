@@ -27,19 +27,26 @@ tape: length word, packed bytes). The empty output, any other tag, and a child l
 certificate requires the denoted witness to be `E`'s result, not the words to be one canonical
 encoding.
 
-**Domain (V3-S1-A11, V3-S2R-H-m3).** Every statement, every proof of at most `proofCap` bytes and
-every log whose tape the machine can address: at most `2^64` words, since the input is read at a
-64-bit address. A log entry takes at least five words, so efficient extraction is claimed for logs
-of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The output has at most
-`outCap = 2^24` words (a witness of the relation needs at most `11 + 2 · 2^17`), and the program
-has at most `progCap = 2^20` statements.
+**Domain (V3-S1-A11, V3-S2R-H-m3, A9).** Every statement, every proof of at most `proofCap`
+bytes and every log whose queries have fewer than `2^64` bytes each and whose tape the machine can
+address: at most `2^64` words, since the input is read at a 64-bit address. A length word is the
+number's low 64 bits, so a query of `2^64` bytes or more would make the tape ambiguous (two logs
+with different answers, one tape). A log entry takes at least five words, so efficient extraction
+is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The
+output has at most `outCap = 2^24` words (a witness of the relation needs at most
+`11 + 2 · 2^17`), and the program has at most `progCap = 2^20` statements.
 
-**Budget (V3-S2R-A1, O-21).** `B t` charges `2^16` steps per input word and a fixed `2^48`. The
-fixed term covers a quasi-linear Reed–Solomon decoder of the word a node extractor must decode
-(about `2^29` symbols, `2^38.7` field operations at about `2^4` statements each, F1 §3.3), with
-`2^5` to spare. The linear term covers indexing the log by sorting it (`t · log t` comparisons of
-4-word digests). Within the domain `B t ≤ 2^80`, so enumerating `2^128` candidates is excluded; the
-relation has no shorter secret.
+**Budget (V3-S2R-A1, A8, O-21).** `B t` charges `2^16` steps per input word and a fixed
+`2^48`. The fixed term covers a quasi-linear Reed–Solomon decoder of the word a node extractor must
+decode (about `2^29` symbols, `2^38.7` field operations at about `2^4` statements each, F1 §3.3),
+with `2^5` to spare. The linear term covers indexing the log: copy each entry's answer and tape
+position into memory and merge-sort them by answer in a scratch of the same size (`memPerWord = 2`,
+`Machine.lean`), `t · log t ≤ 64 · t` comparisons of 4-word digests at about `2^5` statements each,
+so about `2^11` steps per word; a lookup is then a binary search. The decoded word's symbols are
+read from the log, so the decoder's memory is also proportional to `t`. One scan of the log for
+an answer is a kernel-checked control within `16 · t` steps (`Controls/LogScan.lean`). Within the
+domain `B t < 2^81`, so enumerating `2^128` candidates is excluded; the relation has no shorter
+secret.
 -/
 import RecursionFast.Contract.Machine
 import RecursionFast.Contract.Oracle
@@ -102,11 +109,12 @@ def outCap : ℕ := 2 ^ 24
 def progCap : ℕ := 2 ^ 20
 
 /-- **The program computes the extractor `E` within `fuel`**: on every statement, every proof of
-at most `proofCap` bytes and every log whose tape has at most `2^64` words, the program halts
-within `fuel t` steps, `t` the tape's length, with at most `outCap` words, and they denote `E`'s
-result. -/
+at most `proofCap` bytes and every log of queries under `2^64` bytes whose tape has at most `2^64`
+words, the program halts within `fuel t` steps, `t` the tape's length, with at most `outCap`
+words, and they denote `E`'s result. -/
 def Computes (p : XProg) (E : Digest → Proof → Log → Option Wit) (fuel : ℕ → ℕ) : Prop :=
-  ∀ c (π : Proof) (L : Log), π.size ≤ proofCap → (extractorInput c π L).length ≤ 2 ^ 64 →
+  ∀ c (π : Proof) (L : Log), π.size ≤ proofCap → (∀ e ∈ L, e.1.size < 2 ^ 64) →
+    (extractorInput c π L).length ≤ 2 ^ 64 →
     ∃ o, p.run (extractorInput c π L) (fuel (extractorInput c π L).length) = some o ∧
       o.length ≤ outCap ∧ decodeWit o = E c π L
 

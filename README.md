@@ -39,14 +39,14 @@ Lean v4.34.1 and Mathlib v4.34.1; the pins are in `lakefile.toml`.
 lake build                    # contract, library, controls (kernel-checked positive and negative controls)
 lake build gate axiomaudit    # the harness tools
 lake exe axiomaudit           # every declaration within propext, Classical.choice, Quot.sound
-scripts/ci.sh                 # the above plus hygiene, the source rule and the line budget
+scripts/ci.sh                 # the above plus hygiene, the source rule, gate rule 4 and the line budget
 ```
 
 ## Layout
 
 | Path | What | Trust |
 |---|---|---|
-| `RecursionFast/Contract/` | the contract: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine`, `Extractor`, `Tree`, `Certificate` | trusted; 288 code lines, budget 500 |
+| `RecursionFast/Contract/` | the contract: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine`, `Extractor`, `Tree`, `Certificate` | trusted; 292 code lines, budget 500 |
 | `RecursionFast/Library/` | kernel-checked helpers for submitters, including the witness-sending argument | untrusted |
 | `RecursionFast/Controls/` | positive and negative controls for every trusted definition, including the known gap O-25 (`Backdoor.lean`) | untrusted, run in CI |
 | `scripts/` | the gate, the source rule, the axiom audit, the manifest tool, the sandbox shim, the line budget, CI, the kernel pins (`tools.env`) | harness tools |

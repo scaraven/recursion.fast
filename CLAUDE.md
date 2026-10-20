@@ -50,7 +50,7 @@ lake build                          # default targets: contract, library, contro
 lake build gate axiomaudit          # the harness tools
 lake exe axiomaudit                 # PASS: every RecursionFast.* declaration within propext, Classical.choice, Quot.sound
 lake env lean RecursionFast/Controls/Backdoor.lean   # one file
-scripts/ci.sh                       # hygiene, the source rule's fixtures, build, axiom audit, line budget
+scripts/ci.sh                       # hygiene, the source rule's fixtures, build, axiom audit, gate rule 4's fixtures, line budget
 python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/Blake2s.lean   # trusted line budget
 ```
 
@@ -58,10 +58,10 @@ python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean
 
 | Layer | Path | Rule |
 |---|---|---|
-| Contract | `RecursionFast/Contract/*.lean`: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine` (the extractor's step-counting word language), `Extractor`, `Tree`, `Certificate` (DESIGN-v3 §8) | **TRUSTED.** Imports Lean core and Mathlib only; never ArkLib/CompPoly/VCVio/PolyFun. No field (V3-1). Budget ≤ 500 code lines for `Contract.lean`, `Contract/*.lean` and `Hash/Blake2s.lean` together (`scripts/loc.py`; 288 after V3-S2R). Every definition has a docstring saying what it means, not how it is written. The vendored Rv64 model left with the RISC-V extractor image (V3-S2R-A1; in git at `05fde28`). |
+| Contract | `RecursionFast/Contract/*.lean`: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine` (the extractor's step-counting word language), `Extractor`, `Tree`, `Certificate` (DESIGN-v3 §8) | **TRUSTED.** Imports Lean core and Mathlib only; never ArkLib/CompPoly/VCVio/PolyFun. No field (V3-1). Budget ≤ 500 code lines for `Contract.lean`, `Contract/*.lean` and `Hash/Blake2s.lean` together (`scripts/loc.py`; 292 after the V3-S2R fix pass). Every definition has a docstring saying what it means, not how it is written. The vendored Rv64 model left with the RISC-V extractor image (V3-S2R-A1; in git at `05fde28`). |
 | Library | `RecursionFast/Library/` | Untrusted, kernel-checked helpers for submitters: oracle, security and completeness lemmas, the paper theorem, reasoning about extractor programs (`Runs`), tape and output formats with linear-time twins, the tree, the witness-sending argument. |
 | Controls | `RecursionFast/Controls/` | Positive **and** negative controls for every trusted definition; run in CI. `Backdoor.lean` is the known gap O-25, kept on purpose. |
-| Harness tools | `scripts/`, `tests/source-rule/` | `Gate.lean` (the environment gate, rules 1–9; rule 4's v3 fields `V`, `P`, `ext`), `source-rule.py` with its fixtures and `TokenSweep.lean`, `AxiomAudit.lean`, `olean-manifest.py`, `bwrap-landrun.sh` (the sandbox shim), `check-hygiene.sh`, `loc.py`, `ci.sh`, `tools.env` (the comparator and nanoda pins). Carried over from v2 (design §10). The gate's allowlist, the olean manifest, the organiser build, the challenge stubs, the renderer and the full harness order are stage S3's (DESIGN-AMENDMENTS V3-S2R-A4 lists what S3 must do). |
+| Harness tools | `scripts/`, `tests/source-rule/`, `tests/gate/` | `Gate.lean` (the environment gate, rules 1–9; rule 4's v3 fields `V`, `P`, `ext`), `source-rule.py` with its fixtures and `TokenSweep.lean`, `AxiomAudit.lean`, `olean-manifest.py`, `bwrap-landrun.sh` (the sandbox shim), `check-hygiene.sh`, `loc.py`, `ci.sh`, `tools.env` (the comparator and nanoda pins). Carried over from v2 (design §10). The gate's allowlist, the olean manifest, the organiser build, the challenge stubs, the renderer and the full harness order are stage S3's (DESIGN-AMENDMENTS V3-S2R-A4 lists what S3 must do). |
 
 Hard rules for anything trusted: no `sorry`; axioms only `propext`, `Classical.choice`, `Quot.sound`;
 no `native_decide`, `implemented_by`, `extern`, `csimp`; statements are non-vacuous (a negative
@@ -101,5 +101,6 @@ RecursionFast/Controls/   CI controls (Backdoor is the known gap O-25)
 scripts/                  harness tools: Gate.lean · AxiomAudit.lean · source-rule.py · TokenSweep.lean ·
                           olean-manifest.py · bwrap-landrun.sh · check-hygiene.sh · loc.py · ci.sh · tools.env
 tests/source-rule/        the source rule's fixtures
+tests/gate/               gate rule 4's fixtures (run by scripts/ci.sh)
 docs/                     DESIGN-v3.md · DESIGN-AMENDMENTS.md · stages/V3-S<n>-RESULT.md · reviews/ · reference/
 ```

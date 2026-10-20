@@ -19,7 +19,7 @@ git = "https://github.com/leanprover-community/mathlib4"
 rev = "v4.34.1"
 
 # Pinned, untrusted dependencies of the organiser's library (the contract imports Lean core,
-# Mathlib and the vendored Rv64 only). No v3 module imports them yet: the baseline's field
+# Mathlib only). No v3 module imports them yet: the baseline's field
 # (CompPoly's BF64, DESIGN-v3 §7.4) and the ArkLib bridge (stage S4) will. Kept pinned so the
 # manifest and the shared package tree do not change.
 [[require]]

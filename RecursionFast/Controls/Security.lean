@@ -30,7 +30,7 @@ Negative:
   (`acceptAll_no_kstate_none`: the contract's relation, every verifier instance and error).
   **Not shown**: a digest without a witness in `Rel Vb`; none can be exhibited for BLAKE2s, and if
   `nodeStmt` is onto, the accept-all verifier has a knowledge state with a non-constructive
-  extractor. What excludes it is the named extractor with its image and budget
+  extractor. What excludes it is the named extractor with its program and budget
   (`Controls/Certificate.lean`, `acceptAll_no_certificate`).
 * `jumpAll_ge_one`, `badAll_not_capped`: a knowledge state whose potential is `1` on every
   non-empty log has `ε ≥ 1`, above `errorCap`; one exists (`badAll`), so this is not vacuous.

@@ -29,7 +29,11 @@ capped at `1` and stopped when it first reaches `1` rises by at most `ε` in exp
 most `(Q + qV) · ε`; otherwise `final` extracts. Kernel-checked for a lazily sampled oracle and a
 deterministic game of at most `Q + qV` queries in `Library/PaperTheorem.lean` (`paper`); the
 passage to a random function and to randomised adversaries is standard and on paper. Nothing is
-claimed for `Q + qV > logCap`.
+claimed for `Q + qV > logCap`. **The extractor is efficient (`Computes`, `Extractor.lean`) only
+for tapes of at most `2^64` words, about `2^61` log entries** (V3-S2R-m2): on longer logs `E` is
+unconstrained and may be a non-constructive choice (`Controls/Certificate.lean`,
+`choice_certificate`), so between about `2^61` and `logCap` entries the bound is a soundness-type
+statement, not knowledge.
 
 **Why a potential.** A challenge that spans several answers (the query phase of a hash-based IOP:
 positions drawn from `H(T ‖ 1), …, H(T ‖ k)`) has error the product of its answers' conditionals;
@@ -54,8 +58,9 @@ that accepts everything has one exactly when every statement has some witness, w
 can be shown to lack (`Library/Security.lean`, `acceptAll_kstate_iff`). The knowledge content of a
 certificate is `KS` **with the named extractor**, which `Extractor.lean` requires a program of the
 contract's machine to compute within a step budget (decision Q1, V3-S2R-A1). Nor does anything
-here constrain how `V` behaves on one particular oracle function: a `V` that recognises the deployment oracle (BLAKE2s,
-`Certificate.lean`) and accepts a magic proof there is certified (O-25, `Controls/Backdoor.lean`).
+here constrain how `V` behaves on one particular oracle function: a `V` that recognises the
+deployment oracle (BLAKE2s, `Certificate.lean`) and accepts a magic proof there is certified (O-25,
+`Controls/Backdoor.lean`).
 
 **Completeness (`CompleteWithError`, V3-S2R-A2, O-23; the user's decision of 2026-10-20).** On
 every statement and witness of the relation, the honest prover's proof, produced and then verified
@@ -64,7 +69,7 @@ number at most `completenessCap = 2^-128` (`Certificate.lean`). The oracle is sa
 (`failProb`): a fresh query, the prover's or the verifier's, is answered uniformly over the `2^256`
 digests and recorded, and a repeated one is answered from the record, so the verifier sees the
 answers the prover saw. This admits grinding and challenge-dependent exceptional cases, which
-perfect completeness over every oracle function (S1's `Complete`, now `Library/Security.lean`)
+perfect completeness over every oracle function (S1's `Complete`, now `Library/Completeness.lean`)
 forbids; `Complete` implies `CompleteWithError` at `δ = 0`. Nothing here says that an honest proof
 verifies under the one deployed oracle, BLAKE2s; the harness's concrete checks do (DESIGN-v3
 §5.4, V3-S2R-H-M4).

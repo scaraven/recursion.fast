@@ -10,6 +10,7 @@ import RecursionFast.Controls.Completeness
 import RecursionFast.Controls.Potential
 import RecursionFast.Controls.Machine
 import RecursionFast.Controls.Extractor
+import RecursionFast.Controls.LogScan
 import RecursionFast.Controls.WitnessSending
 import RecursionFast.Controls.Tree
 import RecursionFast.Controls.Certificate

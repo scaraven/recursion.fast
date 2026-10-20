@@ -15,13 +15,18 @@ Positive:
 * `indirect_run`: `store` and `load` address memory through a cell.
 * `count_run`: the program that counts a cell down from `k` halts in exactly `2k + 7` steps, for
   every `k < 2^64`.
+* `poke_affine`: memory is affine in the tape (V3-S2R-A8): with `memPerWord = 4`, a cell named by
+  an input word exists on an 8-word tape and keeps what is written to it.
 
 Negative:
 * `straight_short`: with one step less, the straight-line program does not halt.
 * `count_short`: **a program that loops `k` times needs more than `2k + 6` steps**, for every
   `k < 2^64`; nothing in the language runs an iteration for free.
-* `mem_charged`: a program with `m` memory words does not run with `m` fuel, for every `m`: the
-  zero-initialised memory is charged.
+* `mem_charged`: a program with `m + r · t` memory words on a tape of `t` words does not run with
+  that much fuel, for every `m`, `r` and tape: the zero-initialised memory is charged
+  (`mem_charged_run`: one step more suffices for one statement).
+* `poke_const`: with constant memory, a cell named by an input word beyond it is lost (the
+  separating twin of `poke_affine`).
 * `spin_run`: a program whose loop condition never clears halts at no fuel.
 -/
 import RecursionFast.Library.Machine
@@ -45,7 +50,7 @@ theorem eval_kat :
 /-! ## Straight-line programs, bounds, indirection -/
 
 /-- `M[0] := 2^64 - 1`, output `M[0] + M[0]` and `clmulh(M[0], M[0])`. -/
-def straight : XProg := ⟨3, seqs (.const 0 (-1))
+def straight : XProg := ⟨3, 0, seqs (.const 0 (-1))
   [.op .add 1 0 0, .out 1, .op .clmulh 2 0 0, .out 2]⟩
 
 theorem straight_run : straight.run [] 100 = some [0xfffffffffffffffe, 0x5555555555555555] := by
@@ -59,12 +64,12 @@ theorem straight_short : straight.run [] 11 = none := by decide +kernel
 
 /-- One memory word: write `7` to cell 5 (lost), output cell 5 (`0`), read input word 9 of a
 two-word tape (`0`) and output it. -/
-def bounds : XProg := ⟨1, seqs (.const 5 7) [.out 5, .const 0 9, .input 0 0, .out 0]⟩
+def bounds : XProg := ⟨1, 0, seqs (.const 5 7) [.out 5, .const 0 9, .input 0 0, .out 0]⟩
 
 theorem bounds_run : bounds.run [1, 2] 100 = some [0, 0] := by decide +kernel
 
 /-- `M[0] := 3; M[1] := 42; M[M[0]] := M[1]; M[2] := M[M[0]]`; output `M[2]` and `M[3]`. -/
-def indirect : XProg := ⟨4, seqs (.const 0 3)
+def indirect : XProg := ⟨4, 0, seqs (.const 0 3)
   [.const 1 42, .store 0 1, .load 2 0, .out 2, .out 3]⟩
 
 theorem indirect_run : indirect.run [] 100 = some [42, 42] := by decide +kernel
@@ -75,7 +80,7 @@ theorem indirect_run : indirect.run [] 100 = some [42, 42] := by decide +kernel
 def dec : XStmt := .op .sub 0 0 1
 
 /-- Count `M[0]` down from `k` to `0` with `M[1] = 1`. -/
-def count (k : ℕ) : XProg := ⟨2, .seq (.const 0 (toWord k)) (.seq (.const 1 1) (.loop 0 dec))⟩
+def count (k : ℕ) : XProg := ⟨2, 0, .seq (.const 0 (toWord k)) (.seq (.const 1 1) (.loop 0 dec))⟩
 
 theorem exec_dec {I M o : Array Word} {n : ℕ} {ks : List XStmt} :
     exec I (n + 1) M o (dec :: ks) = exec I n (M.setIfInBounds 0 (M.getD 0 0 - M.getD 1 0)) o ks :=
@@ -121,7 +126,8 @@ theorem count_mem (k : ℕ) (I : Array Word) (n : ℕ) :
 theorem count_run (k : ℕ) (hk : k < 2 ^ 64) (t : List Word) :
     (count k).run t (2 * k + 7) = some [] := by
   unfold XProg.run
-  simp only [count, show 2 ≤ 2 * k + 7 by omega, ↓reduceIte]
+  simp only [count, XProg.memFor, Nat.zero_mul, Nat.add_zero, show 2 ≤ 2 * k + 7 by omega,
+    ↓reduceIte]
   rw [show 2 * k + 7 - 2 = (0 + 2 * k + 1) + 4 by omega]
   exact (count_mem k _ _).trans (count_loop _ _ 0 k hk)
 
@@ -130,19 +136,41 @@ theorem count_short (k : ℕ) (hk : k < 2 ^ 64) (t : List Word) {f : ℕ} (hf : 
     (count k).run t f = none := by
   unfold XProg.run
   split
-  · apply exec_none_of_le (n' := 2 * k + 4) _ (by simp only [count] at *; omega)
-    rw [show 2 * k + 4 = 2 * k + 4 from rfl]
+  · apply exec_none_of_le (n' := 2 * k + 4) _ (by simp only [count, XProg.memFor] at *; omega)
+    simp only [count, XProg.memFor, Nat.zero_mul, Nat.add_zero]
     exact (count_mem k _ _).trans (count_loop_none _ _ k hk)
   · rfl
 
 /-! ## The memory charge; a loop that never ends -/
 
-/-- **Memory is charged**: `m` memory words and one statement do not run in `m` steps. -/
-theorem mem_charged (m : ℕ) (t : List Word) : (⟨m, .const 0 0⟩ : XProg).run t m = none := by
-  simp [XProg.run]
+/-- **Memory is charged**: `m + r · t` memory words and one statement do not run in `m + r · t`
+steps on a tape of `t` words. -/
+theorem mem_charged (m r : ℕ) (t : List Word) :
+    (⟨m, r, .const 0 0⟩ : XProg).run t (m + r * t.length) = none := by
+  simp [XProg.run, XProg.memFor]
+
+/-- With one step more they do. -/
+theorem mem_charged_run (m r : ℕ) (t : List Word) :
+    (⟨m, r, .const 0 0⟩ : XProg).run t (m + r * t.length + 1) = some [] := by
+  simp [XProg.run, XProg.memFor, exec]
+
+/-- Write `1` to the cell named by input word 4 (a proof's byte length on an extractor tape), then
+output that cell. -/
+def poke (r : ℕ) : XProg := ⟨2, r, seqs (.const 0 4) [.input 1 0, .const 0 1, .store 1 0, .load 0 1,
+  .out 0]⟩
+
+/-- An 8-word tape whose word 4 is `16`. -/
+def tape8 : List Word := [0, 0, 0, 0, 16, 0, 0, 0]
+
+/-- **Memory grows with the tape**: with `4` words per input word, cell `16` exists on an 8-word
+tape (`2 + 4 · 8` words) and keeps the `1`. -/
+theorem poke_affine : (poke 4).run tape8 100 = some [1] := by decide +kernel
+
+/-- **Not with constant memory**: with `2` words the write is lost and the read gives `0`. -/
+theorem poke_const : (poke 0).run tape8 100 = some [0] := by decide +kernel
 
 /-- `M[0] := 1`, then loop while `M[0] ≠ 0` writing cell 1. -/
-def spin : XProg := ⟨1, .seq (.const 0 1) (.loop 0 (.const 1 0))⟩
+def spin : XProg := ⟨1, 0, .seq (.const 0 1) (.loop 0 (.const 1 0))⟩
 
 theorem spin_loop (I : Array Word) (o : Array Word) :
     ∀ n, exec I n #[1] o [.loop 0 (.const 1 0)] = none := by
@@ -161,7 +189,7 @@ theorem spin_run (t : List Word) (f : ℕ) : spin.run t f = none := by
   unfold XProg.run
   split
   · rename_i h
-    simp only [spin] at h ⊢
+    simp only [spin, XProg.memFor, Nat.zero_mul, Nat.add_zero] at h ⊢
     obtain ⟨n, hn⟩ : ∃ n, f - 1 = n := ⟨_, rfl⟩
     rw [hn]
     match n with

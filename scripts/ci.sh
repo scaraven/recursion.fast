@@ -8,9 +8,11 @@
 #   2  source rule: its fixtures (tests/source-rule/check.sh: every rejected form reported, the allowed pass)
 #   3  build:       contract, library, controls (the kernel-evaluated controls), gate, axiomaudit
 #   4  axiom audit: every RecursionFast.* declaration within propext, Classical.choice, Quot.sound
-#   5  line budget: Contract.lean, Contract/*.lean, Contract/Hash/Blake2s.lean ≤ 500 code lines
+#   5  gate rule 4: its fixtures (tests/gate/check.sh: the witness-sending and backdoor submissions
+#                   pass, a noncomputable `ext` is rejected; against a manifest of this tree)
+#   6  line budget: Contract.lean, Contract/*.lean, Contract/Hash/Blake2s.lean ≤ 500 code lines
 #
-#   scripts/ci.sh       (the vendor check of the RISC-V model left with the model, V3-S2R-A1)
+# Usage: scripts/ci.sh (no arguments).
 # Logs: logs/ci/ (gitignored).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,7 +30,9 @@ lake build RecursionFastContract RecursionFastLibrary RecursionFastControls gate
   > "$LOG/build.log" 2>&1; tail -1 "$LOG/build.log"
 step "4 axiom audit"
 lake exe axiomaudit > "$LOG/axiomaudit.log" 2>&1; tail -2 "$LOG/axiomaudit.log"
-step "5 line budget"
+step "5 gate rule 4"
+tests/gate/check.sh | tee "$LOG/gate.log"
+step "6 line budget"
 python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean \
   RecursionFast/Contract/Hash/Blake2s.lean > "$LOG/loc.log"
 code=$(awk '/^TOTAL/ {print $5}' "$LOG/loc.log")

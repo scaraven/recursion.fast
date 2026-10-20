@@ -412,6 +412,11 @@ record is `docs/stages/V3-S2R-RESULT.md`. The implemented Lean is the reference.
   run only when its declared fuel at that tape length is at most a liveness cap, H-M3), §6.6 (the
   extractor and image rows), §8 (table, items 2, 3, 8), §10, §12 (O-15(2) reframed as an organiser
   decoder *program*; O-16 moot; O-21's budget clause).
+  **How decision (a) is implemented (review V3-S2R-m6; to be confirmed by the user).** The user
+  decided "the extractor is a computable Lean function with a proved step bound". It is implemented
+  as a **deep program** `ext : XProg` with a proved step bound plus a **specification** `E`, which
+  may be noncomputable, tied by `Computes ext E fuel`; gate rule 4 lists `ext`, not `E` (H-M1:
+  any shallow Lean function or monad hides uncharged work).
 - **V3-S2R-A2 (completeness with error; O-23, #8 (2), #9 item 10, handoff §2.6, H-M4, H-m1,
   m7, m8, m9).** `Oracle.lean` gains `OProg.bind`. `Security.lean`: `failProb p L` (the probability
   that `p` returns `false` under a lazily sampled random oracle started from the table `L`),
@@ -478,6 +483,31 @@ record is `docs/stages/V3-S2R-RESULT.md`. The implemented Lean is the reference.
   (H-M1): `OProg`'s continuations are uncharged. Recursion incentive: either the same cap on every
   sampled proof, or column R ranked beside T. This is the user's decision; until then §5.3 and §6.7
   carry A6's corrections.
+- **V3-S2R-A8 (affine extractor memory; review V3-S2R-M1, fix pass).** `XProg` has two memory
+  numbers, `mem` and `memPerWord`, given as data; on a tape of `t` words the program has
+  `XProg.memFor t = mem + memPerWord · t` zero-initialised words, charged one step each before the
+  first statement (so steps still bound memory). With one constant, a certified program's memory
+  was at most `B 6 ≈ 2^48` words whatever the tape (review probe P2), so the budget's derivation
+  (sort the log in `Θ(t)` memory) was not an algorithm of the machine, and every leaf liveness run
+  allocated a node decoder's memory. Library: `XProg.run_of_runs`, `run_lt_mem` restated with
+  `memFor`, `XProg.run_eq`. Controls: `mem_charged` (for every `m`, `r`, tape) and
+  `mem_charged_run`; `poke_affine` / `poke_const` (a cell named by an input word exists with
+  `memPerWord = 4` and not with constant memory). Design text: §4.4 (code block, why this shape, the
+  budget's derivation rewritten to an algorithm the machine runs: index the log with
+  `memPerWord = 2`), §6.3 step 8 (a liveness memory cap, proposed `2^27` words). Trusted lines:
+  292 (was 288).
+- **V3-S2R-A9 (`Computes` requires queries under `2^64` bytes; found by the fix pass's log-scan
+  control, review V3-S2R-M2).** A length word on the tape is the number's low 64 bits, and the
+  `2^64`-word domain admits a query of `2^64` bytes or more (up to `2^61` packed words). Such a
+  query makes the tape ambiguous: `[(q, a), (ε, b)]` with `|q| = 2^64` (length word `0`) and
+  `[(ε, a'), (y, b)]`, where `a'` is `q`'s first 32 bytes and `y` (`2^64 − 8 ≤ |y| < 2^64`, its
+  length the next word of `q`) covers the rest of `q`, `a` and `ε`'s length word, share one tape
+  while `a` is an answer of only the first; so no program can compute a specification
+  defined from the log (a find-by-answer or preimage extractor) on both, and a certified
+  log-reading extractor would be impossible. `Computes` adds `∀ e ∈ L, e.1.size < 2 ^ 64`. Beyond
+  it `E` is unconstrained, as beyond `2^64` words (m2). Every certificate in the tree ports by an
+  ignored hypothesis. Design text: §4.4 (the domain), §4.5. Control: `Controls/LogScan.lean`,
+  `scan_computes` (`Computes scan findE (16 · t)`), whose proof uses the bound.
 - **Answered, not changed (open decisions, recorded in the RESULT).** `logCap` stays `2^96` (Q2).
   The extractor budget's value is this stage's derivation (A1), and the user may revise it.
   `completenessCap = 2^-128`. Not in this stage: §2.9a (proofCap and the hash menu), §2.9b (the

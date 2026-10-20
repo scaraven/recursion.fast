@@ -51,27 +51,28 @@ theorem ws_run_short : ext.run tape0 25 = none := by decide +kernel
 /-- **Fuel exhaustion**: 25 steps are not enough. -/
 theorem ws_fuel_short : ¬ Computes ext E fun _ => 25 := by
   intro h
-  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by decide)
+  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by simp) (by decide)
   cases ws_run_short.symm.trans ho
 
 /-! ## The one-statement program -/
 
 /-- One statement, no memory, no output. -/
-def haltProg : XProg := ⟨0, .const 0 0⟩
+def haltProg : XProg := ⟨0, 0, .const 0 0⟩
 
 theorem halt_run (t : List Word) (f : ℕ) : haltProg.run t (f + 1) = some [] := by
-  simp [haltProg, XProg.run, exec]
+  simp [haltProg, XProg.run, XProg.memFor, exec]
 
 /-- **The one-statement program computes the extractor that returns nothing.** -/
 theorem halt_computes : Computes haltProg (fun _ _ _ => none) fun _ => 1 :=
-  fun _ _ _ _ _ => ⟨[], halt_run _ 0, by decide, rfl⟩
+  fun _ _ _ _ _ _ => ⟨[], halt_run _ 0, by decide, rfl⟩
 
 /-- **Wrong output**: it does not compute the witness-sending extractor. -/
 theorem halt_not_ws : ¬ Computes haltProg E fun _ => 1 := by
   intro h
   have hs := size_encode_leaf (Vector.replicate 32 0) 0
   obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) (encode (.leaf (Vector.replicate 32 0) 0)) []
-    (by rw [hs]; decide) (by simp [extractorInput_eq, packBytes_length, hs])
+    (by rw [hs]; decide) (by simp)
+    (by simp [extractorInput_eq, packBytes_length, hs])
   cases (halt_run _ 0).symm.trans ho
   exact nomatch hd.trans (decode_encode (.leaf _ 0) (by decide : (0 : ℕ) < 2 ^ 64))
 
@@ -81,7 +82,7 @@ theorem halt_not_ws : ¬ Computes haltProg E fun _ => 1 := by
 theorem spin_computes_nothing (E : Digest → Proof → Log → Option Wit) (f : ℕ → ℕ) :
     ¬ Computes spin E f := by
   intro h
-  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by decide)
+  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by simp) (by decide)
   cases (spin_run _ _).symm.trans ho
 
 /-- The loop body that outputs `M[0]`, then counts it down. -/
@@ -89,7 +90,7 @@ def outDec : XStmt := .seq (.out 0) dec
 
 /-- Output `2^24 + 1` words. -/
 def toolongProg : XProg :=
-  ⟨2, .seq (.const 0 (toWord (2 ^ 24 + 1))) (.seq (.const 1 1) (.loop 0 outDec))⟩
+  ⟨2, 0, .seq (.const 0 (toWord (2 ^ 24 + 1))) (.seq (.const 1 1) (.loop 0 outDec))⟩
 
 theorem exec_outDec {I M o : Array Word} {n : ℕ} {ks : List XStmt} :
     exec I (n + 1) M o (outDec :: ks) = exec I n M o (.out 0 :: dec :: ks) := rfl
@@ -118,8 +119,8 @@ theorem toolong_mem (I : Array Word) (n : ℕ) :
 theorem toolong_run (t : List Word) : ∃ o,
     toolongProg.run t (4 * (2 ^ 24 + 1) + 7) = some o ∧ o.length = 2 ^ 24 + 1 := by
   unfold XProg.run
-  simp only [show toolongProg.mem = 2 from rfl, show 2 ≤ 4 * (2 ^ 24 + 1) + 7 by omega,
-    ↓reduceIte]
+  simp only [show toolongProg.memFor t.length = 2 by simp [toolongProg, XProg.memFor],
+    show 2 ≤ 4 * (2 ^ 24 + 1) + 7 by omega, ↓reduceIte]
   rw [show 4 * (2 ^ 24 + 1) + 7 - 2 = (0 + 4 * (2 ^ 24 + 1) + 1) + 4 by omega, toolong_mem]
   obtain ⟨r, hr, hl⟩ := outDec_loop t.toArray 0 (2 ^ 24 + 1) #[] (by decide)
   exact ⟨r, hr, by simpa using hl⟩
@@ -128,7 +129,7 @@ theorem toolong_run (t : List Word) : ∃ o,
 theorem toolong_not_computes (E : Digest → Proof → Log → Option Wit) :
     ¬ Computes toolongProg E fun _ => 4 * (2 ^ 24 + 1) + 7 := by
   intro h
-  obtain ⟨o, ho, hl, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by decide)
+  obtain ⟨o, ho, hl, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by simp) (by decide)
   obtain ⟨o', ho', hl'⟩ := toolong_run tape0
   cases ho.symm.trans ho'
   exact absurd (hl' ▸ hl) (by decide)
@@ -138,7 +139,7 @@ every declared fuel within `B`. -/
 theorem enum_no_computes (E : Digest → Proof → Log → Option Wit) (f : ℕ → ℕ)
     (hf : ∀ t, f t ≤ extractorBudget t) : ¬ Computes (count (2 ^ 64 - 1)) E f := by
   intro h
-  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by decide)
+  obtain ⟨o, ho, -⟩ := h (Vector.replicate 32 0) .empty [] (by decide) (by simp) (by decide)
   have h6 := hf tape0.length
   change (count _).run tape0 (f tape0.length) = some o at ho
   rw [tape0_length] at h6 ho

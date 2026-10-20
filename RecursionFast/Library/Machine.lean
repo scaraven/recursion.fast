@@ -140,16 +140,30 @@ open RecursionFast XStmt
 /-- **A run of the body is a result of the program**, with any fuel that covers the memory and
 the steps. -/
 theorem run_of_runs {p : XProg} {input : List Word} {n f : ℕ} {M' o' : Array Word}
-    (h : Runs input.toArray p.body (Array.replicate p.mem 0) #[] n M' o')
-    (hf : p.mem + n ≤ f) : p.run input f = some o'.toList := by
+    (h : Runs input.toArray p.body (Array.replicate (p.memFor input.length) 0) #[] n M' o')
+    (hf : p.memFor input.length + n ≤ f) : p.run input f = some o'.toList := by
   unfold run
-  simp only [show p.mem ≤ f by omega, ↓reduceIte]
-  rw [show f - p.mem = n + (f - p.mem - n) by omega, h]
+  simp only [show p.memFor input.length ≤ f by omega, ↓reduceIte]
+  rw [show f - p.memFor input.length = n + (f - p.memFor input.length - n) by omega, h]
   simp
 
 /-- With less fuel than the memory, the program does not run. -/
-theorem run_lt_mem {p : XProg} {input : List Word} {f : ℕ} (h : f < p.mem) :
+theorem run_lt_mem {p : XProg} {input : List Word} {f : ℕ} (h : f < p.memFor input.length) :
     p.run input f = none := by
-  unfold run; simp only [show ¬ p.mem ≤ f by omega, ↓reduceIte]
+  unfold run; simp only [show ¬ p.memFor input.length ≤ f by omega, ↓reduceIte]
+
+/-- The program's run, once its memory is charged. -/
+theorem run_eq {p : XProg} {input : List Word} {f : ℕ} (h : p.memFor input.length ≤ f) :
+    p.run input f = XStmt.exec input.toArray (f - p.memFor input.length)
+      (Array.replicate (p.memFor input.length) 0) #[] [p.body] := by
+  unfold run; simp only [h, ↓reduceIte]
 
 end RecursionFast.XProg
+
+namespace RecursionFast
+
+/-- The tape as the interpreter reads it: an array read is the list read. -/
+theorem getD_toArray (l : List Word) (k : ℕ) : l.toArray.getD k 0 = l.getD k 0 := by
+  simp [Array.getD_eq_getD_getElem?, List.getD_eq_getElem?_getD]
+
+end RecursionFast

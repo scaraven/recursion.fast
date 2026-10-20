@@ -347,8 +347,11 @@ existing arguments port unchanged. `failProb` is the paper theorem's lazy-sampli
 (`failProb_eq_prob`). The cap: `2^-128` matches `errorCap`'s scale. A grinding prover needs about
 `89·2^g` tries in the worst case at difficulty `2^g`, against `67·2^g` at `2^-96`, and the same
 `2^g` in expectation. Completeness is required (V3-4), because knowledge soundness alone is
-satisfied by a verifier that rejects everything (`rejectAll_not_complete`: at no `δ < 1`, whatever
-the prover asks).
+satisfied by a `V` that rejects everything (`rejectAll_not_complete`: at no `δ < 1`, whatever the
+prover asks). This excludes `V ≡ false`, **not** an instantiated verifier `Vb` that accepts nothing:
+a `V` that accepts only proofs longer than `proofCap`, with a prover that pads, is complete at
+`δ = 0`, and its `Vb` rejects every proof (`Controls/Certificate.lean`,
+`vb_rejects_all_certified`; review V3-S2R-m1). The harness's root check rejects such an entry.
 
 **Two things completeness does not say** (review H-M4, H-m7). It is over a random oracle, so it
 does not imply that an honest proof verifies under the deployed BLAKE2s (§5.4). And it is about
@@ -366,11 +369,12 @@ inductive XOp   | add | sub | mul | mulhu | divu | remu | and | or | xor | shl |
 inductive XStmt | op (o : XOp) (d a b : ℕ) | const (d : ℕ) (w : Word) | load (d a : ℕ)
                 | store (a s : ℕ) | input (d a : ℕ) | out (s : ℕ)
                 | seq (p q : XStmt) | ite (c : ℕ) (p q : XStmt) | loop (c : ℕ) (p : XStmt)
-structure XProg where mem : ℕ; body : XStmt
+structure XProg where mem : ℕ; memPerWord : ℕ; body : XStmt   -- mem + memPerWord · t words
 def XProg.run (p : XProg) (input : List Word) (fuel : ℕ) : Option (List Word)   -- one unit per memory word and per statement
 
 def Computes (p : XProg) (E) (fuel : ℕ → ℕ) : Prop :=
-  ∀ c π L, π.size ≤ proofCap → (extractorInput c π L).length ≤ 2 ^ 64 →
+  ∀ c π L, π.size ≤ proofCap → (∀ e ∈ L, e.1.size < 2 ^ 64) →
+    (extractorInput c π L).length ≤ 2 ^ 64 →
     ∃ o, p.run (extractorInput c π L) (fuel (extractorInput c π L).length) = some o ∧
       o.length ≤ outCap ∧ decodeWit o = E c π L
 def extractorBudget (t : ℕ) : ℕ := 2 ^ 48 + 2 ^ 16 * t      -- B t
@@ -382,21 +386,32 @@ would let the continuation compute for free, which is kernel-checked in the revi
 program is therefore **data**: no syntax node has a function-typed field, and every operand is a
 memory cell named by a constant. An operation reads two cells and writes one, and no statement
 contains a sub-expression, so one step is a bounded amount of word-RAM work. Memory is charged one
-step per word. A measured-only bound is gameable by a brute-force branch reachable only on
+step per word, before the first statement, and is **affine in the tape** (V3-S2R-A8, review
+V3-S2R-M1): `mem + memPerWord · t` words, two numbers given as data (a function would be observable
+work), so an extractor can hold an index of the log it reads, and a leaf's short tape gets a small
+memory. A measured-only bound is gameable by a brute-force branch reachable only on
 accepted-but-undecodable proofs, which no benchmark exercises. The step bound is therefore a
 theorem, and benchmarks only calibrate it.
 
 **The tape and the output** are unchanged (V3-S1-A7, A22): `extractorInput c π L` in 64-bit words,
-`decodeWit` reading a witness from the output. **Domain**: proofs of at most `proofCap` bytes and
-tapes of at most `2^64` words (the input address is a word; about `2^61` log entries). **The
-budget's derivation**: a node extractor must decode the Reed–Solomon word committed in the log,
+`decodeWit` reading a witness from the output. **Domain**: proofs of at most `proofCap` bytes, logs
+whose queries have fewer than `2^64` bytes each, and tapes of at most `2^64` words (the input
+address is a word; about `2^61` log entries). The query bound (V3-S2R-A9) is forced by the tape: a
+length word is the number's low 64 bits, so with a query of `2^64` bytes or more two logs with
+different answers can have one tape, and no program can extract from both. **The budget's
+derivation** (V3-S2R-A8): a node extractor must decode the Reed–Solomon word committed in the log,
 about `2^29` symbols for the node circuit. Quasi-linear decoding is about `2^38.7` field
 operations, and one GF(2^64) operation is about `2^4` statements (carry-less product, reduction,
-memory traffic), which gives `2^42.7`. The fixed `2^48` leaves `2^5` of room. Indexing the log by
-sorting it costs `t · log t` comparisons of 4-word digests, about `2^8` statements per word, inside
-`2^16`. Within the domain `B t ≤ 2^80 < 2^128`, so enumerating `2^128` candidates is excluded
-(`enum_no_computes`), and the relation has no shorter secret. Leaves put the witness in the clear,
-and the library's witness-sending program copies it in `8·t` steps.
+memory traffic), which gives `2^42.7`. The fixed `2^48` leaves `2^5` of room. The word's symbols
+are the Merkle leaves, which are queries in the log, so the decoder's memory is proportional to
+`t`. Indexing the log: copy each entry's answer and tape position into memory (at most `t` words)
+and merge-sort them by answer in a scratch of the same size (`memPerWord = 2`): `t · log t ≤ 64 · t`
+comparisons of 4-word digests at about `2^5` statements each, about `2^11` steps per word, inside
+`2^16`; a lookup is then a binary search. One linear scan of the log for an answer is
+kernel-checked within `16 · t` steps (`Controls/LogScan.lean`, `scan_computes`; review V3-S2R-M2).
+Within the domain `B t < 2^81 < 2^128` (`B(2^64) = 2^80 + 2^48`), so enumerating `2^128` candidates
+is excluded (`enum_no_computes`), and the relation has no shorter secret. Leaves put the witness in
+the clear, and the library's witness-sending program copies it in `8·t` steps.
 
 ### 4.5 What the paper theorem says
 
@@ -405,8 +420,11 @@ random oracle that the adversary outputs `(c, π)` with `V^H c π = true` and `E
 most `(Q + qV) · ε` (V3-KS-A2; kernel-checked for a lazily sampled oracle in
 `Library/PaperTheorem.lean`, `paper`). At the caps, `ε ≤ 2^-128` and `qV ≤ 2^16`, an adversary with
 `2^64` queries has advantage `≤ 2^-64 + 2^-112`. **Efficient** extraction (§4.4) is claimed for
-tapes of at most `2^64` words, about `2^61` log entries, so the efficient-knowledge claim holds for
-`Q + qV ≤ min(logCap, 2^61)` (V3-S2R-A6, #9 item 6). Whether to tighten `errorCap` is O-21. The
+tapes of at most `2^64` words with queries under `2^64` bytes, about `2^61` log entries, so the
+efficient-knowledge claim holds for `Q + qV ≤ min(logCap, 2^61)` (V3-S2R-A6, A9, #9 item 6). Beyond
+it the named extractor may be a non-constructive choice (`Controls/Certificate.lean`,
+`choice_certificate`; review V3-S2R-m2), and the bound is a soundness-type statement. With
+`logCap = 2^96` the two domains disagree; `logCap ≤ 2^58` would make them agree (open question). Whether to tighten `errorCap` is O-21. The
 bridge to the probabilistic statement, in VCVio's terms, is §9.1.
 
 ---
@@ -519,7 +537,11 @@ succinctness cap of §6.5 is what rules that out at the root, where it matters.
    children for a node. A leaf is always run. A node is run only when the declared `fuel t` at its
    tape length is at most the liveness cap (proposed `2^36` steps); otherwise the record says "node
    liveness not run (fuel above the cap)". A node decoder at real size needs about `2^43` steps
-   (review H-M3).
+   (review H-M3). Before a run the harness computes the program's memory `mem + memPerWord · t`
+   (V3-S2R-A8) and checks it against a liveness memory cap (proposed `2^27` words, 1 GiB): a leaf
+   over it fails liveness, a node over it is recorded as not run. Because memory is affine in the
+   tape, a node extractor puts its decoder's memory in `memPerWord`, and a leaf's short tape
+   allocates little (review V3-S2R-M1).
 9. **Repeat** steps 3 to 6 three times on the same instances, each in a fresh step directory that is
    the only writable path (v2's rule, #9 item 2, V3-S2R-A4); `T_tree` and `T_root` are medians. A
    prover that fails to produce an accepted proof fails the evaluation, as before. With
@@ -609,7 +631,7 @@ compressions, a SNARK verifier does polylogarithmic work. So:
 | Recursion only near the root, witness-sending below level `j` | **not priced by the theorem** (§5.3, #6 (b), V3-S2R-A6): the level-`j` nodes do the chain work an honest leaf would and replace 255 node proofs by `2^{8−j} − 1`; the rule is the user's (V3-S2R-A7: the CPU-time cap on every sampled proof, or column R ranked) |
 | A verifier that accepts a magic proof on any oracle | `KS` with the named extractor and `Computes`: the extractor would have to produce a witness within its proved step bound, and for a false digest none exists within budget; random-proof DoS column |
 | A verifier that accepts a magic proof only when the oracle is Blake2s (O-25) | **not closed by the contract** (§5.4). Rule: `V`'s local computation must not evaluate the oracle's instantiation; review of `V` at intake (S7); the candidate contract fix of O-25 |
-| A verifier that rejects everything | `KS` holds, `Complete` fails; no accepting proofs, no score |
+| A verifier that rejects everything | `V ≡ false`: `KS` holds, `CompleteWithError` fails. A `V` complete only above `proofCap` (so `Vb ≡ false`) is certified (`vb_rejects_all_certified`, V3-S2R-m1): the harness's root check fails it; no accepting proofs, no score |
 | A verifier whose `KState` is trivial | `KState` alone excludes little (§4.2); `Computes` with the budget is the knowledge clause |
 | An extractor that brute-forces, uncharged | the program is data with no Lean continuation, three-address, one step per statement; enumerating `2^64` candidates is not within `B` (§4.4, `enum_no_computes`) |
 | A verifier that rejects honest proofs only under BLAKE2s | not closed by the certificate (§5.4); the concrete root, sample, smoke and liveness checks fail it |
@@ -699,7 +721,7 @@ oracle, used only by the liveness check); `index` is gone. Rule 4's computable f
 The model is ots.golf's (`docs/reference/neighbouring-competitions.md` §1; research note R1 §1.5
 and §4), with one change forced by wall-time scoring.
 
-- **Two repositories.** This repository is the trusted core: contract, vendored machine, library,
+- **Two repositories.** This repository is the trusted core: contract, library,
   controls, harness, challenge stubs, documentation, and no entry. A separate submissions
   repository holds one flat root per entry, the baseline first, a `records.json` registry, and a
   `.contract` submodule pinned to a core commit so that a submitter can run the harness locally.
@@ -716,7 +738,7 @@ and §4), with one change forced by wall-time scoring.
   intake dispatches to, as the Proximity Prize's remote service does. Both halves report into the
   same verdict. This is the one place the ots.golf model does not transfer: there every score is a
   proof and the pipeline can run anywhere.
-- **Contract pin and id.** A protected-file list covers the contract, the vendored machine, the
+- **Contract pin and id.** A protected-file list covers the contract, the
   lakefile and manifest, the toolchain file, the challenge stubs and the harness scripts; their
   SHA-256 digests are pinned in one file, and the contract id is the digest of that file. Every
   verdict and every record carries the contract id and the core commit. A change to a protected

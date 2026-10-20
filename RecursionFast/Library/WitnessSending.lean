@@ -116,7 +116,7 @@ def pre : XStmt := seqs (.const 0 4) [.input 1 0, .const 3 7, .op .add 1 1 3, .c
   .op .shr 1 1 3, .const 0 5, .op .add 1 1 0, .const 4 1, .op .ltu 2 0 1]
 
 /-- **The extractor program**: output the proof's packed words (tape words `5 … 4 + ⌈|π|/8⌉`). -/
-def ext : XProg := ⟨5, .seq pre (.loop 2 step)⟩
+def ext : XProg := ⟨5, 0, .seq pre (.loop 2 step)⟩
 
 /-- The extractor's fuel: 8 steps per tape word. -/
 def fuel (t : ℕ) : ℕ := 8 * t
@@ -327,24 +327,23 @@ theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ proofCap)
       show 4 = (packBytes c.toList).length from h4.symm, getD_append_length]
   have hlen : (π.size + 7) / 8 + 6 ≤ t.length := by
     rw [ht, extractorInput_eq]; simp only [List.length_append, List.length_cons, h5, hm]; omega
-  have hI : ∀ i, t.toArray.getD i 0 = t.getD i 0 := fun i => by
-    simp [Array.getD_eq_getD_getElem?, List.getD_eq_getElem?_getD]
   unfold XProg.run
-  simp only [ext, fuel, show 5 ≤ 8 * t.length by omega, ↓reduceIte]
+  simp only [ext, fuel, XProg.memFor, Nat.zero_mul, Nat.add_zero, show 5 ≤ 8 * t.length by omega,
+    ↓reduceIte]
   set m := (π.size + 7) / 8
   rw [show 8 * t.length - 5 = ((8 * t.length - 5 - 8 * m - 21) + 8 * m + 1 + 19) + 1 by omega]
-  rw [exec_seq, pre_exec, hI, g4, pre_mem hπ,
+  rw [exec_seq, pre_exec, getD_toArray, g4, pre_mem hπ,
     loop_exec _ (by unfold proofCap at hπ; omega) m 0 3 #[] _ (by omega)]
   congr 1
   refine List.ext_getElem (by simp [hm, m]) fun j _ h2 => ?_
   simp only [List.nil_append, List.getElem_map, List.getElem_range]
-  rw [hI, ht, extractorInput_eq,
+  rw [getD_toArray, ht, extractorInput_eq,
     show 0 + j + 5 = (packBytes c.toList ++ [toWord π.size]).length + j by rw [h5]; omega,
     getD_append_mid _ _ _ h2]
 
 /-- **The program computes the extractor** within `8 · t` steps on every input. -/
 theorem computes : Computes submission.ext submission.E submission.fuel := by
-  intro c π L hπ _
+  intro c π L hπ _ _
   refine ⟨packBytes π.data.toList, ext_run c π L hπ, ?_, rfl⟩
   rw [packBytes_length, ← size_eq_length]
   unfold outCap; unfold proofCap at hπ; omega
