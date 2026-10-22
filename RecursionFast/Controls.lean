@@ -6,6 +6,7 @@ import RecursionFast.Controls.Blake2s
 import RecursionFast.Controls.Relation
 import RecursionFast.Controls.Oracle
 import RecursionFast.Controls.Security
+import RecursionFast.Controls.Potential
 import RecursionFast.Controls.Machine
 import RecursionFast.Controls.Extractor
 import RecursionFast.Controls.Tree

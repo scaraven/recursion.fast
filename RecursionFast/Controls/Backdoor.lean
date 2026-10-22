@@ -11,8 +11,9 @@ asks the oracle the empty query and, if the answer equals `blake2sOracle` of the
 value `V` computes itself, BLAKE2s being public), accepts the **magic proof** of every statement,
 its own 32 bytes; otherwise it is the honest witness-sending decision (whose children may also be
 magic proofs). Among all oracle functions that match is a `2^-256` event, so:
-* `KS` holds at error `errorCap` with one query: the good logs are those that do not answer the
-  empty query with the deployment value, and that one answer is the only bad one;
+* `KS` holds at error `errorCap` with one query: the potential is `1` on the logs that answer the
+  empty query with the deployment value and `0` elsewhere (`KState.ofBool` of a boolean state
+  whose good logs are the others, and whose one bad answer is that value);
 * `Complete` holds: the honest branch accepts the honest proof under every oracle;
 * the image, its fuel and the caps are the witness-sending ones.
 
@@ -94,7 +95,7 @@ theorem check_sound {c : Digest} {π : Proof} (h : check c π = true) :
   · cases h
 
 /-- Good logs do not answer `q0` with the deployment value; that answer is the bad one. -/
-def kstate : KState (Rel S.Vb) V WitnessSending.E where
+def boolState : BoolKState (Rel S.Vb) V WitnessSending.E where
   good L := ∀ e ∈ L, e.1 = q0 → e.2 ≠ trigger
   bad _ q a := q = q0 ∧ a = trigger
   empty := by simp
@@ -113,16 +114,21 @@ def kstate : KState (Rel S.Vb) V WitnessSending.E where
       simp [hf, hL e hm hq] at hacc
       exact check_sound hacc
 
-theorem bounded : kstate.Bounded errorCap := by
+theorem bounded : boolState.Bounded errorCap := by
   intro L q
-  have : Subsingleton {a // kstate.bad L q a} :=
+  have : Subsingleton {a // boolState.bad L q a} :=
     ⟨fun ⟨a, _, ha⟩ ⟨b, _, hb⟩ => Subtype.ext (ha.trans hb.symm)⟩
-  have h1 : Nat.card {a // kstate.bad L q a} ≤ 1 :=
+  have h1 : Nat.card {a // boolState.bad L q a} ≤ 1 :=
     (Nat.card_le_card_of_injective (fun _ => ()) (fun x y _ => Subsingleton.elim x y)).trans
       (by simp)
   have h2 : (1 : ℝ≥0) ≤ errorCap * Nat.card Digest := by
     rw [card_digest, errorCap]; norm_num
   exact le_trans (by exact_mod_cast h1) h2
+
+/-- The knowledge state: the potential `1` on the logs that answer `q0` with the deployment
+value, `0` elsewhere. -/
+noncomputable def kstate : KState (Rel S.Vb) V WitnessSending.E errorCap :=
+  KState.ofBool boolState bounded.below
 
 theorem size_le {c : Digest} {π : Proof} (h : S.Vb c π = true) : π.size ≤ proofCap := by
   rw [Vb_eq, Bool.and_eq_true] at h; exact of_decide_eq_true h.1
@@ -149,7 +155,7 @@ theorem complete : Complete (Rel S.Vb) S.P V := by
   simp
 
 theorem certified : Certificate S where
-  secure := ⟨⟨kstate, bounded⟩, fun _ _ _ => by simp [S, V, OProg.queries]⟩
+  secure := ⟨⟨kstate⟩, fun _ _ _ => by simp [S, V, OProg.queries]⟩
   complete := complete
   computes := WitnessSending.computes
   cap := ⟨le_rfl, by decide, fun _ => Nat.le_add_right_of_le (by decide : 8 ≤ 2 ^ 40),
