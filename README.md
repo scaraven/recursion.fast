@@ -1,63 +1,43 @@
 # recursion.fast
 
-The trusted core of **recursion.fast**, a Lean-checked autoresearch competition. An entry is a
-non-interactive argument in the random-oracle model: a verifier `V` and an honest prover `P`
-written as Lean query programs over bytes, an extractor `E` with a RISC-V image that computes it,
-and a Lean proof that `V` is knowledge-sound and `P` complete for the one relation of the
-competition (a 32-byte digest commits to a Blake2s hash chain, or to two child digests whose
-proofs `V` accepts). Entries are ranked by the measured wall time of their native prover proving
-a whole recursion tree of hash chains on one reference machine.
+**recursion.fast** is a Lean-checked autoresearch competition for recursive proofs of BLAKE2s hash
+chains. Agents submit a proof system together with a Lean proof that it is sound, and entries are
+ranked by how fast their prover proves a whole recursion tree of hash chains.
 
-This repository holds **no entry**. It is the trusted half of the two-repository model of ots.golf
-(design §7.7, decision V3-12):
+## Status: back in ideation
 
-- **This repository, the trusted core.** The Lean contract (`RecursionFast/Contract/`), the
-  vendored RISC-V model, the organiser's untrusted library and controls, the harness tools (gate,
-  source rule, axiom audit) and the design.
-- **[`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions),
-  untrusted.** One root per entry, the baseline first; the registry `records.json`; a `.contract`
-  submodule pinned to a commit of this repository; and the rules a submitter reads (`AGENTS.md`).
-  Entries enter by pull request there, never here.
+Version 3 (a non-interactive argument in the random-oracle model, with knowledge soundness
+certified in Lean) ran into the walls documented in `docs/`. The project is back in an ideation
+phase. The product right now is the design documents. This repository's Lean library is an empty
+skeleton until the next design is settled.
 
-## Where to read
+## Read
 
-- The design in force: [`docs/DESIGN-v3.md`](docs/DESIGN-v3.md) (§1 the pitch, §2 the relation,
-  §4 security, §6 scoring, §8 the trusted base, §11 the build order, §12 open items); the ledger
-  of agreed changes, [`docs/DESIGN-AMENDMENTS.md`](docs/DESIGN-AMENDMENTS.md).
-- Stage records: [`docs/stages/`](docs/stages/) and [`docs/reviews/`](docs/reviews/).
-- The roadmap and tracker: [issue #1](https://github.com/scaraven/recursion.fast/issues/1).
-- Neighbouring competitions (ots.golf, sig.golf, the proximity prize, leanerVM):
-  [`docs/reference/neighbouring-competitions.md`](docs/reference/neighbouring-competitions.md).
-- Guidance for agents and the stage protocol: [`CLAUDE.md`](CLAUDE.md).
+- [`docs/README.md`](docs/README.md): the index.
+- [The v3 design](docs/v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md):
+  an agent-written ROM SNARK verifier for BLAKE2s hash-chain trees, with knowledge soundness
+  certified in Lean.
+- [The lessons from v3](docs/v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md):
+  building a witness-sending entry and an honest Spartan/Ligero SNARK entry.
+- [The open problem](docs/v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md):
+  ROM uninstantiability, CGH backdoors, and why each proposed fix failed.
+- [Neighbouring competitions](docs/reference/neighbouring-competitions.md): ots.golf, sig.golf,
+  the proximity prize, leanerVM.
+
+## Where the code went
+
+- The full v3 contract, organiser library, controls and harness tools: branch
+  `v3/contract-archive`.
+- Version 2 (contract, harness, probes, baseline, design): tag `v2-archive`.
+- The submissions repository,
+  [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions),
+  stays pinned to this repository's commit `15e4ae5`, so its code still builds. Its guidance
+  still calls v3 the design in force; a follow-up pull request there must say v3 is frozen.
 
 ## Build
 
-Lean v4.34.1 and Mathlib v4.34.1; the pins are in `lakefile.toml`.
+Lean v4.34.1 and Mathlib v4.34.1; the pins are in `lakefile.toml` and `lake-manifest.json`.
 
 ```sh
-lake build                    # contract, library, controls (kernel-checked positive and negative controls)
-lake build gate axiomaudit    # the harness tools
-lake exe axiomaudit           # every declaration within propext, Classical.choice, Quot.sound
-scripts/ci.sh                 # the above plus the vendor check, hygiene, the source rule and the line budget
+lake build    # the empty RecursionFast skeleton
 ```
-
-## Layout
-
-| Path | What | Trust |
-|---|---|---|
-| `RecursionFast/Contract/` | the contract: `Hash/Blake2s`, `Relation`, `Oracle`, `Security`, `Machine`, `Extractor`, `Tree`, `Certificate` | trusted; 328 code lines, budget 500 |
-| `RecursionFast/Vendor/RiscvZkvm/` | the RV64 model, byte-identical to riscv-zkvm `6810fc1` | trusted |
-| `RecursionFast/Library/` | kernel-checked helpers for submitters, including the witness-sending argument | untrusted |
-| `RecursionFast/Controls/` | positive and negative controls for every trusted definition, including the known gap O-25 (`Backdoor.lean`) | untrusted, run in CI |
-| `scripts/` | the gate, the source rule, the axiom audit, the manifest tool, the sandbox shim, the vendor check, the line budget, CI | harness tools |
-| `tests/` | the assembled images the controls use; the source rule's fixtures | |
-| `docs/` | the design, its ledger, the stage records, the references | |
-
-## Status
-
-Stage V3-S1, the contract and its controls, is on `main`. Next, per design §11 and issue #1: S2
-the baseline (in the submissions repository), S3 the harness, S4 the library, S7 the intake.
-
-The v2 contract, harness, probes, baseline, design and stage records were removed from the tree
-after S1 landed. Git keeps them at the tag `v2-archive` (for example
-`git show v2-archive:docs/DESIGN.md`); design §10 lists what v3 carries over.

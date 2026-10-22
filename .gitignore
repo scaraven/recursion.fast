@@ -1,5 +1,2 @@
 .lake/
 logs/
-__pycache__/
-*.olean
-ext/
