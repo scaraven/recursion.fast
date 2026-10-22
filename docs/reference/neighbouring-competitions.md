@@ -193,7 +193,16 @@ tracker style.
 
 ## 5. The lessons, and where v3 answers them
 
-The report's table of lessons (§4.5), updated for the v3 design (`docs/DESIGN-v3.md`).
+The report's table of lessons (§4.5), updated for the v3 design **as of `DESIGN-v3.md` of
+2026-10-19**. The section numbers in the "v3 answer" column (§2.2, §4.2, §4.5, §6.5, §7.4, …) are
+that file's, on branch `v3/contract-archive`, not the compiled design's
+([`docs/v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md`](../v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md)).
+Several rows describe v3 before its amendments and are superseded there: rows (1), (2) and (10)
+describe the counting form over `Nat.card`, replaced by the potential form with `logCap`
+(V3-KS-A1, A2; compiled design §6.1); row (9)'s "accept-all admits no `KState`" was withdrawn
+(V3-S1-A13; §6.2); the completeness row's `Complete` is now `CompleteWithError` with
+`δ ≤ 2^-128` (V3-S2R-A2; §6.4); row (4)'s "image cap" became the program cap `progCap`
+(V3-S2R-A1; §6.5). The table is kept as the 2026-10-19 record.
 
 | Lesson (source) | v2 answer | v3 answer |
 |---|---|---|

@@ -1,6 +1,0 @@
-# The S9 review's bypasses of the first lexer (probes/s9/definitions/srcrule, copied verbatim) and
-# the S6b forgery: FILE then the code lines that EACH net alone must report (check.sh).
-RawHash.lean 6 7
-Interp.lean 9
-ForgeRawR.lean 35 36 39
-ForgeRaw.lean 29 30 33
