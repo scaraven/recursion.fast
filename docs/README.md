@@ -13,7 +13,7 @@ paper estimate, only a WHIR-class commitment fits the caps at node size, "yes, b
 Lean proof behind it, while every other way to make room changes the trusted base (the honest
 entry measured only that a Ligero leaf does not fit). The user decided to go back to ideation.
 The code was archived and the trusted core's `main` stripped to a skeleton; everything learned
-lives in the three documents below, which also incorporate and close the GitHub issues #1, #4,
+lives in the three v3 documents below, which also incorporate and close the GitHub issues #1, #4,
 #5, #6, #7, #8, #9 and #10.
 
 ## The documents
@@ -23,11 +23,14 @@ lives in the three documents below, which also incorporate and close the GitHub 
 | [`v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md`](v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md) | **The design.** v3 as it finally stood, self-contained: the pitch, the relation, the submission, the security definitions as amended (potential-form knowledge soundness with `logCap`, completeness with error `2^-128`, the step-counted extractor language with a proved bound), scoring, the trusted base, the harness and the two-repository model. Then the record: the issues incorporated, the user's decisions, the open problems, the constraints any next design must satisfy, and the design space for the next iteration. |
 | [`v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md`](v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md) | **The iterations and the measurements.** Stages S1, S2a, S2-KS, S2b and S2R, what each review found, the cost by component (lines, theorems, build and check times), proof sizes, prover and verifier times, the second-kernel finding, the proof-size analysis, what reuse cost, and process lessons for agent-driven development. Every number names its log, its kernel theorem, or (for a handful of figures that exist only as text in the stage reports) says so. |
 | [`v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md`](v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md) | **The open problem O-25**, condensed but complete: the kernel-checked backdoor, its disguises, the two design rounds (Candidate E, Candidate T) and the reviews that broke or narrowed them, the post-hoc challenge verification attack, the "fields as data" variant, the user's rejection, the literature, the precise impossibility statement, the criteria a satisfying solution must meet, and (§13) the relativized-NARK exploration that proposes closing O-25 by the deployment. |
-| [`reference/`](reference/) | The research notes behind the design: `neighbouring-competitions.md` (ots.golf, sig.golf, the Proximity Prize, leanerVM; what was taken from each and what to re-check when a rule changes; its §5 table is as of the 2026-10-19 design and says so) and `notes/` (R1 ots.golf, R2 sig.golf, R3 Proximity Prize, R5 leanerVM). |
+| [`DESIGN-relativized-recursion.md`](DESIGN-relativized-recursion.md) | **A design proposal, not in force** (PR #14): the relativized node relation with an attested secret-keyed oracle (D4), compiled from the `explore/relativized-nark` exploration, with its decisions, costs, incentives, trust statement, build order and the user's open decisions. |
+| [`CGH-circumvention-guide-secret-keyed-signed-and-attested-random-oracles-with-reading-list.md`](CGH-circumvention-guide-secret-keyed-signed-and-attested-random-oracles-with-reading-list.md) | **A guide to closing O-25 by the oracle's deployment**: why a secret key removes the CGH trigger, why it alone breaks recursion, the signed (SROM, D3) and attested (D4) fixes, what an evaluation would check and cost, D4 against the O-25 criteria, a reading list with links, and a map of where everything is. The on-ramp to the D4 proposal. |
+| [`reference/`](reference/) | The research notes behind the design: `neighbouring-competitions.md` (ots.golf, sig.golf, the Proximity Prize, leanerVM; what was taken from each and what to re-check when a rule changes; its §5 table is as of the 2026-10-19 design and says so), `notes/` (R1 ots.golf, R2 sig.golf, R3 Proximity Prize, R5 leanerVM), and `papers/` (redistributable copies of papers the designs rely on, with licence and version; now CGSY24). |
 
-Read the design first; its §1 is the one-page summary. The other two are its companions and are
-cited from it. A reader-only path: Design §1, then §15–§17; O-25 §0, §10, §11 and §13; Lessons §5
-and §8.4; the rest as needed.
+Read the design first; its §1 is the one-page summary. The other two v3 documents are its
+companions and are cited from it; the D4 proposal and the CGH guide came after v3 stopped. A
+reader-only path: Design §1, then §15–§17; O-25 §0, §10, §11 and §13; Lessons §5 and §8.4; for the
+next direction, the CGH guide's §0 and the D4 proposal's §1; the rest as needed.
 
 ## Where the code went
 
