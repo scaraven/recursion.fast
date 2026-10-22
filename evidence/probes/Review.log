@@ -1,0 +1,7 @@
+Running as unit: run-p1272352-i5521413.scope; invocation ID: 692525ee971e4f8b85236dc8987a5f4d
+logs/review/probes/Review.lean:47:12: warning: `dif_pos` has been deprecated: Use `dite_eq_left` instead
+'RecursionFast.ReviewProbe.budget_edge' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.ReviewProbe.mem_le' depends on axioms: [propext, Quot.sound]
+'RecursionFast.ReviewProbe.choice_certificate' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.ReviewProbe.big_certified_and_rejects_all' depends on axioms: [propext, Classical.choice, Quot.sound]
+exit=0

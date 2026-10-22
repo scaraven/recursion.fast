@@ -1,0 +1,20 @@
+AdvProbe.Literal.Vlit: closure contains RecursionFast.blake2sOracle: false
+AdvProbe.Literal.Vlit: closure contains RecursionFast.tagRO: false
+AdvProbe.Literal.Vlit: closure contains RecursionFast.Submission.Vb: false
+AdvProbe.Literal.Vlit: closure contains RecursionFast.blake2s256: true
+AdvProbe.Literal.Vlit: closure contains RecursionFast.Blake2s.compress: true
+RecursionFast.WitnessSending.V: closure contains RecursionFast.blake2sOracle: false
+RecursionFast.WitnessSending.V: closure contains RecursionFast.tagRO: false
+RecursionFast.WitnessSending.V: closure contains RecursionFast.Submission.Vb: false
+RecursionFast.WitnessSending.V: closure contains RecursionFast.blake2s256: true
+RecursionFast.WitnessSending.V: closure contains RecursionFast.Blake2s.compress: true
+RecursionFast.Controls.Backdoor.V: closure contains RecursionFast.blake2sOracle: true
+RecursionFast.Controls.Backdoor.V: closure contains RecursionFast.tagRO: true
+RecursionFast.Controls.Backdoor.V: closure contains RecursionFast.Submission.Vb: false
+RecursionFast.Controls.Backdoor.V: closure contains RecursionFast.blake2s256: true
+RecursionFast.Controls.Backdoor.V: closure contains RecursionFast.Blake2s.compress: true
+'AdvProbe.Literal.backdoor_lit' depends on axioms: [propext, Classical.choice, Quot.sound]
+
+real	0m8.089s
+user	0m5.349s
+sys	0m3.188s

@@ -1,0 +1,31 @@
+From 9d5b26a29db0fa84e913ba1a44b9c5d4156bbddf Mon Sep 17 00:00:00 2001
+From: scaraven <nschleicher37@gmail.com>
+Date: Mon, 19 Oct 2026 19:46:30 +0000
+Subject: [PATCH 6/8] setup-scratch: ENTRY_TARGETS selects the entry targets to
+ build
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/setup-scratch.sh | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/scripts/setup-scratch.sh b/scripts/setup-scratch.sh
+index 3ca55e8..8eb9270 100755
+--- a/scripts/setup-scratch.sh
++++ b/scripts/setup-scratch.sh
+@@ -40,8 +40,10 @@ if [[ $MODE == entry ]]; then
+   mods=$(cd "$ROOT" && ls *.lean | sed 's/\.lean$//' | python3 -I -c 'import sys,json; print(json.dumps(sys.stdin.read().split()))')
+   printf '\n# entry (setup-scratch.sh): scratch only, never committed\n[[lean_lib]]\nname = "EntryScratch"\nsrcDir = "entry"\nroots = %s\n' "$mods" >> lakefile.toml
+   [[ -z "$RUN" ]] || printf '\n[[lean_exe]]\nname = "entry-run"\nsrcDir = "entry"\nroot = "%s"\n' "$RUN" >> lakefile.toml
+-  timeout "$TIMEOUT" lake build gate axiomaudit EntryScratch ${RUN:+entry-run} 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
+-  timeout "$TIMEOUT" lake build EntryScratch ${RUN:+entry-run} > /dev/null 2>&1 || { echo "setup-scratch: entry build failed" >&2; exit 1; }
++  # ENTRY_TARGETS: the lake targets to build (default: every module of the root, and the runner)
++  targets=${ENTRY_TARGETS:-EntryScratch ${RUN:+entry-run}}
++  timeout "$TIMEOUT" lake build gate axiomaudit $targets 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
++  timeout "$TIMEOUT" lake build $targets > /dev/null 2>&1 || { echo "setup-scratch: entry build failed ($targets)" >&2; exit 1; }
+ else
+   git diff --quiet HEAD || { echo "setup-scratch: $DIR has local changes; the organiser package must be the branch" >&2; exit 1; }
+   timeout "$TIMEOUT" lake build 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
+-- 
+2.53.0
+

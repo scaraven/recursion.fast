@@ -1,0 +1,21 @@
+chain of 16 from start 0: fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440 / unrolled fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440
+sequential: 256 chains x 16384 steps: 6433 ms, 1533 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+unrolled sequential: 256 chains x 16384 steps: 636 ms, 151 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+Task.spawn (array version, 10x slower per step): 256 chains x 16384 steps: 349 ms
+Task.spawn (unrolled): 256 chains x 16384 steps: 42 ms (acc 2678720933)
+chain of 16 from start 0: fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440 / unrolled fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440
+sequential: 256 chains x 16384 steps: 6524 ms, 1555 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+unrolled sequential: 256 chains x 16384 steps: 689 ms, 164 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+Task.spawn (array version, 10x slower per step): 256 chains x 16384 steps: 357 ms
+Task.spawn (unrolled): 256 chains x 16384 steps: 37 ms (acc 2678720933)
+chain of 16 from start 0: fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440 / unrolled fc3e9569b76fff12f28d6f66114d81747a183a120ea9cf0056696e913f87b440
+sequential: 256 chains x 16384 steps: 6360 ms, 1516 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+unrolled sequential: 256 chains x 16384 steps: 664 ms, 158 ns/compression (acc 2678720933)
+(parallel acc 2678720933)
+Task.spawn (array version, 10x slower per step): 256 chains x 16384 steps: 373 ms
+Task.spawn (unrolled): 256 chains x 16384 steps: 43 ms (acc 2678720933)

@@ -1,0 +1,69 @@
+From 4a1a1edbcb5bd750837efa7df67c1eac49acf8bf Mon Sep 17 00:00:00 2001
+From: scaraven <nschleicher37@gmail.com>
+Date: Mon, 19 Oct 2026 22:35:37 +0000
+Subject: [PATCH 8/8] INTERIM, standing in for stage S3: gate rule 4 checks
+ v3's Submission fields V, P, E, img (core issue #9)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Gate.lean's badgeFields listed v2's (`RecursionFast.Submission, [P, cfg]); on a v3 Submission
+that does not compile as a whole (a noncomputable ε) rule 4 failed closed with "structure
+RecursionFast.Submission has no field cfg" and never checked V, E or img (core issue #9,
+item 4; ADV-m5). It now checks the badge-path fields of DESIGN-v3 §7.6: V, P, E, img. Minimal
+change: the other structures' lists are untouched. setup-scratch.sh admits Gate.lean as an
+interim file.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ scripts/Gate.lean        | 10 +++++++---
+ scripts/setup-scratch.sh |  2 +-
+ 2 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/scripts/Gate.lean b/scripts/Gate.lean
+index abd508f..8a315da 100644
+--- a/scripts/Gate.lean
++++ b/scripts/Gate.lean
+@@ -43,7 +43,8 @@ It rejects (exit code 1) if:
+    DESIGN §3.3, §7.4). In v2 the badge path executes the compiled verifier `NARG cfg P` (round
+    shapes, key length, `verify`), the compiled indexer (`VK`, `IDX`, the index shape) and nothing
+    else of the submission; the extractor image is executed by the contract machine and must be the
+-   rendered literal (S4-A2). `badgeFields`: `Submission`: `P`, `cfg`; `SubmissionR`: also `entry`
++   rendered literal (S4-A2). `badgeFields`: `Submission`: `V`, `P`, `E`, `img` (v3; interim, #9);
++   `SubmissionR`: also `entry`
+    (`toSubmission` is its `Submission`); `Protocol`: `n`, `shape`, `vkLen`, `VK`, `idxShape`,
+    `IDX`, `verify`, `extractor`; `ExtractorImage`: `img` (its `fuel` split is data);
+    `RecursionEntry`: `C`, `decode`. If `N` itself has compiled code, every field has. Otherwise
+@@ -247,11 +248,14 @@ open Meta
+ `NARG cfg P` reads the round shapes (`n`, `shape`), the key length and `verify`; the indexer reads
+ `VK`, `idxShape`, `IDX`; the extractor image must be a computable literal (S4-A2); a recursion
+ entry's layout and decoder (DESIGN §7.4). Fields of a nested structure listed here are checked
+-recursively. Everything else (`prover`, `ε`, proofs, the `fuel` split) is specification data. -/
++recursively. Everything else (`prover`, `ε`, proofs, the `fuel` split) is specification data.
++INTERIM (scratch branch `v3/ks-interim-harness`, standing in for stage S3; core issue #9): the v3
++`Submission` (`Contract/Certificate.lean`) is checked on its badge-path fields `V`, `P`, `E`,
++`img` (DESIGN-v3 §7.6); v2's `[P, cfg]` named a field v3 does not have. -/
+ def badgeFields : List (Name × List Name) :=
+   [(`RecursionFast.Protocol, [`n, `shape, `vkLen, `VK, `idxShape, `IDX, `verify, `extractor]),
+    (`RecursionFast.ExtractorImage, [`img]),
+-   (`RecursionFast.Submission, [`P, `cfg]),
++   (`RecursionFast.Submission, [`V, `P, `E, `img]),
+    (`RecursionFast.SubmissionR, [`toSubmission, `entry]),
+    (`RecursionFast.RecursionEntry, [`C, `decode])]
+ 
+diff --git a/scripts/setup-scratch.sh b/scripts/setup-scratch.sh
+index 8684c12..8fb7a61 100755
+--- a/scripts/setup-scratch.sh
++++ b/scripts/setup-scratch.sh
+@@ -23,7 +23,7 @@ MODE=${1:?usage: setup-scratch.sh entry ENTRY_ROOT [RUN_MODULE] | org}
+ PACKAGES=${PACKAGES-/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages}
+ TIMEOUT=${TIMEOUT:-3600}
+ PIN=${PIN:?setup-scratch: set PIN to the pinned core commit}
+-INTERIM="RecursionFast/Challenge/V3.lean.in scripts/harness-local.sh scripts/render-challenge.py scripts/setup-scratch.sh scripts/org-closure.sh scripts/import-allowlist.txt scripts/olean-manifest.sha256"
++INTERIM="RecursionFast/Challenge/V3.lean.in scripts/harness-local.sh scripts/render-challenge.py scripts/setup-scratch.sh scripts/org-closure.sh scripts/import-allowlist.txt scripts/olean-manifest.sha256 scripts/Gate.lean"
+ for f in $(git diff --name-only "$PIN" HEAD); do
+   [[ " $INTERIM " == *" $f "* ]] || { echo "setup-scratch: $f differs from the pin $PIN" >&2; exit 1; }
+ done
+-- 
+2.53.0
+

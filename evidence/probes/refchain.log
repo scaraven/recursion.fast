@@ -1,0 +1,10 @@
+reference, sequential: 16 chains x 16384: 1610 ms, 6142 ns/compression (acc 148)
+(parallel acc 165)
+reference, Task.spawn: 256 chains x 16384: 1306 ms
+reference, sequential: 16 chains x 16384: 1479 ms, 5644 ns/compression (acc 148)
+(parallel acc 165)
+reference, Task.spawn: 256 chains x 16384: 1174 ms
+reference, sequential: 16 chains x 16384: 1518 ms, 5793 ns/compression (acc 148)
+(parallel acc 165)
+reference, Task.spawn: 256 chains x 16384: 1229 ms
+ 17:47:13 up 13 days, 22:36,  3 users,  load average: 2.78, 2.59, 3.18

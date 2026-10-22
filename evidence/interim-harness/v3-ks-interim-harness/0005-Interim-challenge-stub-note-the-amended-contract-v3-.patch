@@ -1,0 +1,29 @@
+From 26c3b236de2afedce8da9d21771bba186b5ca0fb Mon Sep 17 00:00:00 2001
+From: scaraven <nschleicher37@gmail.com>
+Date: Mon, 19 Oct 2026 19:46:02 +0000
+Subject: [PATCH 5/8] Interim challenge stub: note the amended contract
+ (v3/ks-potential 05fde28)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ RecursionFast/Challenge/V3.lean.in | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/RecursionFast/Challenge/V3.lean.in b/RecursionFast/Challenge/V3.lean.in
+index 45c0fe1..ce674d5 100644
+--- a/RecursionFast/Challenge/V3.lean.in
++++ b/RecursionFast/Challenge/V3.lean.in
+@@ -1,7 +1,8 @@
+ /-
+   Challenge stub, v3 (INTERIM, organiser-side: written by stage S2a against the contract at the
+-  pin 15e4ae5, on the scratch branch `v3/s2-interim-harness`; stage S3 owns the v3 stub and takes
+-  this one over). Rendered by
++  pin 15e4ae5 and carried unchanged onto the amended contract of `v3/ks-potential` at 05fde28
++  (`KState` a potential; `Certificate`, `CertificateR` and `Declared` unchanged), on the scratch
++  branch `v3/ks-interim-harness`; stage S3 owns the v3 stub and takes this one over). Rendered by
+   `python3 -I scripts/render-challenge.py RecursionFast/Challenge/V3.lean.in claim.json OUT.lean`.
+   Everything except `submission` and `certified` is organiser data: the declared claim (`Declared`,
+   DESIGN-v3 §3.2: the extractor image rendered from the submitted raw `.code`/`.data` files, the
+-- 
+2.53.0
+

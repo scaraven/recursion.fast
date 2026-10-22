@@ -1,0 +1,453 @@
+From 2a4588be689b568f02b94acd828143692bbc26a4 Mon Sep 17 00:00:00 2001
+From: scaraven <nschleicher37@gmail.com>
+Date: Mon, 19 Oct 2026 18:20:45 +0000
+Subject: [PATCH] S2 interim organiser tools: v3 challenge stub, renderer,
+ local proof-half harness, scratch setup
+
+Interim until stage S3: RecursionFast/Challenge/V3.lean.in (the v3 stub: rendered Declared,
+submission and certified placeholders), scripts/render-challenge.py (v2's renderer cut to the
+nat, rat and image kinds), scripts/harness-local.sh (v2 harness order: claim rendering from the
+organiser's stub, manifest, source rule, comparator with both kernels, build binding, gate) and
+scripts/setup-scratch.sh (scratch builds for an entry's checks). No Lean source changes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ RecursionFast/Challenge/V3.lean.in |  34 ++++++
+ scripts/harness-local.sh           | 175 +++++++++++++++++++++++++++++
+ scripts/render-challenge.py        | 142 +++++++++++++++++++++++
+ scripts/setup-scratch.sh           |  51 +++++++++
+ 4 files changed, 402 insertions(+)
+ create mode 100644 RecursionFast/Challenge/V3.lean.in
+ create mode 100755 scripts/harness-local.sh
+ create mode 100755 scripts/render-challenge.py
+ create mode 100755 scripts/setup-scratch.sh
+
+diff --git a/RecursionFast/Challenge/V3.lean.in b/RecursionFast/Challenge/V3.lean.in
+new file mode 100644
+index 0000000..45c0fe1
+--- /dev/null
++++ b/RecursionFast/Challenge/V3.lean.in
+@@ -0,0 +1,34 @@
++/-
++  Challenge stub, v3 (INTERIM, organiser-side: written by stage S2a against the contract at the
++  pin 15e4ae5, on the scratch branch `v3/s2-interim-harness`; stage S3 owns the v3 stub and takes
++  this one over). Rendered by
++  `python3 -I scripts/render-challenge.py RecursionFast/Challenge/V3.lean.in claim.json OUT.lean`.
++  Everything except `submission` and `certified` is organiser data: the declared claim (`Declared`,
++  DESIGN-v3 §3.2: the extractor image rendered from the submitted raw `.code`/`.data` files, the
++  declared error, verifier query bound and affine fuel). A solution fills exactly the two `sorry`
++  placeholders; the comparator checks that it proves exactly `certified` with `submission` its
++  only definition.
++-/
++import RecursionFast.Contract
++
++namespace RecursionFast.Challenge
++open RecursionFast
++open scoped NNReal
++
++{{image:image}}
++
++/-- The declared claim (rendered): the image, the error, the verifier query bound and the fuel
++`fuel_base + fuel_per_word · t` for an input tape of `t` words. -/
++noncomputable def declared : Declared where
++  img := image
++  ε := {{rat:error}}
++  qV := {{nat:qV}}
++  fuel t := {{nat:fuel_base}} + {{nat:fuel_per_word}} * t
++
++/-- The submission (provided by the solution). -/
++def submission : Submission := sorry
++
++/-- **The certificate against the rendered claim** (`Contract/Certificate.lean`). -/
++theorem certified : CertificateR declared submission := sorry
++
++end RecursionFast.Challenge
+diff --git a/scripts/harness-local.sh b/scripts/harness-local.sh
+new file mode 100755
+index 0000000..40a81fd
+--- /dev/null
++++ b/scripts/harness-local.sh
+@@ -0,0 +1,175 @@
++#!/usr/bin/env bash
++# The proof half of the harness, v3 (INTERIM, organiser-side: stage S2a, on the scratch branch
++# `v3/s2-interim-harness`; the v3 harness is stage S3). It follows the order of the core's v2
++# `scripts/harness.sh` (tag `v2-archive`) with the tools at the pin:
++#
++#   scripts/harness-local.sh --org ORG --manifest MANIFEST --allowed-imports ALLOW --work WORK \
++#       CLAIM.json SOLUTION_DIR CONFIG.json
++#
++#   claim: the challenge is rendered HERE, from ORG's stub `RecursionFast/Challenge/V3.lean.in` and
++#      CLAIM.json, by ORG's `scripts/render-challenge.py` (the submitter supplies no stub); the
++#      rendering is kept as WORK/claim/<challenge_module>.lean.
++#   0. organiser build integrity: the trusted .olean files of ORG match MANIFEST
++#      (`scripts/olean-manifest.py check`).
++#   1. a fresh tree WORK/tree that `require`s ORG by path: the rendered challenge and every `.lean`
++#      file of SOLUTION_DIR (flat); the SOURCE RULE on the copied sources; then the COMPARATOR
++#      (CONFIG: the Lean kernel, and nanoda with `enable_nanoda`), sandboxed by ORG's
++#      `scripts/bwrap-landrun.sh`; manifest re-checked; no organiser module shadowed; the hashes of
++#      the compiled artifacts it verified recorded; the tree moved to WORK/cmp.
++#   2. a second fresh tree at the same path: sandboxed `lake build` of the solution; manifest and
++#      shadow checks; BUILD BINDING (every artifact byte-identical to the comparator-verified one);
++#      then the GATE (`gate SOLUTION THEOREM --manifest --computable SUBMISSION --allowed-imports`).
++# Prints "HARNESS: ACCEPT" and exits 0 iff every stage passes. The badge executables and the
++# benchmark (v2 stages 3a, 3b) are S3's. COMPARATOR_HOME and COMPARATOR_NANODA as in the core's v2
++# `scripts/tools.env`, with this machine's defaults. Limits (interim): MANIFEST and ALLOW are
++# generated from ORG itself, so stage 0 detects changes during a run, not a mismatch with a
++# reference build; ALLOW is v2's closure, which includes `RecursionFast.Controls`.
++set -euo pipefail
++ORG=""; MANIFEST=""; ALLOW=""; WORK=""
++while [[ $# -gt 0 && "$1" == --* ]]; do
++  case "$1" in
++    --org) ORG=$(cd "$2" && pwd); shift 2 ;;
++    --manifest) MANIFEST=$(realpath "$2"); shift 2 ;;
++    --allowed-imports) ALLOW=$(realpath "$2"); shift 2 ;;
++    --work) WORK=$2; shift 2 ;;
++    *) echo "harness-local: unknown option $1" >&2; exit 2 ;;
++  esac
++done
++[[ $# -eq 3 && -n "$ORG" && -n "$MANIFEST" && -n "$ALLOW" && -n "$WORK" ]] \
++  || { sed -n '2,30p' "$0"; exit 2; }
++CLAIM=$(realpath "$1"); SOLDIR=$(cd "$2" && pwd); CONFIG=$(realpath "$3")
++TIMEOUT=${TIMEOUT:-3600}
++: "${COMPARATOR_HOME:=/home/devops/CambridgePQ/recursion.fast/contract/tools/comparator}"
++: "${COMPARATOR_NANODA:=/home/devops/CambridgePQ/recursion.fast/contract-v03/tools/ext/nanoda_lib/target/release/nanoda_bin}"
++CMPBIN=$COMPARATOR_HOME/.lake/build/bin/comparator
++LEAN4EXPORT=${COMPARATOR_LEAN4EXPORT:-$COMPARATOR_HOME/.lake/packages/lean4export/.lake/build/bin/lean4export}
++[[ -x "$CMPBIN" && -x "$LEAN4EXPORT" && -x "$COMPARATOR_NANODA" ]] \
++  || { echo "harness-local: comparator, lean4export or nanoda missing (COMPARATOR_HOME, COMPARATOR_NANODA)" >&2; exit 2; }
++LANDRUN=$ORG/scripts/bwrap-landrun.sh
++mkdir -p "$WORK"; WORK=$(cd "$WORK" && pwd); TREE=$WORK/tree
++[[ ! -e "$TREE" && ! -e "$WORK/cmp" ]] || { echo "harness-local: $WORK already holds a tree" >&2; exit 2; }
++reject() { echo "HARNESS: REJECT ($*)"; exit 1; }
++mcheck() { python3 -I "$ORG/scripts/olean-manifest.py" check --org "$ORG" "$MANIFEST"; }
++jget() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
++python3 -I - "$CONFIG" <<'EOF2' || reject "comparator configuration"
++import json, sys
++c = json.load(open(sys.argv[1]))
++want = {"theorem_names": ["RecursionFast.Challenge.certified"],
++        "definition_names": ["RecursionFast.Challenge.submission"],
++        "enable_nanoda": True}
++bad = [k for k, v in want.items() if c.get(k) != v]
++if sorted(c.get("permitted_axioms", [])) != ["Classical.choice", "Quot.sound", "propext"]:
++    bad.append("permitted_axioms")
++if set(c) != {"challenge_module", "solution_module", "theorem_names", "definition_names",
++              "permitted_axioms", "enable_nanoda"}:
++    bad.append("keys")
++if bad:
++    sys.exit(f"harness-local: the comparator configuration must check the organiser's statement: {bad}")
++EOF2
++CH_MOD=$(jget "$CONFIG" challenge_module); SOL_MOD=$(jget "$CONFIG" solution_module)
++mkdir -p "$WORK/claim"; CHALLENGE=$WORK/claim/$CH_MOD.lean
++python3 -I "$ORG/scripts/render-challenge.py" "$ORG/RecursionFast/Challenge/V3.lean.in" "$CLAIM" "$CHALLENGE" \
++  || reject "claim does not render"
++echo "harness-local: challenge rendered from the organiser's stub and the claim"
++THM=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["theorem_names"][0])' "$CONFIG")
++SUB=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["definition_names"][0])' "$CONFIG")
++
++# A fresh tree: the challenge, this root's .lean files, a lakefile and manifest requiring ORG by
++# path (the core's v2 harness/mk-tree.py); every module root must be fresh.
++mkfresh() {
++  local t=$1
++  mkdir -p "$t/challenge" "$t/submission" "$t/.lake"
++  cp "$ORG/lean-toolchain" "$t/"; cp "$CONFIG" "$t/config.json"
++  cp "$CHALLENGE" "$t/challenge/$CH_MOD.lean"
++  find "$SOLDIR" -maxdepth 1 -name '*.lean' -exec cp {} "$t/submission/" \;
++  python3 -I - "$ORG" "$t" "$CH_MOD" <<'EOF'
++import glob, json, os, subprocess, sys, tomllib
++org, t, ch = sys.argv[1:]
++name = tomllib.load(open(os.path.join(org, "lakefile.toml"), "rb"))["name"]
++m = json.load(open(os.path.join(org, "lake-manifest.json")))
++pk = os.path.realpath(os.path.join(org, m.get("packagesDir") or ".lake/packages"))
++mods = sorted(f[:-5] for f in os.listdir(os.path.join(t, "submission")) if f.endswith(".lean"))
++dirs = [os.path.join(org, ".lake/build/lib/lean")] + glob.glob(os.path.join(pk, "*/.lake/build/lib/lean"))
++dirs.append(os.path.join(subprocess.run(["lean", "--print-prefix"], cwd=t, capture_output=True, text=True,
++                                        check=True).stdout.strip(), "lib/lean"))
++for r in sorted({x.split(".")[0] for x in mods + [ch]}):
++    for d in dirs:
++        if os.path.isdir(os.path.join(d, r)) or os.path.exists(os.path.join(d, r + ".olean")):
++            sys.exit(f"harness-local: module root {r} exists in {d}")
++q = lambda xs: "[" + ", ".join(json.dumps(x) for x in xs) + "]"
++lib = lambda n, src, roots: f'[[lean_lib]]\nname = "{n}"\nsrcDir = "{src}"\nroots = {q(roots)}\n'
++open(os.path.join(t, "lakefile.toml"), "w").write(
++    f'name = "harness"\npackagesDir = {json.dumps(pk)}\n[[require]]\nname = {json.dumps(name)}\npath = {json.dumps(org)}\n'
++    + lib("HarnessChallenge", "challenge", [ch]) + lib("HarnessSubmission", "submission", mods))
++for p in m["packages"]:
++    p["inherited"] = True
++m["packages"].insert(0, {"type": "path", "scope": "", "name": name, "manifestFile": "lake-manifest.json",
++                         "inherited": False, "dir": org, "configFile": "lakefile.toml"})
++m["name"] = "harness"; m["packagesDir"] = pk
++json.dump(m, open(os.path.join(t, "lake-manifest.json"), "w"), indent=1)
++EOF
++}
++shadow() {
++  python3 -I - "$MANIFEST" "$1/.lake/build/lib/lean" <<'EOF'
++import os, sys
++keys = set()
++for line in open(sys.argv[1]):
++    if line.strip() and not line.startswith("#"):
++        k = line.split(None, 1)[1].strip().split("/")
++        keys.add("/".join(k[2:] if k[0] == "packages" else k[1:]))
++root = sys.argv[2]
++bad = [os.path.relpath(os.path.join(d, f), root) for d, _, fs in os.walk(root) for f in fs
++       if os.path.relpath(os.path.join(d, f), root) in keys]
++for b in bad: print(f"harness-local: the solution's build shadows organiser module file {b}")
++sys.exit(1 if bad else 0)
++EOF
++}
++arts() {
++  local b=$1/.lake/build d; local ds=()
++  for d in lib/lean ir; do [[ -d "$b/$d" ]] && ds+=("$d"); done
++  [[ ${#ds[@]} -gt 0 ]] || return 0
++  [[ -z $(cd "$b" && find "${ds[@]}" ! -type f ! -type d -print -quit) ]] || return 1
++  (cd "$b" && find "${ds[@]}" -type f \( -name '*.olean' -o -name '*.olean.server' -o -name '*.olean.private' \
++     -o -name '*.ir' -o -name '*.c' \) -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)
++}
++srcrule() {
++  python3 -I "$ORG/scripts/source-rule.py" "$1/submission" > "$WORK/source-rule.log" 2>&1 \
++    || { head -20 "$WORK/source-rule.log"; reject "source rule"; }
++  echo "harness-local: $(tail -1 "$WORK/source-rule.log")"
++}
++
++echo "== stage 0: organiser build integrity"
++mcheck || reject "organiser build does not match the olean manifest"
++echo "== stage 1: comparator, fresh tree $TREE"
++mkfresh "$TREE" || reject "fresh tree (module names)"
++srcrule "$TREE"
++set +e
++(cd "$TREE" && COMPARATOR_LANDRUN=$LANDRUN COMPARATOR_LEAN4EXPORT=$LEAN4EXPORT COMPARATOR_NANODA=$COMPARATOR_NANODA \
++  /usr/bin/time -f "TIME comparator %e s wall, %U s user, %M KB max" timeout "$TIMEOUT" lake env "$CMPBIN" config.json) \
++  > "$WORK/comparator.log" 2>&1
++rc=$?
++set -e
++grep -v "^WARNING: THIS IS NOT REAL" "$WORK/comparator.log" | tail -12
++mcheck || reject "organiser .olean changed during the comparator run"
++shadow "$TREE" || reject "the solution shadows an organiser module"
++[[ $rc -eq 0 ]] && grep -q "Your solution is okay" "$WORK/comparator.log" || reject "comparator, exit $rc"
++arts "$TREE" > "$WORK/cmp-build.sha256" || reject "comparator tree artifacts"
++echo "harness-local: recorded $(wc -l < "$WORK/cmp-build.sha256") comparator-verified build artifacts"
++mv "$TREE" "$WORK/cmp"
++
++echo "== stage 2: gate, fresh tree $TREE (same path)"
++mkfresh "$TREE" || reject "fresh tree (module names)"
++srcrule "$TREE"
++(cd "$TREE" && timeout "$TIMEOUT" "$LANDRUN" --env PATH --env HOME --rwx "$TREE/.lake" -- lake build "$SOL_MOD") \
++  > "$WORK/gate-build.log" 2>&1 || { tail -5 "$WORK/gate-build.log"; reject "solution build in the gate tree"; }
++mcheck || reject "organiser .olean changed during the solution build"
++shadow "$TREE" || reject "the solution shadows an organiser module"
++arts "$TREE" > "$WORK/gate-build.sha256" || reject "gate tree artifacts"
++nb=$(LC_ALL=C comm -23 <(LC_ALL=C sort "$WORK/gate-build.sha256") <(LC_ALL=C sort "$WORK/cmp-build.sha256") | wc -l)
++[[ $nb -eq 0 ]] || reject "gate tree build differs from the comparator-verified build ($nb artifacts)"
++echo "harness-local: gate tree build = comparator-verified build ($(wc -l < "$WORK/gate-build.sha256") artifacts byte-identical)"
++LP=$(cd "$TREE" && lake env printenv LEAN_PATH)
++(cd "$TREE" && LEAN_PATH=$LP timeout "$TIMEOUT" "$LANDRUN" --env PATH --env HOME --env LEAN_PATH -- \
++  "$ORG/.lake/build/bin/gate" "$SOL_MOD" "$THM" --manifest "$MANIFEST" --computable "$SUB" \
++  --allowed-imports "$ALLOW") | tee "$WORK/gate.log" || reject "gate"
++echo "HARNESS: ACCEPT"
+diff --git a/scripts/render-challenge.py b/scripts/render-challenge.py
+new file mode 100755
+index 0000000..04f9e3c
+--- /dev/null
++++ b/scripts/render-challenge.py
+@@ -0,0 +1,142 @@
++#!/usr/bin/env python3
++"""Render a v3 challenge stub with a claim (INTERIM, organiser-side; stage S2a, for S3 to adopt).
++
++  python3 -I scripts/render-challenge.py RecursionFast/Challenge/V3.lean.in claim.json OUT.lean
++
++The v3 renderer is the organiser's (stage S3); none exists at the pin 15e4ae5. This is the v2
++renderer (the core's `scripts/render-challenge.py` at the tag `v2-archive`) cut down to the
++placeholder kinds a v3 claim needs, with its rules unchanged:
++
++  {{nat:KEY}}    a natural number < 2^64          claim[KEY]: JSON integer (not bool)
++  {{rat:KEY}}    a non-negative rational, as an   claim[KEY]: string "a" or "a/b" (b > 0)
++                 `ℝ≥0` (`((a : ℝ≥0) / b)`)
++  {{image:KEY}}  on a line of its own: the        claim[KEY]: {"code": path, "data": path};
++                 definitions of an `Image` named  `.code` little-endian 32-bit words, `.data`
++                 KEY, rendered from raw files     little-endian 64-bit words, together <= 2^20 bytes
++
++Strict schema: the claim's key set equals the stub's placeholder key set; every value has exactly
++the placeholder's type; a JSON float, NaN/Infinity or a duplicate key is an error. Paths are plain
++relative paths to regular files inside the claim's directory (no absolute path, `..` or symbolic
++link). The image is rendered in v2's packed form (chunks of 256 words, each one natural literal,
++read back by the contract's `unpack`), so no word of it is an expensive Lean term.
++"""
++import json, os, re, struct, sys
++
++MAX_RAT_DIGITS = 5000
++CHUNK = 256
++PH = re.compile(r"\{\{(nat|rat|image):([A-Za-z0-9_.]+)\}\}")
++U64 = 2 ** 64
++
++def fail(msg):
++    msg = str(msg)
++    raise SystemExit(f"render-challenge: {msg if len(msg) <= 300 else msg[:300] + ' ...'}")
++
++def nat(k, v):
++    if type(v) is not int or not (0 <= v < U64):
++        fail(f"{k}: expected a JSON integer in [0, 2^64), got {v!r}")
++    return str(v)
++
++def rat(k, v):
++    if type(v) is not str or not re.fullmatch(r"[0-9]+(/[1-9][0-9]*)?", v) or len(v) > 2 * MAX_RAT_DIGITS:
++        fail(f"{k}: expected a string 'a' or 'a/b' of decimal digits, got {v!r}")
++    a, _, b = v.partition("/")
++    return f"(({a} : ℝ≥0) / {b or 1})"
++
++def confined(k, rel, base):
++    if type(rel) is not str:
++        fail(f"{k}: expected a path string, got {rel!r}")
++    parts = rel.split("/")
++    if os.path.isabs(rel) or "\\" in rel or any(p in ("", ".", "..") for p in parts):
++        fail(f"{k}: path {rel!r} must be a plain relative path inside the claim's directory")
++    p = base
++    for part in parts:
++        p = os.path.join(p, part)
++        if os.path.islink(p):
++            fail(f"{k}: path {rel!r} goes through a symbolic link")
++    if os.path.commonpath([os.path.realpath(p), base]) != base or not os.path.isfile(p):
++        fail(f"{k}: path {rel!r} is not a regular file inside the claim's directory")
++    return p
++
++def strict_json(path, what):
++    def pairs(ps):
++        d = {}
++        for key, val in ps:
++            if key in d:
++                fail(f"{what}: duplicate key {key!r}")
++            d[key] = val
++        return d
++    def bad_const(s):
++        fail(f"{what}: {s} not allowed")
++    try:
++        with open(path) as f:
++            return json.load(f, object_pairs_hook=pairs, parse_constant=bad_const,
++                             parse_float=lambda s: fail(f"{what}: float {s} not allowed"))
++    except (json.JSONDecodeError, UnicodeDecodeError) as e:
++        fail(f"{what}: not JSON ({e})")
++
++def words(path, width):
++    data = open(path, "rb").read()
++    if len(data) % width:
++        fail(f"{path}: length {len(data)} is not a multiple of {width}")
++    return list(struct.unpack(f"<{len(data) // width}{'I' if width == 4 else 'Q'}", data))
++
++def lean_list(name, ty, ws, bits):
++    out, parts = [], []
++    for i in range(0, len(ws), CHUNK):
++        part = ws[i:i + CHUNK]
++        n = sum(w << (bits * j) for j, w in enumerate(part))
++        cn = f"{name}_{i // CHUNK}"
++        parts.append(f"unpack {bits} {len(part)} {cn}")
++        out.append(f"def {cn} : ℕ := 0x{n:x}")
++    out.append(f"/-- Chunks of the submitted file ({len(ws)} words), {CHUNK} words each but the last. -/\n"
++               f"def {name}_chunks : List (List ℕ) := [{', '.join(parts)}]")
++    out.append(f"/-- Rendered from the submitted file. -/\n"
++               f"def {name} : List ({ty}) := {name}_chunks.flatten.map (BitVec.ofNat {bits})")
++    return out
++
++def image(k, v, base):
++    if type(v) is not dict or set(v) != {"code", "data"}:
++        fail(f"{k}: expected an object with exactly the keys code, data, got {v!r}")
++    code = words(confined(k, v["code"], base), 4)
++    data = words(confined(k, v["data"], base), 8)
++    if 4 * len(code) + 8 * len(data) > 2 ** 20:
++        fail(f"{k}: image of {4 * len(code) + 8 * len(data)} bytes exceeds 2^20")
++    name = k.replace(".", "_")
++    out = lean_list(f"{name}_code", "BitVec 32", code, 32) + lean_list(f"{name}_data", "Word", data, 64)
++    out.append(f"/-- The submitted extractor image (rendered challenge data). -/\n"
++               f"def {name} : Image := {{ code := {name}_code, data := {name}_data }}")
++    return "\n".join(out)
++
++def main():
++    if len(sys.argv) != 4:
++        fail("usage: render-challenge.py STUB.lean.in claim.json OUT.lean")
++    stub, claim_path, out = sys.argv[1:4]
++    sys.set_int_max_str_digits(0)
++    text = open(stub).read()
++    vals = strict_json(claim_path, "claim")
++    if type(vals) is not dict:
++        fail("claim must be a JSON object")
++    found = {}
++    for kind, key in PH.findall(text):
++        if found.setdefault(key, kind) != kind:
++            fail(f"placeholder {key} used with two types")
++    if set(vals) != set(found):
++        fail(f"key mismatch: missing {sorted(set(found) - set(vals))}, extra {sorted(set(vals) - set(found))}")
++    base = os.path.realpath(os.path.dirname(os.path.abspath(claim_path)))
++    def sub(m):
++        kind, key = m.groups()
++        if kind == "nat": return nat(key, vals[key])
++        if kind == "rat": return rat(key, vals[key])
++        line_start = m.string.rfind("\n", 0, m.start()) + 1
++        line_end = m.string.find("\n", m.end())
++        rest = m.string[m.end():] if line_end < 0 else m.string[m.end():line_end]
++        if m.string[line_start:m.start()].strip() or rest.strip():
++            fail(f"{kind} placeholder {key} must be on a line of its own")
++        return image(key, vals[key], base)
++    rendered = PH.sub(sub, text)
++    if "{{" in rendered:
++        fail("unrendered or malformed placeholder left")
++    open(out, "w").write(rendered)
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/setup-scratch.sh b/scripts/setup-scratch.sh
+new file mode 100755
+index 0000000..3ca55e8
+--- /dev/null
++++ b/scripts/setup-scratch.sh
+@@ -0,0 +1,51 @@
++#!/usr/bin/env bash
++# Prepare and build THIS clone of the core for an entry's local checks (INTERIM, stage S2a, on the
++# scratch branch `v3/s2-interim-harness`; S3 replaces it). Only the clone is written to.
++#
++#   scripts/setup-scratch.sh entry ENTRY_ROOT [RUN_MODULE]
++#                                               add a `[[lean_lib]]` of the flat entry root (srcDir: a
++#                                               symbolic link `entry` to it; every `*.lean` file a
++#                                               root) and, with RUN_MODULE, a `[[lean_exe]]`
++#                                               `entry-run` rooted there; build them, `gate` and
++#                                               `axiomaudit`
++#   scripts/setup-scratch.sh org                the clean organiser package: the core's default
++#                                               targets and `gate` only, no entry module
++#
++# The Lean tree must be the pin's: `git diff --name-only PIN HEAD` may name only the interim
++# organiser files of this branch (PIN: an environment variable, the submissions repository's
++# `.contract` pin). Packages: PACKAGES (default: this machine's shared, prebuilt,
++# read-only tree) is linked as .lake/packages; never `lake update` or `lake exe cache get` against
++# it; with PACKAGES='' the script runs `lake exe cache get`. Builds run under `timeout` (TIMEOUT
++# seconds, default 3600).
++set -euo pipefail
++DIR=$(cd "$(dirname "$0")/.." && pwd); cd "$DIR"
++MODE=${1:?usage: setup-scratch.sh entry ENTRY_ROOT [RUN_MODULE] | org}
++PACKAGES=${PACKAGES-/home/devops/CambridgePQ/recursion.fast/contract/.lake/packages}
++TIMEOUT=${TIMEOUT:-3600}
++PIN=${PIN:?setup-scratch: set PIN to the pinned core commit}
++INTERIM="RecursionFast/Challenge/V3.lean.in scripts/harness-local.sh scripts/render-challenge.py scripts/setup-scratch.sh"
++for f in $(git diff --name-only "$PIN" HEAD); do
++  [[ " $INTERIM " == *" $f "* ]] || { echo "setup-scratch: $f differs from the pin $PIN" >&2; exit 1; }
++done
++git diff --quiet HEAD -- . ':!lakefile.toml' || { echo "setup-scratch: uncommitted changes in $DIR" >&2; exit 1; }
++if [[ ! -e .lake/packages ]]; then
++  mkdir -p .lake
++  if [[ -n "$PACKAGES" ]]; then ln -s "$PACKAGES" .lake/packages; else timeout "$TIMEOUT" lake exe cache get; fi
++fi
++if [[ $MODE == entry ]]; then
++  ROOT=$(cd "${2:?usage: setup-scratch.sh entry ENTRY_ROOT [RUN_MODULE]}" && pwd); RUN=${3:-}
++  [[ -L entry ]] || ln -s "$ROOT" entry
++  [[ "$(readlink entry)" == "$ROOT" ]] || { echo "setup-scratch: entry links elsewhere" >&2; exit 1; }
++  git checkout -q lakefile.toml
++  mods=$(cd "$ROOT" && ls *.lean | sed 's/\.lean$//' | python3 -I -c 'import sys,json; print(json.dumps(sys.stdin.read().split()))')
++  printf '\n# entry (setup-scratch.sh): scratch only, never committed\n[[lean_lib]]\nname = "EntryScratch"\nsrcDir = "entry"\nroots = %s\n' "$mods" >> lakefile.toml
++  [[ -z "$RUN" ]] || printf '\n[[lean_exe]]\nname = "entry-run"\nsrcDir = "entry"\nroot = "%s"\n' "$RUN" >> lakefile.toml
++  timeout "$TIMEOUT" lake build gate axiomaudit EntryScratch ${RUN:+entry-run} 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
++  timeout "$TIMEOUT" lake build EntryScratch ${RUN:+entry-run} > /dev/null 2>&1 || { echo "setup-scratch: entry build failed" >&2; exit 1; }
++else
++  git diff --quiet HEAD || { echo "setup-scratch: $DIR has local changes; the organiser package must be the branch" >&2; exit 1; }
++  timeout "$TIMEOUT" lake build 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
++  timeout "$TIMEOUT" lake build gate 2>&1 | grep -E "^(error|warning)|Build completed|^✖" || true
++  [[ -x .lake/build/bin/gate ]] || { echo "setup-scratch: organiser build failed" >&2; exit 1; }
++fi
++echo "setup-scratch: $MODE at $(git rev-parse --short HEAD) (pin $PIN) in $DIR"
+-- 
+2.53.0
+

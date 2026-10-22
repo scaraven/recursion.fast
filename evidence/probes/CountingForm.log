@@ -1,0 +1,7 @@
+'AdvProbe.product16_not_capped' depends on axioms: [propext, Classical.choice, Quot.sound]
+'AdvProbe.collision_not_capped' depends on axioms: [propext, Classical.choice, Quot.sound]
+'AdvProbe.colState_bounded' depends on axioms: [propext, Classical.choice, Quot.sound]
+
+real	0m6.449s
+user	0m6.658s
+sys	0m3.037s
