@@ -1,0 +1,139 @@
+<title>Relativized Recursion for recursion.fast</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&display=swap">
+<style>
+/* Layout: a proof-report reading column (~68ch) with a sticky contents rail on wide screens;
+   evidence labels (kernel / paper / measured / estimate) are the page's one coloured device. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --ink: #18202a;
+  --muted: #586374;
+  --rule: #d8dde5;
+  --accent: #0d6a60;
+  --accent-soft: #e3f1ee;
+  --code-bg: #eef1f5;
+  --ev-kernel: #0d6a60;  --ev-kernel-bg: #e0f1ed;
+  --ev-paper: #3f4aa8;   --ev-paper-bg: #e7e9f8;
+  --ev-measured: #8a5a12; --ev-measured-bg: #f6ecdc;
+  --ev-estimate: #5f6673; --ev-estimate-bg: #eceef1;
+  --font-display: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --step-0: 1rem; --step-1: 1.2rem; --step-2: 1.5rem; --step-3: 2.1rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --surface: #171c23; --ink: #e5e9ef; --muted: #9aa5b4; --rule: #2a323d;
+    --accent: #5cc0b2; --accent-soft: #15302d; --code-bg: #1d232c;
+    --ev-kernel: #6fd0c1; --ev-kernel-bg: #143330;
+    --ev-paper: #a3abf2; --ev-paper-bg: #1f2346;
+    --ev-measured: #e2b56b; --ev-measured-bg: #382a14;
+    --ev-estimate: #b3bac6; --ev-estimate-bg: #252b34;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --surface: #171c23; --ink: #e5e9ef; --muted: #9aa5b4; --rule: #2a323d;
+  --accent: #5cc0b2; --accent-soft: #15302d; --code-bg: #1d232c;
+  --ev-kernel: #6fd0c1; --ev-kernel-bg: #143330;
+  --ev-paper: #a3abf2; --ev-paper-bg: #1f2346;
+  --ev-measured: #e2b56b; --ev-measured-bg: #382a14;
+  --ev-estimate: #b3bac6; --ev-estimate-bg: #252b34;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: var(--step-0); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 2.5rem 4rem;
+}
+.shell { max-width: 76rem; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2.5rem; }
+@media (min-width: 1100px) { .shell { grid-template-columns: 15rem minmax(0, 1fr); } }
+nav.rail { font-size: 0.85rem; min-width: 0; }
+@media (min-width: 1100px) {
+  nav.rail { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 1.5rem); align-self: start; max-height: calc(100vh - 3rem); overflow-y: auto; }
+}
+nav.rail .label { text-transform: uppercase; letter-spacing: 0.08em; font-size: 0.72rem; color: var(--muted); font-weight: 600; margin: 0 0 0.6rem; }
+ol.toc, ol.toc ol { list-style: none; margin: 0; padding: 0; }
+ol.toc > li { margin: 0.35rem 0; }
+ol.toc ol { margin: 0.2rem 0 0.4rem 0.75rem; border-left: 1px solid var(--rule); padding-left: 0.6rem; }
+ol.toc a { color: var(--muted); text-decoration: none; display: block; padding: 0.1rem 0; }
+ol.toc a:hover, ol.toc a:focus-visible { color: var(--accent); }
+@media (max-width: 1099px) {
+  nav.rail { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 0.9rem 1rem; }
+  nav.rail details summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+}
+main.doc { min-width: 0; max-width: 46rem; }
+.doc h1 {
+  font-family: var(--font-display); font-weight: 700; font-size: var(--step-3); line-height: 1.15;
+  margin: 0 0 0.6rem; text-wrap: balance; letter-spacing: -0.01em;
+}
+.doc h1 + p { font-size: var(--step-1); color: var(--muted); margin: 0 0 1rem; }
+.doc h1 + p strong { font-weight: 500; color: var(--muted); }
+.doc h1 + p + p { font-size: 0.88rem; color: var(--muted); border-left: 3px solid var(--accent); padding: 0.2rem 0 0.2rem 0.8rem; }
+.doc h2 {
+  font-family: var(--font-display); font-weight: 600; font-size: var(--step-2); line-height: 1.25;
+  margin: 2.6rem 0 0.8rem; text-wrap: balance; scroll-margin-top: 1.5rem;
+}
+.doc h3 {
+  font-family: var(--font-display); font-weight: 600; font-size: var(--step-1); line-height: 1.3;
+  margin: 2rem 0 0.6rem; text-wrap: balance; scroll-margin-top: 1.5rem;
+}
+.doc p { margin: 0 0 0.9rem; }
+.doc ul, .doc ol { margin: 0 0 1rem; padding-left: 1.4rem; }
+.doc li { margin: 0.25rem 0; }
+.doc li > ul, .doc li > ol { margin: 0.25rem 0 0.35rem; }
+.doc strong { font-weight: 600; }
+.doc a { color: var(--accent); }
+.doc hr { border: 0; border-top: 1px solid var(--rule); margin: 2.4rem 0; }
+.doc code {
+  font-family: var(--font-mono); font-size: 0.86em; background: var(--code-bg);
+  padding: 0.08em 0.32em; border-radius: 3px; overflow-wrap: anywhere;
+}
+.doc pre.code {
+  background: var(--code-bg); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 0.9rem 1rem; overflow-x: auto; font-size: 0.84rem; line-height: 1.5; margin: 0 0 1.1rem;
+}
+.doc pre.code code { background: none; padding: 0; overflow-wrap: normal; white-space: pre; }
+.table-wrap { overflow-x: auto; margin: 0 0 1.2rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+.doc table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+.doc th, .doc td { text-align: left; vertical-align: top; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--rule); }
+.doc th { font-weight: 600; background: var(--accent-soft); color: var(--ink); }
+.doc tr:last-child td { border-bottom: 0; }
+.doc td code, .doc th code { font-size: 0.82em; }
+.ev {
+  display: inline-block; font-family: var(--font-mono); font-size: 0.74em; font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.05em; padding: 0.05em 0.45em; border-radius: 3px;
+  vertical-align: 0.08em;
+}
+.ev-kernel { color: var(--ev-kernel); background: var(--ev-kernel-bg); }
+.ev-paper { color: var(--ev-paper); background: var(--ev-paper-bg); }
+.ev-measured { color: var(--ev-measured); background: var(--ev-measured-bg); }
+.ev-estimate { color: var(--ev-estimate); background: var(--ev-estimate-bg); }
+.legend { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; font-size: 0.82rem; color: var(--muted); margin: 0 0 1.4rem; }
+.legend span.item { display: inline-flex; gap: 0.4rem; align-items: center; }
+footer.src { margin-top: 3rem; font-size: 0.82rem; color: var(--muted); border-top: 1px solid var(--rule); padding-top: 1rem; }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+<div class="shell">
+  <nav class="rail" aria-label="Contents">
+    <details open id="toc-details"><summary class="label">Contents</summary>
+    {{TOC}}
+    </details>
+  </nav>
+  <main class="doc">
+    {{BODY}}
+    <footer class="src">Source: <code>docs/explore/REPORT.md</code> on branch <code>explore/relativized-nark</code> of the recursion.fast repository, with the working notes in <code>docs/explore/notes/</code> and the Lean probes in <code>RecursionFast/Explore/</code>.</footer>
+  </main>
+</div>
+<script>
+// On narrow screens start the contents collapsed so the report itself is the first thing seen.
+try { if (window.matchMedia("(max-width: 1099px)").matches) document.getElementById("toc-details").open = false; } catch (e) {}
+</script>
