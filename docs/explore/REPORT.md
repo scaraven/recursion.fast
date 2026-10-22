@@ -40,24 +40,35 @@ model it cannot be a recursion competition. One extra harness capability fixes t
    - *The oracle charge is gameable* in every self-measured form, and it leaves the verifier's
      local work unpriced. A million chains would take about 89 machine-days.
    - What would win is a chain prover with any verifier, not a "Flock 2.0".
-3. **The workaround: let the harness authenticate oracle answers** (paper + kernel; TODO P2/P3).
-   - The harness keeps a secret oracle and attests the list of answers a child proof used. The
-     parent circuit hashes that list with concrete BLAKE2s, which is what a real recursion spends
-     on those hashes (1.09×).
-   - This is the signed-random-oracle route that the impossibility paper itself names as an escape.
-     It closes O-25 by construction, keeps whole-tree composition as a theorem, and adds about 50
-     trusted lines.
-   - Refinement (W5): attest only the ≈ 500 Fiat–Shamir answers per proof, and hash Merkle trees
-     with public BLAKE2s. The node then pays exactly a real recursion step plus about 2%, and the
-     service load drops a thousandfold. The price is a named preimage-awareness assumption on BLAKE2s.
-4. **What none of this fixes.** The recursion incentive and the succinctness cap (issue #6) remain
-   measurement problems, unless the leaf chain also goes through the oracle (D4+, §7.4; TODO A3).
-   Node extraction is still decoding (#7), and proof sizes are still tight (#8).
+3. **The workaround: let the harness authenticate oracle answers** (kernel + paper).
+   - **D4, the attested oracle.** The harness keeps a secret oracle and attests the list of answers
+     a child proof used.
+     - The parent circuit hashes that list with concrete BLAKE2s, which costs about what a real
+       recursion spends on those hashes (1.09×).
+     - In the kernel, one `attest` call per node replaces re-asking.
+     - This is the signed-random-oracle escape the impossibility paper itself names. It closes O-25
+       by construction and keeps whole-tree composition as a theorem.
+     - Assumptions: PRF security and BLAKE2s collision resistance, both falsifiable. It adds about
+       50 trusted lines.
+     - Its weakness is service traffic: every Merkle hash goes through the harness.
+   - **W5, the channel split.** Attest only the ≈ 500 Fiat–Shamir answers per proof, and hash Merkle
+     trees with public BLAKE2s.
+     - The node then pays a real recursion step plus 0.5–2%, and service traffic drops about a
+       thousandfold.
+     - The price is an unfalsifiable *extractability* heuristic on BLAKE2s (whoever outputs a digest
+       knows a preimage). It is weaker than v3's random-oracle heuristic and cannot be exploited by
+       `V`. The kernel shows it needs a second, "late preimage" escape in the knowledge clause.
+4. **What none of this fixes.**
+   - The recursion incentive (issue #6(b)) remains a measurement and benchmark-shape problem.
+   - Routing the leaf chain through the oracle as well (D4+) closes the *trivial-root* half (#6(a))
+     by the theorem, but not the incentive half: a relabelled flat proof of a subtree survives every
+     cap.
+   - Node extraction is still decoding (#7), and proof sizes are still tight (#8).
 
-**Recommendation** (§9). Do not adopt D1/D2 as stated. Adopt the relativized node relation together
-with an attested oracle as the O-25 stage, with the channel split as its deployment. Keep a
-CPU-time rule for issue #6 unless D4+ survives review. The decisions only the user can take are
-listed in §9.
+**Recommendation** (§9). Do not adopt D1/D2 as stated. Keep the user's central move, the relativized
+node relation, and pair it with an attested secret oracle as the O-25 contract stage (D4). Deploy it
+all-oracle first, or as W5 if the user accepts the extractability heuristic. Add D4+ for #6(a).
+Handle #6(b) through the benchmark shape. The decisions only the user can take are listed in §9.
 
 ---
 
@@ -291,7 +302,7 @@ SNARKs exist in other oracle models. The impossibility paper's §1.2 names the s
 (SROM, Chiesa–Tromer 2010, which already proposes "a trusted Internet service"). Our variant is
 CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trusted decider (L1).
 
-### 7.1 D4, the attested oracle (W2; kernel TODO P2)
+### 7.1 D4, the attested oracle (W2; kernel P2)
 
 - **Service.** The service holds a PRF key `k` and a set `S`, both fresh per timed run. It answers
   three calls:
@@ -356,7 +367,7 @@ CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trus
   `hashList` through a re-parse at 2^64-byte queries. The clause must require both lists to be
   bounded (`IsColl`).
 
-### 7.2 W5, the channel split, with a published log (W1; kernel TODO P3; attacks TODO A2)
+### 7.2 W5, the channel split, with a published log (W1; kernel P3; attacks A2)
 
 A hash-based verifier uses the oracle for two things. Of spartan-chain's 5,156 queries, about
 4,700 are Merkle-path hashes, which need only *binding*, and about 400–500 are Fiat–Shamir squeezes,
@@ -440,33 +451,55 @@ D3 is the same idea with hash-based signatures verified in-circuit. A signature 
 100–200-line trusted signature specification. D4/W4 dominates it unless proofs must be verifiable
 offline *during* the evaluation.
 
-### 7.4 D4+, the oracle-chain leaf (W2 §D; attacks TODO A3)
+### 7.4 D4+, the oracle-chain leaf (W2 §D, A3)
 
-Attestation removes the reason the brief kept the leaf concrete. If the leaf chain is computed
-through the oracle and certified as an `n`-item list (the leaf circuit hashes 1.6·n compressions
-instead of n), then:
+Attestation removes the reason §3 kept the leaf concrete. Under D4+ the leaf chain is computed
+through the oracle and certified as an `n`-item list. The leaf circuit then hashes that list: 1.16×
+v3's chain cost with streamed 74-byte items (A3 m1). The chain digests are now PRF outputs, so no
+root verifier can recompute them.
 
-- a witness-sending verifier needs `n` oracle calls per leaf and `2^j·n` at level `j`;
-- the certificate's bound `qV ≤ n` would therefore exclude witness-sending and the trivial root **by
-  the theorem**.
-
-That would close issue #6 without a wall-clock cap. It is the only lever found that prices
-recursion in the theorem rather than in a rule. TODO A3 verdict.
+- **Closes #6(a), the trivial root, by the theorem** (A3, paper).
+  - A root verifier sees at most `proofCap` bytes and `qV` answers, so it can recover at most
+    ≈ `2^15 + qV` of the `2^22` chain digests. The rest must come from a SNARK.
+  - `T_V` becomes a loose liveness cap. The CPU-time rule, its calibration against the best linear
+    verifier, and the step-count upgrade (O-18) all become unnecessary.
+- **Does not close #6(b), the recursion incentive** (A3 M1). T1's flat lift survives as "proof of
+  parent":
+  - one flat SNARK over a level-`j` subtree's attested lists serves as the proof of *every*
+    statement in that subtree, with a path to say which one;
+  - its extractor is straight-line, and it fits every cap;
+  - the prover flattens to the memory limit, `j ≈ 3–4`, as in v3, and is 2.3–7.5× cheaper than full
+    recursion at the ranked shape (estimate);
+  - a per-level `T_V` cannot see it either: a relabelled flat proof verifies as fast as a recursive
+    one.
+- **Parameter conditions** (A3 M2).
+  - At the stated cap `qV ≤ n`, a hybrid witness-sending node still exists at level 1. It re-queries
+    one chain and carries the sibling's compact transcript in 524 KB.
+  - Fix: `qV ≤ 2^13` (or `2^12` under W5), plus the shape invariant `proofCap < 64·n`. Raising
+    `proofCap`, as issue #8 wishes, would reopen the hybrid.
+- **Engineering** (A3 M3, M4).
+  - The chain is `n` *dependent* service calls per leaf: 17 ms (spin) to 0.61 s (futex) per `2^14`
+    leaf. A `chain(s, n)` service call evaluated in-process fixes this; it is modelled as `n` queries
+    and charged to the prover.
+  - Instances now depend on the key, so the key must be fresh per repeat and released afterwards
+    (W4), so that anyone can check the tree was a tree of chains.
+- **Cost.** About 6 trusted lines over D4.
 
 ### 7.5 What none of these fix
 
-- **Issue #6(a), the succinctness cap.** Witness-sending needs no service. Its check takes 37–43 ms
-  threaded and 0.19–0.69 s on one core (**measured**/estimate). A real recursive root checks in
-  8–30 ms (estimate, on a machine with carry-less multiply), but takes 0.5 s on the dev VM without
-  it.
+- **Issue #6(a), the succinctness cap, without D4+.** Witness-sending needs no service. Its check
+  takes 37–43 ms threaded and 0.19–0.69 s on one core (**measured**/estimate). A real recursive root
+  checks in 8–30 ms (estimate, on a machine with carry-less multiply), but takes 0.5 s on the dev VM
+  without it.
   - A one-core CPU-time cap separates the two by only 2–2.5× at the ranked shape. At
     `r = 4, n = 2^20` the margin grows to 25–95× (C1).
-  - So the benchmark shape matters more than the oracle model, and `T_V` must be calibrated on the
-    reference machine.
-- **Issue #6(b), the recursion incentive.** "Witness-sending below level `j`, one flat SNARK at
-  `j`" needs no attestation and still saves work. Recursion costs 2.5–12.6× the work of proving the
-  same compressions flat at the ranked shape, and about 1.17× at `r = 4, n = 2^20` (C1).
-  - Only memory or a per-level rule stops it, unless D4+ holds.
+  - So without D4+ the benchmark shape matters more than the oracle model, and `T_V` must be
+    calibrated on the reference machine.
+- **Issue #6(b), the recursion incentive, with or without D4+.** Flattening to level `j ≈ 3–4` is
+  certifiable under every design studied. Recursion costs 2.5–12.6× the work of proving the same
+  compressions flat at the ranked shape, but only about 1.17× at `r = 4, n = 2^20` (C1).
+  - The honest fix is the shape: fewer, longer leaves, where recursion is nearly free and memory
+    forbids flattening. Otherwise say openly that flattening below `j ≈ 4` is allowed.
 - **Issue #7.** Node extraction is decoding, and the extractor budget question is unchanged.
 - **Issue #8.** Proof sizes are unchanged; D4 adds about 64 B per node.
 
@@ -474,16 +507,17 @@ recursion in the theorem rather than in a rule. TODO A3 verdict.
 
 ## 8. Comparison
 
-| | v3 | D1 priced | D2 pure-ROM tree | D3 signed | D4 attested | **W5 split + W4 log** |
+| | v3 | D1 priced | D2 pure-ROM tree | D3 signed | **D4 attested** | **W5 split + W4 log** |
 |---|---|---|---|---|---|---|
-| O-25 / CGH | open | closed if the oracle is secret | closed | closed | closed | closed, both channels |
+| O-25 / CGH | open | closed only if the oracle is secret | closed | closed | closed | closed, both channels |
 | Composition across levels | heuristic | n/a (no tree) | theorem | theorem | theorem | theorem |
 | Root verifier | succinct | n/a | linear in all inner calls | succinct | succinct | succinct |
-| Node in-circuit vs real recursion | 1.00× | nothing built | nothing built | 1.09× + 0.5–12% | 1.09× | **1.00× + 2%** |
-| Rewards recursion-friendly verifiers | partly (#6) | no | no | partly | partly | partly (#6); D4+ would |
+| Node in-circuit vs real recursion | 1.00× | nothing built | nothing built | 1.09× + 0.5–12% | 1.09× | **1.00× + 0.5–2%** |
+| Recursion-friendly verifiers rewarded | yes, but flattening wins (#6b) | no | no | as D4 | yes; flattening still wins (#6b) | as D4, more faithfully |
+| Trivial root (#6a) excluded | by a CPU cap only | by a cap only | — | by a cap | by a cap; **by theorem with D4+** | same as D4 |
 | Service calls per tree | 0 | ≈ 0 | ≈ 10^8 | ≈ 10^8 | ≈ 10^8 | **≈ 2.5·10^5** |
-| Assumptions beyond the counting form | BLAKE2s is a RO | PRF | PRF | PRF, EUF-CMA | PRF, CR | PRF, CR, preimage awareness |
-| Trusted lines added (estimate) | — | +10–15 | +10–15 | +150–300 | ≈ +50 | +60–100 |
+| Assumptions beyond the counting form | BLAKE2s is a random oracle | PRF | PRF | PRF, EUF-CMA | PRF, CR | PRF, CR, extractability heuristic |
+| Trusted lines added (estimate) | — | +10–15 | +10–15 | +150–300 | ≈ +50 (+6 for D4+) | +80–120 |
 | Third-party verification | yes | after key release | after key release | yes | after key release | after key release |
 
 ---
@@ -502,21 +536,47 @@ recursion in the theorem rather than in a rule. TODO A3 verdict.
    - a constructive collision output under `Computes`;
    - completeness in context form;
    - deleting `Submission.Vb`, `blake2sOracle` and the §6.7 recognition rule.
-3. **Deploy it as W5**: the channel split, with a published session log and key release, once the
-   `pubStep` probe holds (TODO P3).
-4. **Treat issue #6 separately.** Use a CPU-time cap on every sampled proof, and move the benchmark
-   towards fewer, longer leaves (`r = 4, n = 2^20`). Alternatively adopt D4+ if its review holds
-   (TODO A3).
+3. **Deploy it all-oracle first.** The service is a separate process with a spinning, batched
+   shared-memory ring, charged to the prover's cgroup. Spartan-class provers lose 0.3–1.2% to it;
+   Flock-class provers up to 2× on a naive service.
+   - Add W4's published session log and key release after freeze, so that records become verifiable
+     by third parties.
+4. **Move to W5, the channel split, as a later contract stage** if the user accepts its
+   extractability heuristic. Use the corrected model of §7.2:
+   - `V` queries the public channel;
+   - the knowledge clause has a collision escape and a late-preimage escape;
+   - challenges are slices of secret answers.
+   It gives exact in-circuit costs and about 1/1000 of the service traffic.
+5. **Add D4+** (the leaf chain through the oracle, `qV ≤ 2^13`, `proofCap < 64·n`, a `chain` service
+   call). This closes #6(a) by the theorem and retires the CPU-time `T_V` rule.
+6. **Handle #6(b) through the benchmark shape.** Use fewer, longer leaves (`r = 4, n = 2^20`), where
+   recursion costs about 1.17× flat and memory forbids flattening. Otherwise state openly that
+   flattening below `j ≈ 4` is allowed. No theorem studied here forces recursion below the memory
+   limit.
+
+**A staged plan.** Each stage follows the repository's implement → review/golf → fix protocol.
+
+| Stage | Contract change | Closes |
+|---|---|---|
+| R1 | log-relative `Rel` (P1's `RelL`), D4's events and `KState` laws, escapes as extractor outputs | composition heuristic |
+| R2 | harness service (PRF oracle, recursive certify/attest), deployment theorem on paper, delete `Vb`/`blake2sOracle`/§6.7 rule | O-25, liveness mirror, "BLAKE2s is a RO" |
+| R3 | D4+ leaf, `qV` and `proofCap` invariants, `chain` call | #6(a) by theorem |
+| R4 (optional) | W5 public channel with its two escapes | service traffic, cost fidelity |
 
 **Decisions for the user.**
 
-1. Is leaving the pure ROM for a trusted harness capability acceptable? V3-5 says ROM only. D4
-   adds PRF security and BLAKE2s collision resistance; W5 adds preimage awareness.
-2. A designated-verifier period: proofs are checkable only by the organiser until the key is
+1. Is leaving the pure ROM for a trusted harness capability acceptable? V3-5 says ROM only.
+   - D4 adds PRF security of keyed BLAKE2s and BLAKE2s collision resistance, both falsifiable.
+   - W5 adds an unfalsifiable extractability heuristic, weaker than v3's random-oracle heuristic.
+2. A designated-verifier window: proofs are checkable only by the organiser until the key is
    released after the record is frozen.
-3. Is "witness or collision" acceptable as the knowledge clause?
-4. The benchmark shape and the CPU-time rule (issue #6).
-5. Whether to pursue D4+ (the leaf through the oracle) as the stage after the minimal version.
+3. Is "witness, or a collision (or late preimage) computed by the extractor" acceptable as the
+   knowledge clause? It is only as strong as the extractor's step bound (`acceptAll_choice`).
+4. The benchmark shape, and an explicit policy on flattening below `j ≈ 4` (#6(b)).
+5. Whether to replace v3's "prove `V` arithmetised with BLAKE2s" by the attested model, given that
+   the competition's records then certify the attested deployment and not a public-hash deployment.
+   A real-world recursion built from a winner still rests on the usual heuristic, which nothing can
+   remove (CGH, plus the impossibility result).
 
 ---
 
