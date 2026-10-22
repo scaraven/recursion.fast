@@ -1,7 +1,15 @@
-# recursion.fast: the design record after v3
+# recursion.fast: the design record (v3, and the v4 proposal)
 
-**State of play (2026-10-22).** The third iteration of the competition, v3 (a non-interactive
-argument in the random-oracle model over a digest relation, scored by whole-tree wall time), was
+**State of play (2026-10-22).** **v4, the signed-random-oracle (SROM) rules, is the proposal now
+implemented on the branch `v4/srom-rules`**, not yet adopted by the user: v3's certificate kept,
+O-25 closed by the oracle's deployment (a secret-keyed BLAKE2s service that signs the answers each
+proof used, checked by one trusted predicate `acc`), x86-64 assembly provers timed on GitHub-hosted
+runners with attested results, and the score `S = T_tree + K·t_link`. Its normative design is
+[`DESIGN-v4-srom.md`](DESIGN-v4-srom.md); its build record (the brief, the design attack, the stage
+results) is under [`v4/`](v4/). The next paragraph is the record v4 starts from.
+
+**v3.** The third iteration of the competition, v3 (a non-interactive argument in the
+random-oracle model over a digest relation, scored by whole-tree wall time), was
 built as far as a trusted contract, a certified witness-sending entry, a certified honest leaf
 SNARK entry (Spartan over GF(2^64) with a Ligero commitment, `HARNESS: ACCEPT`), and a rules stage
 that amended the security definitions. It then hit a wall: among the designs examined in the
@@ -20,6 +28,7 @@ lives in the three v3 documents below, which also incorporate and close the GitH
 
 | File | What it is |
 |---|---|
+| [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md) | **The v4 design (SROM), a proposal implemented on `v4/srom-rules`.** The relation with signed children and the one acceptance predicate `acc`; the contract-fixed hash-based signature; why no certified verifier can trust a signature; the deployment argument that closes O-25; composition across the tree (kernel walk, paper reductions); the signature's EUF-CMA statement; the trust statement; the service, the sandbox, the assembly prover, CI as the attested trusted machine, the measurements and the season-1 score; incentives, the trusted base, checks against C1–C15 and O-25 §11, and every decision taken in the user's absence. |
 | [`v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md`](v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md) | **The design.** v3 as it finally stood, self-contained: the pitch, the relation, the submission, the security definitions as amended (potential-form knowledge soundness with `logCap`, completeness with error `2^-128`, the step-counted extractor language with a proved bound), scoring, the trusted base, the harness and the two-repository model. Then the record: the issues incorporated, the user's decisions, the open problems, the constraints any next design must satisfy, and the design space for the next iteration. |
 | [`v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md`](v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md) | **The iterations and the measurements.** Stages S1, S2a, S2-KS, S2b and S2R, what each review found, the cost by component (lines, theorems, build and check times), proof sizes, prover and verifier times, the second-kernel finding, the proof-size analysis, what reuse cost, and process lessons for agent-driven development. Every number names its log, its kernel theorem, or (for a handful of figures that exist only as text in the stage reports) says so. |
 | [`v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md`](v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md) | **The open problem O-25**, condensed but complete: the kernel-checked backdoor, its disguises, the two design rounds (Candidate E, Candidate T) and the reviews that broke or narrowed them, the post-hoc challenge verification attack, the "fields as data" variant, the user's rejection, the literature, the precise impossibility statement, the criteria a satisfying solution must meet, and (§13) the relativized-NARK exploration that proposes closing O-25 by the deployment. |
@@ -28,7 +37,8 @@ lives in the three v3 documents below, which also incorporate and close the GitH
 | [`DESIGN-cost-incentive-model.md`](DESIGN-cost-incentive-model.md) | **A scoring proposal, not in force**: `S = T_tree + K · t_link`, whole-tree wall time at the long shape (`r = 4`, `n = 2^20`) as the chain term plus a weighted recursion term measured on a stream of short chains, each added to a running proof by a fresh prover process on the clock; why one wall time cannot weight recursion, the measurement protocol, the calibration of `K` from the leading entry, incentives, residual risks and the user's decisions CM-1 … CM-8. Answers v3's #6 (b) and C7 and the D4 proposal's RU-4. Its review is [`reviews/DESIGN-cost-incentive-model-review.md`](reviews/DESIGN-cost-incentive-model-review.md). |
 | [`reference/`](reference/) | The research notes behind the design: `neighbouring-competitions.md` (ots.golf, sig.golf, the Proximity Prize, leanerVM; what was taken from each and what to re-check when a rule changes; its §5 table is as of the 2026-10-19 design and says so), `notes/` (R1 ots.golf, R2 sig.golf, R3 Proximity Prize, R5 leanerVM), and `papers/` (redistributable copies of papers the designs rely on, with licence and version; now CGSY24). |
 
-Read the design first; its §1 is the one-page summary. The other two v3 documents are its
+For v4, read [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md) §0 first. For the record, read the v3
+design; its §1 is the one-page summary. The other two v3 documents are its
 companions and are cited from it; the D4 proposal and the CGH guide came after v3 stopped. A
 reader-only path: Design §1, then §15–§17; O-25 §0, §10, §11 and §13; Lessons §5 and §8.4; for the
 next direction, the CGH guide's §0 and the D4 proposal's §1; the rest as needed.
@@ -65,6 +75,7 @@ next direction, the CGH guide's §0 and the D4 proposal's §1; the rest as neede
   front of it; that guidance is frozen as of 2026-10-22, and a follow-up PR there should say so.
 - **Logs** (`logs/` in both repositories) are gitignored and local to the development VM; the
   lessons document (§9) says which log each number comes from and which probes were archived.
-- The core's `main` is now a skeleton: this `docs/` folder, a stub Lean root, and the build,
-  licence and guidance files. The contract, library, controls, harness tools and stage records
-  are on the archive branch above.
+- The core's `main` was stripped to a skeleton when v3 stopped (this `docs/` folder, a stub Lean
+  root, and the build, licence and guidance files). The branch `v4/srom-rules` adds the v4
+  contract, library and controls (`RecursionFast/`), the service, runner and workflows, and the
+  v4 build record (`docs/v4/`); the v3 code stays on the archive branch above.
