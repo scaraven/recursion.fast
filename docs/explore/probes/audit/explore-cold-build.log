@@ -1,0 +1,26 @@
+✔ [1239/1260] Built RecursionFast.Explore.Relativized.Defs (4.1s)
+✔ [1240/1260] Built RecursionFast.Explore.Relativized.Concat (3.5s)
+✔ [1241/1260] Built RecursionFast.Explore.Relativized.Backdoor (3.5s)
+✔ [1242/1260] Built RecursionFast.Explore.Relativized.Compose (3.5s)
+✔ [1243/1260] Built RecursionFast.Explore.Relativized.Lazy (3.7s)
+✔ [1244/1260] Built RecursionFast.Explore.Attested.Model (4.5s)
+✔ [1245/1260] Built RecursionFast.Explore.TwoChannel.Model (9.9s)
+✔ [1246/1260] Built RecursionFast.Explore.Lift.Deferral (3.8s)
+✔ [1247/1260] Built RecursionFast.Explore.Lift.Basic (4.3s)
+✔ [1248/1260] Built RecursionFast.Explore.Attested.KState (4.5s)
+✔ [1249/1260] Built RecursionFast.Explore.Lift.WS (3.9s)
+✔ [1250/1260] Built RecursionFast.Explore.Attested.Compose (3.4s)
+✔ [1251/1260] Built RecursionFast.Explore.Lift.Tree (3.8s)
+✔ [1252/1260] Built RecursionFast.Explore.Attested.Escape (4.9s)
+✔ [1253/1260] Built RecursionFast.Explore.Attested.Paper (6.0s)
+✔ [1254/1260] Built RecursionFast.Explore.Lift.All (3.8s)
+✔ [1255/1260] Built RecursionFast.Explore.Attested.Controls (4.2s)
+✔ [1256/1260] Built RecursionFast.Explore.Attested.All (3.1s)
+✔ [1257/1260] Built RecursionFast.Explore.TwoChannel.Merkle (19s)
+✔ [1258/1260] Built RecursionFast.Explore.TwoChannel.Backdoor (7.5s)
+✔ [1259/1260] Built RecursionFast.Explore (3.3s)
+Build completed successfully (1260 jobs).
+
+real	0m43.514s
+user	1m47.278s
+sys	0m29.515s

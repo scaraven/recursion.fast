@@ -25,3 +25,18 @@
 'RecursionFast.Explore.Lift.lift_runner_ws' depends on axioms: [propext, Classical.choice, Quot.sound]
 'RecursionFast.Explore.Lift.reask' depends on axioms: [propext, Classical.choice, Quot.sound]
 'RecursionFast.Explore.Lift.flip_reask' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Explore.Relativized.queries_defer' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Explore.Attested.Paper.paper_tree' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Explore.TwoChannel.Merkle.merkleState_pubStep' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RecursionFast.Explore.TwoChannel.Merkle.honest_extracts' depends on axioms: [propext, Quot.sound]
+'RecursionFast.Explore.TwoChannel.Merkle.honest_extracts_blake2s' depends on axioms: [propext, Quot.sound]
+'RecursionFast.Explore.TwoChannel.Merkle.col_extractor_inverts' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'RecursionFast.Explore.TwoChannel.Merkle.pure_extractor_inverts' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'RecursionFast.Explore.TwoChannel.Backdoor.bd_extractor_inverts' depends on axioms: [propext,
+ Classical.choice,
+ Quot.sound]
+'RecursionFast.Explore.Lift.liftState_μ' depends on axioms: [propext, Classical.choice, Quot.sound]

@@ -27,3 +27,12 @@ open RecursionFast.Explore
 #print axioms Lift.lift_runner_ws
 #print axioms Lift.reask
 #print axioms Lift.flip_reask
+#print axioms Relativized.queries_defer
+#print axioms Attested.Paper.paper_tree
+#print axioms TwoChannel.Merkle.merkleState_pubStep
+#print axioms TwoChannel.Merkle.honest_extracts
+#print axioms TwoChannel.Merkle.honest_extracts_blake2s
+#print axioms TwoChannel.Merkle.col_extractor_inverts
+#print axioms TwoChannel.Merkle.pure_extractor_inverts
+#print axioms TwoChannel.Backdoor.bd_extractor_inverts
+#print axioms Lift.liftState_μ

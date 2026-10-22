@@ -20,7 +20,7 @@ are timed on hash chains, and a charge for the verifier's oracle calls stands in
 proving them inside a recursion circuit.
 
 **Verdict.** The idea correctly diagnoses v3's cheating gap (O-25), but in the pure random-oracle
-model it cannot be a recursion competition. One extra harness capability fixes that.
+model (ROM) it cannot be a recursion competition. One extra harness capability fixes that.
 
 1. **What relativization buys** (kernel + paper).
    - *Composition.* Knowledge soundness of one level extends to the whole tree from a single query
@@ -32,11 +32,13 @@ model it cannot be a recursion competition. One extra harness capability fixes t
      deployment is what closes it.
 2. **What it costs in the pure ROM** (kernel + paper + estimate).
    - *Parents must re-ask.* A node verifier must re-ask every oracle query its children's
-     verification depends on. The root then does as much oracle work as checking every proof in the
-     tree, about 2.6 M calls at the ranked size, with an 80–850 MB root proof.
+     verification depends on. The root then does about as much oracle work as checking every proof
+     in the tree: about 2.6 M calls at the ranked size, with an 80–850 MB root proof.
    - *Recursion never beats concatenation*, and relativized IVC over hash chains never compresses.
-   - *The requirement constrains nothing.* Witness-sending, concatenation and a flat SNARK with
-     chain starts in the clear all satisfy it (kernel).
+   - *The requirement constrains nothing.* Witness-sending and concatenation satisfy it (kernel).
+     So does any flat argument with chain starts in the clear, lifted (kernel). With a succinct flat
+     SNARK the lifted root is succinct and nothing recurses (paper: the probe's flat argument is not
+     succinct).
    - *The oracle charge is gameable* in every self-measured form, and it leaves the verifier's
      local work unpriced. A million chains would take about 89 machine-days.
    - What would win is a chain prover with any verifier, not a "Flock 2.0".
@@ -45,11 +47,12 @@ model it cannot be a recursion competition. One extra harness capability fixes t
      a child proof used.
      - The parent circuit hashes that list with concrete BLAKE2s, which costs about what a real
        recursion spends on those hashes (1.09×).
-     - In the kernel, one `attest` call per node replaces re-asking.
+     - In the kernel, one `attest` call per node replaces re-asking. The probe's node carries its
+       children in the clear; a succinct node is paper.
      - This is the signed-random-oracle escape the impossibility paper itself names. It closes O-25
        by construction and keeps whole-tree composition as a theorem.
-     - Assumptions: PRF security and BLAKE2s collision resistance, both falsifiable. It adds about
-       50 trusted lines.
+     - Assumptions: PRF security (falsifiable), and BLAKE2s collision resistance in constructive
+       form (the extractor must hand over the colliding pair). It adds about 50 trusted lines.
      - Its weakness is service traffic: every Merkle hash goes through the harness.
    - **W5, the channel split.** Attest only the ≈ 500 Fiat–Shamir answers per proof, and hash Merkle
      trees with public BLAKE2s.
@@ -57,12 +60,18 @@ model it cannot be a recursion competition. One extra harness capability fixes t
        thousandfold.
      - The price is an unfalsifiable *extractability* heuristic on BLAKE2s (whoever outputs a digest
        knows a preimage). It is weaker than v3's random-oracle heuristic and cannot be exploited by
-       `V`. The kernel shows it needs a second, "late preimage" escape in the knowledge clause.
-4. **What none of this fixes.**
-   - The recursion incentive (issue #6(b)) remains a measurement and benchmark-shape problem.
-   - Routing the leaf chain through the oracle as well (D4+) closes the *trivial-root* half (#6(a))
-     by the theorem, but not the incentive half: a relabelled flat proof of a subtree survives every
-     cap.
+       `V`. The kernel shows the knowledge clause then needs a second way out, the "late preimage".
+   - **What the records then certify.** They certify the *attested* deployment, not a public-hash
+     one. Proofs are checkable only by the organiser, online, until the key is released after the
+     record is frozen. A real-world recursion built from a winner still rests on the usual
+     heuristic, which nothing can remove (CGH plus the impossibility result).
+4. **What none of this fixes.** Issue #6 has two halves: (a) the trivial witness-sending root passes
+   the succinctness cap `T_V`; (b) the benchmark does not reward recursion over proving a subtree
+   flat.
+   - (b) remains a benchmark-shape problem.
+   - Routing the leaf chain through the oracle as well (D4+) closes (a) by the certified caps
+     (paper), not by a measurement. It does not close (b): a relabelled flat proof of a subtree fits
+     every cap.
    - Node extraction is still decoding (#7), and proof sizes are still tight (#8).
 
 **Recommendation** (§9). Do not adopt D1/D2 as stated. Keep the user's central move, the relativized
@@ -117,6 +126,21 @@ charged, recursion never run); **D2** (the same relation, v3's whole tree, a sec
 charge per verifier call); **D3** (signed oracle); **D4** (attested oracle); **W5** (channel split);
 **D4+** (oracle-chain leaf).
 
+**Terms.**
+
+| Term | Meaning |
+|---|---|
+| query log, `runLog L` | the oracle's answers so far, as a list of (query, answer); running `V` "on the log" answers its queries from that list and fails if one is missing |
+| potential `μ` | a non-negative number per log, chosen by the submitter. It starts at 0 and rises by at most `ε` on average per fresh oracle answer. Below 1, every accepted proof must be extractable. The advantage bound `(Q + qV)·ε` is Markov's inequality on it |
+| extractor `E`, `Computes` | the function that opens an accepted proof to a witness from the log; `Computes` is v3's requirement that a step-bounded program on the contract's machine computes it |
+| decoding extractor | one that reads the child proofs committed inside a node proof, as any bounded node circuit forces (issue #7) |
+| straight-line | extraction from one run's log, without rewinding the prover |
+| escape | an extractor output other than a witness: a BLAKE2s collision, or a late preimage (§7.2). Used only in this sense below |
+| board T, `T_V`, `qV`, `proofCap` | v3's ranked whole-tree wall-time board; the root verifier's time cap; the certified bound on verifier queries (`≤ 2^16`); the proof-size cap (1 MiB) |
+| ranked shape | `r = 8`, `n = 2^14`: 256 leaves of `2^14` chain steps, 255 nodes |
+| spartan-chain | the certified honest leaf SNARK in the submissions repository (Spartan + Ligero over GF(2^64), 5,156 oracle queries per proof) |
+| Flock, WHIR, leanVM | Flock (Bünz–Rothblum–Wang, ePrint 2026/1329) proves BLAKE-family compressions over binary fields; snark.fast's "Flock Challenge" times BLAKE3 proving with a fixed verifier. WHIR is a hash-based polynomial commitment. leanVM is a zkVM that uses Flock for BLAKE2s |
+
 ---
 
 ## 4. The user's design, made precise
@@ -137,6 +161,14 @@ below 1, every proof `V` accepts is opened by the extractor `E` to a witness who
 accepts *on that same log*. Everything else is v3's: `step` bounds the average rise of the
 potential per fresh query by `ε`, and the paper theorem gives advantage `≤ (Q + qV)·ε`.
 
+**Completeness has to move inside the game** (A1 m2, W2 M10, P4).
+- `RelL` depends on the log, so the contract's `CompleteWithError`, which takes the relation as a
+  proposition outside the lazily sampled oracle, is ill-typed for it.
+- Node completeness from an arbitrary starting log is unsatisfiable for every Fiat–Shamir design.
+- W2 §A.5's *context form* repairs both: the statement and witness are produced by a program run
+  against the same oracle, and completeness holds for every such program.
+- No probe proves whole-tree completeness. P2 proves node completeness for its toy.
+
 ---
 
 ## 5. What relativization buys
@@ -155,8 +187,8 @@ children, at the same potential. One knowledge state therefore opens the whole t
 
 This is the composition theorem of Chiesa–Guan–Samocha–Yogev (CGSY24, Thm 5.1) in the
 competition's counting form. v3's relation cannot give it. `v3_no_compose` exhibits, on a log of
-potential 0, a node proof that v3's certified backdoor verifier accepts but whose children cannot be
-extracted, because they are accepted under BLAKE2s rather than on the log. DESIGN-v3 §5.4's first
+potential 0, a node proof that v3's certified backdoor verifier accepts but whose children its
+certified extractor does not open, because they are accepted under BLAKE2s rather than on the log. DESIGN-v3 §5.4's first
 heuristic, composition across levels, becomes a theorem.
 
 Hidden conditions (T1 §5): the walk needs an explicit depth bound (a BLAKE2s cycle cannot be ruled
@@ -169,13 +201,21 @@ decomposition; and `qV` of the root must count every query the root re-asks.
   relativized knowledge-sound at `errorCap` with one query, and under `blake2sOracle` it accepts a
   32-byte magic proof of every statement. Relativization changes what the theorem says about
   children, not what a ROM theorem can see about one oracle function.
-- **A secret oracle does close it (paper).** The harness serves `PRF_k(q) = BLAKE2s(k ‖ q)` with a
-  key `k` that is fresh per evaluation and held by a separate process. The prover reaches the
-  oracle only by calling it.
-  - Every winning condition the theorem bounds can be decided in polynomial time with oracle access
-    ("`V` accepts and `E` fails to produce a valid witness").
-  - A standard hybrid therefore moves the ROM bound to deployment, losing only `Adv_PRF`.
+- **A secret oracle does close it (paper).** The harness serves `PRF_k(q)`, BLAKE2s in its keyed
+  mode (not `BLAKE2s(k ‖ q)`; A1 m6, A2 m11), with a key `k` that is fresh per evaluation and held by
+  a separate process. The prover reaches the oracle only by calling it.
+  - The winning condition the theorem bounds ("`V` accepts and `E` fails to produce a valid
+    witness") can be decided with oracle access. A standard hybrid therefore moves the ROM bound to
+    deployment, losing `Adv_PRF`.
   - CGH needs the seed to be public (CGH §4).
+  - The hybrid's fine print (W2 §A.6–A.7, P2):
+    - the distinguisher runs the whole evaluation and the extractor within its budget
+      (`2^48 + 2^16·t` steps), so `Adv_PRF` is taken at that cost;
+    - the step from a lazily sampled table to a random function, and to randomised adversaries, is
+      on paper, as in v3;
+    - the service is assumed correct;
+    - the deployed whole-tree bound is about `2^-100` at `ε = 2^-128`, because `Q` counts every query
+      of the evaluation.
 - **What that kills.** Every disguise in F2 §1.2/§14: the literal trigger, the `evalPoly`
   recognition, the position channel, review evasion, and the post-hoc check over BLAKE2s wires. It
   also kills the liveness mirror (a verifier that rejects honest proofs only at deployment). None of
@@ -209,19 +249,24 @@ flip, but the extracted child proof is now invalid on the log.
   prover-supplied answers, without asking the oracle, accepts on the empty log. There `final`
   demands children accepted on the empty log.
   - `lazy_no_kstate`: for the natural extractor, no knowledge state exists at any error.
-  - `lazy_extractor_collides`: *every* extractor of such a state must output a BLAKE2s collision.
+  - `lazy_extractor_collides`: *every* extractor of such a state must output, on the empty log,
+    either a preimage of `nodeStmt c₁ c₂` under the leaf tag, or a second node preimage whose
+    children are themselves lazy nodes. When `c₁` is a leaf statement, as in the probe's instance,
+    each case is a BLAKE2s collision between distinct inputs.
   - The honest alternative, `deferState`, asks every supplied answer and is sound with the
-    child's potential. But `queries_defer` shows it asks as many oracle queries as running the
-    children would: deferral compresses only local work.
+    child's potential. `queries_defer` shows it asks at most the `|Q|` queries of the carried list,
+    and all of them when it accepts. For an honest list that is the children's own query count:
+    deferral compresses only local work.
 - **Kernel, the general deterministic core** (P4, `reask`, `flip_reask`). Take an extractor that
-  returns the children committed in the node proof. If a committed child reads query `q` and the
-  log has potential below 1, the parent must read `q` too. Either erase `q` from the log or flip
-  the oracle there: `final` then fails.
+  returns the children committed in the node proof. Suppose a committed child reads query `q`, and
+  the log *with `q` erased* still has potential below 1. Then the parent must read `q` too.
+  Otherwise erasing `q` from the log, or flipping the oracle there, makes `final` fail.
 - **Paper (T1 Thm 2.2).** Decoding extractors of this kind are the only ones a bounded node circuit
   admits (issue #7). For them the parent re-asks each child query that the child's validity depends
   on, failing to do so with probability at most `(Q + qV)·ε` per query.
-  - *Spot-checking saves nothing* at fixed error (T1 Prop. 2.4). The paper's concrete bound lets a
-    verifier skip at most a `2^-63` fraction of the sensitive queries at error `2^-128` (L1).
+  - *Spot-checking saves nothing* at fixed error (T1 Prop. 2.4).
+  - For comparison, L1 derives from the paper's Thm 4.1 that, for the paper's own hard language, a
+    verifier at error `2^-128` may skip at most a `2^-63` fraction of the queries.
 
 ### 6.3 Consequences (estimate unless marked)
 
@@ -232,11 +277,20 @@ flip, but the extracted child proof is now invalid on the log.
 | Long tree, `r = 4`, `n = 2^20` | deferral 35–90 ms | 9–22× better than WS: "compressing, not succinct" |
 | IVC, one chain step per step | ≥ 1 query per step accumulates | never compresses; with `k` steps per IVC step, at most `k/qV` |
 
-`h_V` is the number of BLAKE2s compressions one verification feeds the oracle: 5,156 queries and
-about 25.9k compressions for spartan-chain (**measured** queries), and 10k–26k for WHIR or
-leanVM-class verifiers. "Compressing but not succinct" holds exactly when `n > qV_leaf` (T1 §3):
-about 3× at `n = 2^14`, and about 200× at `chainCap`. In the pure ROM, recursion compresses only the
-verifier's local work. For hash-based verifiers that is the minor share.
+`h_V` is the number of 64-byte BLAKE2s compressions one verification feeds the oracle:
+- 25.9k for spartan-chain (from its 5,156 **measured** queries);
+- 9.2k for leanVM-class verifiers;
+- 5–12k for WHIR-class verifiers (C1 §2.1, estimate).
+
+**The unit decides the verdict** (A1 M3).
+- Counted in *queries*, the ranked-shape root compresses about 3× (`n = 2^14` against
+  `qV_leaf = 5,156`; T1 §3: "compressing but not succinct" exactly when `n > qV_leaf`).
+- Counted in *compressions*, the unit an honest in-circuit cost and an unriggable charge must use,
+  it does 0.6–3.2× witness-sending's work, so it **does not compress** (C1 row 4).
+- The two counts agree in direction at `chainCap`, where the compression is about 200×.
+
+In the pure ROM, recursion compresses only the verifier's local work, and for hash-based verifiers
+that is the minor share.
 
 ### 6.4 The requirement is vacuous (kernel)
 
@@ -254,6 +308,13 @@ verifier's local work. For hash-based verifiers that is the minor share.
     SNARKs show such arguments exist; the probe instantiates `V₀` only with a non-succinct check.
   - With the library's witness-sending format the lift covers trees of up to `2^14` leaves, because
     of `proofCap` on the children. A cap-free format removes the limit.
+  - **Caveat: the lift's completeness is paper, not kernel** (P4).
+    - It holds only against children whose clear statement is true. An adversarially chosen child
+      that `V₀` accepted with a false shape breaks perfect completeness over every oracle.
+    - So under a perfect-completeness clause the lift is not an entry. Under a probabilistic,
+      adaptive clause in context form (§4) it is.
+    - The vacuity conclusion does not depend on it: witness-sending and concatenation are perfectly
+      complete (`concatV_node_run`).
 
 So "knowledge-sound for the relativized recursion relation" does not mean "amenable to recursion".
 In D1 the clause is dead weight and only the charge acts. In D2 the charge prices exactly what v3
@@ -269,9 +330,9 @@ already pays implicitly in `T_tree`, since every inner query is hashed in-circui
 | fixed organiser constant, per call | one 512 KB query instead of 5,156 small ones (≈ 260 calls) |
 | fixed constant per 64-byte compression | unriggable, but then it is a certificate quantity needing no run |
 
-- **The charge leaves local work unpriced.** Chain recomputation, Ligero's ≈ 4 M field operations
-  and non-native arithmetic all go uncharged, so the gradient points away from in-circuit cost
-  (A1 M4).
+- **The charge leaves local work unpriced.** Chain recomputation, the verifier's field arithmetic and
+  non-native arithmetic all go uncharged, so the gradient points away from in-circuit cost (A1 M4).
+  Spartan-chain's verifier alone does about `3.1·10^7` field multiplications (C1 §3.4, estimate).
 - **What a hash charge captures** of a real recursion step (C1 row 10): 93–99.6% for an
   R1CS-of-bits BLAKE2s verifier, 69–75% for FRI-based ones (Plonky2, Stwo), about 10% for leanVM,
   and under 1% with a non-native verifier field.
@@ -299,8 +360,10 @@ under v3's caps beyond `r = 2`: its root breaks `qV ≤ 2^16` by 40× and `proof
 Re-asking is forced because, in the pure ROM, the only way to learn an oracle answer is to ask. The
 harness can do something the ROM cannot: **vouch for a list of answers**. This is how relativized
 SNARKs exist in other oracle models. The impossibility paper's §1.2 names the signed random oracle
-(SROM, Chiesa–Tromer 2010, which already proposes "a trusted Internet service"). Our variant is
-CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trusted decider (L1).
+(SROM, Chiesa–Tromer 2010, which already proposes "a trusted Internet service"). D4 is closest to
+the SROM with an online check in place of signatures (L1). By analogy it is also CCS22/CCGOS23's
+"accumulation of oracle queries" with the organiser as the trusted decider, though those
+constructions rely on algebra or rewinding that D4 does not need.
 
 ### 7.1 D4, the attested oracle (W2; kernel P2)
 
@@ -315,8 +378,10 @@ CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trus
     makes **one** `attest` call. The flat variant carries all 511 hashes to the root, which is
     linear in the tree again.
 - **Relation.** `Rel` and `Wit` are unchanged. Only the argument changes: v3's `Rel S.Vb` becomes
-  `Rel (accepted on the log)`. A node proof proves in-circuit that each child is accepted by `V`
-  reading a list whose hash it computes. `V` asks `attest` for that hash.
+  `Rel (accepted on the log)`. A succinct node proof proves in-circuit that each child is accepted
+  by `V` reading a list whose hash it computes, and `V` asks `attest` for that hash. That such a
+  node satisfies `final` with a decoding extractor is a paper obligation (W2 §A.4), the same one as
+  issue #7.
 - **Knowledge state.** v3's `step` plus a deterministic `cert` law: a valid certification never
   raises the potential. `final` lets the extractor output either a witness **or a BLAKE2s collision
   as data**.
@@ -330,13 +395,16 @@ CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trus
   point changes `attest` on every list containing it.
 - **What it deletes from DESIGN-v3 §5.4.**
   - Composition becomes a theorem (§5.1).
-  - "BLAKE2s is a random oracle" is replaced by PRF security of keyed BLAKE2s and collision
-    resistance of BLAKE2s, both standard falsifiable assumptions.
+  - "BLAKE2s is a random oracle" is replaced by two assumptions. One is PRF security of keyed
+    BLAKE2s, which is falsifiable. The other is collision resistance of BLAKE2s in constructive
+    form: the extractor must hand over the pair. (Collision resistance of one fixed function is not
+    an assumption with a challenger, so the constructive form is what gives it content.)
   - O-25 and the liveness mirror close.
   - F2's typed-interface programme and the intake review of `V` become unnecessary.
 - **Cost.**
-  - About 50 trusted lines (288 → ≈ 340 of 500), plus a trusted service process. It is the first
-    runtime component whose bug would be accept-all (W2 M8).
+  - About 50 trusted lines over the rules worktree's 288-line contract (≈ 340 of the 500-line
+    budget), plus a trusted service process. It is the first runtime component whose bug would be
+    accept-all (W2 M8).
   - In-circuit, hashing a child's `(q, a)` list costs 1.09× what a real recursion spends computing
     those hashes for a spartan-chain child (0.79–1.56× per query), so the winning design transfers.
   - **The defect is traffic.** The key must stay unknown to the prover: if it rode in the proof, the
@@ -355,6 +423,8 @@ CCS22/CCGOS23's "accumulation of oracle queries", with the organiser as the trus
   - Its extractor returns the node witness, or the carried and certified lists as a collision.
   - Compare `lazy_no_kstate` (no call: unsound) and `queries_defer` (re-ask: `|Q|` calls).
   - `att_W1`: the instance runs at error 0 with one call per verification at every level.
+  - **Scope:** the probe's node carries its children and the list in the clear. The kernel therefore
+    shows the call count and the laws, not the soundness of a succinct node (above, and W2 §A.4).
 - **Composition.** `compose_all`: either the whole tree is extracted from one well-formed log, or
   the walk returns a named pair of bounded lists that is a BLAKE2s collision.
   - `Paper.paper_tree`: certifications cost nothing in the error bound.
@@ -394,15 +464,20 @@ which need *unpredictability*.
     paths afterwards. This breaks `pubStep` for the natural Merkle potential unless the law assumes
     `pub` outputs never appear in an earlier input (an ordering hypothesis or an extractor escape).
   - *The collision clause* (M3) must be D4's constructive output.
-  - Fixed, the trusted delta is +80–120 lines (to ≈ 370–450 of 500).
+  - Fixed, the trusted delta is +80–120 lines over the contract (A2's estimate).
+  - *An honest prover may hash late* (A2 postscript). An honest prover that recomputes `leafStmt`
+    or `nodeStmt` late makes the late-preimage escape valid on the honest log; column R's node mode
+    is handed child digests, for example. Relation-tagged preimages must therefore be exempt from
+    the ordering condition, or a liveness rule must reject escape outputs on honest proofs.
 - **A modelling restriction** (A2 m6). Challenges must be bit-slices of the secret answers, because
   expanding a seed with local BLAKE2s is unprovable in `step`. Verifiers that expand seeds must be
   redesigned.
-- **Assumptions.** PRF security and collision resistance, both falsifiable, plus an
-  **extractability heuristic**: whoever outputs a BLAKE2s digest knows a preimage.
+- **Assumptions.** PRF security (falsifiable) and constructive collision resistance, as in D4,
+  plus an **extractability heuristic**: whoever outputs a BLAKE2s digest knows a preimage.
   - Its formal version, preimage awareness (Dodis–Ristenpart–Shrimpton), is defined relative to an
-    ideal compression function. Bitansky–Canetti–Paneth–Rosen rule out a standard-model version.
-    So it is not falsifiable (A2 M4).
+    ideal compression function. Assuming indistinguishability obfuscation,
+    Bitansky–Canetti–Paneth–Rosen rule out extractable one-way functions with arbitrary auxiliary
+    input in the standard model. So the heuristic is not a falsifiable assumption (A2 M4).
   - It is strictly weaker than v3's "BLAKE2s is a random oracle". It drops unpredictability, which
     is what CGH attacks.
   - D4's all-oracle form needs no such heuristic, because its service log *is* the trace.
@@ -426,14 +501,18 @@ which need *unpredictability*.
   - *`pubStep` holds in the strong form, with equality.* For any potential that prices each secret
     answer against the log as it stood before that answer (`ofHist_pub`; for the toy,
     `merkleState_pubStep`). The law is not where the difficulty lies.
-  - *W1's "witness or collision" clause is unsatisfiable* (`col_no_kstate`). The adversary squeezes
-    on a root it has not evaluated, then evaluates only the opened leaf. Any other extractor must
-    invert BLAKE2s (`col_extractor_inverts`).
+  - *W1's "witness or collision" clause fails* (`col_no_kstate`). For the natural extractor no
+    knowledge state exists at any `ε < 1`. The adversary squeezes on a root it has not evaluated,
+    then evaluates only the opened leaf's hash and the root. Any other extractor must invert
+    BLAKE2s (`col_extractor_inverts`).
   - *A second escape fixes it.* With a "late preimage" escape (a digest used in an input before any
-    entry produced it), the natural extractor works: `merkleState` certifies the toy at a tight
-    `ε = 1/2` (`merkle_eps_ge`). Honest proofs are extracted, not escaped (`honest_extracts`).
-  - *If `V` hashes privately,* without reading its BLAKE2s values from the log, no knowledge state
-    exists at all (`pure_no_kstate`).
+    entry produced it), the natural extractor works: `merkleState` certifies the toy at `ε = 1/2`,
+    which is tight for that extractor (`merkle_eps_ge`). Honest proofs are extracted, not escaped,
+    whenever neither leaf hash equals the root (`honest_extracts`). The kernel checks this condition
+    for two concrete leaves (`honest_extracts_blake2s`).
+  - *If `V` hashes privately,* without reading its BLAKE2s values from the log, the natural
+    extractor has no knowledge state at any `ε < 1` (`pure_no_kstate`). Every other extractor must
+    invert the Merkle root map from a log holding only the squeeze (`pure_extractor_inverts`).
   - *The CGH backdoor ported to the public channel cannot be certified* with its natural extractor
     (`bd_no_kstate`). Any other extractor must invert the Merkle root map (`bd_extractor_inverts`).
     The same backdoor on the secret channel *is* certified (`bdSecW_kstate`); there only the
@@ -447,9 +526,9 @@ which need *unpredictability*.
 ### 7.3 D3, the signed oracle
 
 D3 is the same idea with hash-based signatures verified in-circuit. A signature check adds 145
-(leanSig XMSS) to 1,059 (WOTS+ worst case) compressions per child, 0.5–12% of the node, plus a
-100–200-line trusted signature specification. D4/W4 dominates it unless proofs must be verifiable
-offline *during* the evaluation.
+(leanSig XMSS) to 1,059 (WOTS+ worst case) compressions per child, 0.5–12% of the node. It also
+needs a 100–200-line trusted signature specification, or 150–300 lines with the signing-oracle
+model. D4/W4 dominates it unless proofs must be verifiable offline *during* the evaluation.
 
 ### 7.4 D4+, the oracle-chain leaf (W2 §D, A3)
 
@@ -458,7 +537,8 @@ through the oracle and certified as an `n`-item list. The leaf circuit then hash
 v3's chain cost with streamed 74-byte items (A3 m1). The chain digests are now PRF outputs, so no
 root verifier can recompute them.
 
-- **Closes #6(a), the trivial root, by the theorem** (A3, paper).
+- **Closes #6(a), the trivial root, by the certified caps rather than a measurement** (A3, paper
+  argument; no Lean theorem).
   - A root verifier sees at most `proofCap` bytes and `qV` answers, so it can recover at most
     ≈ `2^15 + qV` of the `2^22` chain digests. The rest must come from a SNARK.
   - `T_V` becomes a loose liveness cap. The CPU-time rule, its calibration against the best linear
@@ -491,8 +571,9 @@ root verifier can recompute them.
   takes 37–43 ms threaded and 0.19–0.69 s on one core (**measured**/estimate). A real recursive root
   checks in 8–30 ms (estimate, on a machine with carry-less multiply), but takes 0.5 s on the dev VM
   without it.
-  - A one-core CPU-time cap separates the two by only 2–2.5× at the ranked shape. At
-    `r = 4, n = 2^20` the margin grows to 25–95× (C1).
+  - At the ranked shape the raw ratio of witness-sending to real-recursion root time is 6–24×, so a
+    one-core CPU-time cap leaves a margin of only about 2–2.5× on each side.
+  - At `r = 4, n = 2^20` the raw ratio grows to 25–95×, and the margin per side to about 5× (C1 §2.3).
   - So without D4+ the benchmark shape matters more than the oracle model, and `T_V` must be
     calibrated on the reference machine.
 - **Issue #6(b), the recursion incentive, with or without D4+.** Flattening to level `j ≈ 3–4` is
@@ -514,10 +595,10 @@ root verifier can recompute them.
 | Root verifier | succinct | n/a | linear in all inner calls | succinct | succinct | succinct |
 | Node in-circuit vs real recursion | 1.00× | nothing built | nothing built | 1.09× + 0.5–12% | 1.09× | **1.00× + 0.5–2%** |
 | Recursion-friendly verifiers rewarded | yes, but flattening wins (#6b) | no | no | as D4 | yes; flattening still wins (#6b) | as D4, more faithfully |
-| Trivial root (#6a) excluded | by a CPU cap only | by a cap only | — | by a cap | by a cap; **by theorem with D4+** | same as D4 |
+| Trivial root (#6a) excluded | by a CPU cap only | by a cap only | — | by a cap | by a cap; **by the certified caps with D4+** (paper) | same as D4 |
 | Service calls per tree | 0 | ≈ 0 | ≈ 10^8 | ≈ 10^8 | ≈ 10^8 | **≈ 2.5·10^5** |
-| Assumptions beyond the counting form | BLAKE2s is a random oracle | PRF | PRF | PRF, EUF-CMA | PRF, CR | PRF, CR, extractability heuristic |
-| Trusted lines added (estimate) | — | +10–15 | +10–15 | +150–300 | ≈ +50 (+6 for D4+) | +80–120 |
+| Assumptions beyond the counting form | BLAKE2s is a random oracle | PRF | PRF | PRF, EUF-CMA | PRF, constructive CR | PRF, constructive CR, extractability heuristic |
+| Trusted lines added (estimate) | — | +10–15 | +10–15 | +150–300 (with the signing-oracle model) | ≈ +50 (+6 for D4+) | +80–120 |
 | Third-party verification | yes | after key release | after key release | yes | after key release | after key release |
 
 ---
@@ -537,18 +618,21 @@ root verifier can recompute them.
    - completeness in context form;
    - deleting `Submission.Vb`, `blake2sOracle` and the §6.7 recognition rule.
 3. **Deploy it all-oracle first.** The service is a separate process with a spinning, batched
-   shared-memory ring, charged to the prover's cgroup. Spartan-class provers lose 0.3–1.2% to it;
-   Flock-class provers up to 2× on a naive service.
+   shared-memory ring, charged to the prover's cgroup. Its oracle is BLAKE2s in keyed mode, with a
+   fresh key per timed run. Spartan-class provers lose 0.3–1.2% to it; Flock-class provers up to 2×
+   on a naive service.
    - Add W4's published session log and key release after freeze, so that records become verifiable
      by third parties.
 4. **Move to W5, the channel split, as a later contract stage** if the user accepts its
    extractability heuristic. Use the corrected model of §7.2:
    - `V` queries the public channel;
-   - the knowledge clause has a collision escape and a late-preimage escape;
+   - the knowledge clause has a collision escape and a late-preimage escape, with relation-tagged
+     preimages exempt from the ordering condition;
    - challenges are slices of secret answers.
    It gives exact in-circuit costs and about 1/1000 of the service traffic.
 5. **Add D4+** (the leaf chain through the oracle, `qV ≤ 2^13`, `proofCap < 64·n`, a `chain` service
-   call). This closes #6(a) by the theorem and retires the CPU-time `T_V` rule.
+   call). This closes #6(a) by the certified caps (a paper argument, not a measurement) and retires
+   the CPU-time `T_V` rule.
 6. **Handle #6(b) through the benchmark shape.** Use fewer, longer leaves (`r = 4, n = 2^20`), where
    recursion costs about 1.17× flat and memory forbids flattening. Otherwise state openly that
    flattening below `j ≈ 4` is allowed. No theorem studied here forces recursion below the memory
@@ -558,15 +642,16 @@ root verifier can recompute them.
 
 | Stage | Contract change | Closes |
 |---|---|---|
-| R1 | log-relative `Rel` (P1's `RelL`), D4's events and `KState` laws, escapes as extractor outputs | composition heuristic |
-| R2 | harness service (PRF oracle, recursive certify/attest), deployment theorem on paper, delete `Vb`/`blake2sOracle`/§6.7 rule | O-25, liveness mirror, "BLAKE2s is a RO" |
-| R3 | D4+ leaf, `qV` and `proofCap` invariants, `chain` call | #6(a) by theorem |
-| R4 (optional) | W5 public channel with its two escapes | service traffic, cost fidelity |
+| R1 | log-relative `Rel` (P1's `RelL`), D4's events and `KState` laws, escapes as extractor outputs, completeness in context form | composition heuristic |
+| R2 | harness service (keyed-BLAKE2s oracle, recursive certify/attest), deployment theorem on paper, delete `Vb`/`blake2sOracle`/§6.7 rule | O-25, liveness mirror, "BLAKE2s is a RO" |
+| R3 | D4+ leaf, `qV` and `proofCap` invariants, `chain` call | #6(a) by the certified caps |
+| R4 (optional) | W5 public channel with its two escapes and the relation-tag exemption | service traffic, cost fidelity |
 
 **Decisions for the user.**
 
 1. Is leaving the pure ROM for a trusted harness capability acceptable? V3-5 says ROM only.
-   - D4 adds PRF security of keyed BLAKE2s and BLAKE2s collision resistance, both falsifiable.
+   - D4 adds PRF security of keyed BLAKE2s (falsifiable) and BLAKE2s collision resistance in
+     constructive form.
    - W5 adds an unfalsifiable extractability heuristic, weaker than v3's random-oracle heuristic.
 2. A designated-verifier window: proofs are checkable only by the organiser until the key is
    released after the record is frozen.
@@ -588,23 +673,26 @@ three standard axioms; notes `P1`–`P4`):
 | Theorem | File | Shows |
 |---|---|---|
 | `compose`, `compose_flat`, `paper_tree` | `Relativized/Compose.lean` | whole-tree extraction from one log, one error bound |
-| `V3.v3_no_compose` | `Relativized/Compose.lean` | v3's certified backdoor accepts a node proof whose children cannot be extracted |
+| `V3.v3_no_compose` | `Relativized/Compose.lean` | v3's certified backdoor accepts a node proof whose children its certified extractor does not open |
 | `ws_ksRel`, `concatState` | `Relativized/Concat.lean` | witness-sending and concatenation meet the requirement |
 | `Backdoor.backdoor` | `Relativized/Backdoor.lean` | the O-25 backdoor is relativized-sound at `errorCap` |
 | `lazy_no_kstate`, `lazy_extractor_collides` | `Relativized/Lazy.lean` | a parent that trusts supplied answers is unsound |
-| `deferState`, `queries_defer` | `Relativized/Lazy.lean` | a re-asking parent is sound but asks as many queries |
-| `attState`, `calls_node`, `att_W1` | `Attested/Escape.lean` | with attestation, one call per node suffices |
+| `deferState`, `queries_defer` | `Relativized/Lazy.lean` | a re-asking parent is sound, but asks up to `|Q|` queries |
+| `attState`, `calls_node`, `att_W1` | `Attested/Escape.lean` | with attestation, one call per node suffices (children in the clear) |
 | `compose_all`, `Paper.paper_tree` | `Attested/Compose.lean`, `Attested/Paper.lean` | whole tree from one log, or a named collision; certifications are free |
 | `acceptAll_choice`, `hashList_not_coll`, `encList_inj` | `Attested/Controls.lean`, `Attested/Model.lean` | the collision clause needs `Computes` and bounded lists; the list encoding is injective |
-| `merkleState`, `merkleState_pubStep`, `merkle_eps_ge`, `honest_extracts` | `TwoChannel/Merkle.lean` | the corrected two-channel laws hold for a Merkle verifier |
-| `col_no_kstate`, `col_extractor_inverts`, `pure_no_kstate` | `TwoChannel/Merkle.lean` | collisions alone are not enough; private hashing is unsound |
+| `merkleState`, `merkleState_pubStep`, `merkle_eps_ge`, `honest_extracts`, `honest_extracts_blake2s` | `TwoChannel/Merkle.lean` | the corrected two-channel laws hold for a two-leaf Merkle verifier |
+| `col_no_kstate`, `col_extractor_inverts`, `pure_no_kstate`, `pure_extractor_inverts` | `TwoChannel/Merkle.lean` | collisions alone are not enough, and private hashing fails (natural extractor; others must invert BLAKE2s) |
 | `bd_no_kstate`, `bd_extractor_inverts`, `bdSecW_kstate` | `TwoChannel/Backdoor.lean` | the backdoor is uncertifiable on the public channel, certified on the secret one |
 | `lift`, `lift_runner_ws`, `liftState_μ` | `Lift/Basic.lean`, `Lift/Tree.lean` | any flat argument with starts in the clear meets the requirement with its own error and queries |
 | `reask`, `flip_reask` | `Lift/Deferral.lean` | a decoding extractor forces the parent to read every query a committed child reads |
 
-All 27 headline theorems above depend only on `propext`, `Classical.choice` and `Quot.sound`
-(`docs/explore/probes/audit/audit-orchestrator.log`, from `lake env lean docs/explore/probes/audit/Audit.lean`). The whole probe library, about 5,200 lines,
-builds in under 20 s from cold contract oleans.
+Every theorem in this table (36 declarations) depends only on `propext`, `Classical.choice` and
+`Quot.sound`. The audit is `docs/explore/probes/audit/audit-orchestrator.log`, produced by
+`lake env lean docs/explore/probes/audit/Audit.lean`. The probe library is 21 modules, 3,008 code
+lines by `scripts/loc.py` (5,196 lines in all). A cold rebuild of those modules against built
+contract oleans takes 43.5 s wall on the 32-vCPU development VM
+(`docs/explore/probes/audit/explore-cold-build.log`).
 
 **Notes** (`docs/explore/notes/`):
 
