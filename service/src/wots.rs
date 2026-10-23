@@ -238,24 +238,20 @@ impl Signer {
     }
 }
 
-/// Leaves `j0 … j0 + out.len() − 1`, eight at a time (the leaf hash is vectorised across leaves).
+/// Leaves `j0 … j0 + out.len() − 1`. The chains of all these keys advance together, so that each
+/// step is one batch of hashes, vectorised across chains.
 fn compute_leaves(seed: &Keyed, j0: u64, out: &mut [Digest]) {
-    for (g, o) in out.chunks_mut(8).enumerate() {
-        let base = j0 + 8 * g as u64;
-        let mut msgs: Vec<Vec<u8>> = Vec::with_capacity(8);
-        for l in 0..o.len() {
-            let j = base + l as u64;
-            let sk: Vec<[u8; 10]> = (0..LEN).map(|i| sk_msg(j, i as u8)).collect();
-            let refs: Vec<&[u8]> = sk.iter().map(|m| m.as_slice()).collect();
-            let mut x = [[0u8; 32]; LEN];
-            seed.eval_many(&refs, &mut x);
-            advance(j, &mut x, &[0; LEN], &[3; LEN]);
-            msgs.push(leaf_msg(j, &x));
-            blake2s::wipe(x.as_flattened_mut());
-        }
-        let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
-        hash_many(&init(0), 0, &refs, o);
+    let key = |c: usize| (j0 + (c / LEN) as u64, (c % LEN) as u8);
+    let sk: Vec<[u8; 10]> = (0..out.len() * LEN).map(|c| sk_msg(key(c).0, key(c).1)).collect();
+    let mut x = vec![[0u8; 32]; sk.len()];
+    seed.eval_many(&sk.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), &mut x);
+    for s in 0..3 {
+        let msgs: Vec<[u8; 43]> = x.iter().enumerate().map(|(c, x)| f_msg(key(c).0, key(c).1, s, x)).collect();
+        hash_many(&init(0), 0, &msgs.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), &mut x);
     }
+    let leaves: Vec<Vec<u8>> = x.chunks(LEN).enumerate().map(|(k, e)| leaf_msg(j0 + k as u64, e.try_into().unwrap())).collect();
+    hash_many(&init(0), 0, &leaves.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), out);
+    blake2s::wipe(&mut x);
 }
 
 #[cfg(test)]

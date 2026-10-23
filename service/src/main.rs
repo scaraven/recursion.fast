@@ -83,14 +83,12 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// `PRF_k` of every query, eight at a time; queries are grouped by block count first when their
+/// `out[i] = PRF_k(qs[i])`, eight at a time; queries are grouped by block count first when their
 /// sizes differ, so that the eight lanes of one compression run the same number of blocks.
-fn answers(prf: &Keyed, qs: &[&[u8]]) -> Vec<Digest> {
-    let mut out = vec![[0u8; 32]; qs.len()];
+fn answers(prf: &Keyed, qs: &[&[u8]], out: &mut [Digest]) {
     let nb = |q: &[u8]| q.len().div_ceil(64);
     if qs.len() < 16 || qs.iter().all(|q| nb(q) == nb(qs[0])) {
-        prf.eval_many(qs, &mut out);
-        return out;
+        return prf.eval_many(qs, out);
     }
     let mut order: Vec<u32> = (0..qs.len() as u32).collect();
     order.sort_unstable_by_key(|&i| nb(qs[i as usize]));
@@ -100,7 +98,6 @@ fn answers(prf: &Keyed, qs: &[&[u8]]) -> Vec<Digest> {
     for (k, &i) in order.iter().enumerate() {
         out[i as usize] = tmp[k];
     }
-    out
 }
 
 /// An error response; the connection is closed after it.
@@ -158,53 +155,46 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
         let guard = st.keys.read().unwrap();
         let Some(keys) = guard.as_ref() else { return Ok(()) };
         resp.clear();
-        match op {
-            OP_VK => {
-                resp.extend_from_slice(&header(ST_OK, 0, 32));
-                resp.extend_from_slice(&keys.signer.vk());
-            }
-            _ => {
-                let ans = answers(&keys.prf, &qs);
-                let sig = if op == OP_SIGN {
-                    match keys.signer.sign(&trace_digest(&qs, &ans)) {
-                        Ok(s) => Some(s),
-                        Err(_) => {
-                            drop(guard);
-                            return refuse(&mut w, ST_EXHAUSTED, "all 2^16 one-time keys are used");
-                        }
+        if op == OP_VK {
+            resp.extend_from_slice(&header(ST_OK, 0, 32));
+            resp.extend_from_slice(&keys.signer.vk());
+        } else {
+            // the answers are computed in place, after room for the header
+            resp.resize(16 + 32 * qs.len(), 0);
+            let (ans, _) = resp[16..].as_chunks_mut::<32>();
+            answers(&keys.prf, &qs, ans);
+            let sig = if op == OP_SIGN {
+                match keys.signer.sign(&trace_digest(&qs, ans)) {
+                    Ok(s) => Some(s),
+                    Err(_) => {
+                        drop(guard);
+                        return refuse(&mut w, ST_EXHAUSTED, "all 2^16 one-time keys are used");
                     }
-                } else {
-                    None
-                };
-                drop(guard);
-                if let Some(log) = &st.log {
-                    let mut buf = Vec::with_capacity(body.len() + 36 * qs.len());
-                    for (q, a) in qs.iter().zip(&ans) {
-                        push_item(&mut buf, q, a);
-                    }
-                    let mut l = log.lock().unwrap();
-                    l.write_all(&buf)?;
-                    l.flush()?; // the liveness check reads the log before the service exits
                 }
-                let n = 32 * ans.len() + if sig.is_some() { rf_oracle::wots::Sig::BYTES } else { 0 };
-                resp.extend_from_slice(&header(ST_OK, count, n as u64));
-                resp.extend_from_slice(ans.as_flattened());
-                if let Some(s) = &sig {
-                    s.encode(&mut resp);
-                    st.signatures.fetch_add(1, Ordering::Relaxed);
+            } else {
+                None
+            };
+            drop(guard);
+            if let Some(log) = &st.log {
+                let mut buf = Vec::with_capacity(body.len() + 36 * qs.len());
+                for (q, a) in qs.iter().zip(ans.iter()) {
+                    push_item(&mut buf, q, a);
                 }
-                st.queries.fetch_add(count as u64, Ordering::Relaxed);
-                st.query_bytes.fetch_add(blen - 4 * count as u64, Ordering::Relaxed);
+                let mut l = log.lock().unwrap();
+                l.write_all(&buf)?;
+                l.flush()?; // the liveness check reads the log before the service exits
             }
+            let n = 32 * qs.len() + if sig.is_some() { rf_oracle::wots::Sig::BYTES } else { 0 };
+            resp[..16].copy_from_slice(&header(ST_OK, count, n as u64));
+            if let Some(s) = &sig {
+                s.encode(&mut resp);
+                st.signatures.fetch_add(1, Ordering::Relaxed);
+            }
+            st.queries.fetch_add(count as u64, Ordering::Relaxed);
+            st.query_bytes.fetch_add(blen - 4 * count as u64, Ordering::Relaxed);
         }
         st.requests.fetch_add(1, Ordering::Relaxed);
         w.write_all(&resp)?;
-        if body.capacity() > 1 << 20 {
-            body = Vec::new();
-        }
-        if resp.capacity() > 1 << 20 {
-            resp = Vec::new();
-        }
     }
 }
 

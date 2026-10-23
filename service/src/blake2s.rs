@@ -37,16 +37,35 @@ pub fn init(kk: u32) -> [u32; 8] {
     h
 }
 
+/// The ten rounds of F (RFC 7693 §3.2) on the work vector `$v` and the message words `$m`, with
+/// the mixing function `$g`; unrolled, so that every message index is a constant.
+macro_rules! rounds {
+    ($g:ident, $v:ident, $m:ident) => {
+        rounds!(@ $g, $v, $m, 0 1 2 3 4 5 6 7 8 9)
+    };
+    (@ $g:ident, $v:ident, $m:ident, $($r:literal)*) => {$({
+        let s = &SIGMA[$r];
+        $g(&mut $v, [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11], [12, 13, 14, 15],
+           [$m[s[0]], $m[s[2]], $m[s[4]], $m[s[6]]], [$m[s[1]], $m[s[3]], $m[s[5]], $m[s[7]]]);
+        $g(&mut $v, [0, 1, 2, 3], [5, 6, 7, 4], [10, 11, 8, 9], [15, 12, 13, 14],
+           [$m[s[8]], $m[s[10]], $m[s[12]], $m[s[14]]], [$m[s[9]], $m[s[11]], $m[s[13]], $m[s[15]]]);
+    })*};
+}
+
+/// Four indices of the work vector: the columns or the diagonals of one half-round.
+type Cols = [usize; 4];
+
+/// The mixing function G (RFC 7693 §3.1) on four columns (or diagonals) at once, step by step.
 #[inline(always)]
-fn g(v: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, x: u32, y: u32) {
-    v[a] = v[a].wrapping_add(v[b]).wrapping_add(x);
-    v[d] = (v[d] ^ v[a]).rotate_right(16);
-    v[c] = v[c].wrapping_add(v[d]);
-    v[b] = (v[b] ^ v[c]).rotate_right(12);
-    v[a] = v[a].wrapping_add(v[b]).wrapping_add(y);
-    v[d] = (v[d] ^ v[a]).rotate_right(8);
-    v[c] = v[c].wrapping_add(v[d]);
-    v[b] = (v[b] ^ v[c]).rotate_right(7);
+fn g(v: &mut [u32; 16], a: Cols, b: Cols, c: Cols, d: Cols, x: [u32; 4], y: [u32; 4]) {
+    for i in 0..4 { v[a[i]] = v[a[i]].wrapping_add(v[b[i]]).wrapping_add(x[i]); }
+    for i in 0..4 { v[d[i]] = (v[d[i]] ^ v[a[i]]).rotate_right(16); }
+    for i in 0..4 { v[c[i]] = v[c[i]].wrapping_add(v[d[i]]); }
+    for i in 0..4 { v[b[i]] = (v[b[i]] ^ v[c[i]]).rotate_right(12); }
+    for i in 0..4 { v[a[i]] = v[a[i]].wrapping_add(v[b[i]]).wrapping_add(y[i]); }
+    for i in 0..4 { v[d[i]] = (v[d[i]] ^ v[a[i]]).rotate_right(8); }
+    for i in 0..4 { v[c[i]] = v[c[i]].wrapping_add(v[d[i]]); }
+    for i in 0..4 { v[b[i]] = (v[b[i]] ^ v[c[i]]).rotate_right(7); }
 }
 
 /// The compression function F (RFC 7693 §3.2): `t` counts the bytes hashed so far including this
@@ -64,16 +83,7 @@ pub fn compress(h: &mut [u32; 8], block: &[u8; 64], t: u64, last: bool) {
     if last {
         v[14] = !v[14];
     }
-    for s in &SIGMA {
-        g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
-        g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
-        g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
-        g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
-        g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
-        g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
-        g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
-        g(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
-    }
+    rounds!(g, v, m);
     for i in 0..8 {
         h[i] ^= v[i] ^ v[i + 8];
     }
@@ -205,23 +215,16 @@ impl Keyed {
 
     /// Overwrite the key material.
     pub fn wipe(&mut self) {
-        wipe_words(&mut self.mid);
+        wipe(&mut self.mid);
         wipe(&mut self.empty);
     }
 }
 
-/// Overwrite `b` with zeros (volatile, so that the write is not optimised away).
-pub fn wipe(b: &mut [u8]) {
+/// Overwrite `b` with zeros (volatile writes, one per element, so that they are not optimised
+/// away).
+pub fn wipe<T: Copy + Default>(b: &mut [T]) {
     for x in b.iter_mut() {
-        unsafe { std::ptr::write_volatile(x, 0) };
-    }
-    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-}
-
-/// Overwrite `w` with zeros (volatile).
-pub fn wipe_words(w: &mut [u32]) {
-    for x in w.iter_mut() {
-        unsafe { std::ptr::write_volatile(x, 0) };
+        unsafe { std::ptr::write_volatile(x, T::default()) };
     }
     std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
 }
@@ -270,7 +273,7 @@ pub fn has_avx2() -> bool {
 /// Eight-way BLAKE2s compression with AVX2: lane `l` of every vector belongs to message `l`.
 #[cfg(target_arch = "x86_64")]
 mod avx2 {
-    use super::{Digest, IV, SIGMA};
+    use super::{Cols, Digest, IV, SIGMA};
     use std::arch::x86_64::*;
 
     #[inline(always)]
@@ -283,13 +286,7 @@ mod avx2 {
     }
     #[inline(always)]
     unsafe fn rot16(x: __m256i) -> __m256i {
-        _mm256_shuffle_epi8(
-            x,
-            _mm256_set_epi8(
-                13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2, 13, 12, 15, 14, 9, 8, 11, 10, 5, 4,
-                7, 6, 1, 0, 3, 2,
-            ),
-        )
+        _mm256_or_si256(_mm256_srli_epi32(x, 16), _mm256_slli_epi32(x, 16))
     }
     #[inline(always)]
     unsafe fn rot12(x: __m256i) -> __m256i {
@@ -311,15 +308,15 @@ mod avx2 {
     }
 
     #[inline(always)]
-    unsafe fn g(v: &mut [__m256i; 16], a: usize, b: usize, c: usize, d: usize, x: __m256i, y: __m256i) {
-        v[a] = add(add(v[a], v[b]), x);
-        v[d] = rot16(xor(v[d], v[a]));
-        v[c] = add(v[c], v[d]);
-        v[b] = rot12(xor(v[b], v[c]));
-        v[a] = add(add(v[a], v[b]), y);
-        v[d] = rot8(xor(v[d], v[a]));
-        v[c] = add(v[c], v[d]);
-        v[b] = rot7(xor(v[b], v[c]));
+    unsafe fn g(v: &mut [__m256i; 16], a: Cols, b: Cols, c: Cols, d: Cols, x: [__m256i; 4], y: [__m256i; 4]) {
+        for i in 0..4 { v[a[i]] = add(add(v[a[i]], v[b[i]]), x[i]); }
+        for i in 0..4 { v[d[i]] = rot16(xor(v[d[i]], v[a[i]])); }
+        for i in 0..4 { v[c[i]] = add(v[c[i]], v[d[i]]); }
+        for i in 0..4 { v[b[i]] = rot12(xor(v[b[i]], v[c[i]])); }
+        for i in 0..4 { v[a[i]] = add(add(v[a[i]], v[b[i]]), y[i]); }
+        for i in 0..4 { v[d[i]] = rot8(xor(v[d[i]], v[a[i]])); }
+        for i in 0..4 { v[c[i]] = add(v[c[i]], v[d[i]]); }
+        for i in 0..4 { v[b[i]] = rot7(xor(v[b[i]], v[c[i]])); }
     }
 
     /// 8x8 transpose of 32-bit words: row `i` of the input is column `i` of the output.
@@ -354,13 +351,10 @@ mod avx2 {
     /// Compress one block per lane: `blocks[l]` is lane `l`'s block, `t` and `f` its counter and
     /// final flag; lanes with `active[l] == false` keep their chaining value.
     #[inline(always)]
-    unsafe fn compress8(h: &mut [__m256i; 8], blocks: &[[u8; 64]; 8], t: &[u64; 8], f: &[u32; 8], active: &[u32; 8]) {
-        let mut lo = [_mm256_setzero_si256(); 8];
-        let mut hi = [_mm256_setzero_si256(); 8];
-        for l in 0..8 {
-            lo[l] = _mm256_loadu_si256(blocks[l].as_ptr() as *const __m256i);
-            hi[l] = _mm256_loadu_si256(blocks[l].as_ptr().add(32) as *const __m256i);
-        }
+    unsafe fn compress8(h: &mut [__m256i; 8], blocks: &[&[u8; 64]; 8], t: &[u64; 8], f: &[u32; 8], active: &[u32; 8]) {
+        let ld = |p: *const u8| _mm256_loadu_si256(p as *const __m256i);
+        let mut lo: [__m256i; 8] = core::array::from_fn(|l| ld(blocks[l].as_ptr()));
+        let mut hi: [__m256i; 8] = core::array::from_fn(|l| ld(blocks[l][32..].as_ptr()));
         transpose(&mut lo);
         transpose(&mut hi);
         let m = [
@@ -369,25 +363,16 @@ mod avx2 {
         ];
         let tl: [u32; 8] = core::array::from_fn(|l| t[l] as u32);
         let th: [u32; 8] = core::array::from_fn(|l| (t[l] >> 32) as u32);
-        let ld = |a: &[u32; 8]| _mm256_loadu_si256(a.as_ptr() as *const __m256i);
+        let ldw = |a: &[u32; 8]| ld(a.as_ptr() as *const u8);
         let mut v = [
             h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
             _mm256_set1_epi32(IV[0] as i32), _mm256_set1_epi32(IV[1] as i32),
             _mm256_set1_epi32(IV[2] as i32), _mm256_set1_epi32(IV[3] as i32),
-            xor(_mm256_set1_epi32(IV[4] as i32), ld(&tl)), xor(_mm256_set1_epi32(IV[5] as i32), ld(&th)),
-            xor(_mm256_set1_epi32(IV[6] as i32), ld(f)), _mm256_set1_epi32(IV[7] as i32),
+            xor(_mm256_set1_epi32(IV[4] as i32), ldw(&tl)), xor(_mm256_set1_epi32(IV[5] as i32), ldw(&th)),
+            xor(_mm256_set1_epi32(IV[6] as i32), ldw(f)), _mm256_set1_epi32(IV[7] as i32),
         ];
-        for s in &SIGMA {
-            g(&mut v, 0, 4, 8, 12, m[s[0]], m[s[1]]);
-            g(&mut v, 1, 5, 9, 13, m[s[2]], m[s[3]]);
-            g(&mut v, 2, 6, 10, 14, m[s[4]], m[s[5]]);
-            g(&mut v, 3, 7, 11, 15, m[s[6]], m[s[7]]);
-            g(&mut v, 0, 5, 10, 15, m[s[8]], m[s[9]]);
-            g(&mut v, 1, 6, 11, 12, m[s[10]], m[s[11]]);
-            g(&mut v, 2, 7, 8, 13, m[s[12]], m[s[13]]);
-            g(&mut v, 3, 4, 9, 14, m[s[14]], m[s[15]]);
-        }
-        let mask = ld(active);
+        rounds!(g, v, m);
+        let mask = ldw(active);
         for i in 0..8 {
             let new = xor(h[i], xor(v[i], v[i + 8]));
             h[i] = _mm256_blendv_epi8(h[i], new, mask);
@@ -395,48 +380,36 @@ mod avx2 {
     }
 
     /// Hash 2 ≤ `msgs.len()` ≤ 8 messages from `h0` after `t0` bytes; lane `l` runs
-    /// `max(1, ⌈|m_l| / 64⌉)` blocks and idles (keeps its value) for the rest.
+    /// `max(1, ⌈|m_l| / 64⌉)` blocks and idles (keeps its value) for the rest. A full block is
+    /// read in place; only a message's partial last block is copied, into the zeroed `pad[l]`.
     #[target_feature(enable = "avx2")]
     pub unsafe fn hash8(h0: &[u32; 8], t0: u64, msgs: &[&[u8]], out: &mut [Digest]) {
         let k = msgs.len();
         debug_assert!((1..=8).contains(&k));
-        let mut nb = [0usize; 8];
-        for l in 0..k {
-            nb[l] = msgs[l].len().div_ceil(64).max(1);
-        }
-        let maxnb = nb.iter().copied().max().unwrap_or(0);
+        let nb: [usize; 8] = core::array::from_fn(|l| msgs.get(l).map_or(0, |m| m.len().div_ceil(64).max(1)));
         let mut h: [__m256i; 8] = core::array::from_fn(|i| _mm256_set1_epi32(h0[i] as i32));
-        let mut blocks = [[0u8; 64]; 8];
-        let mut t = [0u64; 8];
-        let mut f = [0u32; 8];
-        let mut active = [0u32; 8];
-        for b in 0..maxnb {
-            for l in 0..8 {
-                if l < k && b < nb[l] {
-                    let m = msgs[l];
-                    let start = 64 * b;
-                    let end = (start + 64).min(m.len());
-                    let n = end.saturating_sub(start);
-                    blocks[l][..n].copy_from_slice(&m[start.min(m.len())..end]);
-                    blocks[l][n..].fill(0);
-                    let last = b + 1 == nb[l];
-                    t[l] = t0 + if last { m.len() as u64 } else { 64 * (b as u64 + 1) };
-                    f[l] = if last { u32::MAX } else { 0 };
-                    active[l] = u32::MAX;
-                } else {
-                    active[l] = 0;
+        let mut pad = [[0u8; 64]; 8];
+        for b in 0..nb.iter().copied().max().unwrap_or(0) {
+            let s = 64 * b;
+            for l in 0..k {
+                let m = msgs[l];
+                if b < nb[l] && m.len() < s + 64 {
+                    pad[l][..m.len() - s].copy_from_slice(&m[s..]); // once per lane: its last block
                 }
             }
+            let blocks: [&[u8; 64]; 8] = core::array::from_fn(|l| match msgs.get(l) {
+                Some(m) if m.len() >= s + 64 => m[s..s + 64].try_into().unwrap(),
+                _ => &pad[l],
+            });
+            let len = |l: usize| msgs.get(l).map_or(0, |m| m.len() as u64);
+            let t: [u64; 8] = core::array::from_fn(|l| t0 + len(l).min(s as u64 + 64));
+            let f: [u32; 8] = core::array::from_fn(|l| if b + 1 == nb[l] { u32::MAX } else { 0 });
+            let active: [u32; 8] = core::array::from_fn(|l| if b < nb[l] { u32::MAX } else { 0 });
             compress8(&mut h, &blocks, &t, &f, &active);
         }
-        let mut words = [[0u32; 8]; 8];
-        for i in 0..8 {
-            _mm256_storeu_si256(words[i].as_mut_ptr() as *mut __m256i, h[i]);
-        }
+        transpose(&mut h);
         for l in 0..k {
-            for i in 0..8 {
-                out[l][4 * i..4 * i + 4].copy_from_slice(&words[i][l].to_le_bytes());
-            }
+            _mm256_storeu_si256(out[l].as_mut_ptr() as *mut __m256i, h[l]);
         }
     }
 }
