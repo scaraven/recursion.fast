@@ -15,18 +15,23 @@
 #                the three tree repeats and `t_link` as the median of the three stream repeats, lists
 #                each job's CPU model, and marks a result whose jobs ran on different CPU models
 #                (`mixed_cpu`) as not usable for a paired record comparison. `split: false` runs
-#                everything in one job (the smoke shape).
+#                everything in one job (the smoke shape). The parts are defined once, in
+#                `harness/aggregate.py` (the `plan` job prints them), and the aggregation requires
+#                exactly that set: a missing, duplicated or mismatched part is ERROR, never ACCEPT
+#                (RF-M1).
 #   attest       signs the result JSON with a GitHub artifact attestation; runs no entry code
 #
 # Nothing here holds a write token while entry code runs: `permissions` are read-only in the
 # certificate and benchmark jobs, checkouts do not persist credentials, the entry is fetched by SHA
 # as data with plain git, and every sandboxed process starts with an empty environment.
 #
-# Record acceptance (V4-A1): a result is a record only if
-#   gh attestation verify result.json --owner scaraven \
-#      --signer-workflow scaraven/recursion.fast/.github/workflows/evaluate.yml
-# passes; the attested JSON binds the verdict to vk, the CPU model, the runner image, the harness
-# commit and the service binary's hash.
+# Record acceptance (V4-A1, RF-m1): a result is a record only if `harness/verify-record.sh
+# result.json` passes. It runs `gh attestation verify` with `--signer-workflow
+# scaraven/recursion.fast/.github/workflows/evaluate.yml` and `--deny-self-hosted-runners`, then
+# requires the certificate's signer digest (the commit the reusable workflow ran at) to equal the
+# result's `harness_commit`, and the verdict to be ACCEPT and comparable. The attested JSON binds
+# the verdict to vk, the CPU model, the runner image, the harness commit and the service binary's
+# hash.
 name: evaluate
 on:
   workflow_call:
@@ -97,19 +102,39 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: certificate, path: cert-out/ }
 
+  plan:
+    # the benchmark's parts, defined once in harness/aggregate.py; the aggregation requires exactly
+    # these (RF-M1). Runs no entry code.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: { contents: read }
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      parts: ${{ steps.plan.outputs.parts }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ inputs.core_ref }}", path: core, persist-credentials: false }
+      - id: plan
+        run: |
+          name=${{ inputs.split && 'split' || 'single' }}
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "parts=$(python3 -I core/harness/aggregate.py --print-matrix "$name")" >> "$GITHUB_OUTPUT"
+
   benchmark:
-    needs: certificate
+    needs: [certificate, plan]
     if: needs.certificate.outputs.status != 'reject'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions: { contents: read }
     strategy:
-      # RB-M1, RB-m1: one job's failure must not cancel the others; aggregate.py decides from the
-      # parts that arrive
+      # RB-M1: one job's failure must not cancel the others; the aggregation then requires every
+      # planned part (a missing one is ERROR, RF-M1)
       fail-fast: false
       matrix:
         # every job calibrates T_V and the service on its own machine (V4-12, V4-A5)
-        part: ${{ fromJSON(inputs.split && '["calibrate,tree,dos,liveness", "calibrate,tree", "calibrate,tree", "calibrate,stream", "calibrate,stream", "calibrate,stream"]' || '["all"]') }}
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
     steps:
       - name: machine
         run: lscpu
@@ -142,7 +167,7 @@ jobs:
         with: { name: "result-${{ strategy.job-index }}", path: "result-*.json" }
 
   attest:
-    needs: [certificate, benchmark]
+    needs: [certificate, plan, benchmark]
     if: always() && needs.certificate.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -162,8 +187,10 @@ jobs:
         id: agg
         env: { SEASON: "core/${{ inputs.season }}", RUN: "${{ github.run_id }}", ATTEMPT: "${{ github.run_attempt }}" }
         run: |
-          python3 -I core/harness/aggregate.py --season "$SEASON" --cert cert/cert.json --out result.json \
-            --job "$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT" parts/result-*.json
+          shopt -s nullglob
+          python3 -I core/harness/aggregate.py --plan "${{ needs.plan.outputs.name }}" --season "$SEASON" \
+            --cert cert/cert.json --out result.json --job "$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT" \
+            parts/result-*.json
           echo "verdict=$(python3 -I -c 'import json; print(json.load(open("result.json"))["verdict"])')" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@v2
         with: { subject-path: result.json }

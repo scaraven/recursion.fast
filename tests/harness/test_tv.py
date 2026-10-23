@@ -15,10 +15,12 @@ from rfh.bench import Bench, Fail  # noqa: E402
 
 class StubBadge:
     def __init__(self, script):
-        self.script, self.calls = list(script), 0
+        self.script, self.calls, self.warm = list(script), 0, []
 
-    def verify(self, items, store):
+    def verify(self, items, store, timeout=None, warm=False):
+        # the real badge checks the first item once more, untimed, when `warm` (RF-m3)
         self.calls += 1
+        self.warm.append(warm)
         return [(True, self.script.pop(0)) for _ in items]
 
 
@@ -41,6 +43,7 @@ def main():
     b.check(item, "spike")
     check(b.tv_seen == [("root", 90)] and b.tv_remeasured == 1 and b.badge.calls == 2,
           f"a spike above the cap is measured again and passes on its best time ({b.tv_seen})")
+    check(b.badge.warm == [True, True], "every timed batch is warmed with an untimed first check (RF-m3)")
     b = bench([150, 140, 130])               # above the cap every time
     try:
         b.check(item, "slow")

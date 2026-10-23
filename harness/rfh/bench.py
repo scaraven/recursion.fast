@@ -46,6 +46,8 @@ class Params:
     live_r: int
     live_n: int
     dos_proofs: int
+    dos_item_factor: float
+    dos_total_s: float
     proof_cap: int
     file_cap: int
     verify_s: float
@@ -69,6 +71,7 @@ class Params:
             M=g("stream", "M"), n_f=g("stream", "n_f"), stream_repeats=g("stream", "repeats"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
             live_r=g("liveness", "r"), live_n=g("liveness", "n"), dos_proofs=g("dos", "proofs"),
+            dos_item_factor=float(g("dos", "item_factor")), dos_total_s=g("dos", "total_s"),
             proof_cap=g("caps", "proof_cap"), file_cap=g("caps", "file_cap"), verify_s=g("caps", "verify_s"),
             setup_s=g("caps", "setup_s"), build_s=g("caps", "build_s"),
             mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"),
@@ -148,7 +151,7 @@ class Bench:
         is the best of `checker_runs` chain-checker runs over `R`, so a check above the cap is
         measured again, up to `checker_runs` times in all, and only its best time is compared."""
         try:
-            res = self.badge.verify([(vk, c, rel) for vk, c, rel, _ in items], self.store)
+            res = self.badge.verify([(vk, c, rel) for vk, c, rel, _ in items], self.store, warm=tv)
         except BadgeError as e:
             raise Fail(f"{what}: {e}")
         for (_, _, _, label), (ok, _) in zip(items, res):
@@ -163,7 +166,7 @@ class Bench:
             if not over:
                 break
             try:
-                again = self.badge.verify([items[k][:3] for k in over], self.store)
+                again = self.badge.verify([items[k][:3] for k in over], self.store, warm=True)
             except BadgeError as e:
                 raise Fail(f"{what}: {e}")
             for k, (ok, ns) in zip(over, again):
@@ -206,7 +209,8 @@ class Bench:
         svc = self.service("calibration")
         rec = {"keygen_ms": float(svc.info.get("keygen_ms", "nan")), "simd": svc.info.get("simd")}
         try:
-            for threads in sorted({1, os.cpu_count() or 1}):
+            # RF-m5: the CPUs this job may use, not the machine's count
+            for threads in sorted({1, len(os.sched_getaffinity(0))}):
                 out = subprocess.run([self.bench_bin, "oracle.sock", "throughput", str(threads), "1024", "64",
                                       str(self.p.calib_s)], cwd=svc.sock_dir, capture_output=True, text=True,
                                      timeout=600).stdout
@@ -219,6 +223,9 @@ class Bench:
                                              "compressions_per_query": per,
                                              "compressions_per_s": float(kv["calls_per_s"]) * per,
                                              "us_per_request": float(kv["us_per_request"])}
+        except Fail as e:
+            e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
+            raise
         finally:
             self.stop(svc, rec)
         cal["service"] = rec
@@ -272,6 +279,9 @@ class Bench:
                 if not ok:
                     raise Fail(f"liveness: the extractor did not produce an accepted witness: {msg[-300:]}")
             self.alive(svc)
+        except Fail as e:
+            e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
+            raise
         finally:
             self.stop(svc, rec)
         return rec
@@ -321,6 +331,9 @@ class Bench:
                     flush()
             flush()
             self.alive(svc)
+        except Fail as e:
+            e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
+            raise
         finally:
             self.stop(svc, rec)
         rec["t_leaf"] = sum(rec["leaf_s"]) / p.M
@@ -346,17 +359,35 @@ class Bench:
 
     # -- the DoS column -------------------------------------------------------------------------------
     def dos(self, vk, root, root_rel):
+        """The DoS column (RF-M1 (2), RF-m6): 1,000 random and mutated proofs of the root's
+        statement must all be rejected, each within the per-item cap (`dos.item_factor · T_V` where
+        `T_V` is enforced, else `verify_s`) and all within `dos.total_s`. A breach is the entry's
+        failure (a verifier slow on crafted input fails the run), and the slow input is kept in the
+        store and named."""
         data = open(os.path.join(self.store, root_rel), "rb").read()
         files = dos_inputs(data, self.p.dos_proofs, random.Random(os.urandom(16)))
         items = [(vk, root, self.keep(f"dos/{k}.bin", b)) for k, b in enumerate(files)]
+        enforced = self.p.tv_enforce and self.tv_cap_ns is not None
+        item_cap = self.p.dos_item_factor * self.tv_cap_ns if enforced else self.p.verify_s * 1e9
         try:
-            res = self.badge.verify(items, self.store)
+            res = self.badge.verify(items, self.store, timeout=self.p.dos_total_s)
         except BadgeError as e:
-            raise Fail(f"DoS column: {e}")
+            k = len(getattr(e, "partial", []))
+            where = f"; input {k} (store/{items[k][2]}) was being checked" if k < len(items) else ""
+            raise Fail(f"DoS column: not finished within {self.p.dos_total_s} s{where} ({e})")
         acc = [k for k, (ok, _) in enumerate(res) if ok]
         if acc:
-            raise Fail(f"DoS column: {len(acc)} random proofs accepted")
-        return {"proofs": len(items), "max_ns": max(ns for _, ns in res), "median_ns": statistics.median(ns for _, ns in res)}
+            raise Fail(f"DoS column: {len(acc)} random proofs accepted (e.g. store/{items[acc[0]][2]})")
+        slow = [(ns, k) for k, (_, ns) in enumerate(res) if ns > item_cap]
+        if slow:
+            ns, k = max(slow)
+            raise Fail(f"DoS column: input {k} took {ns / 1e6:.1f} ms, above the per-item cap of "
+                       f"{item_cap / 1e6:.1f} ms ({len(slow)} inputs over; kept as store/{items[k][2]})")
+        worst = max(range(len(res)), key=lambda k: res[k][1])
+        return {"proofs": len(items), "max_ns": res[worst][1], "max_input": items[worst][2],
+                "median_ns": statistics.median(ns for _, ns in res), "item_cap_ns": item_cap,
+                "total_s": self.p.dos_total_s,
+                "over_T_V": sum(1 for _, ns in res if self.tv_cap_ns and ns > self.tv_cap_ns)}
 
 
 def score(p: Params, tree_recs, stream_recs):

@@ -88,7 +88,7 @@ the liveness log and the lifecycle. A scalar-only service would be about 850 cod
     - a query: 2^20 bytes (V4-A3);
     - a body: 2^24 bytes;
     - items: 2^18 per `QUERY`, 2^16 per `SIGN`;
-    - connections: 64;
+    - connections: 32 (64 before the final fix pass, RF-m20);
     - signatures: 2^16 per lifetime.
   - Lifecycle: `vk` and `ready` on stdout; end of stdin makes the service wipe its keys and exit.
 - **Signed-proof file** (`harness/FORMAT.md`).
@@ -204,7 +204,7 @@ The table below is the pre-golf build's own measurement, kept with its logs.
 | Test | Result | Log |
 |---|---|---|
 | `cargo test` | 4 unit tests: RFC 7693 `"abc"`; the empty message; AVX2 = scalar on 20 lengths, keyed and unkeyed; the WOTS digits | — |
-| `tests/service/test_service.py` (against the `insecure-test-keys` test build) | **90 checks pass**, on Python 3.14 and 3.12.15 (uv). The list is below; the 90th is that the release binary rejects `--insecure-test-keys` (RB-m5) | `logs/harness/test_service-py3.{14,12}.log` |
+| `tests/service/test_service.py` (against the `insecure-test-keys` test build) | **92 checks pass** (after the final fix pass), on Python 3.14 and 3.12.15 (uv). The list is below. Since the first version: the release binary rejects `--insecure-test-keys` (RB-m5); concurrent signers get a permutation of indices; 32 maximal requests fit the 2 GiB cgroup (RF-m20, RF-m22) | `logs/harness/test_service-py3.{14,12}.log` |
 | `tests/service/test_lean_signer.py` | **byte-identical to stage A's compiled Lean signer**: the service's `vk` and its first two signatures (an empty trace; 3 queries). The Lean `SigOkF` accepts them | `logs/service/test_lean_signer.log` |
 | `tests/harness/test_sandbox.py` | **45 checks pass** against a hostile prover, on Python 3.14 and 3.12.15. The list is below | `logs/harness/test_sandbox-py3.{14,12}.log` |
 | `tests/gate/check.sh` | pass: the witness-sending certificate (9,759 constants after `ea2e8ab`, standard axioms); the backdoor, with `V`, `P`, `ext` compiled one by one; an entry importing CompPoly's `BF64`/`Ext3`, whose `@[csimp]` lemma is reported as a pinned dependency's note (Q2). Rejected: a noncomputable `ext` (rule 4), `@[implemented_by]` (rule 3), a `partial` verifier (rule 2) | `logs/harness/gate-fixtures.log` |
@@ -224,7 +224,7 @@ The 89 service checks:
 - the liveness log;
 - ten malformed or over-cap requests, each refused;
 - a query of exactly 2^20 bytes, answered;
-- 32 concurrent connections, and a 65th refused;
+- 32 concurrent connections, and a 33rd refused (a 65th before RF-m20);
 - fresh keys for every service, and the runner refusing a service with test keys;
 - exactly 2^16 signatures, then `EXHAUSTED`;
 - clean shutdown.
@@ -527,7 +527,7 @@ With `split` (the default in `evaluate.yml` and the template), the benchmark is 
 
 ## 9. Fix pass (reviews RB and GB; FIXLIST Q1–Q14)
 
-Everything below is verified by the suites. The service tests (90 checks) and the sandbox tests
+Everything below is verified by the suites. The service tests (90 checks at that pass, 92 after §10) and the sandbox tests
 (45) pass on Python 3.14 and 3.12.15. The gate fixtures pass, now with CompPoly. The stand-in smoke
 passes, with 5 broken provers. The end-to-end smoke passes 15 checks. The `acc` probe and the
 Lean-signer cross-check were rerun.
@@ -594,3 +594,70 @@ wrong.
 **Also fixed.** The `acc` probe now builds as its own Lake package requiring the organiser by path.
 Its earlier `lake -f` build had left `RFBadge*` and `AccProbeSub` modules in the organiser's
 `.lake/build`, which every evaluation tree sees; they were removed.
+
+## 10. Final fix pass (whole-branch review RF, `docs/v4/reviews/R-final-review.md`)
+
+### Majors
+
+**RF-M2 (the toy prover did not assemble on the runner), fixed.**
+- **Cause.** `harness/toy-prover/honest/prover.s` came from the VM's GCC 15.2, which emits
+  `.base64`; the runner image's binutils 2.42 rejects it.
+- **Helper.** `harness/tools/asm-compat.py` (untrusted, for submitters). It merges the baseline
+  team's LLVM filter (`spartan-srom/prover/sanitize-asm.py`, attributed in its docstring) with a
+  GCC rule:
+  - `.base64` is rewritten as `.byte`;
+  - `.prefalign` is rewritten as `.p2align`;
+  - DWARF-5 `.file`/`.loc` lines and `.debug_*` sections are dropped;
+  - `.incbin`/`.include` are refused.
+- **The regenerated assembly** goes through the helper. Its `.text` and `.rodata` are
+  byte-identical to the unfiltered build's. The smoke's broken variants go through it too.
+- **The rule.** `PROVER.md` §1 now states the reference toolchain as part of the rule: GitHub's
+  `ubuntu-24.04` image (season 1 first ran on `ubuntu24 20261012.334.1`), GCC 13.3, binutils
+  2.42, glibc 2.39.
+- **CI** (`ci.yml`, `harness` and `smoke` jobs) prints those versions and assembles every committed
+  `.s` file with the image's `gcc` before anything else.
+
+**RF-M1 (a result assembled from whichever jobs finished), fixed.**
+
+1. **The plan.** `harness/aggregate.py` defines the benchmark parts once (`PLANS`, printed by
+   `--print-matrix`); `evaluate.yml`'s new `plan` job builds the matrix from it. `--plan` requires
+   exactly that multiset of parts, identified by the `parts` each result records, from one harness
+   commit and one season. A part that is missing, duplicated or mismatched is `ERROR`, and the
+   result is not comparable. A part the entry failed is `REJECT`, whatever else is missing.
+2. **The DoS column is bounded and fails the entry.**
+   - Each input may take at most `dos.item_factor · T_V`: 10 · `T_V` where `T_V` is enforced,
+     else `verify_s`.
+   - The whole column runs within `dos.total_s`: 1,800 s per season, 300 s at the smoke shape.
+   - A breach is the entry's **failure** (REJECT): a verifier that is slow on crafted input fails
+     the run. The slow input is kept in the store and named in the reason.
+   - The column records `max_input`, both caps and how many inputs exceeded `T_V` (RF-m6).
+3. **Tests.**
+   - `tests/harness/test_aggregate.py`: 10 cases, among them job 0 missing, a duplicate, a swapped
+     part and two commits.
+   - `tests/harness/test_dos.py`: 4 cases.
+   - The smoke now aggregates its one part (ACCEPT), then the same with the part dropped (ERROR).
+
+### Harness minors
+
+| Id | What was done |
+|---|---|
+| RF-m1 | **Fixed.** `harness/verify-record.sh RESULT.json` is the record-acceptance command. It runs `gh attestation verify --owner scaraven --signer-workflow scaraven/recursion.fast/.github/workflows/evaluate.yml --deny-self-hosted-runners`, then requires the certificate's signer digest (the commit the reusable workflow ran at) to equal the result's `harness_commit`, which `aggregate.py` now records and requires to be one commit across all parts, and finally the verdict ACCEPT and comparable. It is untested here: the VM's `gh` 2.46 has no `attestation` command. |
+| RF-m2 | **Answered: wall time of the pinned check is the better measure; please change the design's wording.** Four reasons. (a) The cap is measured the same way: wall time of the chain checker on the same pinned core. (b) On one pinned core, wall time ≥ CPU time: threads (`Task.spawn`) share the core, and waiting only adds. (c) A per-check CPU time needs a CPU clock inside the badge, which core Lean lacks without FFI, or one process per check with `rusage`, which adds the 140 MB executable's start-up to every sample. (d) Since RB-M1, noise is handled by the best-of-N statistic on both sides. Suggested wording: "wall time of the pinned check (an upper bound on its CPU time), with the cap measured the same way". |
+| RF-m3 | **Fixed.** Every timed batch (and every re-measure) first checks its first item once, untimed (`Badge.verify(warm=True)`), so the root is no longer the fresh process's coldest check. `test_tv.py` checks it. |
+| RF-m4 | **Answered.** `t_leaf = Σ(M + 1 leaves)/M` is the cost model's definition (§3.3, "the sum of the M + 1 leaf times over M"), so `M · t_link` is the whole timed stream. Changing it is the design's call. |
+| RF-m5 | **Fixed.** The calibration uses `len(os.sched_getaffinity(0))` threads. |
+| RF-m6 | **Fixed** with RF-M1 (2). |
+| RF-m7 | **Fixed.** A failed run's partial record (status, times, prover output, `T_V` samples so far, service refusals and statistics) is kept in the result as `failed_run`. |
+| RF-m12 | **Answered.** `rf-bench` was always untrusted tooling (§1). The `liveness` badge is trusted only for the smoke check it performs, never for the security claim (`Computes` is proved). |
+| RF-m20 | **Fixed.** The connection cap is 32, so 32 × (16 MiB body + 8 MiB response + about 17 MiB temporaries) ≈ 1.3 GiB fits the 2 GiB cgroup. Liveness items are written straight to the locked writer, with no copy of the request. A new test sends 32 concurrent 16 MiB `QUERY` requests (2^18 queries each) to a service in a 2 GiB scope; all are answered and the service exits cleanly. |
+| RF-m21 | **Fixed (text).** `PROTOCOL.md` §5 now says liveness mode is observable by latency: connections are serialised on the log. Nothing depends on it, since the run is unscored and its shape public. "One lock" for the signature index: `PROTOCOL.md`, `wots.rs` and §6 here already say "one atomic step / read-modify-write". The design's wording is stage D's to change. |
+| RF-m22 | **Fixed in part.** The key generator fills its buffers in place (no stack copy). `Keyed::new` wipes its keyed-`Hasher` temporary. A connection's slot is released by a drop guard, also on a panic. A new test checks that 8 concurrent signers get a permutation of indices. Not fixed: the chain values in `advance` (they become the public `ots`), and a test that a failed `SIGN` burns its index (no failure path after the index is taken can be forced from outside). |
+| RF-m9 | **Answered.** The caller template is a template to be installed with the pin. The design's status sentence is stage D's (RF-M2 part (a)). |
+
+### A test-client bug found on the way
+
+`rfh.service.Client` connected through `os.chdir`, which is not thread-safe. In the concurrent
+tests some threads failed to connect, and the earlier tests swallowed thread exceptions.
+- **Fix:** it now connects through `/proc/self/fd/N/` of an `O_PATH` directory descriptor.
+- **Tests:** every concurrent test now counts a thread's exception as a failure. The service suite
+  passes 92 checks on Python 3.14 and 3.12.

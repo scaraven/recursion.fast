@@ -60,26 +60,33 @@ class Badge:
         err.join(5)
         return code, out.kept.decode(errors="replace"), err.kept.decode(errors="replace")
 
-    def verify(self, items, store):
-        """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns)."""
+    def verify(self, items, store, timeout=None, warm=False):
+        """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns). With
+        `warm`, the first item is checked once more before the timed ones and that result dropped,
+        so no timed item is the fresh process's first, coldest check (RF-m3). `timeout` bounds the
+        whole batch (default `verify_s` per item); a batch that times out or crashes raises
+        `BadgeError` with the answers so far in `.partial`."""
         if not items:
             return []
+        lst = ([items[0]] if warm else []) + list(items)
         d = os.path.join(self.scratch, f"list{self.n}")
         os.makedirs(d)
         with open(os.path.join(d, "list.txt"), "w") as f:
-            for vk, stmt, rel in items:
+            for vk, stmt, rel in lst:
                 f.write(f"{vk.hex()} {stmt.hex()} /store/{rel}\n")
         code, out, err = self._run(["verify", "--batch", "/list/list.txt"], [("ro", store, "/store"), ("ro", d, "/list")],
-                                   self.verify_s * len(items) + 60)
-        lines = out.split("\n")[:len(items)]
+                                   timeout if timeout is not None else self.verify_s * len(lst) + 60)
         res = []
-        for line in lines:
+        for line in out.split("\n")[:len(lst)]:
             w = line.split()
             if len(w) != 2 or w[0] not in ("accept", "reject") or not w[1].isdigit():
                 break
             res.append((w[0] == "accept", int(w[1])))
+        res = res[1:] if warm else res
         if code != 0 or len(res) != len(items):
-            raise BadgeError(f"verify: exit {code}, {len(res)} of {len(items)} answers; stderr: {err[-500:]}")
+            e = BadgeError(f"verify: exit {code}, {len(res)} of {len(items)} answers; stderr: {err[-500:]}")
+            e.partial = res
+            raise e
         slow = [ns for _, ns in res if ns > self.verify_s * 1e9]
         if slow:
             raise BadgeError(f"verify: a check took {max(slow) / 1e9:.1f} s, above verify_s")

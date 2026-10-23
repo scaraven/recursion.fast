@@ -66,8 +66,10 @@ def broken(tmp, flag, extra_header=None):
     if extra_header:
         with open(os.path.join(d, "stale_sig.h"), "w") as f:
             f.write(extra_header)
-    s = os.path.join(d, "prover.s")
-    subprocess.run(["gcc", "-S", "-O2", f"-D{flag}", "-I", d, "-o", s, os.path.join(TOY, "toy.c")], check=True)
+    s, raw = os.path.join(d, "prover.s"), os.path.join(d, "raw.s")
+    subprocess.run(["gcc", "-S", "-O2", f"-D{flag}", "-I", d, "-o", raw, os.path.join(TOY, "toy.c")], check=True)
+    # as the committed honest prover: accepted by the reference image's binutils 2.42 (RF-M2)
+    subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "tools", "asm-compat.py"), raw, s], check=True)
     return entry_from(s, os.path.join(tmp, f"entry-{flag}"))
 
 
@@ -195,6 +197,19 @@ def main():
               f"`#eval` in the entry: {sr.get('verdict')} {sr['certificate']['reasons'][:1]}")
 
     r = results["honest"]
+    # RF-M1: the aggregation of this evaluation's one part ACCEPTs (or matches the certificate),
+    # and with the part dropped it is ERROR, never ACCEPT
+    cert_file = cert if not a.mock else os.path.join(tmp, "cert-mock.json")
+    if a.mock:
+        json.dump({"status": "ok", "reasons": []}, open(cert_file, "w"))
+    agg = lambda files, out: (subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"),  # noqa: E731
+                                              "--plan", "single", "--season", os.path.join(ROOT, "harness", "smoke.toml"),
+                                              "--cert", cert_file, "--out", out, *files], check=True,
+                                             capture_output=True), json.load(open(out)))[1]
+    whole = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-whole.json"))
+    dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
+    check(whole["verdict"] == "ACCEPT" and dropped["verdict"] == "ERROR" and not dropped["comparable"],
+          f"aggregate: the planned part gives {whole['verdict']}; the part dropped gives {dropped['verdict']} (RF-M1)")
     if r.get("benchmark") == "pass":
         sc = r["score"]
         check(all(k in sc for k in ("T_tree", "t_leaf", "t_merge", "t_link", "S")), f"score components: {sc}")

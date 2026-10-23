@@ -178,7 +178,10 @@ impl Keyed {
         block[..32].copy_from_slice(key);
         let mut mid = init(32);
         compress(&mut mid, &block, 64, false);
-        let empty = Hasher::new_keyed(key).finalize();
+        let mut kh = Hasher::new_keyed(key);
+        let empty = kh.finalize();
+        wipe(&mut kh.buf); // the key block (RF-m22)
+        wipe(&mut kh.h);
         wipe(&mut block);
         Keyed { mid, empty }
     }

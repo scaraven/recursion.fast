@@ -26,6 +26,8 @@ n = 16
 
 [dos]
 proofs = 1000
+item_factor = 10     # an input may take at most item_factor · T_V (verify_s where T_V is not enforced)
+total_s = 1800       # the whole column's budget; a breach is the entry's failure (RF-M1)
 
 [caps]
 proof_cap = 1048576     # |π| ≤ 2^20 (checked by acc; V4-13)

@@ -34,7 +34,10 @@ pub const MAX_QUERY_COUNT: u32 = 1 << 18;
 /// Most items in one `SIGN` (the verifier query bound `qV ≤ 2^16`).
 pub const MAX_SIGN_COUNT: u32 = 1 << 16;
 /// Most concurrent connections.
-pub const MAX_CONNS: usize = 64;
+/// Most concurrent connections: 32. A connection holds at most a 16 MiB body, an 8 MiB response and
+/// about 17 MiB of per-request temporaries (the sort of a mixed-size `QUERY`), so 32 of them fit the
+/// service's 2 GiB cgroup with room for the keys (RF-m20; 64 did not).
+pub const MAX_CONNS: usize = 32;
 
 /// The 16-byte header.
 pub fn header(code: u8, count: u32, body_len: u64) -> [u8; 16] {

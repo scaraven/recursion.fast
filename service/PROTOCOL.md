@@ -16,7 +16,7 @@ fresh signing key pair `(sk, vk)`; neither ever leaves the process.
   it writes, otherwise both sides can block on full socket buffers. The service serves each connection on
   its own thread, so **use one connection per prover thread** to hash in parallel (the service
   computes on the same CPUs as the prover; it is not a co-processor).
-- At most **64** connections are open at a time; a further connection receives a `CAP` response and
+- At most **32** connections are open at a time; a further connection receives a `CAP` response and
   is closed.
 - After any error response the service closes the connection.
 
@@ -95,7 +95,7 @@ root of the 2^16 one-time public keys). The runner also writes it to `DIR/vk.hex
 |---|---|
 | 0 | OK |
 | 1 `BAD` | unknown op, non-zero reserved bytes, `VK` with a body, item lengths that do not add up to `body_len` |
-| 2 `CAP` | `body_len > 2^24`; a query above `2^20` bytes; `QUERY` with `count > 2^18`; `SIGN` with `count > 2^16`; more than 64 connections |
+| 2 `CAP` | `body_len > 2^24`; a query above `2^20` bytes; `QUERY` with `count > 2^18`; `SIGN` with `count > 2^16`; more than 32 connections |
 | 3 `EXHAUSTED` | `SIGN` after all 2^16 one-time keys are used |
 
 An error response has `count = 0` and a body holding a UTF-8 message. The connection is closed
@@ -111,7 +111,7 @@ after it. A refused call has no answers: a prover that needs them cannot produce
 | items per `QUERY` | 2^18 | bounds the answer buffer (8 MiB) |
 | items per `SIGN` | 2^16 | the verifier makes at most `qV ≤ 2^16` queries (V4-13) |
 | signatures per service lifetime | 2^16 | the Merkle tree's height (V4-3) |
-| connections | 64 | one per prover thread |
+| connections | 32 | one per prover thread; 32 maximal connections fit the service's 2 GiB cgroup (RF-m20) |
 
 Larger data must be hashed in pieces by the entry's own construction (e.g. a Merkle tree), as with
 any random oracle of bounded input. The service runs in its own memory cgroup, separate from the
@@ -131,8 +131,10 @@ kills the prover first (V4-A5).
 
 Started with `--log FILE`, the service appends every query it evaluates (in `QUERY` and in `SIGN`)
 with its answer to FILE as `enc64 |q| ‖ q ‖ a`, in evaluation order (interleaved across
-connections). The runner uses FILE as the query log `L` of the extractor liveness check. A prover
-cannot tell whether the service runs in liveness mode.
+connections). The runner uses FILE as the query log `L` of the extractor liveness check. In this mode
+every request writes and flushes the log under one lock, so connections are serialised there and a
+prover can notice the mode by its latency (RF-m21); nothing depends on it, since the liveness run
+is unscored and its shape (`r = 1`, `n = 16`) is public.
 
 ## 6. Lifecycle (informative; the runner's)
 
