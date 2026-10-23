@@ -1037,7 +1037,7 @@ V4-16 where they differ.
 | V4-10 | `S = T_tree + K·t_link`, `K = 20` provisional, 100/200 ms reference lines, a fresh process per stream request | the cost model as written, with its illustration |
 | V4-11 | season 1: `r = 6`, `n = 2^18`; stream `M = 512`, `n_f = 2^16`; smoke `r = 2`, `n = 16`, `M = 4`; one season file | 16 GB runners; the same chain work as the long shape |
 | V4-12 | `T_V`: wall time of one `acc` check pinned to one core ≤ `T_triv,best / 10`, the cap measured the same way in the same job | C6; self-calibrating |
-| V4-13 | v3's caps kept; memory 13 GB | minimal change |
+| V4-13 | v3's caps kept; memory 13 GB in all (as built: 11 GB prover + 2 GB service, B dev. 1) | minimal change |
 | V4-14 | no D4+, no W5, no key release; every query, Merkle hashes included, goes to the service | no extractability heuristic |
 | V4-15 | PROVISIONAL listing for entries whose certificate does not check | lets real entries be measured; never ranked |
 | V4-16 | tree, leaf clause, `chainCap`, statements unchanged; tags `T`, `W`, `K`, `M` added | distinct first bytes for every contract hash |
