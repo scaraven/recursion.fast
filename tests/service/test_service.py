@@ -13,7 +13,8 @@ in `wots_ref.py`.
 3. `VK` against the root of the full Merkle tree computed by `wots_ref` from the seed;
 4. the liveness log against the queries asked;
 5. malformed and over-cap requests are refused and close the connection;
-6. 32 concurrent connections;
+6. 32 concurrent connections, a 33rd refused; 8 concurrent signers get a permutation of indices;
+   32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
 7. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
 8. shutdown on stdin end of file: exit 0, socket removed, statistics printed.
 """
@@ -44,15 +45,15 @@ FAILS = []
 
 
 def check(cond, what):
-    print(("ok   " if cond else "FAIL ") + what)
+    print(("ok   " if cond else "FAIL ") + what, flush=True)
     if not cond:
         FAILS.append(what)
 
 
-def start(d, env_extra=None, test_keys=True, log=None):
+def start(d, env_extra=None, test_keys=True, log=None, wrap=()):
     """A service with fixed test keys (raw Popen: the runner's `Service` refuses test keys)."""
     os.makedirs(d)
-    cmd = [BIN, "--socket", "oracle.sock"] + (["--log", log] if log else [])
+    cmd = list(wrap) + [BIN, "--socket", "oracle.sock"] + (["--log", log] if log else [])
     if test_keys:
         cmd += ["--insecure-test-keys", PRF_KEY.hex(), SEED.hex()]
     env = dict(os.environ, **(env_extra or {}))
@@ -156,13 +157,16 @@ def main():
     errs = []
 
     def worker(t):
-        r = random.Random(t)
-        cl = Client(sock)
-        for _ in range(20):
-            qs = [bytes(r.getrandbits(8) for _ in range(r.choice([0, 5, 64, 65, 200]))) for _ in range(r.randint(1, 300))]
-            if cl.query(qs) != [W.H(q, key=PRF_KEY) for q in qs]:
-                errs.append(t)
-        cl.close()
+        try:
+            r = random.Random(t)
+            cl = Client(sock)
+            for _ in range(20):
+                qs = [bytes(r.getrandbits(8) for _ in range(r.choice([0, 5, 64, 65, 200]))) for _ in range(r.randint(1, 300))]
+                if cl.query(qs) != [W.H(q, key=PRF_KEY) for q in qs]:
+                    errs.append(t)
+            cl.close()
+        except Exception as e:  # noqa: BLE001 (a thread's failure is the test's)
+            errs.append(repr(e))
     ths = [threading.Thread(target=worker, args=(t,)) for t in range(32)]
     [t.start() for t in ths]
     [t.join() for t in ths]
@@ -171,13 +175,61 @@ def main():
     cb = Client(sock)
     check(cb.query([big]) == [W.H(big, key=PRF_KEY)], "a query of exactly 2^20 bytes is answered")
     cb.close()
-    conns = [Client(sock) for _ in range(64)]
+    conns = [Client(sock) for _ in range(32)]
     extra = Client(sock)
     st, _, msg = extra.call(OP_VK)
-    check(st == 2, f"65th connection refused (status {st})")
+    check(st == 2, f"33rd connection refused (status {st})")
     for cc in conns:
         cc.close()
     stop(p)
+
+    # concurrent signers get distinct, consecutive indices (RF-m22)
+    p, info, sock = start(os.path.join(tmp, "svc-perm"))
+    got, lock = [], threading.Lock()
+
+    def perm_signer():
+        try:
+            cl = Client(sock)
+            for _ in range(64):
+                body = cl.sign([])
+                with lock:
+                    got.append(struct.unpack("<I", body[:4])[0])
+            cl.close()
+        except Exception as e:  # noqa: BLE001
+            with lock:
+                got.append(repr(e))
+    ths = [threading.Thread(target=perm_signer) for _ in range(8)]
+    [t.start() for t in ths]
+    [t.join() for t in ths]
+    check(sorted(map(str, got)) == sorted(map(str, range(512))),
+          f"8 concurrent signers: indices are a permutation of 0…511 ({len(set(got))} distinct of {len(got)})")
+    stop(p)
+    # 32 maximal requests at once fit the service's 2 GiB cgroup (RF-m20)
+    from rfh.sandbox import memcap, memcap_method
+    if memcap_method() == "systemd":
+        p, info, sock = start(os.path.join(tmp, "svc-mem"), wrap=memcap("2G", f"rf-svc-memtest-{os.getpid()}"))
+        qs = [bytes([i % 251]) * 60 for i in range(1 << 18)]          # body 2^18 · 64 = 16 MiB
+        want = {k: W.H(qs[k], key=PRF_KEY) for k in (0, 1, 12345, (1 << 18) - 1)}
+        bad, barrier = [], threading.Barrier(32)
+
+        def big():
+            try:
+                cl = Client(sock)
+                barrier.wait(timeout=120)
+                ans = cl.query(qs)
+                if any(ans[k] != v for k, v in want.items()):
+                    bad.append("wrong answer")
+                cl.close()
+            except Exception as e:  # noqa: BLE001 (a refused or dropped connection is the failure)
+                bad.append(repr(e))
+        ths = [threading.Thread(target=big) for _ in range(32)]
+        [t.start() for t in ths]
+        [t.join() for t in ths]
+        code, out = stop(p)
+        check(not bad and code == 0, f"32 concurrent 16 MiB QUERY requests (2^18 queries each) in a 2 GiB scope: "
+                                     f"{len(bad)} failures, service exit {code}")
+    else:
+        print("skip the 2 GiB cgroup test: no systemd user scope here")
 
     # 7. random keys, exhaustion; the runner's Service class
     s1 = Service(BIN, os.path.join(tmp, "rand1")).start()

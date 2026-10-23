@@ -106,12 +106,13 @@ class Client:
     def __init__(self, path):
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         d, name = os.path.split(os.path.abspath(path))
-        cwd = os.getcwd()
-        try:                                   # connect by a short relative path (108-byte limit)
-            os.chdir(d)
-            self.s.connect(name)
+        # a short path through the directory's descriptor (Unix socket paths are capped at 108 bytes);
+        # thread-safe, unlike changing the working directory
+        dfd = os.open(d, os.O_PATH | os.O_DIRECTORY)
+        try:
+            self.s.connect(f"/proc/self/fd/{dfd}/{name}")
         finally:
-            os.chdir(cwd)
+            os.close(dfd)
 
     def _recv(self, n):
         out = bytearray()

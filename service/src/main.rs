@@ -24,7 +24,7 @@
 use rf_oracle::blake2s::{self, Digest, Keyed};
 use rf_oracle::proto::*;
 use rf_oracle::wots::Signer;
-use rf_oracle::{push_item, trace_digest};
+use rf_oracle::trace_digest;
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -38,19 +38,18 @@ extern "C" {
     fn prctl(option: i32, ...) -> i32;
 }
 
-/// 32 bytes from the kernel's CSPRNG (`getrandom`, else `/dev/urandom`).
-fn random32() -> [u8; 32] {
-    let mut b = [0u8; 32];
+/// Fill `b` with 32 bytes from the kernel's CSPRNG (`getrandom`, else `/dev/urandom`), in place, so
+/// that no copy of a key is left on the stack (RF-m22).
+fn random32(b: &mut [u8; 32]) {
     let mut got = 0usize;
     while got < 32 {
         let r = unsafe { getrandom(b.as_mut_ptr().add(got), 32 - got, 0) };
         if r <= 0 {
-            File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("rf-oracle: no randomness");
-            return b;
+            File::open("/dev/urandom").and_then(|mut f| f.read_exact(b)).expect("rf-oracle: no randomness");
+            return;
         }
         got += r as usize;
     }
-    b
 }
 
 /// The secret state: the PRF and the signer. `None` once wiped at shutdown.
@@ -187,12 +186,13 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
             };
             drop(guard);
             if let Some(log) = &st.log {
-                let mut buf = Vec::with_capacity(body.len() + 36 * qs.len());
-                for (q, a) in qs.iter().zip(ans.iter()) {
-                    push_item(&mut buf, q, a);
-                }
+                // straight into the buffered writer, under its lock: no copy of the request (RF-m20)
                 let mut l = log.lock().unwrap();
-                l.write_all(&buf)?;
+                for (q, a) in qs.iter().zip(ans.iter()) {
+                    l.write_all(&(q.len() as u64).to_le_bytes())?;
+                    l.write_all(q)?;
+                    l.write_all(a)?;
+                }
                 l.flush()?; // the liveness check reads the log before the service exits
             }
             let n = 32 * qs.len() + if sig.is_some() { rf_oracle::wots::Sig::BYTES } else { 0 };
@@ -273,7 +273,12 @@ fn main() {
             println!("INSECURE fixed test keys");
             (k, s)
         }
-        None => (random32(), random32()),
+        None => {
+            let (mut k, mut s) = ([0u8; 32], [0u8; 32]);
+            random32(&mut k);
+            random32(&mut s);
+            (k, s)
+        }
     };
     let t0 = Instant::now();
     let signer = Signer::keygen(&seed, threads);
@@ -320,12 +325,19 @@ fn main() {
         if st.conns.fetch_add(1, Ordering::SeqCst) >= MAX_CONNS {
             st.conns.fetch_sub(1, Ordering::SeqCst);
             let mut c = conn;
-            let _ = refuse(&mut c, ST_CAP, "more than 64 connections");
+            let _ = refuse(&mut c, ST_CAP, "more than 32 connections");
             continue;
         }
         std::thread::spawn(move || {
+            // the slot is released when the thread ends, by return or by panic (RF-m22)
+            struct Slot(&'static AtomicUsize);
+            impl Drop for Slot {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _slot = Slot(&st.conns);
             let _ = serve(conn, st);
-            st.conns.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }

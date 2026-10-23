@@ -135,6 +135,8 @@ def main():
     except Fail as e:
         res["benchmark"] = "fail"
         res["reasons"].append(str(e))
+        if getattr(e, "rec", None) is not None:
+            res["failed_run"] = e.rec
         log(f"FAIL: {e}")
     except Exception as e:  # a harness error is not the entry's failure: say so
         res["benchmark"] = "error"

@@ -113,6 +113,10 @@ jobs:
         run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
+      - name: committed assembly assembles with this image's toolchain (RF-M2)
+        run: |
+          gcc --version | head -1; as --version | head -1; ldd --version | head -1
+          for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
       - name: runner setup (AppArmor user namespaces, bubblewrap, systemd user scopes)
         run: harness/ci/runner-setup.sh
       - name: service
@@ -122,6 +126,10 @@ jobs:
         run: timeout 1800 python3 tests/harness/test_sandbox.py
       - name: T_V enforcement with the cap's statistic (RB-M1)
         run: timeout 300 python3 tests/harness/test_tv.py
+      - name: the aggregation requires every planned part, and the DoS column is bounded (RF-M1)
+        run: |
+          timeout 300 python3 tests/harness/test_aggregate.py
+          timeout 300 python3 tests/harness/test_dos.py
       - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
         run: timeout 3600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
@@ -136,6 +144,10 @@ jobs:
         run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
+      - name: committed assembly assembles with this image's toolchain (RF-M2)
+        run: |
+          gcc --version | head -1; as --version | head -1; ldd --version | head -1
+          for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
       - name: runner setup
         run: harness/ci/runner-setup.sh
       - name: elan

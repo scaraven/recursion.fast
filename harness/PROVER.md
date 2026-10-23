@@ -8,6 +8,17 @@ produces is checked by the compiled `acc` (`harness/FORMAT.md`); nothing it says
 
 - Sources: the entry's `prover/*.s` (AT&T or `.intel_syntax`), nothing else. Sources in any other
   language may sit beside them for readers; they are not built.
+- **The reference toolchain is the runner image's**, and it is part of the rule:
+  - GitHub's `ubuntu-24.04` image (the result records `ImageOS` and `ImageVersion`; season 1 was
+    first run on `ubuntu24 20261012.334.1`);
+  - GCC 13.3, GNU Binutils 2.42 (`as`, `ld`), glibc 2.39 (static);
+  - every result records the exact `gcc`, `as`, `ld` and glibc version lines.
+
+  The `.s` files must assemble with **that** `as`. Assembly emitted by a newer compiler may use
+  directives it rejects: GCC 15's `.base64`, LLVM 23's `.prefalign` and DWARF-5 `.file` forms.
+  `harness/tools/asm-compat.py IN.s OUT.s` (untrusted, a convenience) rewrites them; the
+  committed toy prover went through it. CI assembles every committed `.s` file with the image's
+  toolchain first (RF-M2).
 - Command, inside the build sandbox (V4-A6), in a directory holding only copies of the `.s` files:
 
   ```

@@ -15,7 +15,8 @@
  * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
  * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up) or
  * -DBROKEN_OOM (allocates without bound) it is one of the smoke's deliberately broken provers. The committed assembly
- * (honest/prover.s) is `gcc -S -O2` of this file with no option.
+ * (honest/prover.s) is `gcc -S -O2` of this file with no option, passed through
+ * harness/tools/asm-compat.py (GCC 15 emits `.base64`, which the reference image's binutils 2.42 rejects).
  */
 #define _GNU_SOURCE
 #include <stdint.h>
