@@ -56,6 +56,11 @@ class Reject(Exception):
     pass
 
 
+class HarnessError(Exception):
+    """A failure of the organiser's side (toolchain, comparator), not the entry's: verdict ERROR."""
+
+
+
 def sh(cmd, cwd=None, env=None, timeout=TIMEOUT, log=None):
     """Run a trusted command (outside the sandbox); its output goes to `log`."""
     with open(log, "ab") if log else open(os.devnull, "wb") as f:
@@ -239,6 +244,11 @@ def cert_job(a):
         lean = kernel_run("lean", a.cert_mem)
         res["kernel_runs"] = {"lean": lean}
         res["comparator_s"] = lean["seconds"]
+        full = open(os.path.join(work, "comparator-lean.log"), errors="replace").read()
+        if lean["outcome"] == "rejected" and f"Building {SOLUTION_MODULE}" not in full:
+            # the comparator failed on the organiser's challenge, before it built the entry (e.g. a
+            # lean4export of another Lean: "incompatible header", CI run 39960437824)
+            raise HarnessError("the comparator stopped before building the solution: " + lean["tail"][-600:])
         if not org.manifest_ok(logs["manifest"]):
             raise Reject("organiser .olean changed during the comparator run")
         unchecked = lean["outcome"] in ("over budget", "timeout")     # Q12: the kernel's budget, not the entry
@@ -323,6 +333,9 @@ def cert_job(a):
     except Reject as e:
         res["status"] = "reject"
         res["reasons"].append(str(e))
+    except HarnessError as e:
+        res["status"] = "error"
+        res["reasons"].append(f"harness error: {e}")
     except subprocess.TimeoutExpired as e:
         res["status"] = "reject"
         res["reasons"].append(f"timeout: {e.cmd[0] if e.cmd else ''}")
@@ -423,13 +436,14 @@ def main():
             os.makedirs(work)
         cert = cert_job(a)
         if a.mode == "cert":
-            return 0 if cert["status"] != "reject" else 1
+            return {"ok": 0, "provisional": 0, "reject": 1}.get(cert["status"], 2)
         a.out, a.work = out, work + "/bench"
-        if cert["status"] == "reject":
-            res = {"verdict": "REJECT", "certificate": cert}
+        if cert["status"] in ("reject", "error"):
+            verdict = "REJECT" if cert["status"] == "reject" else "ERROR"
+            res = {"verdict": verdict, "comparable": False, "certificate": cert}
             json.dump(res, open(out, "w"), indent=1)
-            print("VERDICT: REJECT")
-            return 1
+            print(f"VERDICT: {verdict}")
+            return 1 if verdict == "REJECT" else 2
         res = bench_job(a, cert)
     return 0 if res["verdict"] in ("ACCEPT", "PROVISIONAL") else 1
 

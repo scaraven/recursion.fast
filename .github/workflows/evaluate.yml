@@ -90,8 +90,9 @@ jobs:
       - name: certificate (source rule, comparator, gate, badge)
         id: cert
         run: |
-          # RB-m3: a rejected entry is a result (exit 1, cert.json says `reject`); a harness crash
-          # (no cert.json) fails the job, and any unreadable status counts as `reject`
+          # RB-m3: a rejected entry is a result (exit 1, cert.json says `reject`; a harness error
+          # says `error`, exit 2); a crash (no cert.json) fails the job, and any unreadable status
+          # counts as `reject`
           rc=0
           python3 -I core/harness/evaluate.py cert --entry entry --org "$PWD/core" --work "$RUNNER_TEMP/cert" \
             --out cert.json ${{ inputs.nanoda && '--nanoda' || '' }} || rc=$?
@@ -124,7 +125,7 @@ jobs:
 
   benchmark:
     needs: [certificate, plan]
-    if: needs.certificate.outputs.status != 'reject'
+    if: needs.certificate.outputs.status == 'ok' || needs.certificate.outputs.status == 'provisional'
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions: { contents: read }
