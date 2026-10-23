@@ -661,3 +661,39 @@ tests some threads failed to connect, and the earlier tests swallowed thread exc
 - **Fix:** it now connects through `/proc/self/fd/N/` of an `O_PATH` directory descriptor.
 - **Tests:** every concurrent test now counts a thread's exception as a failure. The service suite
   passes 92 checks on Python 3.14 and 3.12.
+
+## 11. CI run 39960437824: the end-to-end smoke on the runner
+
+**What happened.** The `lean`, `service` and `harness` jobs passed on the runner (AMD EPYC 9V45,
+`ubuntu24 20261012.334.1`). The end-to-end smoke rejected the witness-sending entry: "the gate
+tree's build differs from the comparator-verified build (`ir/Solution.c`,
+`lib/lean/Solution.olean`)".
+
+**The binding was not at fault.** The comparator's Lean-kernel run had failed first, on the
+organiser's own challenge: "failed to read file …/Challenge.olean, incompatible header". The
+comparator's tree therefore had no `Solution` artifacts at all, and those two were reported as
+differences.
+
+**Root cause.**
+- The comparator pin `d03acab` names Lean v4.34.0. `harness/ci/build-kernels.sh` built it, and its
+  `lean4export`, with that toolchain.
+- A `lean4export` of v4.34.0 cannot read the oleans of the organiser's v4.34.1.
+- The development machine's comparator checkout carries an uncommitted one-line change to
+  v4.34.1, which is why the same smoke passed locally.
+
+**Fixes.**
+- **The root.** `build-kernels.sh` now writes this repository's `lean-toolchain` into the
+  comparator checkout before building, so the comparator and `lean4export` are built with
+  v4.34.1. `scripts/tools.env` documents this.
+- **Reproduced and verified** (`logs/harness/repro-cert-{434,fixed}.log`):
+  - a comparator built with v4.34.0 in the scratchpad reproduces the runner's error;
+  - one built by the fixed `build-kernels.sh` certifies the entry;
+  - both runs used fresh trees under an absolute path different from every earlier run, and the
+    byte-identity binding held, unchanged.
+- **Reporting.** A comparator that stops before it builds `Solution` fails on the organiser's
+  side. It is now a **harness error** (certificate status `error`, verdict ERROR, exit code 2), not
+  the entry's REJECT. The benchmark runs only after `ok` or `provisional`, and `aggregate.py` maps
+  a certificate `error` to ERROR.
+- **The smoke** wraps every step: a crash or a missing result is a failed check, and the smoke
+  continues. The steps that need a badge are skipped with a failed check when the certificate
+  fails, so no traceback ends the run.

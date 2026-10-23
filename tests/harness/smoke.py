@@ -51,7 +51,7 @@ def run_bench(entry, badge, work, out, parts=None, season=None):
         cmd += ["--parts", parts]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     print(p.stdout[-3000:], p.stderr[-2000:], sep="\n", flush=True)
-    return json.load(open(out))
+    return load(out)
 
 
 def entry_from(src_s, d):
@@ -71,6 +71,14 @@ def broken(tmp, flag, extra_header=None):
     # as the committed honest prover: accepted by the reference image's binutils 2.42 (RF-M2)
     subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "tools", "asm-compat.py"), raw, s], check=True)
     return entry_from(s, os.path.join(tmp, f"entry-{flag}"))
+
+
+def load(path):
+    """A JSON result, or {} if it is missing or unreadable (the check that reads it then fails)."""
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError):
+        return {}
 
 
 def evaluate(*args):
@@ -109,6 +117,13 @@ def main():
         print(("ok   " if cond else "FAIL ") + what, flush=True)
         if not cond:
             fails.append(what)
+
+    def step(name, fn):
+        """Run one step; a crash is a failed check, and the smoke continues."""
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            check(False, f"{name}: crashed: {e!r}")
 
     # a signature of the empty trace from another service (another run's key)
     other = Service(SERVICE, os.path.join(tmp, "other-service")).start()
@@ -150,66 +165,85 @@ def main():
             raise SystemExit("smoke: --org ORG or --mock")
         entry = ws_entry(tmp, "entry-ws", honest_s)
         cert = os.path.join(tmp, "cert.json")
-        evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert"), "--out", cert,
-                 *(["--nanoda"] if a.nanoda else []))
-        cj = json.load(open(cert))
-        check(cj["status"] == "ok", f"witness-sending entry certified: {cj['status']} {cj['reasons']} kernels {cj['kernels']}")
-        check("Solution" in cj.get("built_modules", []) and "RfSmokeUnused" not in cj.get("built_modules", []),
+        results = {}
+        try:
+            evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert"), "--out", cert,
+                     *(["--nanoda"] if a.nanoda else []))
+        except Exception as e:  # noqa: BLE001 (every step reports and the smoke continues)
+            print(f"evaluate cert crashed: {e!r}")
+        cj = load(cert)
+        check(cj.get("status") == "ok", f"witness-sending entry certified: {cj.get('status')} {cj.get('reasons')} "
+                                        f"kernels {cj.get('kernels')}")
+        check("Solution" in (cj.get("built_modules") or []) and "RfSmokeUnused" not in (cj.get("built_modules") or []),
               f"an entry module Solution does not import is never built (Q7): built {cj.get('built_modules')}")
-        out = os.path.join(tmp, "result-honest.json")
-        evaluate("bench", "--entry", entry, "--cert", cert, "--work", os.path.join(tmp, "work-honest"), "--out", out,
-                 "--season", os.path.join(ROOT, "harness", "smoke.toml"))
-        r = json.load(open(out))
-        check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
-        results = {"honest": r}
-        for flag, e in broken_entries:
-            out = os.path.join(tmp, f"result-{flag}.json")
-            evaluate("bench", "--entry", e, "--cert", cert, "--work", os.path.join(tmp, f"work-{flag}"), "--out", out,
-                     "--season", season_of(flag), "--parts", "calibrate,tree")
-            results[flag] = json.load(open(out))
-        # Q12: a kernel over its memory budget is its own outcome, never a failed certificate
-        oc = os.path.join(tmp, "cert-overbudget.json")
-        evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert-overbudget"), "--out", oc,
-                 "--cert-mem", "400M")
-        ob = json.load(open(oc))
-        if memcap_method() == "systemd":
-            check(ob["status"] == "provisional" and any("over its memory budget" in r for r in ob["provisional_reasons"])
-                  and (ob.get("kernel_runs") or {}).get("lean", {}).get("outcome") == "over budget",
-                  f"the Lean kernel over a 400M budget: {ob['status']}, {ob['provisional_reasons']}")
-        else:      # an address-space limit cannot tell a kernel over budget from a failure
-            check(ob["status"] != "ok", f"the Lean kernel over a 400M address-space limit is not certified: {ob['status']}")
-        # 3. provisional: the same entry, its certificate left open
-        pe = ws_entry(tmp, "entry-provisional", honest_s, [(
-            "theorem certified : CertificateR declared submission :=\n", "theorem certified : CertificateR declared submission := by\n  sorry\n\nexample : CertificateR declared submission :=\n")])
-        pc = os.path.join(tmp, "cert-provisional.json")
-        evaluate("all", "--entry", pe, "--org", a.org, "--work", os.path.join(tmp, "provisional"), "--out", pc,
-                 "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
-        pr = json.load(open(pc))
-        check(pr.get("verdict") == "PROVISIONAL" and pr.get("comparable") is False,
-              f"an open certificate is PROVISIONAL and not comparable: {pr.get('verdict')} "
-              f"{(pr.get('certificate') or {}).get('provisional_reasons')}")
-        # 4. the source rule
-        se = ws_entry(tmp, "entry-eval", honest_s, [("end RecursionFast.Challenge", "#eval 1\n\nend RecursionFast.Challenge")])
-        sc = os.path.join(tmp, "cert-eval.json")
-        evaluate("all", "--entry", se, "--org", a.org, "--work", os.path.join(tmp, "eval"), "--out", sc)
-        sr = json.load(open(sc))
-        check(sr.get("verdict") == "REJECT" and "source rule" in " ".join(sr["certificate"]["reasons"]),
-              f"`#eval` in the entry: {sr.get('verdict')} {sr['certificate']['reasons'][:1]}")
+        if cj.get("status") in ("ok", "provisional"):
+            out = os.path.join(tmp, "result-honest.json")
+            step("honest benchmark", lambda: evaluate("bench", "--entry", entry, "--cert", cert, "--work",
+                                                      os.path.join(tmp, "work-honest"), "--out", out,
+                                                      "--season", os.path.join(ROOT, "harness", "smoke.toml")))
+            r = load(out)
+            check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
+            results["honest"] = r
+            for flag, e in broken_entries:
+                out = os.path.join(tmp, f"result-{flag}.json")
+                step(flag, lambda e=e, flag=flag, out=out: evaluate(
+                    "bench", "--entry", e, "--cert", cert, "--work", os.path.join(tmp, f"work-{flag}"), "--out", out,
+                    "--season", season_of(flag), "--parts", "calibrate,tree"))
+                results[flag] = load(out)
+        else:
+            check(False, f"the benchmarks need a certified entry; skipped (certificate {cj.get('status')})")
 
-    r = results["honest"]
+        def over_budget():   # Q12: a kernel over its memory budget is its own outcome, never a failed certificate
+            oc = os.path.join(tmp, "cert-overbudget.json")
+            evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert-overbudget"), "--out", oc,
+                     "--cert-mem", "400M")
+            ob = load(oc)
+            if memcap_method() == "systemd":
+                check(ob.get("status") == "provisional" and any("over its memory budget" in x for x in ob.get("provisional_reasons", []))
+                      and (ob.get("kernel_runs") or {}).get("lean", {}).get("outcome") == "over budget",
+                      f"the Lean kernel over a 400M budget: {ob.get('status')}, {ob.get('provisional_reasons')}")
+            else:      # an address-space limit cannot tell a kernel over budget from a failure
+                check(ob.get("status") not in ("ok", None), f"the Lean kernel over a 400M address-space limit is not certified: {ob.get('status')}")
+        step("Q12", over_budget)
+
+        def provisional():   # 3. the same entry, its certificate left open
+            pe = ws_entry(tmp, "entry-provisional", honest_s, [(
+                "theorem certified : CertificateR declared submission :=\n", "theorem certified : CertificateR declared submission := by\n  sorry\n\nexample : CertificateR declared submission :=\n")])
+            pc = os.path.join(tmp, "cert-provisional.json")
+            evaluate("all", "--entry", pe, "--org", a.org, "--work", os.path.join(tmp, "provisional"), "--out", pc,
+                     "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
+            pr = load(pc)
+            check(pr.get("verdict") == "PROVISIONAL" and pr.get("comparable") is False,
+                  f"an open certificate is PROVISIONAL and not comparable: {pr.get('verdict')} "
+                  f"{(pr.get('certificate') or {}).get('provisional_reasons')}")
+        step("provisional", provisional)
+
+        def source_rule():   # 4. the source rule
+            se = ws_entry(tmp, "entry-eval", honest_s, [("end RecursionFast.Challenge", "#eval 1\n\nend RecursionFast.Challenge")])
+            sc = os.path.join(tmp, "cert-eval.json")
+            evaluate("all", "--entry", se, "--org", a.org, "--work", os.path.join(tmp, "eval"), "--out", sc)
+            sr = load(sc)
+            why = " ".join((sr.get("certificate") or {}).get("reasons", []))
+            check(sr.get("verdict") == "REJECT" and "source rule" in why, f"`#eval` in the entry: {sr.get('verdict')} {why[:120]}")
+        step("source rule", source_rule)
+
+    r = results.get("honest", {})
     # RF-M1: the aggregation of this evaluation's one part ACCEPTs (or matches the certificate),
     # and with the part dropped it is ERROR, never ACCEPT
     cert_file = cert if not a.mock else os.path.join(tmp, "cert-mock.json")
     if a.mock:
         json.dump({"status": "ok", "reasons": []}, open(cert_file, "w"))
-    agg = lambda files, out: (subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"),  # noqa: E731
-                                              "--plan", "single", "--season", os.path.join(ROOT, "harness", "smoke.toml"),
-                                              "--cert", cert_file, "--out", out, *files], check=True,
-                                             capture_output=True), json.load(open(out)))[1]
-    whole = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-whole.json"))
-    dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
-    check(whole["verdict"] == "ACCEPT" and dropped["verdict"] == "ERROR" and not dropped["comparable"],
-          f"aggregate: the planned part gives {whole['verdict']}; the part dropped gives {dropped['verdict']} (RF-M1)")
+
+    def aggregate_check():
+        agg = lambda files, out: (subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"),  # noqa: E731
+                                                  "--plan", "single", "--season", os.path.join(ROOT, "harness", "smoke.toml"),
+                                                  "--cert", cert_file, "--out", out, *files], check=True,
+                                                 capture_output=True), load(out))[1]
+        whole = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-whole.json"))
+        dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
+        check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
+              f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')} (RF-M1)")
+    step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
         sc = r["score"]
         check(all(k in sc for k in ("T_tree", "t_leaf", "t_merge", "t_link", "S")), f"score components: {sc}")
@@ -218,7 +252,7 @@ def main():
               f"canaries rejected: tree {r['tree'][0]['canaries']}, stream {r['stream'][0]['canaries']}")
         check(r["dos"]["proofs"] > 0, f"DoS column: {r['dos']}")
     for flag, _ in broken_entries:
-        rb = results[flag]
+        rb = results.get(flag, {})
         why = " ".join(rb.get("reasons", []))
         check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and expect[flag] in why,
               f"{flag}: {rb.get('verdict', rb.get('benchmark'))}: {why[:400]}")

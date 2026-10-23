@@ -89,6 +89,8 @@ def main():
     status = [r.get("benchmark") for r in parts]
     if cert.get("status") == "reject":
         verdict = "REJECT"
+    elif cert.get("status") not in ("ok", "provisional"):
+        verdict = "ERROR"                     # the certificate job itself failed (harness error)
     elif any(st == "fail" for st in status):
         verdict = "REJECT"                    # a part the entry failed decides, whatever is missing
     elif "error" in status or plan_errors:
