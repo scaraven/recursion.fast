@@ -32,7 +32,10 @@ Negative:
   signature, the signature verifies on two different digests, or the two traces' encodings
   collide: a changed answer is never free.
 * `acc_query_at_cap` (positive): a signed one-entry trace whose query has exactly `queryCap`
-  bytes is accepted under a verifier that asks it (exact consumption, cap, signature).
+  bytes is accepted under a verifier that asks it and declares `qV = 1` (exact consumption,
+  trace length at `qV`, query cap, signature).
+* `acc_trace_over_qV`, `acc_two_entries_rejected` (RA-M2): every submission's `acc` rejects a
+  trace longer than its `qV`; the instance at `qV + 1 = 2` entries.
 * `acc_over_cap`, `acc_query_over_cap`: every submission's `acc` rejects a proof above
   `proofCap` and a trace with a query above `queryCap`; `deep_accepted_but_capped`: the
   witness-sending verifier accepts a 7-level proof of 1,232,456 bytes (its children, 611,400
@@ -267,24 +270,37 @@ theorem acc_query_over_cap (S : Submission) (vk c : Digest) (p : Signed) {e : By
   rw [decide_eq_false this]
   simp
 
-/-- The verifier that asks the one query `q` and accepts (the witness-sending submission
-otherwise). -/
+/-- The verifier that asks the one query `q` and accepts, declaring `qV = 1` (the
+witness-sending submission otherwise). -/
 def oneQuery (q : ByteArray) : Submission :=
-  { submission with V := fun _ _ _ => .query q fun _ => .ret true }
+  { submission with V := fun _ _ _ => .query q fun _ => .ret true, qV := 1 }
 
 /-- The longest query `acc` admits: `queryCap` zero bytes. -/
 def qMax : ByteArray := ⟨Array.replicate queryCap 0⟩
 
-/-- **A signed trace with a query of exactly `queryCap` bytes is accepted** (the cap is `≤`)
-under a verifier that asks that query: exact consumption, the query cap and the reference
-signature on the trace's digest all pass, for every secret function, answer and proof within
-`proofCap`. -/
+/-- **A signed trace with a query of exactly `queryCap` bytes, and exactly `qV = 1` entries, is
+accepted** (both caps are `≤`) under a verifier that asks that query: exact consumption, the
+trace-length and query caps and the reference signature on the trace's digest all pass, for
+every secret function, answer and proof within `proofCap`. -/
 theorem acc_query_at_cap (sk : ℕ → ℕ → Digest) (a c : Digest) {π : Proof}
     (hπ : π.size ≤ proofCap) :
     (oneQuery qMax).acc (Signer.pk sk) c
       ⟨π, [(qMax, a)], Signer.sign sk 0 (traceDigest [(qMax, a)])⟩ = true := by
   have hq : qMax.size = queryCap := by simp [qMax, ByteArray.size]
   simp [Submission.acc, oneQuery, hπ, hq, Signer.sigOk_sign sk 0 (by decide), OProg.runSeq]
+
+/-- **Over the trace-length cap** (RA-M2): every submission's `acc` rejects a trace with more
+than `qV` entries, whatever its signature. -/
+theorem acc_trace_over_qV (S : Submission) (vk c : Digest) (p : Signed) (h : S.qV < p.tr.length) :
+    S.acc vk c p = false := by
+  simp [Submission.acc, show ¬ p.tr.length ≤ S.qV by omega]
+
+/-- An instance at `qV + 1 = 2` entries: the trace of `acc_query_at_cap` with its entry
+repeated is rejected under a verifier declaring `qV = 1`, signature and all. -/
+theorem acc_two_entries_rejected (sk : ℕ → ℕ → Digest) (a c : Digest) (π : Proof) :
+    (oneQuery qMax).acc (Signer.pk sk) c ⟨π, [(qMax, a), (qMax, a)],
+      Signer.sign sk 0 (traceDigest [(qMax, a), (qMax, a)])⟩ = false :=
+  acc_trace_over_qV _ _ _ _ (by simp [oneQuery])
 
 /-- A tree of `k` levels over one leaf: the digest. -/
 def deepStmt : ℕ → Digest

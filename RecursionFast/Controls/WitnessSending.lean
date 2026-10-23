@@ -81,7 +81,7 @@ theorem packBytes_wordsBytes_append (ws : List Word) (b : List UInt8) :
   | nil => rfl
   | cons w ws ih =>
     rw [show wordsBytes (w :: ws) = wordBytes w ++ wordsBytes ws from rfl, List.append_assoc,
-      packBytes_append8 _ (by simp [wordBytes]), ih, ofLE_wordBytes]
+      packBytes_append8 _ (wordBytes_length w), ih, ofLE_wordBytes]
     simp [toWord]
 
 /-- Decoding ignores what follows an encoded witness. -/
@@ -132,7 +132,7 @@ theorem node_children_capped {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ :
   cases hd ▸ hd'
   obtain ⟨-, h₁, h₂⟩ := hR
   simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂
-  exact ⟨h₁.1.1.1, h₂.1.1.1⟩
+  exact ⟨h₁.1.1.1.1, h₂.1.1.1.1⟩
 
 /-- An accepted node proof's children carry empty traces (this verifier asks no query). -/
 theorem node_children_untraced {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ : Signed}

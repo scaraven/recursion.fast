@@ -30,8 +30,10 @@ inductive OProg (α : Type) where
   /-- Ask the oracle `q`, continue with its answer. -/
   | query (q : ByteArray) (k : Digest → OProg α)
 
-/-- A query log: oracle answers to some queries, in the order asked. -/
-abbrev Log := List (ByteArray × Digest)
+/-- A query log: oracle answers to some queries, in the order asked. It is the type of a trace
+(`Relation.lean`); the two names say how it is read: a log by lookup (`runLog`, the first
+entry for a query), a trace in order (`runSeq`). -/
+abbrev Log := Trace
 
 namespace OProg
 variable {α : Type}

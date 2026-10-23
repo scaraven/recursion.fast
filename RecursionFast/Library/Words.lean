@@ -118,12 +118,12 @@ theorem wordByte_packBytes (b : List UInt8) (i : ℕ) : wordByte (packBytes b) i
 def wordsBytes (ws : List Word) : List UInt8 := ws.flatMap wordBytes
 
 theorem ofLE_wordBytes (w : Word) : ofLE (wordBytes w) = w.toNat := by
-  rw [wordBytes, ofLE_ofFn, Nat.mod_eq_of_lt (by simpa using w.isLt)]
+  rw [wordBytes, ofLE_enc64, Nat.mod_eq_of_lt (by simpa using w.isLt)]
 
-theorem wordBytes_length (w : Word) : (wordBytes w).length = 8 := List.length_ofFn
+theorem wordBytes_length (w : Word) : (wordBytes w).length = 8 := enc64_length _
 
 theorem wordsBytes_length (ws : List Word) : (wordsBytes ws).length = 8 * ws.length := by
-  simp [wordsBytes, wordBytes, List.length_flatMap, mul_comm]
+  simp [wordsBytes, List.length_flatMap, wordBytes_length, mul_comm]
 
 theorem packBytes_append8 {pre : List UInt8} (rest : List UInt8) (h : pre.length = 8) :
     packBytes (pre ++ rest) = toWord (ofLE pre) :: packBytes rest := by
@@ -137,7 +137,7 @@ theorem packBytes_wordsBytes (ws : List Word) : packBytes (wordsBytes ws) = ws :
   | nil => rfl
   | cons w ws ih =>
     rw [show wordsBytes (w :: ws) = wordBytes w ++ wordsBytes ws from rfl,
-      packBytes_append8 _ (by simp [wordBytes]), ih, ofLE_wordBytes]
+      packBytes_append8 _ (wordBytes_length w), ih, ofLE_wordBytes]
     simp [toWord]
 
 theorem wordByte_eq_getD (ws : List Word) (i : ℕ) :

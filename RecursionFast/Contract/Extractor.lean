@@ -50,9 +50,9 @@ program has at most `progCap = 2^20` statements.
 **Output cap (recomputed for v4).** `outCap = 2^24` words. A leaf witness takes 6 words; a node
 witness `9 + Σ` over its two children of `(1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 + ⌈|q|/8⌉)) + 597`.
 With both proofs at `proofCap` (`2^17` words each), `2^24 − 263,351` words remain for the two
-traces: for example `2^16` queries per child (the cap on `qV`) of up to 960 bytes each. A trace is
-exactly the verifier's queries (`runSeq`, V4-A3), so this bounds what a node extractor must output
-for a verifier whose queries are that short. A node whose children's traces do not fit cannot be
+traces: for example `2^16` queries per child of up to 960 bytes each. An accepted trace has at
+most `qV ≤ 2^16` entries (`acc`, RA-M2), so this bounds what a node extractor must output for a
+verifier whose queries are that short. A node whose children's traces do not fit cannot be
 extracted, so its verifier is not certifiable (C-m11), which is the intended outcome.
 
 **Budget (V3-S2R-A1, A8, O-21).** `B t` charges `2^16` steps per input word and a fixed
@@ -111,9 +111,8 @@ def readNat : Reader ℕ := fun o =>
   | w :: o => some (w.toNat, o)
   | [] => none
 
-/-- The 8 bytes of a word, little-endian. -/
-def wordBytes (w : Word) : List UInt8 :=
-  List.ofFn fun i : Fin 8 => (w.toNat / 256 ^ i.val).toUInt8
+/-- The 8 bytes of a word, little-endian (the encoding of every length the contract hashes). -/
+def wordBytes (w : Word) : List UInt8 := enc64 w.toNat
 
 /-- `n` bytes, packed eight per word in the next `⌈n/8⌉` words. -/
 def readBytes (n : ℕ) : Reader (List UInt8) := fun o =>

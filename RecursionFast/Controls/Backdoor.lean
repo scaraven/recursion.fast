@@ -60,9 +60,11 @@ def check (vk c : Digest) (π : Proof) : Bool :=
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encode (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmt c₁ c₂) &&
-        (decide (p₁.π.size ≤ proofCap) && decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
+        (decide (p₁.π.size ≤ proofCap) && decide (p₁.tr.length ≤ 1) &&
+          decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
           SigOk vk (traceDigest p₁.tr) p₁.σ && onTrace p₁.tr c₁ p₁.π (check vk c₁ p₁.π)) &&
-        (decide (p₂.π.size ≤ proofCap) && decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
+        (decide (p₂.π.size ≤ proofCap) && decide (p₂.tr.length ≤ 1) &&
+          decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
           SigOk vk (traceDigest p₂.tr) p₂.σ && onTrace p₂.tr c₂ p₂.π (check vk c₂ p₂.π))
     else false
   | none => false
@@ -94,8 +96,9 @@ theorem runSeq_V (vk c : Digest) (π : Proof) (tr : Trace) :
   all_goals by_cases hq : q = q0 <;> simp [V, OProg.runSeq, onTrace, hq]
 
 theorem acc_eq (vk c : Digest) (p : Signed) : S.acc vk c p =
-    (decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-      SigOk vk (traceDigest p.tr) p.σ && onTrace p.tr c p.π (check vk c p.π)) :=
+    (decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ 1) &&
+      decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
+      onTrace p.tr c p.π (check vk c p.π)) :=
   congrArg (_ && ·) (runSeq_V vk c p.π p.tr)
 
 theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
@@ -147,12 +150,7 @@ theorem fits_of_rel {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) : w.Fits
   have hc : ∀ {c' : Digest} {p : Signed}, S.acc vk c' p = true → p.Fits := by
     intro c' p h
     simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, SigOk] at h
-    obtain ⟨⟨⟨hπ, hq⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, ht⟩ := h
-    have hlen : p.tr.length = 1 := by
-      unfold onTrace at ht
-      split at ht
-      · next heq => exact congrArg List.length heq
-      · cases ht
+    obtain ⟨⟨⟨⟨hπ, hl⟩, hq⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, -⟩ := h
     exact ⟨hπ.trans_lt (by decide), by omega, fun e he => (hq e he).trans_lt (by decide),
       hi.trans (by decide), ho, hp⟩
   cases w with

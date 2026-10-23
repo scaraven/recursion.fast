@@ -7,11 +7,12 @@ random-oracle model: the verifier `V` and the honest prover `P` as query program
 the **public key** `vk` of the deployment's signer, the extractor's specification `E` and its
 program `ext` (neither takes `vk`, V4-6), and four declared numbers.
 
-**Acceptance (`acc`, V4-7, V4-A3).** A signed proof `(π, tr, σ)` is accepted for the statement
-`c` under `vk` when `π` has at most `proofCap` bytes, every query of `tr` at most `queryCap`
-bytes, `σ` signs the trace's digest under `vk` (`SigOk`, `traceDigest`), and `V vk c π` returns
-`true` with its queries answered in order by `tr`, used up exactly (`OProg.runSeq`). The
-conjuncts are in order of cheapest rejection (C-m5); compiled `&&` stops at the first `false`.
+**Acceptance (`acc`, V4-7, V4-A3, RA-M2).** A signed proof `(π, tr, σ)` is accepted for the
+statement `c` under `vk` when `π` has at most `proofCap` bytes, `tr` at most `qV` entries (the
+submission's declared query bound), every query of `tr` at most `queryCap` bytes, `σ` signs the
+trace's digest under `vk` (`SigOk`, `traceDigest`), and `V vk c π` returns `true` with its
+queries answered in order by `tr`, used up exactly (`OProg.runSeq`). The conjuncts are in order
+of cheapest rejection (C-m5); compiled `&&` stops at the first `false`.
 This one predicate is the node clause of the relation, the harness's check of every proof it is
 given (the root, the samples, the canaries, the stream), and the check any third party runs later
 with the published `vk`. It never evaluates the oracle and needs no service.
@@ -33,8 +34,12 @@ content is the named extractor `E` with its program and budget (`Security.lean`)
   relation would have witnesses of every size, which no prover sized for its verifier's queries
   can prove (a node circuit hashes the whole trace to check its signature), and no recursive
   entry, the witness-sending one included, would be complete. Used up exactly, the trace of an
-  accepted child is the verifier's own queries, at most `qV` of at most `queryCap` bytes, and
-  `traceDigest` is injective on it by a fact of the relation (`enc64 |q|` is exact).
+  accepted child is the verifier's query sequence on that trace's answers; `acc` itself bounds it
+  by `qV` entries of at most `queryCap` bytes, so the witness space is bounded by a fact of the
+  relation, and `traceDigest` is injective on it (`enc64 |q|` is exact). `KS`'s query bound does
+  not give this: it ranges over oracle functions, and a non-functional trace follows no
+  function's path (RA-M2; a functional trace, such as every trace the service signs, meets it by
+  `Library/Trace.lean`'s `runSeq_length_le`).
 
 **Deployment (V4-2, V4-3).** The harness's service answers queries with BLAKE2s-256 keyed by a
 secret drawn after `V` is frozen, and signs the trace of each `sign` request; `vk` is published
@@ -81,12 +86,14 @@ structure Submission where
   fuel : ℕ → ℕ
 
 /-- **Acceptance of a signed proof** for the statement `c` under the public key `vk`: the proof
-is within `proofCap` and the trace's queries within `queryCap`, the signature on the trace's
-digest verifies, and the verifier accepts the proof on the trace's answers in order, using them
-all. The relation, the harness and third parties use this predicate. -/
+is within `proofCap`, the trace within `qV` entries and its queries within `queryCap`, the
+signature on the trace's digest verifies, and the verifier accepts the proof on the trace's
+answers in order, using them all. The relation, the harness and third parties use this
+predicate. -/
 def Submission.acc (S : Submission) (vk c : Digest) (p : Signed) : Bool :=
-  decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-    SigOk vk (traceDigest p.tr) p.σ && decide ((S.V vk c p.π).runSeq p.tr = some true)
+  decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ S.qV) &&
+    decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
+    decide ((S.V vk c p.π).runSeq p.tr = some true)
 
 /-- **The certificate** of a submission. -/
 structure Certificate (S : Submission) : Prop where

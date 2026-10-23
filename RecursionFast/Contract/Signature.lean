@@ -22,7 +22,8 @@ refuses after `2^16` signatures (BRIEF §4.3).
 * Digits of a 32-byte message `m`: byte `i` gives the digits `4i + t = (m[i] >> 2t) & 3`,
   `t = 0 … 3` (128 digits); the checksum `C = Σ (3 − dᵢ)` over them (at most 384) gives the
   digits `128 + t = (C >> 2t) & 3`, `t = 0 … 4`. Raising a message digit lowers a checksum digit,
-  so no signature can be advanced along its chains to sign another message.
+  so no signature can be advanced along its chains to sign another message
+  (`Library/Signer.lean`, `wotsDigits_dominates`).
 * Chain step `F(j, i, s, x) = BLAKE2s-256(tagWots ‖ enc64 j ‖ i ‖ s ‖ x)` (43 bytes): chain `i` of
   one-time key `j`, from position `s` to `s + 1`. A signature's value for chain `i` is the chain at
   position `dᵢ`; the verifier walks it to position 3.

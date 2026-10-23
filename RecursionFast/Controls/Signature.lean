@@ -16,7 +16,10 @@ other), and for every pair of traces `traceBytes_inj` (`Library/Trace.lean`).
 **WOTS digits.** `wotsDigits_ff` (all `0xFF`: 128 digits `3`, checksum `0`), `wotsDigits_zero`
 (all `0x00`: checksum `384 = 0b01_10_00_00_00`, digits `0, 0, 0, 2, 1`, low first),
 `wotsDigits_order` (byte `0x1B` gives digits `3, 2, 1, 0`: low bits first), and the general
-facts `wotsDigits_length`, `wotsDigits_le` (`Library/Signer.lean`).
+facts `wotsDigits_length`, `wotsDigits_le` (`Library/Signer.lean`). Negative (RA-m1):
+**`wotsDigits_dominates`**, for two different messages some digit of the second is below the
+first's (the checksum property the contract's header claims), with the instance
+`wotsDigits_dominates_kat`.
 
 **Chain, leaf, node, root.** `wotsStep_layout` (`tagWots ‖ enc64 j ‖ i ‖ s ‖ x`, 43 bytes),
 `wotsStep_kat` (against `hashlib`), `wotsLeaf_length` (133 ends make 4,265 bytes),
@@ -87,6 +90,19 @@ theorem wotsDigits_order : (wotsDigits ((Vector.replicate 32 0).set 0 0x1B)).tak
 example (m : Digest) : (wotsDigits m).length = wotsLen := Signer.wotsDigits_length m
 
 example (m : Digest) : ∀ d ∈ wotsDigits m, d ≤ 3 := Signer.wotsDigits_le m
+
+/-- **The checksum dominates** (RA-m1; the negative control of the digits and of `wotsEnds`):
+for two different messages some WOTS digit of the second is below the first's, so a signature
+of the first cannot be walked forward along its chains into a signature of the second. -/
+theorem wotsDigits_dominates {m m' : Digest} (h : m ≠ m') :
+    ∃ i < wotsLen, (wotsDigits m').getD i 0 < (wotsDigits m).getD i 0 :=
+  Signer.wotsDigits_dominates h
+
+/-- An instance: from the all-zero message to the one whose first byte is `1`, no message digit
+falls, and checksum digit 131 does (`384 = …, 2, 1` to `383 = …, 1, 1`). -/
+theorem wotsDigits_dominates_kat :
+    (wotsDigits ((Vector.replicate 32 0).set 0 1)).getD 131 0 <
+      (wotsDigits (Vector.replicate 32 0)).getD 131 0 := by decide +kernel
 
 /-! ## Chain, leaf, node, root -/
 

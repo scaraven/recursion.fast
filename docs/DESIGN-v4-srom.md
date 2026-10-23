@@ -63,9 +63,13 @@ of `V`: nothing is left for a reviewer to forbid.
 
 **The tree.** On the run's one query log, the root's signed trace is genuine unless a signature was
 forged, so `V` accepts on the log and the extractor yields children whose traces are genuine again,
-down to the leaves: CGSY24 Thm 5.1's straightline argument, no factor per node. The walk is a
-Library theorem (**kernel**, `Compose.compose`); the PRF hybrid and the reading of the walk's
-"signed trace not in the log" as a forgery or a collision are **paper**. Error `(Q + qV)·ε +
+down to the leaves: CGSY24 Thm 5.1's straightline argument, no factor per node. The kernel content
+is the Library's computable `Compose.walk`, whose type is the statement: from the hypotheses it
+returns the leaf starts, an explicit collision, or an explicit capped signed trace not in the log
+that lies in the extraction tree of the root proof (`Compose.compose` is its propositional form;
+the bare disjunction without the tree membership, `compose_exists`, is trivially true for any key
+whose signer is known, RA-M1). The PRF hybrid and the reading of the walk's "signed trace not in
+the log" as a forgery or a collision are **paper**. Error `(Q + qV)·ε +
 Adv_PRF + Adv_EUF-CMA + Adv_coll`, the first term about `2^-98` (**estimate**: `Q ≈ 2^30`,
 `ε = 2^-128`).
 
@@ -164,8 +168,9 @@ structure Submission where
   fuel : ℕ → ℕ
 
 def Submission.acc (S : Submission) (vk c : Digest) (p : Signed) : Bool :=
-  decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-    SigOk vk (traceDigest p.tr) p.σ && decide ((S.V vk c p.π).runSeq p.tr = some true)
+  decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ S.qV) &&
+    decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
+    decide ((S.V vk c p.π).runSeq p.tr = some true)
 
 structure Certificate (S : Submission) : Prop where
   secure   : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV
@@ -177,8 +182,9 @@ structure Certificate (S : Submission) : Prop where
 
 Both caps, `proofCap` and `queryCap`, are `2^20` (`Relation.lean`).
 
-**In words.** A signed proof is accepted for `c` under `vk` when the proof is at most 1 MiB, every
-query in the trace is at most 1 MiB, the signature on the trace's digest verifies under `vk`, and
+**In words.** A signed proof is accepted for `c` under `vk` when the proof is at most 1 MiB, the
+trace has at most `qV` entries and every query in it is at most 1 MiB, the signature on the trace's
+digest verifies under `vk`, and
 the submitted verifier accepts the proof with its oracle queries answered one by one from the trace
 (each entry must be for the query asked, and the trace must be used up exactly). A node witness is
 two child digests and two signed proofs accepted in that sense. The certificate is v3's, required
@@ -191,9 +197,10 @@ for every `vk`; `Declared` and `CertificateR` bind the declared numbers as in v3
 | A child is accepted against a signed trace, not by running `V` on the oracle | The relation then evaluates no oracle; a node circuit checks a signature instead of evaluating `PRF_k`, which it cannot do without `k`. The relation is an ordinary relation once `vk` is fixed. | P2, V4-3 |
 | Every hash in the relation is public BLAKE2s-256 under one of seven tags `C L N T W K M` | No contract hash input is an oracle input or another domain's input. v3's oracle tag `R` is gone: keyed BLAKE2s differs from the unkeyed hash on every input (its first block is the key). | V4-16 |
 | Sequential trace semantics (`runSeq`), not first-match lookup | Linear for the harness; a node circuit walks the child's trace in order with no lookup or permutation argument. | V4-4 |
-| The trace is used up exactly | The signed trace is then exactly `V`'s query sequence: at most `qV` entries, fixed by the verifier's own design. A suffix-tolerant trace gave the relation witnesses with traces of every length, so a fixed-size node prover could not be complete (C-M3). | V4-A3 |
+| The trace is used up exactly | The signed trace is then exactly `V`'s query sequence on that trace's answers. A suffix-tolerant trace gave the relation witnesses with traces of every length, so a fixed-size node prover could not be complete (C-M3). | V4-A3 |
+| `\|tr\| ≤ qV` in `acc` | Bounds every accepted trace by a fact of the relation, so the witness space is bounded and node circuits are sized from `qV`. `KS`'s query bound does not do it: it ranges over oracle functions, and a non-functional trace (two answers to one query, possible only with a forged signature or a known `sk`) follows no function's path (RA-M2; a functional trace meets it anyway, `runSeq_length_le`). | RA-M2 |
 | `queryCap = 2^20` bytes per query in `acc` | Makes `enc64 \|q\|` exact, so the trace encoding is injective on every accepted trace by a fact inside the relation, and a trace-digest collision is a genuine BLAKE2s collision; equals the service's cap. | V4-A3 |
-| Conjunct order: size, query cap, `SigOk`, `runSeq` | Cheapest rejection first: a bogus proof costs a signature check (about 300 compressions), not a verifier run. | V4-A3, C-m5 |
+| Conjunct order: size, trace length, query cap, `SigOk`, `runSeq` | Cheapest rejection first: a bogus proof costs a signature check (about 300 compressions), not a verifier run. | V4-A3, C-m5 |
 | `proofCap` on `π` only | A trace is bounded by the verifier's queries and a signature is an index and 149 digests. | V4-13 |
 | `V` and `P` take `vk`; `E` does not | A node circuit checks its children's signatures, so `vk` is a public input of the node's statement and `V` needs it. A node extractor decodes the children from the node proof's committed witness and never needs `vk`; a design whose encoding depends on `vk` writes `vk` into `π`, so the rule restricts nothing. | V4-6, C-m6 |
 | `KS` and completeness for every `vk` | The signer is not in the model, and the theorem's adversary may hold `sk`; a verifier that trusts a signature is then uncertifiable (§2.2). | V4-1 |
@@ -431,7 +438,7 @@ counts them all. If the potential of `L` is below 1, which fails with probabilit
 
 | Piece | Status |
 |---|---|
-| the walk over the harness's tree, returning leaf starts, a BLAKE2s collision (as an explicit pair), or an explicit signed trace not contained in the log, given a functional log of at most `logCap` entries with potential below 1 and an accepted root | **kernel**, Library (untrusted, kernel-checked): `Library/Compose.lean`, the computable `walk` and the theorem `compose` (V4-8) |
+| the walk over the harness's tree, returning leaf starts, a BLAKE2s collision (as an explicit pair), or an explicit signed trace with queries within `queryCap`, not contained in the log, **in the extraction tree of the root proof**, given a functional log of at most `logCap` entries with potential below 1 and an accepted root | **kernel**, Library (untrusted, kernel-checked): `Library/Compose.lean`, the computable `walk` (its type is the statement) and `compose`, its propositional form (V4-8); `compose_exists`, without the tree membership, is trivially true for a known signer's key (`Controls/Compose.lean`, RA-M1) |
 | `runSeq → runLog` | **kernel**: `Library/Trace.lean`, `OProg.runLog_of_runSeq` (on a functional log, a verdict on a trace whose entries are all in the log is the verdict on the log) |
 | equal trace digests are equal traces or an explicit collision | **kernel**: `Library/Trace.lean`, `traceDigest_eq` (for queries under `2^64` bytes, which `queryCap` implies) |
 | the paper theorem `(Q + qV)·ε` | **kernel** (`Library/PaperTheorem.lean`, `paper`, v3's) for a lazily sampled oracle and a deterministic adversary; randomisation and the random function **paper** |

@@ -14,13 +14,13 @@
   * **Verifier (strict, #10, V3-S2R-A5).** `check vk c π`: `π` is the canonical encoding of a leaf
     witness of at most `chainCap` steps (checked before the hash) whose chain ends at the
     statement's chain end, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
-    children `acc vk` accepts: each child's proof within `proofCap`, its queries within
-    `queryCap`, its signature valid on its trace's digest, and, since this verifier asks no query,
-    its trace **empty** (exact consumption, V4-A3) and its proof accepted by `check`,
-    recursively. Canonical encodings for leaves and nodes make it reject appended and truncated
-    bytes (`check_canonical`). It runs the linear-time decoder twins and the word-level hashes
-    (`Library/Fast.lean`); `check_eq` states it with the specification functions. `V vk c π :=
-    ret (check vk c π)`: no query, `qV = 0`.
+    children `acc vk` accepts: each child's proof within `proofCap`, its trace within `qV = 0`
+    entries (RA-M2) and its queries within `queryCap`, its signature valid on its trace's digest,
+    and, since this verifier asks no query, its trace **empty** (exact consumption, V4-A3) and its
+    proof accepted by `check`, recursively. Canonical encodings for leaves and nodes make it
+    reject appended and truncated bytes (`check_canonical`). It runs the linear-time decoder
+    twins and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the
+    specification functions. `V vk c π := ret (check vk c π)`: no query, `qV = 0`.
   * **Prover.** `P vk c w := ret (encode w)`. Every witness of the relation fits the format
     (`fits_of_rel`: `acc` bounds the proof, empties the trace, and `SigOk` fixes the signature's
     counts), so perfect completeness needs no normalisation (`complete_perfect`); the
@@ -89,8 +89,9 @@ theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
 
 /-- **The strict witness-sending decision** under the key `vk`: `π` is the canonical encoding of
 a leaf witness of `c` (its length within `chainCap`, checked before any hash), or of a node
-witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof and
-queries capped, signature valid, trace empty, proof accepted recursively). -/
+witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof,
+trace length (`qV = 0`) and queries capped, signature valid, trace empty, proof accepted
+recursively). -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decodeF π with
   | some (.leaf s n) =>
@@ -99,9 +100,11 @@ def check (vk c : Digest) (π : Proof) : Bool :=
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encodeF (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmtF c₁ c₂) &&
-        (decide (p₁.π.size ≤ proofCap) && decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
+        (decide (p₁.π.size ≤ proofCap) && decide (p₁.tr.length ≤ 0) &&
+          decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
           SigOkF vk (traceDigestF p₁.tr) p₁.σ && (p₁.tr.isEmpty && check vk c₁ p₁.π)) &&
-        (decide (p₂.π.size ≤ proofCap) && decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
+        (decide (p₂.π.size ≤ proofCap) && decide (p₂.tr.length ≤ 0) &&
+          decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
           SigOkF vk (traceDigestF p₂.tr) p₂.σ && (p₂.tr.isEmpty && check vk c₂ p₂.π))
     else false
   | none => false
@@ -154,8 +157,9 @@ theorem runSeq_ret_eq (b : Bool) (tr : Trace) :
 
 /-- **What `acc` of this submission decides.** -/
 theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
-    (decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-      SigOk vk (traceDigest p.tr) p.σ && (p.tr.isEmpty && check vk c p.π)) :=
+    (decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ 0) &&
+      decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
+      (p.tr.isEmpty && check vk c p.π)) :=
   congrArg (_ && ·) (runSeq_ret_eq _ _)
 
 /-- `check`, with the specification functions. -/
@@ -203,7 +207,7 @@ theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
 theorem fits_of_acc {vk c : Digest} {p : Signed} (h : submission.acc vk c p = true) :
     p.Fits := by
   simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff, SigOk] at h
-  obtain ⟨⟨⟨hπ, -⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, htr, -⟩ := h
+  obtain ⟨⟨⟨⟨hπ, -⟩, -⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, htr, -⟩ := h
   exact ⟨hπ.trans_lt (by decide), by simp [htr], by simp [htr], hi.trans (by decide), ho, hp⟩
 
 /-- Every witness of the relation fits the output format. -/

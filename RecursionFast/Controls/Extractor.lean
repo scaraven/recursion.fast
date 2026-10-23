@@ -12,7 +12,8 @@ Positive:
   1 step.
 * Format known answers (for the runner's Python twins; the expected words are those of the
   module header's format): `extractorInput_kat` (v3's: a 3-byte proof and a log of one 9-byte
-  query: padding, length words, answer), `decodeWit_leaf_kat`, and for v4's node with two signed
+  query: padding, length words, answer), `wordBytes_layout` and `wordBytes_kat` (a word's bytes,
+  little-endian), `decodeWit_leaf_kat`, and for v4's node with two signed
   children `decodeWit_node_kat`, `witWords_node_kat` (`nodeKatWords`: two proofs, a one-entry and
   an empty trace, two signatures), `decodeWit_trailing` (words after the fields are ignored).
 
@@ -162,6 +163,14 @@ theorem extractorInput_kat :
        3, 0xccbbaa, 1, 9, 0x0807060504030201, 9,
        0x0202020202020202, 0x0202020202020202, 0x0202020202020202, 0x0202020202020202] := by
   decide +kernel
+
+/-- **A word's bytes are the 8-byte little-endian encoding** (`wordBytes w = enc64 w.toNat`, GA's
+trusted-code change): byte `i` is `w / 256^i mod 256`. -/
+theorem wordBytes_layout (w : Word) :
+    wordBytes w = List.ofFn fun i : Fin 8 => (w.toNat / 256 ^ i.val).toUInt8 := rfl
+
+/-- The bytes of `0x0807060504030201` are `01 02 … 08`, low byte first. -/
+theorem wordBytes_kat : wordBytes 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
 
 /-- A leaf: tag `0`, the start `01…01` (4 words), the length `16`. -/
 theorem decodeWit_leaf_kat :

@@ -1,7 +1,8 @@
 # Stage A (v4, SROM): the trusted contract, its library and controls — RESULT
 
-Status (2026-10-22): **done**. `lake build` is green (1,262 jobs). The axiom audit passes on all 43
-`RecursionFast.*` modules: `propext`, `Classical.choice` and `Quot.sound` only. Nothing in the
+Status (2026-10-22; fix pass 2026-10-23, §9): **done**. `lake build` is green (1,264 jobs). The
+axiom audit passes on every `RecursionFast.*` module (41 with declarations, 45 in all):
+`propext`, `Classical.choice` and `Quot.sound` only. Nothing in the
 built targets uses `sorry`, `native_decide` or a code-changing attribute; the only attributes are
 `@[simp]` and `@[inline]`. The trusted contract has **355 code lines** (v3: 292; target ≤ 370,
 cap 500). Every item of the stage, the stretch goal included, is built:
@@ -41,12 +42,12 @@ not touch that tree. Instead:
 | `Hash/Blake2s.lean` (+ `LICENSE-leanerVM`) | 68 | 68 | Code byte-identical. One header sentence changed: v3 said BLAKE2s is "the instantiation of the oracle", which is false in v4. |
 | `Relation.lean` | 25 | 38 | `Trace`, `Sig`, `Signed`, `Wit` with signed children, `Rel (acc)`. Tags `T W K M` added and `R` deleted. `queryCap = 2^20` (V4-A3). |
 | `Signature.lean` (new) | — | 31 | The byte layouts of BRIEF §4.2 exactly: `traceBytes`/`traceDigest`, `msgDigits`/`wotsDigits`, `wotsStep` (F), `wotsChain`, `wotsEnds`, `wotsLeaf`, `sigNode`, `sigRoot`, `SigOk`. |
-| `Oracle.lean` | 22 | 24 | `runSeq` added, with exact consumption (V4-A3). `run` deleted: `Vb` was its only trusted user, and it moved to `Library/Oracle.lean`. |
+| `Oracle.lean` | 22 | 24 | `runSeq` added, with exact consumption (V4-A3). `run` deleted: `Vb` was its only trusted user, and it moved to `Library/Oracle.lean`. `Log := Trace` (one type, two readings; RA-m3). |
 | `Security.lean` | 33 | 33 | Verbatim. Header updated (V4-1; O-25 is now closed by the deployment). |
 | `Machine.lean` | 62 | 62 | Verbatim; header note only. |
-| `Extractor.lean` | 35 | 51 | Tape unchanged (`logWords` factored out; the tape is definitionally the same). The output decoder is new: a strict reader in `StateT (List Word) Option` (`readNat`, `readBytes`, `readString`, `readDigest`, `readList`, `readEntry`, `readTrace`, `readSig`, `readSigned`, `readWit`, `decodeWit`). `outCap` adequacy recomputed (header). |
+| `Extractor.lean` | 35 | 50 | Tape unchanged (`logWords` factored out; the tape is definitionally the same). The output decoder is new: a strict reader in `StateT (List Word) Option` (`readNat`, `readBytes`, `readString`, `readDigest`, `readList`, `readEntry`, `readTrace`, `readSig`, `readSigned`, `readWit`, `decodeWit`). `outCap` adequacy recomputed (header). `wordBytes w := enc64 w.toNat` (GA). |
 | `Tree.lean` | 8 | 8 | Verbatim; header note only. |
-| `Certificate.lean` | 31 | 31 | `Submission` with `vk` in `V` and `P`, `Submission.acc` (conjunct order of V4-A3), `Certificate` with `∀ vk` in `secure` and `complete`, `Declared`, `CertificateR`. `blake2sOracle` and `Vb` deleted. |
+| `Certificate.lean` | 31 | 32 | `Submission` with `vk` in `V` and `P`, `Submission.acc` (conjunct order of V4-A3, plus `\|tr\| ≤ qV`, RA-M2), `Certificate` with `∀ vk` in `secure` and `complete`, `Declared`, `CertificateR`. `blake2sOracle` and `Vb` deleted. |
 | **Total** | **292** | **355** | |
 
 Every trusted definition has a docstring saying what it means. Module headers give the reasons
@@ -121,9 +122,11 @@ and cite V4-n, V4-An and the v3 ids they inherit.
   - The computable `walk` returns one of three outcomes:
     - `Outcome.starts`: `sᵢ` with `chainEnd sᵢ n = hᵢ` for every leaf;
     - `Outcome.collision`: a `Collision`, two different byte strings with one BLAKE2s digest;
-    - `Outcome.forgery`: a signed proof met on the walk whose `SigOk` is true and whose trace is
-      not contained in `L`.
-  - `compose` is the same result as a proposition.
+    - `Outcome.forgery`: a signed proof in the extraction tree of the root (`InTree`) whose
+      queries are within `queryCap`, whose `SigOk` is true and whose trace is not contained in
+      `L` (fix pass, RA-M1).
+  - `walk`'s type is the statement; `compose` is the same result as a proposition, with the tree
+    membership; `compose_exists`, without it, is trivially true for a known signer's key.
   - Helpers: `extract` (it computes the witness from `S.E`, not by choice) and
     `treeRoot_append`.
   - A helper agent wrote the proof against statements I fixed. I checked that the statements are
@@ -184,7 +187,7 @@ The cold build's long poles are the kernel known answers:
 | `Trace`, `Sig`, `Signed`, `Wit`, `Rel` (leaf clause) | `leaf_at_chainCap` | `leaf_over_chainCap`, `wrong_end` |
 | `Rel` (signed node clause) | **`node_of_two_leaves`**, `node_of_two_leaves_ref` (reference signer, symbolic) | `node_needs_statement`, `node_statement_mismatch`, `first_child_rejected`, `second_child_rejected`, **`child_other_key`**, **`child_trace_nonempty`** |
 | `traceBytes`, `traceDigest` | `traceBytes_kat`, `traceDigest_layout`, `traceDigest_kat`, `traceDigest_empty_kat` (hashlib); `traceBytes_inj` | **`traceDigest_changed_answer`** (a changed answer gives another digest), `acc_changed_answer` |
-| `wotsLen`, `msgDigits`, `wotsDigits` | `wotsDigits_ff`, `wotsDigits_zero`, `wotsDigits_order`; `wotsDigits_length`, `wotsDigits_le` | `sigOk_ots_length` (not 133 values) |
+| `wotsLen`, `msgDigits`, `wotsDigits` | `wotsDigits_ff`, `wotsDigits_zero`, `wotsDigits_order`; `wotsDigits_length`, `wotsDigits_le` | **`wotsDigits_dominates`**, `wotsDigits_dominates_kat` (RA-m1), `sigOk_ots_length` (not 133 values) |
 | `wotsStep`, `wotsChain`, `wotsEnds`, `wotsLeaf` | `wotsStep_layout`, `wotsStep_kat`, `wotsChain_two`, `wotsLeaf_length`; `wotsEnds_sign` | through `SigOk`'s negatives |
 | `sigHeight`, `sigNode`, `sigRoot` | `sigNode_kat`, `sigRoot_bits`, `sigRoot_one`; `sigRoot_sibs` | `sigOk_path_length` (not 16 siblings) |
 | `SigOk` | **`sigOk_sign`** (every `sk`, `j < 2^16`), `sigOk_sign_ref` | `sigOk_idx_out_of_range`, `sigOk_ots_length`, `sigOk_path_length`, **`sigOk_key_unique`**, `sigOk_other_key` |
@@ -197,7 +200,9 @@ The cold build's long poles are the kernel known answers:
 | `Reader`, `readNat`, `wordBytes`, `readBytes`, `readString`, `readDigest`, `readList`, `readEntry`, `readTrace`, `readSig`, `readSigned`, `readWit`, `decodeWit` | `decodeWit_leaf_kat`, **`decodeWit_node_kat`**, `witWords_node_kat`, `decodeWit_trailing`; `decodeWit_witWords` (every fitting witness) | `decodeWit_bad_tag`, `decodeWit_empty`, `decodeWit_short_leaf` (strict), `decodeWit_long_proof`, **`decodeWit_long_trace`** (a malformed trace length, V4-A7 (c)), `decodeWit_short_sig` |
 | `extractorBudget`, `outCap`, `progCap`, `Computes` | `ws_computes`, `ws_run_exact`, `halt_computes`, `scan_computes` (v3) | `ws_fuel_short`, `halt_not_ws`, `spin_computes_nothing`, `toolong_not_computes`, `enum_no_computes`, `scan_fuel_short`, `big_program_no_certificate` |
 | `treeLevel`, `treeRoot` | `treeRoot_one…eight`, `treeRoot_recursive`, `treeRoot_kat`; `treeRoot_append` (Compose) | `treeRoot_order` |
-| `Submission`, **`acc`** | `acc_leafSigned`, **`acc_query_at_cap`** (a signed one-entry trace with a query of exactly `queryCap` bytes), `ws_acc_leaf`; `accF_eq` | `acc_over_cap`, `acc_query_over_cap`, `deep_accepted_but_capped`, `acc_bad`, `child_other_key`, `child_trace_nonempty`, `acc_changed_answer` |
+| `Submission`, **`acc`** | `acc_leafSigned`, **`acc_query_at_cap`** (a signed one-entry trace, at `qV = 1` entries, with a query of exactly `queryCap` bytes), `ws_acc_leaf`; `accF_eq` | `acc_over_cap`, **`acc_trace_over_qV`**, `acc_two_entries_rejected` (RA-M2), `acc_query_over_cap`, `deep_accepted_but_capped`, `acc_bad`, `child_other_key`, `child_trace_nonempty`, `acc_changed_answer` |
+| `Log` (= `Trace`), `wordBytes` | `wordBytes_layout` (`rfl`), `wordBytes_kat` | through `decodeWit`'s negatives |
+| Composition (Library, V4-8) | **`walk_one_leaf`**, **`walk_two_leaves`** (the walk returns the starts on honest witness-sending trees, `Controls/Compose.lean`) | **`forgery_trivial`**, `compose_exists_free` (RA probe P1: the bare disjunction is free under a known signer's key) |
 | `queryCap`, `proofCap` | `acc_query_at_cap`, `deepProof_check` (accepted within the cap) | `acc_query_over_cap`, `acc_over_cap`, `deep_accepted_but_capped` |
 | **`Certificate`** (with `∀ vk`), `Declared`, `CertificateR` | `ws_certificate`, `ws_certificateR`, `choice_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` (why `∀ vk` bites) | `fuel_low_claim`, `fuel_over_budget_claim`, `rejectAll_no_certificate`, `acceptAll_no_certificate`, `error_one_*`, `delta_one_*`, `fuel_over_budget_*`, `big_program_*`, **`sigTrust_no_certificate`**, `sigTrust_certificate_opens` |
 | What the model does not exclude | `acc_rejects_all_certified` (an `acc` that accepts nothing is certified), **`Backdoor.backdoor`**: a verifier that compares the answer to the empty query with its public BLAKE2s is certified, and its `acc` accepts the 32-byte magic proof of every statement on the signed trace `[(empty, BLAKE2s(empty))]` | **`magic_needs_trigger`**: only on that trace, which the keyed service never signs (in the design, on paper) |
@@ -342,12 +347,9 @@ Stage B can turn it into a `[[lean_exe]]` of the main lakefile (root `scripts/sp
    interpreter and `decodeWit` on the liveness path pay for it. Should stage B measure them? A
    `UInt64` twin of the decoder is possible; the machine's semantics are trusted and stay as
    they are.
-3. **`KS`'s query bound quantifies over oracle functions** (`queries H`). A non-functional
-   accepted trace, which needs a forged signature or a key whose secret the adversary holds,
-   follows no oracle's path, so `qV` does not bound it (`runSeq_length_le` needs
-   functionality). Honest signed traces are functional. Should the query bound be stated over
-   answer sequences instead, a contract change, so that node circuits can be sized from `qV`
-   alone? Or is it the submitter's business to bound their `V` on every answer sequence?
+3. *(Resolved in the fix pass, RA-M2.)* `KS`'s query bound quantifies over oracle functions, so
+   it does not bound a non-functional accepted trace; `acc` now bounds every accepted trace by
+   `qV` itself.
 4. **`outCap = 2^24`** admits two children with `2^16` queries of up to 960 bytes each (with both
    proofs at `proofCap`). Since `queryCap = 2^20`, a verifier with long queries is not
    certifiable, because its node witnesses cannot be extracted (C-m11 calls this intended).
@@ -362,3 +364,28 @@ Stage B can turn it into a `[[lean_exe]]` of the main lakefile (root `scripts/sp
    service's input validation.
 8. **The probabilistic split of `Compose`'s forgery outcome** into an EUF-CMA forgery or a
    collision of trace encodings is on paper (V4-A8). It is stated in the module header.
+
+## 9. Fix pass (2026-10-23): the adversarial review RA and the golf GA
+
+Applied on top of `a5e4cff` (stage A, RA, GA). `lake build` is green (1,264 jobs); the axiom audit
+passes (`logs/A-fix-axiom-audit.log`); trusted code is **355 lines** (`logs/A-fix-loc-contract.log`;
+`Certificate.lean` +1 for the new conjunct, `Extractor.lean` −1 for `wordBytes`). Cold build
+1 min 56 s wall on a loaded VM (`logs/A-fix-build-cold.log`; new modules: `Controls/Compose`
+6.3 s, `Library/Compose` 9.8 s, `Library/Signer` 7.6 s). Nothing is committed.
+
+| Finding | Status | What was done |
+|---|---|---|
+| **RA-M1** (`compose` vacuous; `Forgery` lacks the cap) | **fixed** | `Library/Compose.lean`: new `InTree S L c₀ p₀` (the extraction tree of `S` on `L` from the root: the root, and the children of every member that `S.E` opens to a node witness). `Forgery` gains `cap : ∀ e ∈ p.tr, e.1.size ≤ queryCap`. `Outcome.forgery` now carries the member `(c, f.p)` and its proof of `InTree … c₀ p₀ c f.p`; `walk`'s type is the statement (the outcome is indexed by the root `(treeRoot …, p)`), computed through `walkFrom`, which carries the membership down. `compose` states the disjunction **with** the membership; the bare disjunction is `compose_exists`, documented as trivially true for a known signer's key. `extract` now computes the witness with `Option.get` (no dependent match) and returns its `S.E` equation; reading lemmas `extract_of_E`, `walkFrom_leaf`. New `Controls/Compose.lean`: **negative** `forgery_trivial` (RA's P1 adapted to the cap: a fresh answer to the empty query exists in every log within `logCap`, `fresh_answer`) and `compose_exists_free`; **positive** `walk_one_leaf` and `walk_two_leaves` (on the witness-sending submission under the reference signer's key with the empty log, `walk` returns `[s]` and `[s₁, s₂]`; symbolic, no hash). The module header, design §0, §2.4 table and RESULT now name `walk` as the kernel content. |
+| **RA-M2** (the `qV` bound on traces) | **fixed** (contract option, as the orchestrator chose) | `Submission.acc` gains `decide (p.tr.length ≤ S.qV)` after the proof-size cap; `accF` too (`accF_eq` re-proved). The `Certificate.lean` header now says the bound is `acc`'s own conjunct and why `KS` does not give it. The witness-sending verifier inlines it (`qV = 0`); its certificate is unchanged (its traces are empty). The backdoor control inlines `\|tr\| ≤ 1` (its `qV`). Controls: positive `acc_query_at_cap` (now at exactly `qV = 1` entries), negatives `acc_trace_over_qV` (every submission) and `acc_two_entries_rejected` (`qV + 1 = 2` entries, signed). The Extractor header's `outCap` note, design §1.1–§1.2 (the `acc` listing, "in words", a table row for the conjunct, the conjunct order) are updated. `runSeq_length_le` stays as the statement about functional traces. |
+| **RA-m1** (no control for the checksum) | **fixed** | `Library/Signer.lean`: **`wotsDigits_dominates`**: `m ≠ m' → ∃ i < wotsLen, (wotsDigits m').getD i 0 < (wotsDigits m).getD i 0`, from `msgDigits_inj` (the digits determine the message), the checksum strictly falling when the message digits weakly rise and differ, and the base-4 digit comparison (`le_of_digits`, by induction on the number of digits; a direct `omega` over five `div`/`mod` pairs did not terminate in 5 minutes). Cited from the `Signature.lean` header; `Controls/Signature.lean`: the control and an instance (`wotsDigits_dominates_kat`: checksum digit 131 falls from 2 to 1). |
+| **RA-m2** (`Controls/Extractor` 116 s) | fixed by GA | GA derived `decodeWit_node_kat` from the encoder KAT (131 s → 6 s). |
+| **RA-m3** (`Trace`/`Log`) | **fixed** | `abbrev Log := Trace` in `Oracle.lean`, with a docstring saying why both names exist (a log is read by lookup, a trace in order). |
+| **RA-m4** (stale lakefile header) | **fixed** | The comment above the `[[require]]` blocks now describes v4; nothing else in `lakefile.toml` changed. |
+| **GA**'s proposal `wordBytes w := enc64 w.toNat` | **applied** | One trusted line shorter, same meaning (`rfl`); `Controls/Extractor.lean`: `wordBytes_layout` (the old formula, `rfl`) and `wordBytes_kat`. |
+| Orchestrator item 5 (`Signer.lean` docstring) | **fixed** | The sentence now says the keys' independence, not the tag, separates the chain starts from the oracle (oracle queries are untagged, so `0x53 ‖ …` is a legal query; V4-A4 as corrected by stage D). |
+
+GA's two orchestrator's-choice items (`Controls/Hex.lean`, hash KATs proved through the twins) are
+left as GA committed them. The BRIEF's V4-A3 sentence "the signed trace is then exactly the
+verifier's query sequence" is the orchestrator's; it is true of the trace's answers, and the
+length bound is now `acc`'s own conjunct.
+
