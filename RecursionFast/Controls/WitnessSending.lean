@@ -55,28 +55,25 @@ def dropLast (π : Proof) : Proof := ⟨π.data.pop⟩
 
 /-- **An accepted proof has a multiple of 8 bytes.** -/
 theorem size_mod_eight {vk c : Digest} {π : Proof} (h : check vk c π = true) : π.size % 8 = 0 := by
-  obtain ⟨w, -, he⟩ := check_canonical h
-  rw [← he, size_encode]; omega
+  obtain ⟨w, -, rfl⟩ := check_canonical h
+  rw [size_encode, Nat.mul_mod_right]
 
 /-- **One appended byte is rejected**, on every honest proof, statement and key. -/
 theorem appended_byte_rejected (vk c : Digest) (w : Wit) (b : UInt8) :
-    check vk c (appendByte (encode w) b) = false := by
-  cases h : check vk c (appendByte (encode w) b)
-  · rfl
-  · have := size_mod_eight h
-    simp only [appendByte, ByteArray.size_push, size_encode] at this
-    omega
+    check vk c (appendByte (encode w) b) = false := Bool.eq_false_iff.mpr fun h => by
+  have := size_mod_eight h
+  simp only [appendByte, ByteArray.size_push, size_encode] at this
+  omega
 
 /-- **One removed byte is rejected**, on every honest proof, statement and key. -/
 theorem truncated_rejected (vk c : Digest) (w : Wit) :
     check vk c (dropLast (encode w)) = false := by
   have hpos : 0 < (witWords w).length := by cases w <;> simp [witWords]
-  cases h : check vk c (dropLast (encode w))
-  · rfl
-  · have := size_mod_eight h
-    simp only [dropLast, ByteArray.size, Array.size_pop] at this
-    rw [show (encode w).data.size = (encode w).size from rfl, size_encode] at this
-    omega
+  refine Bool.eq_false_iff.mpr fun h => ?_
+  have := size_mod_eight h
+  simp only [dropLast, ByteArray.size, Array.size_pop] at this
+  rw [show (encode w).data.size = (encode w).size from rfl, size_encode] at this
+  omega
 
 theorem packBytes_wordsBytes_append (ws : List Word) (b : List UInt8) :
     packBytes (wordsBytes ws ++ b) = ws ++ packBytes b := by
@@ -93,22 +90,17 @@ theorem decode_encode_append {w : Wit} (hw : w.Fits) (b : List UInt8) :
   have h := readWit_witWords w hw (packBytes b)
   simp only [decode, encode_data, packBytes_wordsBytes_append, decodeWit, StateT.run',
     StateT.run] at h ⊢
-  rw [h]; rfl
+  exact congrArg (Prod.fst <$> ·) h
 
 /-- **Anything appended to an accepted proof is rejected.** -/
 theorem appended_rejected {vk c : Digest} {π : Proof} (h : check vk c π = true) {b : List UInt8}
     (hb : b ≠ []) : check vk c ⟨(π.data.toList ++ b).toArray⟩ = false := by
-  obtain ⟨w, hd, he⟩ := check_canonical h
-  obtain ⟨w', hd', hR⟩ := check_sound h
-  rw [hd] at hd'; cases hd'
-  cases h' : check vk c ⟨(π.data.toList ++ b).toArray⟩
-  · rfl
-  · obtain ⟨w'', hd'', he''⟩ := check_canonical h'
-    rw [← he, decode_encode_append (fits_of_rel hR)] at hd''
-    cases hd''
-    have := congrArg (fun π : Proof => π.data.toList) he''
-    simp only [he] at this
-    exact absurd (by simpa using this.symm) hb
+  obtain ⟨w, -, rfl, hR⟩ := (check_iff vk c π).mp h
+  refine Bool.eq_false_iff.mpr fun h' => hb ?_
+  obtain ⟨w', hd, he⟩ := check_canonical h'
+  rw [decode_encode_append (fits_of_rel hR)] at hd
+  cases hd
+  simpa using congrArg (fun π : Proof => π.data.toList) he
 
 /-- The leaf's bytes with tag word 2: rejected under every key and statement. -/
 theorem bad_tag_rejected (vk c : Digest) :
@@ -127,7 +119,7 @@ theorem stmt_unique {vk c c' : Digest} {π : Proof} (h : check vk c π = true)
     (h' : check vk c' π = true) : c = c' := by
   obtain ⟨w, hd, hR⟩ := check_sound h
   obtain ⟨w', hd', hR'⟩ := check_sound h'
-  rw [hd] at hd'; cases hd'
+  cases hd ▸ hd'
   cases w with
   | leaf s n => exact hR.2.trans hR'.2.symm
   | node c₁ c₂ p₁ p₂ => exact hR.1.trans hR'.1.symm
@@ -137,10 +129,9 @@ theorem node_children_capped {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ :
     (h : check vk c π = true) (hd : decode π = some (.node c₁ c₂ p₁ p₂)) :
     p₁.π.size ≤ proofCap ∧ p₂.π.size ≤ proofCap := by
   obtain ⟨w, hd', hR⟩ := check_sound h
-  rw [hd] at hd'; cases hd'
-  have h₁ := hR.2.1; have h₂ := hR.2.2
-  rw [acc_eq] at h₁ h₂
-  simp only [Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂
+  cases hd ▸ hd'
+  obtain ⟨-, h₁, h₂⟩ := hR
+  simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂
   exact ⟨h₁.1.1.1, h₂.1.1.1⟩
 
 /-- An accepted node proof's children carry empty traces (this verifier asks no query). -/
@@ -148,10 +139,9 @@ theorem node_children_untraced {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂
     (h : check vk c π = true) (hd : decode π = some (.node c₁ c₂ p₁ p₂)) :
     p₁.tr = [] ∧ p₂.tr = [] := by
   obtain ⟨w, hd', hR⟩ := check_sound h
-  rw [hd] at hd'; cases hd'
-  have h₁ := hR.2.1; have h₂ := hR.2.2
-  rw [acc_eq] at h₁ h₂
-  simp only [Bool.and_eq_true, List.isEmpty_iff] at h₁ h₂
+  cases hd ▸ hd'
+  obtain ⟨-, h₁, h₂⟩ := hR
+  simp only [acc_eq, Bool.and_eq_true, List.isEmpty_iff] at h₁ h₂
   exact ⟨h₁.2.1, h₂.2.1⟩
 
 /-- The honest proof of a zero-step leaf is accepted, under every key. -/

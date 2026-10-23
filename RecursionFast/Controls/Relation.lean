@@ -40,7 +40,7 @@ Negative:
 -/
 import RecursionFast.Library.WitnessSending
 import RecursionFast.Library.Signer
-import RecursionFast.Controls.Blake2s
+import RecursionFast.Controls.Hex
 import RecursionFast.Controls.Signature
 
 namespace RecursionFast.Controls.Relation
@@ -57,18 +57,24 @@ def s0 : Digest := Vector.ofFn fun i => i.val.toUInt8
 
 /-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'C'+bytes(range(32))).hexdigest())"` -/
 theorem chain1_kat : (chainEnd s0 1).toList =
-    hex "7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544" := by decide +kernel
+    hex "7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544" := by
+  rw [← chainEndF_eq]
+  decide +kernel
 
 /-- `python3 -I -c "import hashlib; H=lambda b: hashlib.blake2s(b'C'+b).digest();
 print(H(H(bytes(range(32)))).hex())"` -/
 theorem chain2_kat : (chainEnd s0 2).toList =
-    hex "84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945" := by decide +kernel
+    hex "84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945" := by
+  rw [← chainEndF_eq]
+  decide +kernel
 
 /-- `python3 -I -c "import hashlib; d=bytes(range(32))
 for _ in range(16): d=hashlib.blake2s(b'C'+d).digest()
 print(d.hex())"` -/
 theorem chain16_kat : (chainEnd s0 16).toList =
-    hex "a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d" := by decide +kernel
+    hex "a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d" := by
+  rw [← chainEndF_eq]
+  decide +kernel
 
 /-- `python3 -I -c "import hashlib;
 h=bytes.fromhex('a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d');
@@ -76,7 +82,9 @@ print(hashlib.blake2s(b'L'+h+(16).to_bytes(8,'little')).hexdigest())"` -/
 theorem leafStmt_kat :
     (leafStmt (ofHex "a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d")
       16).toList =
-      hex "c81156bc71500494780f6635d8533cb9e7b738f5c408ebadb58ceef477cd2b4b" := by decide +kernel
+      hex "c81156bc71500494780f6635d8533cb9e7b738f5c408ebadb58ceef477cd2b4b" := by
+  rw [← leafStmtF_eq]
+  decide +kernel
 
 /-- `python3 -I -c "import hashlib;
 a=bytes.fromhex('7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544');
@@ -85,7 +93,9 @@ print(hashlib.blake2s(b'N'+a+b).hexdigest())"` (the digests of `chain1_kat`, `ch
 theorem nodeStmt_kat :
     (nodeStmt (ofHex "7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544")
       (ofHex "84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945")).toList =
-      hex "23b28cbc4bf7d65abbf43ff39084438ba0fb080bdef09b9e4830b10deada1bab" := by decide +kernel
+      hex "23b28cbc4bf7d65abbf43ff39084438ba0fb080bdef09b9e4830b10deada1bab" := by
+  rw [← nodeStmtF_eq]
+  decide +kernel
 
 /-! ## Tags -/
 
@@ -115,7 +125,9 @@ theorem leaf_over_chainCap (acc : Digest → Signed → Bool) (s : Digest) :
   fun h => absurd h.1 (by omega)
 
 /-- The statement of the chain's start is not the statement of its end (`s0`, `n = 1`). -/
-theorem start_ne_end : leafStmt s0 1 ≠ leafStmt (chainEnd s0 1) 1 := by decide +kernel
+theorem start_ne_end : leafStmt s0 1 ≠ leafStmt (chainEnd s0 1) 1 := by
+  rw [← leafStmtF_eq, ← chainEndF_eq]
+  decide +kernel
 
 /-- **Wrong chain end**: the leaf statement committing to the start is not witnessed by the
 start, under every `acc`. -/
@@ -186,8 +198,10 @@ abbrev cBad : Digest := leafStmt s0 1
 /-- **Statement mismatch** (an instance): two accepted children under their own leaf statement,
 which is not their `nodeStmt`, under every `acc`. -/
 theorem node_statement_mismatch (acc : Digest → Signed → Bool) (p₁ p₂ : Signed) :
-    ¬ Rel acc cOk (.node cOk cOk p₁ p₂) :=
-  node_needs_statement _ _ _ (by decide +kernel)
+    ¬ Rel acc cOk (.node cOk cOk p₁ p₂) := by
+  refine node_needs_statement _ _ _ ?_
+  rw [cOk, ← leafStmtF_eq, ← chainEndF_eq, ← nodeStmtF_eq]
+  decide +kernel
 
 theorem acc_bad (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) :
     submission.acc (Signer.pk sk) cBad (leafSigned sk j s0 1) = false := by
@@ -210,22 +224,16 @@ theorem second_child_rejected (sk : ℕ → ℕ → Digest) :
 /-- **A child signed under another key is rejected**, under every key other than the signer's. -/
 theorem child_other_key (sk : ℕ → ℕ → Digest) {vk : Digest} (hvk : vk ≠ Signer.pk sk)
     (c₁ c₂ s : Digest) (n : ℕ) (p₂ : Signed) :
-    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ (leafSigned sk 0 s n) p₂) := by
-  intro h
+    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ (leafSigned sk 0 s n) p₂) := fun h => by
   have hs := Controls.Signature.sigOk_other_key (leafSigned_sig sk (j := 0) (by decide) s n) hvk
-  have := h.2.1
-  rw [acc_eq, hs] at this
-  simp at this
+  simpa [acc_eq, hs] using h.2.1
 
 /-- **A child carrying a trace is rejected** by the witness-sending `acc` (it asks no query, and
 the trace must be used up exactly, V4-A3), even with a valid signature on that trace. -/
 theorem child_trace_nonempty (vk c₁ c₂ : Digest) (π : Proof) (e : ByteArray × Digest)
     (tr : Trace) (σ : Sig) (p₂ : Signed) :
-    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ ⟨π, e :: tr, σ⟩ p₂) := by
-  intro h
-  have := h.2.1
-  rw [acc_eq] at this
-  simp at this
+    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ ⟨π, e :: tr, σ⟩ p₂) := fun h => by
+  simpa [acc_eq] using h.2.1
 
 /-- **A changed answer is never free**: if `acc` accepts one proof with one signature on two
 different traces, the signature verifies on both digests, and they differ unless the traces'

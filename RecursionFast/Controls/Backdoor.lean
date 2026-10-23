@@ -89,23 +89,14 @@ noncomputable def S : Submission where
 
 theorem runSeq_V (vk c : Digest) (π : Proof) (tr : Trace) :
     decide ((V vk c π).runSeq tr = some true) = onTrace tr c π (check vk c π) := by
-  match tr with
-  | [] => rfl
-  | [(q, a)] =>
-    by_cases hq : q = q0
-    · subst hq; simp [V, OProg.runSeq, onTrace]
-    · simp [V, OProg.runSeq, onTrace, hq]
-  | (q, a) :: _ :: _ =>
-    by_cases hq : q = q0
-    · subst hq; simp [V, OProg.runSeq, onTrace]
-    · simp [V, OProg.runSeq, onTrace, hq]
+  rcases tr with _ | ⟨⟨q, a⟩, _ | _⟩
+  · rfl
+  all_goals by_cases hq : q = q0 <;> simp [V, OProg.runSeq, onTrace, hq]
 
 theorem acc_eq (vk c : Digest) (p : Signed) : S.acc vk c p =
     (decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-      SigOk vk (traceDigest p.tr) p.σ && onTrace p.tr c p.π (check vk c p.π)) := by
-  simp only [Submission.acc, S]
-  congr 1
-  exact runSeq_V vk c p.π p.tr
+      SigOk vk (traceDigest p.tr) p.σ && onTrace p.tr c p.π (check vk c p.π)) :=
+  congrArg (_ && ·) (runSeq_V vk c p.π p.tr)
 
 theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
     ∃ w, decode π = some w ∧ Rel (S.acc vk) c w := by
@@ -116,11 +107,8 @@ theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
     exact ⟨.leaf s n, hd, of_decide_eq_true h.1, of_decide_eq_true h.2⟩
   next c₁ c₂ p₁ p₂ hd =>
     split at h
-    · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-      refine ⟨.node c₁ c₂ p₁ p₂, hd, h.1.1, ?_, ?_⟩ <;> rw [acc_eq] <;>
-        simp only [Bool.and_eq_true, decide_eq_true_eq]
-      · exact h.1.2
-      · exact h.2
+    · simp only [← acc_eq, Bool.and_eq_true, decide_eq_true_eq] at h
+      exact ⟨.node c₁ c₂ p₁ p₂, hd, h.1.1, h.1.2, h.2⟩
     · cases h
   · cases h
 
@@ -128,12 +116,9 @@ theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
 def boolState (vk : Digest) : BoolKState (Rel (S.acc vk)) (V vk) WitnessSending.E where
   good L := ∀ e ∈ L, e.1 = q0 → e.2 ≠ trigger
   bad _ q a := q = q0 ∧ a = trigger
-  empty := by simp
-  step L q a hL _ hb := by
-    intro e he h1
-    rcases List.mem_append.mp he with he | he
-    · exact hL e he h1
-    · simp at he; subst he; exact fun h2 => hb ⟨h1, h2⟩
+  empty := fun _ => nofun
+  step L q a hL _ hb :=
+    List.forall_mem_append.mpr ⟨hL, List.forall_mem_singleton.mpr fun h1 h2 => hb ⟨h1, h2⟩⟩
   final L c π hL hacc := by
     simp only [V, OProg.runLog] at hacc
     cases hf : L.find? (fun e => decide (e.1 = q0)) with
@@ -144,16 +129,13 @@ def boolState (vk : Digest) : BoolKState (Rel (S.acc vk)) (V vk) WitnessSending.
       simp [hf, hL e hm hq] at hacc
       exact check_sound hacc
 
-theorem bounded (vk : Digest) : (boolState vk).Bounded errorCap := by
-  intro L q
-  have : Subsingleton {a // (boolState vk).bad L q a} :=
-    ⟨fun ⟨a, _, ha⟩ ⟨b, _, hb⟩ => Subtype.ext (ha.trans hb.symm)⟩
+theorem bounded (vk : Digest) : (boolState vk).Bounded errorCap := fun L q => by
   have h1 : Nat.card {a // (boolState vk).bad L q a} ≤ 1 :=
-    (Nat.card_le_card_of_injective (fun _ => ()) (fun x y _ => Subsingleton.elim x y)).trans
-      (by simp)
+    (Nat.card_le_card_of_injective (fun _ => ()) fun ⟨_, _, ha⟩ ⟨_, _, hb⟩ _ =>
+      Subtype.ext (ha.trans hb.symm)).trans_eq Nat.card_unique
   have h2 : (1 : ℝ≥0) ≤ errorCap * Nat.card Digest := by
     rw [card_digest, errorCap]; norm_num
-  exact le_trans (by exact_mod_cast h1) h2
+  exact (Nat.cast_le_one.mpr h1).trans h2
 
 /-- The knowledge state under `vk`: the potential `1` on the logs that answer `q0` with the
 trigger, `0` elsewhere. -/
@@ -164,13 +146,12 @@ noncomputable def kstate (vk : Digest) : KState (Rel (S.acc vk)) (V vk) WitnessS
 theorem fits_of_rel {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) : w.Fits := by
   have hc : ∀ {c' : Digest} {p : Signed}, S.acc vk c' p = true → p.Fits := by
     intro c' p h
-    rw [acc_eq] at h
-    simp only [Bool.and_eq_true, decide_eq_true_eq, SigOk] at h
+    simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, SigOk] at h
     obtain ⟨⟨⟨hπ, hq⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, ht⟩ := h
     have hlen : p.tr.length = 1 := by
       unfold onTrace at ht
       split at ht
-      · rename_i heq; simp [heq]
+      · next heq => exact congrArg List.length heq
       · cases ht
     exact ⟨hπ.trans_lt (by decide), by omega, fun e he => (hq e he).trans_lt (by decide),
       hi.trans (by decide), ho, hp⟩
@@ -180,30 +161,22 @@ theorem fits_of_rel {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) : w.Fits
 
 theorem check_encode {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) :
     check vk c (encode w) = true := by
-  unfold check
-  rw [decode_encode w (fits_of_rel hR)]
+  rw [check, decode_encode w (fits_of_rel hR)]
   cases w with
   | leaf s n => simp [hR.1, hR.2]
   | node c₁ c₂ p₁ p₂ =>
-    obtain ⟨hc, h₁, h₂⟩ := hR
-    rw [acc_eq] at h₁ h₂
-    dsimp only
-    rw [dite_eq_left_iff.mpr fun h => absurd rfl h]
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂ ⊢
-    exact ⟨⟨hc, h₁⟩, h₂⟩
+    simp only [dite_true, ← acc_eq, hR.2.1, hR.2.2, Bool.and_true, decide_eq_true_eq]
+    exact hR.1
 
-theorem complete_perfect (vk : Digest) : Complete (Rel (S.acc vk)) (S.P vk) (V vk) := by
-  intro H c w hR
-  simp only [S, WitnessSending.P, OProg.run, V, encodeF_eq]
-  rw [check_encode hR]
-  simp
+theorem complete_perfect (vk : Digest) : Complete (Rel (S.acc vk)) (S.P vk) (V vk) :=
+  fun H c w hR => by
+    simp only [S, WitnessSending.P, OProg.run, V, encodeF_eq, check_encode hR, Bool.or_true]
 
 theorem certified : Certificate S where
-  secure vk := ⟨⟨kstate vk⟩, fun _ _ _ => by simp [S, V, OProg.queries]⟩
+  secure vk := ⟨⟨kstate vk⟩, fun _ _ _ => le_rfl⟩
   complete vk := complete_withError_zero (complete_perfect vk)
   computes := WitnessSending.computes
-  cap := ⟨le_rfl, zero_le, by decide, fun t => by
-    simp only [S, WitnessSending.fuel, extractorBudget]; omega, by decide⟩
+  cap := ⟨le_rfl, zero_le, by decide, WitnessSending.certificate.cap.2.2.2⟩
 
 /-! ## The magic proof -/
 
@@ -211,21 +184,17 @@ theorem certified : Certificate S where
 theorem readDigest_three (x y z : Word) : readDigest.run [x, y, z] = none := rfl
 
 theorem decodeWit_four (a b c d : Word) : decodeWit [a, b, c, d] = none := by
-  have h3 := readDigest_three b c d
-  simp only [StateT.run] at h3
+  have h3 : readDigest [b, c, d] = none := readDigest_three b c d
   simp only [decodeWit, StateT.run', readWit, bind, StateT.bind, readNat, Option.bind_some]
-  rcases a.toNat with _ | _ | n <;> simp [StateT.bind, h3, failure]; rfl
+  rcases a.toNat with _ | _ | n <;> simp [StateT.bind, h3, failure, StateT.failure]
 
 theorem decode_magic (c : Digest) : decode (magic c) = none := by
-  have h4 : (packBytes c.toList).length = 4 := packBytes_digest_length c
-  unfold decode magic
-  generalize hl : packBytes (⟨c.toArray⟩ : Proof).data.toList = l
-  have : l.length = 4 := by rw [← hl]; exact h4
-  match l, this with
+  show decodeWit (packBytes c.toList) = none
+  match packBytes c.toList, packBytes_digest_length c with
   | [a, b, c', d], _ => exact decodeWit_four a b c' d
 
 theorem check_magic (vk c : Digest) : check vk c (magic c) = false := by
-  unfold check; rw [decode_magic]
+  rw [check, decode_magic]
 
 /-- **The magic proof is accepted exactly on the trigger trace**: under every key, `acc` accepts
 it iff the trace is the one answer to `q0`, that answer is the public value, and the trace is
@@ -234,21 +203,18 @@ theorem magic_needs_trigger (vk c : Digest) (tr : Trace) (σ : Sig) :
     S.acc vk c ⟨magic c, tr, σ⟩ = true ↔
       tr = [(q0, trigger)] ∧ SigOk vk (traceDigest tr) σ = true := by
   rw [acc_eq, check_magic]
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
   constructor
-  · intro h
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    obtain ⟨⟨-, hs⟩, ht⟩ := h
+  · rintro ⟨⟨-, hs⟩, ht⟩
     refine ⟨?_, hs⟩
     unfold onTrace at ht
     split at ht
-    · rename_i q a
-      simp only [Bool.or_false, Bool.and_eq_true, decide_eq_true_eq] at ht
+    · simp only [Bool.or_false, Bool.and_eq_true, decide_eq_true_eq] at ht
       rw [ht.1, ht.2.1]
     · cases ht
   · rintro ⟨rfl, hs⟩
-    have h1 : (magic c).size = 32 := by simp [magic, ByteArray.size]
-    have h2 : q0.size = 0 := rfl
-    simp [onTrace, hs, h1, h2, proofCap, queryCap]
+    have h1 : (magic c).size = 32 := c.size_toArray
+    simp [onTrace, hs, h1, show q0.size = 0 from rfl, proofCap, queryCap]
 
 /-- **The known model gap (O-25), closed by the deployment in v4**: certified, and under every
 key `acc` accepts the 32-byte magic proof of every statement on a validly signed trace that
@@ -258,6 +224,6 @@ theorem backdoor :
     Certificate S ∧ ∀ vk c σ, SigOk vk (traceDigest [(q0, trigger)]) σ = true →
       S.acc vk c ⟨magic c, [(q0, trigger)], σ⟩ = true ∧ (magic c).size = 32 :=
   ⟨certified, fun vk c σ hs =>
-    ⟨(magic_needs_trigger vk c _ σ).mpr ⟨rfl, hs⟩, by simp [magic, ByteArray.size]⟩⟩
+    ⟨(magic_needs_trigger vk c _ σ).mpr ⟨rfl, hs⟩, c.size_toArray⟩⟩
 
 end RecursionFast.Controls.Backdoor

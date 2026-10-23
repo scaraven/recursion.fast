@@ -58,32 +58,30 @@ theorem encode_data (w : Wit) : (encode w).data.toList = wordsBytes (witWords w)
 theorem decode_encode (w : Wit) (h : w.Fits) : decode (encode w) = some w := by
   rw [decode, encode_data, packBytes_wordsBytes, decodeWit_witWords w h]
 
-theorem size_encode (w : Wit) : (encode w).size = 8 * (witWords w).length := by
-  rw [← wordsBytes_length, ← encode_data, Array.length_toList]; rfl
+theorem size_encode (w : Wit) : (encode w).size = 8 * (witWords w).length :=
+  List.size_toArray.trans (wordsBytes_length _)
 
 theorem size_eq_length (π : Proof) : π.size = π.data.toList.length := Array.length_toList.symm
 
 theorem size_encode_leaf (s : Digest) (n : ℕ) : (encode (.leaf s n)).size = 48 := by
-  rw [size_encode]; simp [witWords, packBytes_digest_length]
+  simp [size_encode, witWords, packBytes_digest_length]
 
 /-- `decode` in linear time (`decodeF_eq`). -/
 def decodeF (π : Proof) : Option Wit := decodeWit (packFast π.data.toList)
 
-theorem decodeF_eq (π : Proof) : decodeF π = decode π := by
-  rw [decodeF, packFast_eq]; rfl
+theorem decodeF_eq (π : Proof) : decodeF π = decode π := congrArg decodeWit (packFast_eq _)
 
 /-- `encode` in linear time (`encodeF_eq`). -/
 def encodeF (w : Wit) : Proof := ⟨(wordsBytes (witWordsF w)).toArray⟩
 
 theorem encodeF_eq (w : Wit) : encodeF w = encode w := by
-  rw [encodeF, witWordsF_eq]; rfl
+  rw [encodeF, encode, witWordsF_eq]
 
 /-- A child's proof is shorter than its parent's encoding. -/
 theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
     p₁.π.size < (encode (.node c₁ c₂ p₁ p₂)).size ∧
       p₂.π.size < (encode (.node c₁ c₂ p₁ p₂)).size := by
-  rw [size_encode]
-  simp only [witWords, signedWords, bytesWords, List.length_cons, List.length_append,
+  simp only [size_encode, witWords, signedWords, bytesWords, List.length_cons, List.length_append,
     packBytes_length, ← size_eq_length]
   omega
 
@@ -152,15 +150,13 @@ def submission : Submission where
 /-- `runSeq` of a program that asks nothing: the trace must be empty. -/
 theorem runSeq_ret_eq (b : Bool) (tr : Trace) :
     decide ((OProg.ret b).runSeq tr = some true) = (tr.isEmpty && b) := by
-  cases tr <;> cases b <;> simp [OProg.runSeq]
+  cases tr <;> cases b <;> rfl
 
 /-- **What `acc` of this submission decides.** -/
 theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
     (decide (p.π.size ≤ proofCap) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) &&
-      SigOk vk (traceDigest p.tr) p.σ && (p.tr.isEmpty && check vk c p.π)) := by
-  simp only [Submission.acc, submission, V]
-  congr 1
-  exact runSeq_ret_eq _ _
+      SigOk vk (traceDigest p.tr) p.σ && (p.tr.isEmpty && check vk c p.π)) :=
+  congrArg (_ && ·) (runSeq_ret_eq _ _)
 
 /-- `check`, with the specification functions. -/
 theorem check_eq (vk c : Digest) (π : Proof) : check vk c π =
@@ -177,44 +173,38 @@ theorem check_eq (vk c : Digest) (π : Proof) : check vk c π =
   simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, chainEndF_eq, nodeStmtF_eq,
     SigOkF_eq, traceDigestF_eq]
 
-/-- **Strictness**: an accepted proof is the canonical encoding of the witness it decodes to. -/
-theorem check_canonical {vk c : Digest} {π : Proof} (h : check vk c π = true) :
-    ∃ w, decode π = some w ∧ encode w = π := by
+/-- An accepted proof is the canonical encoding of a witness of the relation it decodes to. -/
+private theorem exists_of_check {vk c : Digest} {π : Proof} (h : check vk c π = true) :
+    ∃ w, decode π = some w ∧ encode w = π ∧ Rel (submission.acc vk) c w := by
   rw [check_eq] at h
   split at h
   next s n hd =>
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    exact ⟨_, hd, h.1.1⟩
-  next c₁ c₂ p₁ p₂ hd =>
-    split at h
-    · exact ⟨_, hd, ‹_›⟩
-    · cases h
-  · cases h
-
-/-- **An accepted proof decodes to a witness of the relation.** -/
-theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
-    ∃ w, decode π = some w ∧ Rel (submission.acc vk) c w := by
-  rw [check_eq] at h
-  split at h
-  next s n hd =>
-    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    exact ⟨.leaf s n, hd, h.1.2, h.2⟩
+    exact ⟨.leaf s n, hd, h.1.1, h.1.2, h.2⟩
   next c₁ c₂ p₁ p₂ hd =>
     split at h
     · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-      exact ⟨.node c₁ c₂ p₁ p₂, hd, h.1.1, h.1.2, h.2⟩
+      exact ⟨.node c₁ c₂ p₁ p₂, hd, ‹_›, h.1.1, h.1.2, h.2⟩
     · cases h
   · cases h
+
+/-- **Strictness**: an accepted proof is the canonical encoding of the witness it decodes to. -/
+theorem check_canonical {vk c : Digest} {π : Proof} (h : check vk c π = true) :
+    ∃ w, decode π = some w ∧ encode w = π :=
+  (exists_of_check h).imp fun _ h => ⟨h.1, h.2.1⟩
+
+/-- **An accepted proof decodes to a witness of the relation.** -/
+theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
+    ∃ w, decode π = some w ∧ Rel (submission.acc vk) c w :=
+  (exists_of_check h).imp fun _ h => ⟨h.1, h.2.2⟩
 
 /-- An accepted child fits the output format: `acc` caps its proof, empties its trace, and
 `SigOk` fixes its signature's counts. -/
 theorem fits_of_acc {vk c : Digest} {p : Signed} (h : submission.acc vk c p = true) :
     p.Fits := by
-  rw [acc_eq] at h
-  simp only [Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff, SigOk] at h
+  simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff, SigOk] at h
   obtain ⟨⟨⟨hπ, -⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, htr, -⟩ := h
-  refine ⟨hπ.trans_lt (by decide), by simp [htr], by simp [htr],
-    hi.trans (by decide), ho, hp⟩
+  exact ⟨hπ.trans_lt (by decide), by simp [htr], by simp [htr], hi.trans (by decide), ho, hp⟩
 
 /-- Every witness of the relation fits the output format. -/
 theorem fits_of_rel {vk c : Digest} {w : Wit} (h : Rel (submission.acc vk) c w) : w.Fits := by
@@ -226,21 +216,13 @@ theorem fits_of_rel {vk c : Digest} {w : Wit} (h : Rel (submission.acc vk) c w) 
 theorem check_encode {vk c : Digest} {w : Wit} (hR : Rel (submission.acc vk) c w) :
     check vk c (encode w) = true := by
   rw [check_eq, decode_encode w (fits_of_rel hR)]
-  cases w with
-  | leaf s n => simp [hR.1, hR.2]
-  | node c₁ c₂ p₁ p₂ =>
-    obtain ⟨hc, h₁, h₂⟩ := hR
-    simp [hc, h₁, h₂]
+  cases w <;> simp [hR.1, hR.2]
 
 /-- **What the verifier decides**: a proof is accepted exactly when it is the canonical encoding
 of a witness of the relation. -/
 theorem check_iff (vk c : Digest) (π : Proof) : check vk c π = true ↔
-    ∃ w, decode π = some w ∧ encode w = π ∧ Rel (submission.acc vk) c w := by
-  refine ⟨fun h => ?_, fun ⟨w, _, he, hR⟩ => he ▸ check_encode hR⟩
-  obtain ⟨w, hd, he⟩ := check_canonical h
-  obtain ⟨w', hd', hR⟩ := check_sound h
-  rw [hd] at hd'; cases hd'
-  exact ⟨w, hd, he, hR⟩
+    ∃ w, decode π = some w ∧ encode w = π ∧ Rel (submission.acc vk) c w :=
+  ⟨exists_of_check, fun ⟨_, _, he, hR⟩ => he ▸ check_encode hR⟩
 
 /-! ## Knowledge soundness and completeness -/
 
@@ -256,9 +238,8 @@ theorem ks (vk : Digest) :
 
 /-- **Perfect completeness**, for every oracle function and key. -/
 theorem complete_perfect (vk : Digest) :
-    Complete (Rel (submission.acc vk)) (submission.P vk) (submission.V vk) := fun _ _ _ hR => by
-  simp only [submission, P, V, OProg.run, encodeF_eq]
-  exact check_encode hR
+    Complete (Rel (submission.acc vk)) (submission.P vk) (submission.V vk) := fun _ _ _ hR =>
+  (congrArg (check _ _) (encodeF_eq _)).trans (check_encode hR)
 
 /-- **Completeness at error `0`**, under every key. -/
 theorem complete (vk : Digest) :
@@ -290,8 +271,7 @@ theorem loop_exec (I : Array Word) {m : ℕ} (hm : m + 6 < 2 ^ 64) :
   intro k
   induction k with
   | zero =>
-    intro i y o f hi
-    subst hi
+    intro i y o f rfl
     simp [st, exec]
   | succ k ih =>
     intro i y o f hi
@@ -317,9 +297,8 @@ theorem loop_exec (I : Array Word) {m : ℕ} (hm : m + 6 < 2 ^ 64) :
 theorem extractorInput_eq (c : Digest) (π : Proof) (L : Log) :
     extractorInput c π L = (packBytes c.toList ++ [toWord π.size]) ++ packBytes π.data.toList ++
       logWords L := by
-  unfold extractorInput bytesWords
-  rw [size_eq_length]
-  simp only [List.append_assoc, List.cons_append, List.nil_append]
+  simp only [extractorInput, bytesWords, size_eq_length, List.append_assoc, List.cons_append,
+    List.nil_append]
 
 /-- The set-up block's result is the loop's initial memory. -/
 theorem pre_mem {s : ℕ} (hs : s ≤ proofCap) :
@@ -335,8 +314,7 @@ theorem pre_mem {s : ℕ} (hs : s ≤ proofCap) :
     omega
   have hc : (5 : Word) < toWord ((s + 7) / 8 + 5) ↔ 0 < (s + 7) / 8 :=
     (toWord_lt_toWord (a := 0 + 5) (by omega) (by omega)).trans (by omega)
-  rw [he]
-  simp only [st, hc]
+  simp only [he, st, hc]
   rfl
 
 /-- **The program on a proof's tape**: it outputs the proof's packed words, within `8 · t`
@@ -354,12 +332,11 @@ theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ proofCap)
   have hlen : (π.size + 7) / 8 + 6 ≤ t.length := by
     rw [ht, extractorInput_eq]
     simp only [List.length_append, logWords, List.length_cons, h5, hm]; omega
-  unfold XProg.run
-  simp only [ext, fuel, XProg.memFor, Nat.zero_mul, Nat.add_zero, show 5 ≤ 8 * t.length by omega,
-    ↓reduceIte]
+  simp only [XProg.run, ext, fuel, XProg.memFor, Nat.zero_mul, Nat.add_zero,
+    show 5 ≤ 8 * t.length by omega, ↓reduceIte]
   set m := (π.size + 7) / 8
-  rw [show 8 * t.length - 5 = ((8 * t.length - 5 - 8 * m - 21) + 8 * m + 1 + 19) + 1 by omega]
-  rw [exec_seq, pre_exec, getD_toArray, g4, pre_mem hπ,
+  rw [show 8 * t.length - 5 = ((8 * t.length - 5 - 8 * m - 21) + 8 * m + 1 + 19) + 1 by omega,
+    exec_seq, pre_exec, getD_toArray, g4, pre_mem hπ,
     loop_exec _ (by unfold proofCap at hπ; omega) m 0 3 #[] _ (by omega)]
   congr 1
   refine List.ext_getElem (by simp [hm, m]) fun j _ h2 => ?_
@@ -373,7 +350,8 @@ theorem computes : Computes submission.ext submission.E submission.fuel := by
   intro c π L hπ _ _
   refine ⟨packBytes π.data.toList, ext_run c π L hπ, ?_, rfl⟩
   rw [packBytes_length, ← size_eq_length]
-  unfold outCap; unfold proofCap at hπ; omega
+  unfold outCap proofCap at *
+  omega
 
 /-- **The witness-sending submission is certified**, for every public key. -/
 theorem certificate : Certificate submission where

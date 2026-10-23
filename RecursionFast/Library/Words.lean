@@ -69,13 +69,12 @@ theorem ofLE_ofFn (x k : ℕ) :
 theorem ofLE_enc64 (n : ℕ) : ofLE (enc64 n) = n % 2 ^ 64 := by
   rw [enc64, ofLE_ofFn]; norm_num
 
-theorem enc64_length (n : ℕ) : (enc64 n).length = 8 := by simp [enc64]
+theorem enc64_length (n : ℕ) : (enc64 n).length = 8 := List.length_ofFn
 
 /-- **`enc64` is injective below `2^64`.** -/
 theorem enc64_inj {m n : ℕ} (hm : m < 2 ^ 64) (hn : n < 2 ^ 64) (h : enc64 m = enc64 n) :
     m = n := by
-  have := congrArg ofLE h
-  rwa [ofLE_enc64, ofLE_enc64, Nat.mod_eq_of_lt hm, Nat.mod_eq_of_lt hn] at this
+  rw [← Nat.mod_eq_of_lt hm, ← Nat.mod_eq_of_lt hn, ← ofLE_enc64, ← ofLE_enc64, h]
 
 /-! ## Packed bytes -/
 
@@ -121,7 +120,7 @@ def wordsBytes (ws : List Word) : List UInt8 := ws.flatMap wordBytes
 theorem ofLE_wordBytes (w : Word) : ofLE (wordBytes w) = w.toNat := by
   rw [wordBytes, ofLE_ofFn, Nat.mod_eq_of_lt (by simpa using w.isLt)]
 
-theorem wordBytes_length (w : Word) : (wordBytes w).length = 8 := by simp [wordBytes]
+theorem wordBytes_length (w : Word) : (wordBytes w).length = 8 := List.length_ofFn
 
 theorem wordsBytes_length (ws : List Word) : (wordsBytes ws).length = 8 * ws.length := by
   simp [wordsBytes, wordBytes, List.length_flatMap, mul_comm]
@@ -149,12 +148,8 @@ theorem wordByte_eq_getD (ws : List Word) (i : ℕ) :
 theorem unpack_packBytes (b : List UInt8) : (wordsBytes (packBytes b)).take b.length = b := by
   refine List.ext_getElem ?_ fun i h1 h2 => ?_
   · rw [List.length_take, wordsBytes_length, packBytes_length]; omega
-  · rw [List.getElem_take]
-    have hi : i < (wordsBytes (packBytes b)).length := by
-      rw [wordsBytes_length, packBytes_length]; omega
-    have := wordByte_eq_getD (packBytes b) i
-    rw [wordByte_packBytes, List.getD_eq_getElem _ _ h2, List.getD_eq_getElem _ _ hi] at this
-    exact this.symm
+  · rw [List.getElem_take, ← List.getD_eq_getElem _ 0, ← wordByte_eq_getD, wordByte_packBytes,
+      List.getD_eq_getElem _ _ h2]
 
 /-! ## The output format -/
 
@@ -286,11 +281,8 @@ theorem readWit_witWords (w : Wit) (h : w.Fits) (o : List Word) :
     rfl
 
 /-- **The decoder reads `witWords` back** when the witness fits the format. -/
-theorem decodeWit_witWords (w : Wit) (h : w.Fits) : decodeWit (witWords w) = some w := by
-  have := readWit_witWords w h []
-  rw [List.append_nil] at this
-  simp only [decodeWit, StateT.run', StateT.run] at this ⊢
-  rw [this]; rfl
+theorem decodeWit_witWords (w : Wit) (h : w.Fits) : decodeWit (witWords w) = some w :=
+  List.append_nil (witWords w) ▸ congrArg (Prod.fst <$> ·) (readWit_witWords w h [])
 
 /-! ## Linear-time twins -/
 

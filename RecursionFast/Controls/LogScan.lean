@@ -246,15 +246,13 @@ theorem words_eq_iff (a c : Digest) :
       (packBytes a.toList).getD 1 0 = (packBytes c.toList).getD 1 0 ∧
       (packBytes a.toList).getD 2 0 = (packBytes c.toList).getD 2 0 ∧
       (packBytes a.toList).getD 3 0 = (packBytes c.toList).getD 3 0) ↔ a = c := by
-  refine ⟨fun ⟨h0, h1, h2, h3⟩ => ?_, fun h => by subst h; simp⟩
+  refine ⟨fun ⟨h0, h1, h2, h3⟩ => ?_, fun h => h ▸ ⟨rfl, rfl, rfl, rfl⟩⟩
   have he : packBytes a.toList = packBytes c.toList := by
     rw [four _ (packBytes_digest_length a), four (packBytes c.toList) (packBytes_digest_length c),
       h0, h1, h2, h3]
-  have := unpack_packBytes a.toList
-  have hc := unpack_packBytes c.toList
-  rw [he] at this
-  simp only [Vector.length_toList] at this hc
-  exact Vector.toList_inj.mp (this.symm.trans hc)
+  refine Vector.toList_inj.mp ?_
+  rw [← unpack_packBytes a.toList, ← unpack_packBytes c.toList, he, a.length_toList,
+    c.length_toList]
 
 theorem scan_loop (c : Digest) (T : List Word) (hT : T.length ≤ 2 ^ 64) :
     ∀ (L : Log) (A : List Word) (i : ℕ) (x acc y : Word) (o : Array Word) (f : ℕ),
@@ -307,8 +305,8 @@ theorem scan_loop (c : Digest) (T : List Word) (hT : T.length ≤ 2 ^ 64) :
       cases h : L.findIdx? (fun e => e.2 = c) <;> simp [hc, outW, Nat.add_right_comm, Nat.add_assoc]
 
 theorem decode_outW (c : Digest) {i j : ℕ} (hj : i + j < 2 ^ 64) :
-    decodeWit (outW (packBytes c.toList) i (some j)) = some (.leaf c (i + j)) := by
-  exact decodeWit_witWords (.leaf c (i + j)) hj
+    decodeWit (outW (packBytes c.toList) i (some j)) = some (.leaf c (i + j)) :=
+  decodeWit_witWords (.leaf c (i + j)) hj
 
 /-- **The log scan computes `findE` within `16 · t` steps**, on every input of the domain. -/
 theorem scan_computes : Computes scan findE fun t => 16 * t := by

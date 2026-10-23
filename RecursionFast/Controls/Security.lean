@@ -118,7 +118,7 @@ noncomputable def jump (L : Log) : ℝ≥0 := if L = [] then 0 else 1
 potential by more than `1`. -/
 theorem jump_step (L : Log) (q : ByteArray) :
     ∑ a : Digest, jump (L ++ [(q, a)]) ≤ (jump L + 1) * 2 ^ 256 :=
-  (Finset.sum_le_sum fun a _ => show jump _ ≤ 1 by unfold jump; split_ifs <;> simp).trans <| by
+  (Finset.sum_le_sum fun a _ => (ite_eq_right (by simp) : jump _ = 1).le).trans <| by
     rw [Finset.sum_const, Finset.card_univ, nsmul_eq_mul, mul_one, fintype_card_digest,
       Nat.cast_pow, Nat.cast_ofNat]
     exact le_mul_of_one_le_left (by positivity) le_add_self
@@ -128,7 +128,7 @@ non-empty log. -/
 noncomputable def badAll (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
     KState R rejectAll E 1 where
   μ := jump
-  empty := by simp [jump]
+  empty := ite_eq_left rfl
   step L q _ _ _ := jump_step L q
   final _ _ _ _ _ h := nomatch h
 
@@ -136,13 +136,13 @@ noncomputable def badAll (R : Digest → Wit → Prop) (E : Digest → Proof →
 theorem jumpAll_ge_one {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
     {E : Digest → Proof → Log → Option Wit} {ε : ℝ≥0} (k : KState R V E ε)
     (hall : ∀ L, L ≠ [] → k.μ L = 1) : 1 ≤ ε := by
-  simpa [k.empty] using k.one_le_of_jump (L := []) (q := ByteArray.empty) (by simp [logCap])
-    (by simp [k.empty]) (by simp) fun a => (hall _ (by simp)).ge
+  simpa [k.empty] using k.one_le_of_jump (L := []) (q := ByteArray.empty) (by decide)
+    (k.empty ▸ one_pos) nofun fun a => (hall _ (List.cons_ne_nil _ _)).ge
 
 /-- `badAll`'s potential admits no error within the cap. -/
 theorem badAll_not_capped {R : Digest → Wit → Prop} {E : Digest → Proof → Log → Option Wit}
     {ε : ℝ≥0} (k : KState R rejectAll E ε) (hk : k.μ = (badAll R E).μ) : ¬ ε ≤ errorCap :=
-  fun hc => ((jumpAll_ge_one k fun L hL => by simp [hk, badAll, jump, hL]).trans hc).not_gt
+  fun hc => ((jumpAll_ge_one k fun L hL => (congrFun hk L).trans (ite_eq_right hL)).trans hc).not_gt
     errorCap_lt_one
 
 /-! ## The boolean form (`BoolKState`, library) -/
@@ -191,24 +191,21 @@ potential to `1` on every answer to the verifier's fresh query, so every knowled
 `ε ≥ 1`. -/
 theorem queryThenAccept_ge_one (E : Digest → Proof → Log → Option Wit) {ε : ℝ≥0}
     (k : KState (fun _ _ => False) queryThenAccept E ε) : 1 ≤ ε := by
-  have hj : ∀ a, 1 ≤ k.μ ([] ++ [(ByteArray.empty, a)]) := fun a => by
-    by_contra hb
-    obtain ⟨w, -, hw⟩ := k.final _ (Vector.replicate 32 0) ByteArray.empty
-      (by simp [logCap]) (not_le.mp hb)
-      (by simp [queryThenAccept, OProg.runLog])
-    exact hw
-  simpa [k.empty] using k.one_le_of_jump (by simp [logCap]) (by simp [k.empty]) (by simp) hj
+  have hj : ∀ a, 1 ≤ k.μ ([] ++ [(ByteArray.empty, a)]) := fun a => not_lt.mp fun hb =>
+    (k.final _ (Vector.replicate 32 0) .empty (by simp [logCap]) hb
+      (by simp [queryThenAccept, OProg.runLog])).elim fun _ h => h.2
+  simpa [k.empty] using k.one_le_of_jump (by simp [logCap]) (k.empty ▸ one_pos) (by simp) hj
 
 /-- Such a knowledge state exists at error `1` (the potential is `1` on every non-empty log), so
 the error is what fails, not the laws. -/
 noncomputable def ks1 (E : Digest → Proof → Log → Option Wit) :
     KState (fun _ _ => False) queryThenAccept E 1 where
   μ := jump
-  empty := by simp [jump]
+  empty := ite_eq_left rfl
   step L q _ _ _ := jump_step L q
   final L c π _ hL h := by
-    have : L = [] := by by_contra hne; simp [jump, hne] at hL
-    subst this; simp [queryThenAccept, OProg.runLog] at h
+    obtain rfl : L = [] := by_contra fun hne => by simp [jump, hne] at hL
+    simp [queryThenAccept, OProg.runLog] at h
 
 /-! ## The query bound -/
 

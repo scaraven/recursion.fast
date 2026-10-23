@@ -38,8 +38,8 @@ theorem length_iterate_treeLevel (cs : List Digest) (k : ℕ) :
 
 /-- `|cs|` levels leave at most one digest. -/
 theorem length_iterate_length_le_one (cs : List Digest) :
-    (treeLevel^[cs.length] cs).length ≤ 1 := by
-  have := length_iterate_treeLevel cs cs.length; omega
+    (treeLevel^[cs.length] cs).length ≤ 1 :=
+  Nat.le_trans (length_iterate_treeLevel cs cs.length) (by simp)
 
 /-- **Until one remains**: the root of two or more digests is the root of the level above. -/
 theorem treeRoot_cons_cons (a b : Digest) (cs : List Digest) :

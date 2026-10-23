@@ -198,10 +198,20 @@ def nodeKatWords : List Word :=
 
 theorem nodeKatWords_length : nodeKatWords.length = 9 + 607 + 600 := by decide +kernel
 
-theorem decodeWit_node_kat : decodeWit nodeKatWords = some nodeKat := by decide +kernel
-
 /-- The encoder writes exactly these words. -/
 theorem witWords_node_kat : witWords nodeKat = nodeKatWords := by decide +kernel
+
+/-- The node fits the format: its numbers are words, its signatures have 133 and 16 digests. -/
+theorem nodeKat_fits : nodeKat.Fits :=
+  ⟨⟨by decide, by decide, by decide, by decide, rfl, rfl⟩,
+    ⟨by decide, by decide, by decide, by decide, rfl, rfl⟩⟩
+
+/-- The decoder reads the node back. The kernel evaluates the encoder on `nodeKat`
+(`witWords_node_kat`) and the decoder's field boundaries on these words (`decodeWit_short_sig`);
+the bytes of the 302 decoded digests follow from the round trip `decodeWit_witWords` (evaluating
+them and comparing them as vectors took the kernel about 90 s). -/
+theorem decodeWit_node_kat : decodeWit nodeKatWords = some nodeKat :=
+  witWords_node_kat ▸ decodeWit_witWords nodeKat nodeKat_fits
 
 /-! ### Malformed outputs denote nothing -/
 
@@ -230,15 +240,7 @@ denoted; a valid signature has 16). -/
 theorem decodeWit_short_sig : decodeWit (nodeKatWords.dropLast) = none := by decide +kernel
 
 /-- Words after the last field are ignored. -/
-theorem decodeWit_trailing : decodeWit (nodeKatWords ++ [7, 7]) = some nodeKat := by
-  rw [← witWords_node_kat]
-  have hf : nodeKat.Fits :=
-    ⟨⟨by decide, by decide, fun e he => by simp only [List.mem_singleton] at he; subst he; decide,
-        by decide, by simp [wotsLen], by simp [sigHeight]⟩,
-      ⟨by decide, by decide, fun e he => by simp at he, by decide, by simp [wotsLen],
-        by simp [sigHeight]⟩⟩
-  have h := readWit_witWords nodeKat hf [7, 7]
-  simp only [decodeWit, StateT.run', StateT.run] at h ⊢
-  rw [h]; rfl
+theorem decodeWit_trailing : decodeWit (nodeKatWords ++ [7, 7]) = some nodeKat :=
+  witWords_node_kat ▸ congrArg (Prod.fst <$> ·) (readWit_witWords nodeKat nodeKat_fits [7, 7])
 
 end RecursionFast.Controls.Extractor

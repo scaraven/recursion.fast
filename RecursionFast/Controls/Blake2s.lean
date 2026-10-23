@@ -3,10 +3,11 @@
 
 Known-answer tests decided by the kernel (`decide +kernel`; plain `decide` and `rfl` exhaust the
 elaborator's recursion depth). An expected digest is written as the hex string of its source and
-read by `hex`. The general facts (`rotr` against leanerVM's rotation, digest lengths) are theorems
-of `Library/Blake2s.lean`. Outside CI, in v2's probes (git history, tag `v2-archive`): the grid
-differential test against `hashlib` (`probes/s2/Diff.lean`, `diff.py`) and RFC 7693's Appendix E
-self-test (`probes/s2/SelfTest.lean`, a `#guard`; as a kernel theorem it exceeds 32 GB).
+read by `hex` (`Controls/Hex.lean`). The general facts (`rotr` against leanerVM's rotation, digest
+lengths) are theorems of `Library/Blake2s.lean`. Outside CI, in v2's probes (git history, tag
+`v2-archive`): the grid differential test against `hashlib` (`probes/s2/Diff.lean`, `diff.py`)
+and RFC 7693's Appendix E self-test (`probes/s2/SelfTest.lean`, a `#guard`; as a kernel theorem
+it exceeds 32 GB).
 
 Constants (the checks of leanerVM's tests): every row of `sigma` is a permutation (`sigma_perm`),
 and `iv[i] = ⌊2^32 · frac(√pᵢ)⌋` for the first eight primes (`iv_spec`, RFC 7693 §2.6).
@@ -37,21 +38,10 @@ Mutants (v2's `probes/s2/Mutants.lean`, tag `v2-archive`): a block loop that has
 block when `|d|` is a multiple of 64 passes the first seven KATs and fails `len128_kat` and
 `kk1_kat`; key padding by `64 - nn` fails `kk1_kat`; truncation to whole words fails `nn1_kat`.
 -/
-import RecursionFast.Contract.Hash.Blake2s
+import RecursionFast.Controls.Hex
 
 namespace RecursionFast.Controls.Blake2s
 open RecursionFast RecursionFast.Blake2s
-
-/-- The value of a lowercase hex digit. -/
-def hexDigit (c : Char) : Nat := if c ≤ '9' then c.toNat - '0'.toNat else c.toNat - 'a'.toNat + 10
-
-/-- The bytes of a list of lowercase hex digits, two digits per byte. -/
-def hexBytes : List Char → List UInt8
-  | a :: b :: r => (16 * hexDigit a + hexDigit b).toUInt8 :: hexBytes r
-  | _ => []
-
-/-- The bytes written by a lowercase hex string, the form in which the vectors are published. -/
-def hex (s : String) : List UInt8 := hexBytes s.toList
 
 theorem hex_pos : hex "00ff7f80a519" = [0x00, 0xff, 0x7f, 0x80, 0xa5, 0x19] := by decide +kernel
 

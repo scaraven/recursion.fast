@@ -31,15 +31,15 @@ def Complete (R : Digest → Wit → Prop) (P : Digest → Wit → OProg Proof)
 def Consistent (H : ByteArray → Digest) (L : Log) : Prop :=
   ∀ q e, L.find? (fun e => e.1 = q) = some e → H q = e.2
 
-theorem exists_consistent (L : Log) : ∃ H, Consistent H L := by
-  refine ⟨fun q => ((L.find? fun e => e.1 = q).map Prod.snd).getD (Vector.replicate 32 0), ?_⟩
-  intro q e h; simp [h]
+theorem exists_consistent (L : Log) : ∃ H, Consistent H L :=
+  ⟨fun q => ((L.find? fun e => e.1 = q).map Prod.snd).getD (Vector.replicate 32 0),
+    fun _ _ h => by simp [h]⟩
 
 theorem consistent_append {H : ByteArray → Digest} {L : Log} {q : ByteArray} {a : Digest}
     (hf : L.find? (fun e => e.1 = q) = none) (h : Consistent H (L ++ [(q, a)])) :
-    Consistent H L ∧ H q = a := by
-  refine ⟨fun q' e he => h q' e (by simp [List.find?_append, he]), ?_⟩
-  exact h q (q, a) (by simp [List.find?_append, hf])
+    Consistent H L ∧ H q = a :=
+  ⟨fun q' e he => h q' e (by simp [List.find?_append, he]),
+    h q (q, a) (by simp [List.find?_append, hf])⟩
 
 /-- **A program that returns `true` under every oracle consistent with the table fails with
 probability `0`.** -/
@@ -53,19 +53,17 @@ theorem failProb_eq_zero_of_run : ∀ (p : OProg Bool) (L : Log),
     simp only [failProb]
     split
     · rename_i e he
-      exact failProb_eq_zero_of_run _ L fun H hH => by
-        have := h H hH; simp only [OProg.run] at this; rwa [hH q e he] at this
+      exact failProb_eq_zero_of_run _ L fun H hH => hH q e he ▸ h H hH
     · rename_i hf
-      rw [Finset.sum_eq_zero fun a _ => failProb_eq_zero_of_run _ _ fun H hH => by
-        obtain ⟨hL, hq⟩ := consistent_append hf hH
-        have := h H hL; simp only [OProg.run] at this; rwa [hq] at this]
+      rw [Finset.sum_eq_zero fun a _ => failProb_eq_zero_of_run _ _ fun H hH =>
+        (consistent_append hf hH).elim fun hL hq => hq ▸ h H hL]
       simp
 
 /-- **Perfect completeness is completeness with error `0`.** -/
 theorem complete_withError_zero {R : Digest → Wit → Prop} {P : Digest → Wit → OProg Proof}
     {V : Digest → Proof → OProg Bool} (h : Complete R P V) : CompleteWithError R P V 0 :=
-  fun c w hR => le_of_eq (failProb_eq_zero_of_run _ _ fun H _ => by
-    rw [OProg.run_bind]; exact h H c w hR)
+  fun c w hR => le_of_eq (failProb_eq_zero_of_run _ _ fun H _ =>
+    (OProg.run_bind _ _ _).trans (h H c w hR))
 
 theorem CompleteWithError.mono {R : Digest → Wit → Prop} {P : Digest → Wit → OProg Proof}
     {V : Digest → Proof → OProg Bool} {δ δ' : ℝ≥0} (h : CompleteWithError R P V δ)
@@ -81,8 +79,8 @@ theorem failProb_eq_prob : ∀ (p : OProg Bool) (L : Log),
     | some e => exact failProb_eq_prob _ _
     | none => simp only [failProb_eq_prob]
 
-theorem failProb_le_one (p : OProg Bool) (L : Log) : failProb p L ≤ 1 := by
-  rw [failProb_eq_prob]; exact PaperTheorem.prob_le_one _ p L
+theorem failProb_le_one (p : OProg Bool) (L : Log) : failProb p L ≤ 1 :=
+  (failProb_eq_prob p L).trans_le (PaperTheorem.prob_le_one _ p L)
 
 /-- The average of a constant over the `2^256` answers. -/
 theorem avg_const (x : ℝ≥0) : ((2 : ℝ≥0) ^ 256)⁻¹ * ∑ _a : Digest, x = x := by

@@ -61,20 +61,15 @@ theorem runLog_of_runSeq {L : Log} (hL : L.Functional) :
   | .ret _, _ :: _, _, h, _ => nomatch h
   | .query _ _, [], _, h, _ => nomatch h
   | .query q k, (q', a) :: tr, b, h, hin => by
-    simp only [runSeq] at h
-    split at h
-    · rename_i hq
-      subst hq
-      have hmem : (q', a) ∈ L := hin _ (List.mem_cons_self ..)
-      obtain ⟨e, he⟩ : ∃ e, L.find? (fun e => decide (e.1 = q')) = some e := by
-        cases hf : L.find? (fun e => decide (e.1 = q')) with
-        | none => exact absurd (List.find?_eq_none.mp hf _ hmem) (by simp)
-        | some e => exact ⟨e, rfl⟩
-      have h1 : e.1 = q' := by simpa using List.find?_some he
-      have h2 : e.2 = a := hL e (List.mem_of_find?_eq_some he) _ hmem h1
-      simp only [runLog, he, Option.bind_some, h2]
-      exact runLog_of_runSeq hL (k a) tr h fun e he => hin e (List.mem_cons_of_mem _ he)
-    · cases h
+    simp only [runSeq, Option.ite_none_right_eq_some] at h
+    obtain ⟨rfl, h⟩ := h
+    have hmem : (q', a) ∈ L := hin _ (List.mem_cons_self ..)
+    obtain ⟨e, he⟩ : ∃ e, L.find? (fun e => decide (e.1 = q')) = some e :=
+      Option.isSome_iff_exists.mp (List.find?_isSome.mpr ⟨_, hmem, by simp⟩)
+    have h2 : e.2 = a :=
+      hL e (List.mem_of_find?_eq_some he) _ hmem (by simpa using List.find?_some he)
+    simp only [runLog, he, Option.bind_some, h2]
+    exact runLog_of_runSeq hL (k a) tr h fun e he => hin e (List.mem_cons_of_mem _ he)
 
 /-- **The honest trace**: a program's own queries under `H`, with `H`'s answers, answer it. -/
 theorem runSeq_queries (H : ByteArray → Digest) :
@@ -92,14 +87,11 @@ theorem runSeq_map_fst (H : ByteArray → Digest) :
   | .ret _, _ :: _, _, h, _ => nomatch h
   | .query _ _, [], _, h, _ => nomatch h
   | .query q k, (q', a) :: tr, b, h, hH => by
-    simp only [runSeq] at h
-    split at h
-    · rename_i hq
-      subst hq
-      have ha : H q' = a := hH _ (List.mem_cons_self ..)
-      simp only [List.map_cons, queries, ha]
-      rw [runSeq_map_fst H (k a) tr h fun e he => hH e (List.mem_cons_of_mem _ he)]
-    · cases h
+    simp only [runSeq, Option.ite_none_right_eq_some] at h
+    obtain ⟨rfl, h⟩ := h
+    obtain rfl : H q' = a := hH _ (List.mem_cons_self ..)
+    simp only [List.map_cons, queries]
+    rw [runSeq_map_fst H (k (H q')) tr h fun e he => hH e (List.mem_cons_of_mem _ he)]
 
 /-- **An accepted functional trace is at most `qV` long** when the program asks at most `qV`
 queries under every oracle (the query bound of `KS`): it is the program's query sequence under an
@@ -111,16 +103,11 @@ theorem runSeq_length_le {p : OProg α} {tr : Trace} {b : α} {qV : ℕ} (h : p.
     ((tr.find? fun e => e.1 = q).map Prod.snd).getD (Vector.replicate 32 0)
   have hH : ∀ e ∈ tr, H e.1 = e.2 := by
     intro e he
-    obtain ⟨e', he'⟩ : ∃ e', tr.find? (fun x => decide (x.1 = e.1)) = some e' := by
-      cases hfd : tr.find? (fun x => decide (x.1 = e.1)) with
-      | none => exact absurd (List.find?_eq_none.mp hfd e he) (by simp)
-      | some e' => exact ⟨e', rfl⟩
-    have h1 : e'.1 = e.1 := by simpa using List.find?_some he'
+    obtain ⟨e', he'⟩ : ∃ e', tr.find? (fun x => decide (x.1 = e.1)) = some e' :=
+      Option.isSome_iff_exists.mp (List.find?_isSome.mpr ⟨_, he, by simp⟩)
     simp only [H, he', Option.map_some, Option.getD_some]
-    exact hf e' (List.mem_of_find?_eq_some he') e he h1
-  have := congrArg List.length (runSeq_map_fst H p tr h hH)
-  rw [List.length_map] at this
-  exact this ▸ hq H
+    exact hf e' (List.mem_of_find?_eq_some he') e he (by simpa using List.find?_some he')
+  simpa using (congrArg List.length (runSeq_map_fst H p tr h hH)).trans_le (hq H)
 
 end OProg
 
@@ -129,19 +116,17 @@ end OProg
 theorem traceBytes_nil : traceBytes [] = [] := rfl
 
 theorem traceBytes_cons (e : ByteArray × Digest) (tr : Trace) :
-    traceBytes (e :: tr) = enc64 e.1.size ++ e.1.data.toList ++ e.2.toList ++ traceBytes tr := by
-  simp [traceBytes]
+    traceBytes (e :: tr) = enc64 e.1.size ++ e.1.data.toList ++ e.2.toList ++ traceBytes tr :=
+  List.flatMap_cons ..
 
 /-- **The trace encoding is injective** on traces whose queries are shorter than `2^64` bytes. -/
 theorem traceBytes_inj : ∀ {tr tr' : Trace}, (∀ e ∈ tr, e.1.size < 2 ^ 64) →
     (∀ e ∈ tr', e.1.size < 2 ^ 64) → traceBytes tr = traceBytes tr' → tr = tr'
   | [], [], _, _, _ => rfl
   | [], e :: tr', _, _, h => by
-    have := congrArg List.length h
-    simp [traceBytes_cons, traceBytes_nil, enc64_length] at this; omega
+    simpa [traceBytes_cons, traceBytes_nil, enc64_length] using congrArg List.length h.symm
   | e :: tr, [], _, _, h => by
-    have := congrArg List.length h
-    simp [traceBytes_cons, traceBytes_nil, enc64_length] at this
+    simpa [traceBytes_cons, traceBytes_nil, enc64_length] using congrArg List.length h
   | (q, a) :: tr, (q', a') :: tr', h, h', heq => by
     simp only [traceBytes_cons, List.append_assoc] at heq
     obtain ⟨h1, heq⟩ := List.append_inj heq (by simp [enc64_length])
@@ -162,9 +147,8 @@ def Collision.of {x y : List UInt8} (hne : x ≠ y) (heq : blake2sDigest x = bla
 theorem traceDigest_eq {tr tr' : Trace} (h : ∀ e ∈ tr, e.1.size < 2 ^ 64)
     (h' : ∀ e ∈ tr', e.1.size < 2 ^ 64) (heq : traceDigest tr = traceDigest tr') :
     tr = tr' ∨ ∃ c : Collision, c.x = tagTrace :: traceBytes tr ∧
-      c.y = tagTrace :: traceBytes tr' := by
-  by_cases ht : tr = tr'
-  · exact Or.inl ht
-  · refine Or.inr ⟨⟨_, _, fun hb => ht (traceBytes_inj h h' (List.cons.inj hb).2), heq⟩, rfl, rfl⟩
+      c.y = tagTrace :: traceBytes tr' :=
+  (em _).imp_right fun ht =>
+    ⟨⟨_, _, fun hb => ht (traceBytes_inj h h' (List.cons.inj hb).2), heq⟩, rfl, rfl⟩
 
 end RecursionFast

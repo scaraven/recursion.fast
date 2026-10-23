@@ -251,7 +251,7 @@ does not open it to a witness on the empty log. -/
 theorem no_kstate_of_empty {ε : ℝ≥0} {c : Digest} {π : Proof}
     (hV : (V c π).runLog [] = some true) (hE : ¬ ∃ w, E c π [] = some w ∧ R c w) :
     IsEmpty (KState R V E ε) :=
-  ⟨fun k => hE (k.final [] c π (Nat.zero_le _) (by rw [k.empty]; exact one_pos) hV)⟩
+  ⟨fun k => hE (k.final [] c π (Nat.zero_le _) (k.empty ▸ one_pos) hV)⟩
 
 /-- The verifier that accepts every proof, with no query. -/
 def acceptAll (_ : Digest) (_ : Proof) : OProg Bool := .ret true
@@ -261,7 +261,7 @@ statement has a witness**, at every error. So `KState` alone excludes it only th
 witnessless statement, which no digest can be shown to be under `Rel` (V3-S1-A13). -/
 theorem acceptAll_kstate_iff (R : Digest → Wit → Prop) (ε : ℝ≥0) :
     (∃ E, Nonempty (KState R acceptAll E ε)) ↔ ∀ c, ∃ w, R c w :=
-  ⟨fun ⟨_, ⟨k⟩⟩ c => (k.final [] c .empty (Nat.zero_le _) (by rw [k.empty]; exact one_pos)
+  ⟨fun ⟨_, ⟨k⟩⟩ c => (k.final [] c .empty (Nat.zero_le _) (k.empty ▸ one_pos)
       rfl).imp fun _ h => h.2,
     fun h => ⟨fun c _ _ => some (h c).choose,
       ⟨KState.zero ε fun _ c _ _ => ⟨_, rfl, (h c).choose_spec⟩⟩⟩⟩

@@ -85,16 +85,13 @@ theorem levelUp_get {t n : ℕ} {l : Array Digest} (hs : l.size = 2 ^ (n + 1))
     (hl : ∀ k < l.size, l.getD k 0 = node sk t k) :
     (levelUp l).size = 2 ^ n ∧
       ∀ k < (levelUp l).size, (levelUp l).getD k 0 = node sk (t + 1) k := by
-  refine ⟨by rw [levelUp_size, hs, pow_succ]; simp, fun k hk => ?_⟩
-  rw [levelUp_size, hs, pow_succ, Nat.mul_div_cancel _ (by norm_num)] at hk
-  have h1 : 2 * k < l.size := by rw [hs, pow_succ]; omega
-  have h2 : 2 * k + 1 < l.size := by rw [hs, pow_succ]; omega
-  simp only [levelUp, Array.getD_eq_getD_getElem?, Array.getElem?_ofFn]
-  rw [hs, pow_succ, Nat.mul_div_cancel _ (by norm_num)]
-  simp only [hk, ↓reduceDIte, Option.getD_some]
-  have hl' : ∀ k < l.size, l[k]?.getD 0 = node sk t k := fun k hk => by
-    rw [← Array.getD_eq_getD_getElem?]; exact hl k hk
-  rw [hl' _ h1, hl' _ h2, sigNodeF_eq, node]
+  have hsz : (levelUp l).size = 2 ^ n := by
+    rw [levelUp_size, hs, pow_succ, Nat.mul_div_cancel _ (by norm_num)]
+  refine ⟨hsz, fun k hk => ?_⟩
+  rw [hsz] at hk
+  rw [Array.getD_eq_getD_getElem?, Array.getElem?_eq_getElem (by omega), Option.getD_some]
+  simp only [levelUp, Array.getElem_ofFn]
+  rw [hl _ (by rw [hs, pow_succ]; omega), hl _ (by rw [hs, pow_succ]; omega), sigNodeF_eq, node]
 
 theorem levelsFrom_get : ∀ (n t : ℕ) (l : Array Digest), l.size = 2 ^ n →
     (∀ k < l.size, l.getD k 0 = node sk t k) →
@@ -161,7 +158,7 @@ theorem Tree.sign_eq (j : ℕ) (hj : j < 2 ^ sigHeight) (m : Digest) :
 
 /-- **The fast signer's signatures verify** under the fast signer's key. -/
 theorem Tree.sigOk_sign (j : ℕ) (hj : j < 2 ^ sigHeight) (m : Digest) :
-    SigOk (Tree.pk (buildTree sk)) m (Tree.sign sk (buildTree sk) j m) = true := by
-  rw [Tree.pk_eq, Tree.sign_eq sk j hj]; exact Signer.sigOk_sign sk j hj m
+    SigOk (Tree.pk (buildTree sk)) m (Tree.sign sk (buildTree sk) j m) = true :=
+  Tree.pk_eq sk ▸ Tree.sign_eq sk j hj m ▸ Signer.sigOk_sign sk j hj m
 
 end RecursionFast.Signer

@@ -16,7 +16,7 @@ against this value (Stage S3).
 Negative: `treeRoot_order`: the order of the leaves matters (`[d₀, d₁]` and `[d₁, d₀]`).
 -/
 import RecursionFast.Library.Tree
-import RecursionFast.Controls.Blake2s
+import RecursionFast.Controls.Hex
 
 namespace RecursionFast.Controls.Tree
 open RecursionFast

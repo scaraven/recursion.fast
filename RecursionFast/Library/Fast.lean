@@ -92,9 +92,7 @@ def wotsStepF (j i s : ℕ) (x : Digest) : Digest :=
 
 theorem wotsStepF_eq : wotsStepF = wotsStep := by
   funext j i s x
-  rw [wotsStepF, digestB_eq, pushDigest_data, ByteArray.data_push, ByteArray.data_push,
-    Array.toList_push, Array.toList_push, pushU64_data, wotsStep]
-  simp [ByteArray.data_push]
+  simp [wotsStepF, wotsStep, digestB_eq, pushDigest_data, pushU64_data, ByteArray.data_push]
 
 /-- `wotsChain` with `wotsStepF`. -/
 def wotsChainF (j i s : ℕ) : ℕ → Digest → Digest
@@ -115,12 +113,11 @@ theorem foldl_pushDigest_data (b : ByteArray) (ds : List Digest) :
     (ds.foldl pushDigest b).data.toList = b.data.toList ++ ds.flatMap Vector.toList := by
   induction ds generalizing b with
   | nil => simp
-  | cons d ds ih => rw [List.foldl_cons, ih, pushDigest_data]; simp
+  | cons d ds ih => simp [ih, pushDigest_data]
 
 theorem wotsLeafF_eq : wotsLeafF = wotsLeaf := by
   funext j ends
-  rw [wotsLeafF, digestB_eq, foldl_pushDigest_data, pushU64_data, ByteArray.data_push, wotsLeaf]
-  simp
+  simp [wotsLeafF, wotsLeaf, digestB_eq, foldl_pushDigest_data, pushU64_data, ByteArray.data_push]
 
 /-- `sigNode` through the byte-array path. -/
 def sigNodeF (l r : Digest) : Digest :=
@@ -133,8 +130,7 @@ def sigRootF : ℕ → Digest → List Digest → Digest
 
 theorem sigNodeF_eq : sigNodeF = sigNode := by
   funext l r
-  rw [sigNodeF, digestB_eq, pushDigest_data, pushDigest_data, ByteArray.data_push, sigNode]
-  simp
+  simp [sigNodeF, sigNode, digestB_eq, pushDigest_data, ByteArray.data_push]
 
 theorem sigRootF_eq : sigRootF = sigRoot := by
   funext j x p
@@ -175,8 +171,7 @@ def nodeStmtF (c₁ c₂ : Digest) : Digest :=
 
 theorem chainStepF_eq : chainStepF = chainStep := by
   funext d
-  rw [chainStepF, digestB_eq, pushDigest_data, ByteArray.data_push, chainStep]
-  simp
+  simp [chainStepF, chainStep, digestB_eq, pushDigest_data, ByteArray.data_push]
 
 theorem chainEndF_eq : chainEndF = chainEnd := by
   funext s n
@@ -187,13 +182,11 @@ theorem chainEndF_eq : chainEndF = chainEnd := by
 
 theorem leafStmtF_eq : leafStmtF = leafStmt := by
   funext h n
-  rw [leafStmtF, digestB_eq, pushU64_data, pushDigest_data, ByteArray.data_push, leafStmt]
-  simp
+  simp [leafStmtF, leafStmt, digestB_eq, pushU64_data, pushDigest_data, ByteArray.data_push]
 
 theorem nodeStmtF_eq : nodeStmtF = nodeStmt := by
   funext a b
-  rw [nodeStmtF, digestB_eq, pushDigest_data, pushDigest_data, ByteArray.data_push, nodeStmt]
-  simp
+  simp [nodeStmtF, nodeStmt, digestB_eq, pushDigest_data, ByteArray.data_push]
 
 /-! ## Acceptance -/
 

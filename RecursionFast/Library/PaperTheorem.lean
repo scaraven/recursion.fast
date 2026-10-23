@@ -104,16 +104,15 @@ theorem pot_le (k : KState R V E ε) :
         have hrec : ∀ a, pot k (c a) (L ++ [(q, a)]) ≤ k.μ (L ++ [(q, a)]) + n * ε := fun a =>
           (pot_le k _ n _ (h a) (by simp; omega)).trans (by gcongr; exact min_le_right _ _)
         calc N⁻¹ * ∑ a, pot k (c a) (L ++ [(q, a)])
-            ≤ N⁻¹ * ∑ a, (k.μ (L ++ [(q, a)]) + n * ε) := by
-              exact mul_le_mul_of_nonneg_left (Finset.sum_le_sum fun a _ => hrec a) bot_le
+            ≤ N⁻¹ * ∑ a, (k.μ (L ++ [(q, a)]) + n * ε) :=
+              mul_le_mul_of_nonneg_left (Finset.sum_le_sum fun a _ => hrec a) bot_le
           _ = N⁻¹ * ∑ a, k.μ (L ++ [(q, a)]) + n * ε := by
               rw [Finset.sum_add_distrib, mul_add, Finset.sum_const, Finset.card_univ,
                 nsmul_eq_mul, fintype_card_digest, Nat.cast_pow, Nat.cast_ofNat]
               congr 1
               rw [← mul_assoc, inv_mul_cancel₀ N_pos.ne', one_mul]
-          _ ≤ N⁻¹ * ((k.μ L + ε) * N) + n * ε := by
-              have h2 := mul_le_mul_of_nonneg_left hstep (bot_le : (0 : ℝ≥0) ≤ N⁻¹)
-              exact add_le_add h2 le_rfl
+          _ ≤ N⁻¹ * ((k.μ L + ε) * N) + n * ε :=
+              add_le_add_left (mul_le_mul_of_nonneg_left hstep bot_le) _
           _ = min 1 (k.μ L) + (n + 1 : ℕ) * ε := by
               rw [hmin, mul_comm _ N, ← mul_assoc, inv_mul_cancel₀ N_pos.ne', one_mul]
               push_cast; ring
@@ -149,10 +148,8 @@ theorem paper (k : KState R V E ε) (G : OProg (Digest × Proof)) (n : ℕ) (hG 
     prob (fun x L => (V x.1 x.2).runLog L = some true ∧
       ¬ ∃ w, E x.1 x.2 L = some w ∧ R x.1 w) G [] ≤ n * ε := by
   have hB : ∀ (x : Digest × Proof) L, ((V x.1 x.2).runLog L = some true ∧
-      ¬ ∃ w, E x.1 x.2 L = some w ∧ R x.1 w) → L.length ≤ logCap → 1 ≤ k.μ L := by
-    intro x L ⟨hacc, hext⟩ hlen
-    by_contra hlt
-    exact hext (k.final L x.1 x.2 hlen (not_le.mp hlt) hacc)
+      ¬ ∃ w, E x.1 x.2 L = some w ∧ R x.1 w) → L.length ≤ logCap → 1 ≤ k.μ L :=
+    fun x L ⟨hacc, hext⟩ hlen => not_lt.mp fun hlt => hext (k.final L x.1 x.2 hlen hlt hacc)
   calc _ ≤ pot k G [] := prob_le_pot k _ hB G n [] hG (by simpa using hn)
     _ ≤ min 1 (k.μ []) + n * ε := pot_le k G n [] hG (by simpa using hn)
     _ = n * ε := by simp [k.empty]

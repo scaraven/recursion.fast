@@ -188,11 +188,8 @@ theorem spin_loop (I : Array Word) (o : Array Word) :
 theorem spin_run (t : List Word) (f : ℕ) : spin.run t f = none := by
   unfold XProg.run
   split
-  · rename_i h
-    simp only [spin, XProg.memFor, Nat.zero_mul, Nat.add_zero] at h ⊢
-    obtain ⟨n, hn⟩ : ∃ n, f - 1 = n := ⟨_, rfl⟩
-    rw [hn]
-    match n with
+  · simp only [spin, XProg.memFor, Nat.zero_mul, Nat.add_zero]
+    match f - 1 with
     | 0 => rfl
     | 1 => rfl
     | n + 2 =>

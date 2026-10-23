@@ -56,8 +56,7 @@ def declared : Declared where
   fuel t := 8 * t
 
 theorem ws_certificateR : CertificateR declared submission :=
-  ⟨certificate, le_rfl, le_rfl, le_rfl, fun t => ⟨le_rfl, by
-    simp only [declared, extractorBudget]; omega⟩⟩
+  ⟨certificate, le_rfl, le_rfl, le_rfl, fun t => ⟨le_rfl, certificate.cap.2.2.2.1 t⟩⟩
 
 theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
     submission.acc (Signer.pk (Signer.chainStart seed)) (leafStmt (chainEnd s n) n)
@@ -65,11 +64,11 @@ theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ chain
   Controls.Relation.acc_leafSigned _ (by decide) s hn
 
 theorem fuel_low_claim : ¬ CertificateR { declared with fuel := fun _ => 25 } submission :=
-  fun h => absurd (h.bounds.2.2.2 4).1 (by simp [submission, fuel])
+  fun h => absurd (h.bounds.2.2.2 4).1 (by decide)
 
 theorem fuel_over_budget_claim :
     ¬ CertificateR { declared with fuel := fun _ => 2 ^ 49 } submission :=
-  fun h => absurd (h.bounds.2.2.2 0).2 (by simp [extractorBudget])
+  fun h => absurd (h.bounds.2.2.2 0).2 (by decide)
 
 theorem rejectAll_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = Security.rejectAll) :
     ¬ Certificate S := fun h =>
@@ -88,7 +87,7 @@ theorem delta_one_no_certificate (S : Submission) (hδ : S.δ = 1) : ¬ Certific
   (hδ ▸ h.cap.2.1).not_gt (pow_lt_one₀ (by positivity) (by norm_num) (by norm_num))
 
 theorem fuel_over_budget_no_certificate (S : Submission) (hf : S.fuel = fun _ => 2 ^ 49) :
-    ¬ Certificate S := fun h => absurd (hf ▸ h.cap.2.2.2.1 0) (by simp [extractorBudget])
+    ¬ Certificate S := fun h => absurd (hf ▸ h.cap.2.2.2.1 0) (by decide)
 
 /-- `n + 1` constant statements in a row: `2n + 1` statements in all. -/
 def rep : ℕ → XStmt
@@ -101,30 +100,23 @@ theorem size_rep (n : ℕ) : (rep n).size = 2 * n + 1 := by
   | succ n ih => simp only [rep, XStmt.size, ih]; omega
 
 theorem big_program_no_certificate (S : Submission) (hp : S.ext.body = rep (2 ^ 19)) :
-    ¬ Certificate S := fun h => by
-  have := h.cap.2.2.2.2
-  rw [hp, size_rep, progCap] at this
-  omega
+    ¬ Certificate S := fun h => absurd (size_rep _ ▸ hp ▸ h.cap.2.2.2.2) (by decide)
 
 /-! ## The key quantifier: no certified verifier trusts a signature (C-m1) -/
 
 /-- **A verifier that trusts `vk`-valid signatures is not certified** with an extractor that
 returns nothing: the certificate's `∀ vk` reaches the key of a known signer. -/
 theorem sigTrust_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = SigTrust.Vsig vk)
-    (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h => by
-  have k := (h.secure (Signer.pk fun _ _ => 0)).1.some
-  rw [hV, hE] at k
-  exact (SigTrust.sigTrust_no_kstate_none _ _ _).false k
+    (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
+  (SigTrust.sigTrust_no_kstate_none (fun _ _ => 0) _ _).false (hV _ ▸ hE ▸ (h.secure _).1.some)
 
 /-- With any extractor, a certificate would open every statement's signature, on the empty log,
 to a witness of the relation. -/
 theorem sigTrust_certificate_opens (S : Submission) (hV : ∀ vk, S.V vk = SigTrust.Vsig vk)
     (h : Certificate S) (sk : ℕ → ℕ → Digest) (c : Digest) :
     ∃ w, S.E c (SigTrust.sigProof (Signer.sign sk 0 c)) [] = some w ∧
-      Rel (S.acc (Signer.pk sk)) c w := by
-  have k := (h.secure (Signer.pk sk)).1.some
-  rw [hV] at k
-  exact SigTrust.sigTrust_extracts sk k c
+      Rel (S.acc (Signer.pk sk)) c w :=
+  SigTrust.sigTrust_extracts sk (hV _ ▸ (h.secure (Signer.pk sk)).1.some) c
 
 /-- **The twin**: under a key for which no signature verifies, the signature-trusting verifier
 is knowledge-sound for the relation of every `acc` and every extractor. -/
@@ -146,24 +138,15 @@ noncomputable def Schoice : Submission := { submission with E := Echoice }
 
 theorem Echoice_eq (c : Digest) (π : Proof) (L : Log) : Echoice c π L = decode π := by
   unfold Echoice
-  split
+  split_ifs with _ h
   · rfl
-  · split
-    · rename_i h; exact (Classical.choose_spec h).symm
-    · rename_i h; cases hd : decode π
-      · rfl
-      · exact absurd ⟨_, hd⟩ h
+  · exact (Classical.choose_spec h).symm
+  · exact (Option.eq_none_iff_forall_ne_some.mpr fun w hw => h ⟨w, hw⟩).symm
 
 /-- **Beyond the domain the named extractor may be a non-constructive choice.** -/
-theorem choice_certificate : Certificate Schoice where
-  secure vk := ⟨⟨KState.zero 0 fun L c π h => by
-      obtain ⟨w, hd, hR⟩ := check_sound (Option.some.inj h)
-      exact ⟨w, (Echoice_eq c π L).trans hd, hR⟩⟩, fun _ _ _ => le_rfl⟩
-  complete := complete
-  computes := fun c π L hπ hq ht => by
-    obtain ⟨o, ho, hl, hd⟩ := computes c π L hπ hq ht
-    exact ⟨o, ho, hl, by rw [hd]; exact (Echoice_eq c π L).symm⟩
-  cap := certificate.cap
+theorem choice_certificate : Certificate Schoice := by
+  rw [Schoice, show Echoice = E from funext fun c => funext fun π => funext (Echoice_eq c π)]
+  exact certificate
 
 /-- `proofCap + 1` zero bytes. -/
 def pad : List UInt8 := List.replicate (proofCap + 1) 0
@@ -197,18 +180,16 @@ def Sbig : Submission where
 theorem acc_false (vk c : Digest) (p : Signed) : Sbig.acc vk c p = false := by
   unfold Submission.acc
   by_cases h : p.π.size ≤ proofCap
-  · cases p.tr <;> simp [Sbig, Vbig, OProg.runSeq, show ¬ proofCap < p.π.size by omega]
+  · cases p.tr <;> simp [Sbig, Vbig, OProg.runSeq, Nat.not_lt.mpr h]
   · simp [h]
 
 theorem strip_small {π : Proof} (h : π.size ≤ proofCap) : strip π = ⟨#[]⟩ := by
-  unfold strip
-  rw [List.drop_eq_nil_of_le (by rw [Array.length_toList]; exact Nat.le_succ_of_le h)]
+  rw [strip, List.drop_eq_nil_of_le (Array.length_toList.trans_le (Nat.le_succ_of_le h))]
 
 theorem pad_length : pad.length = proofCap + 1 := List.length_replicate
 
 theorem strip_pad (b : List UInt8) : strip ⟨(pad ++ b).toArray⟩ = ⟨b.toArray⟩ := by
-  unfold strip
-  rw [List.drop_left' pad_length]
+  rw [strip, List.drop_left' pad_length]
 
 /-- The leaf clause does not depend on the acceptance predicate. -/
 theorem rel_leaf_iff (acc acc' : Digest → Signed → Bool) (c s : Digest) (n : ℕ) :
@@ -216,21 +197,18 @@ theorem rel_leaf_iff (acc acc' : Digest → Signed → Bool) (c s : Digest) (n :
 
 theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbig.ε Sbig.qV :=
   ⟨⟨KState.zero 0 fun L c π h => by
-      have hc : (decide (proofCap < π.size) && isLeaf (decode (strip π)) &&
-          check vk c (strip π)) = true := Option.some.inj h
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at hc
-      obtain ⟨⟨-, hl⟩, hc⟩ := hc
+      simp only [Sbig, Vbig, OProg.runLog, Option.some.injEq, Bool.and_eq_true,
+        decide_eq_true_eq] at h
+      obtain ⟨⟨-, hl⟩, hc⟩ := h
       obtain ⟨w, hd, hR⟩ := check_sound hc
-      refine ⟨w, hd, ?_⟩
       rw [hd] at hl
       cases w with
-      | leaf s n => exact (rel_leaf_iff _ _ c s n).mp hR
+      | leaf s n => exact ⟨_, hd, (rel_leaf_iff _ _ c s n).mp hR⟩
       | node => cases hl⟩,
     fun _ _ _ => le_rfl⟩
 
 theorem big_computes : Computes Sbig.ext Sbig.E Sbig.fuel := fun c π L hπ _ _ =>
-  ⟨[], Controls.Extractor.halt_run _ 0, by decide, by
-    show none = decode (strip π); rw [strip_small hπ]; decide +kernel⟩
+  ⟨[], Controls.Extractor.halt_run _ 0, by decide, (congrArg decode (strip_small hπ)).symm⟩
 
 theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s n)) :
     Vbig vk c ⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ = .ret true := by
@@ -247,15 +225,12 @@ theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s
 theorem big_complete (vk : Digest) :
     CompleteWithError (Rel (Sbig.acc vk)) (Sbig.P vk) (Sbig.V vk) Sbig.δ := fun c w hR => by
   cases w with
-  | node c₁ c₂ p₁ p₂ => exact absurd hR.2.1 (by rw [acc_false]; simp)
-  | leaf s n =>
-    show failProb ((Pbig vk c (.leaf s n)).bind (Vbig vk c)) [] ≤ 0
-    rw [Pbig, OProg.bind, Vbig_leaf vk c s n hR]
-    simp [failProb]
+  | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
+  | leaf s n => exact (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
 
 /-- **A certified submission whose `acc` accepts nothing** (V3-S2R-m1). -/
 theorem acc_rejects_all_certified : Certificate Sbig ∧ ∀ vk c p, Sbig.acc vk c p = false :=
-  ⟨⟨big_secure, big_complete, big_computes, ⟨zero_le, zero_le, Nat.zero_le _, fun t => by
-    show 1 ≤ _; simp only [extractorBudget]; omega, by decide⟩⟩, acc_false⟩
+  ⟨⟨big_secure, big_complete, big_computes, ⟨zero_le, zero_le, Nat.zero_le _,
+    fun _ => Nat.le_add_right_of_le Nat.one_le_two_pow, by decide⟩⟩, acc_false⟩
 
 end RecursionFast.Controls.Certificate

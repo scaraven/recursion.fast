@@ -98,9 +98,7 @@ theorem wotsEnds_sign (j : ℕ) (m : Digest) :
   have hi : i < (wotsDigits m).length := by simpa [wotsDigits_length] using h2
   have hd : (wotsDigits m)[i] ≤ 3 := wotsDigits_le m _ (List.getElem_mem _)
   simp only [List.getElem_mapIdx, List.getElem_zip, List.getElem_map, List.getElem_range]
-  have := wotsChain_add j i 0 (wotsDigits m)[i] (3 - (wotsDigits m)[i]) (sk j i)
-  rw [Nat.zero_add, Nat.add_sub_cancel' hd] at this
-  exact this.symm
+  conv_rhs => rw [← Nat.add_sub_cancel' hd, wotsChain_add, Nat.zero_add]
 
 /-! ## The path -/
 
@@ -114,14 +112,13 @@ theorem sigRoot_sibs :
     ∀ n t k, sigRoot k (node sk t k) (sibs sk t k n) = node sk (t + n) (k / 2 ^ n)
   | 0, t, k => by simp [sibs, sigRoot]
   | n + 1, t, k => by
-    have hup : (if k % 2 = 0 then sigNode (node sk t k) (node sk t (sib k))
-        else sigNode (node sk t (sib k)) (node sk t k)) = node sk (t + 1) (k / 2) := by
-      simp only [node, sib]
-      split_ifs with h
-      · rw [show 2 * (k / 2) = k by omega]
-      · rw [show 2 * (k / 2) = k - 1 by omega, Nat.sub_add_cancel (by omega : 1 ≤ k)]
-    rw [sibs, sigRoot, hup, sigRoot_sibs n (t + 1) (k / 2), Nat.div_div_eq_div_mul, ← pow_succ',
-      show t + 1 + n = t + (n + 1) by omega]
+    rw [sibs, sigRoot, show t + (n + 1) = t + 1 + n by omega, pow_succ', ← Nat.div_div_eq_div_mul,
+      ← sigRoot_sibs n (t + 1) (k / 2)]
+    congr 1
+    simp only [node, sib]
+    split_ifs with h
+    · rw [show 2 * (k / 2) = k by omega]
+    · rw [show 2 * (k / 2) = k - 1 by omega, Nat.sub_add_cancel (by omega : 1 ≤ k)]
 
 theorem sigRoot_authPath (j : ℕ) (hj : j < 2 ^ sigHeight) :
     sigRoot j (node sk 0 j) (authPath sk j) = pk sk := by
@@ -133,13 +130,8 @@ theorem sigRoot_authPath (j : ℕ) (hj : j < 2 ^ sigHeight) :
 message, the signature passes `SigOk` under the public key. -/
 theorem sigOk_sign (j : ℕ) (hj : j < 2 ^ sigHeight) (m : Digest) :
     SigOk (pk sk) m (sign sk j m) = true := by
-  have hl : (sign sk j m).ots.length = wotsLen := by simp [sign, wotsDigits_length]
-  have hp : (sign sk j m).path.length = sigHeight := sibs_length _ _ _ _
   simp only [SigOk, Bool.and_eq_true, decide_eq_true_eq]
-  refine ⟨⟨⟨hj, hl⟩, hp⟩, ?_⟩
-  have h := wotsEnds_sign sk j m
-  simp only [sign] at h ⊢
-  rw [h]
-  exact sigRoot_authPath sk j hj
+  exact ⟨⟨⟨hj, by simp [sign, wotsDigits_length]⟩, sibs_length _ _ _ _⟩,
+    wotsEnds_sign sk j m ▸ sigRoot_authPath sk j hj⟩
 
 end RecursionFast.Signer

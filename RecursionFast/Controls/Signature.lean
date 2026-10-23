@@ -31,7 +31,8 @@ verifies under at most one key, so a child signed under another key is rejected,
 `Controls/Relation.lean`).
 -/
 import RecursionFast.Library.Signer
-import RecursionFast.Controls.Blake2s
+import RecursionFast.Library.Fast
+import RecursionFast.Controls.Hex
 
 namespace RecursionFast.Controls.Signature
 open RecursionFast
@@ -54,14 +55,20 @@ theorem traceDigest_layout (tr : Trace) :
 /-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'T'+(3).to_bytes(8,'little')
 +bytes([1,2,3])+bytes([2]*32)).hexdigest())"` -/
 theorem traceDigest_kat : (traceDigest tr₁).toList =
-    hex "8a9bab6cd3b72537116ac1deb19be38c20598e1ecdd4ff9a3da4bb6153f9acc2" := by decide +kernel
+    hex "8a9bab6cd3b72537116ac1deb19be38c20598e1ecdd4ff9a3da4bb6153f9acc2" := by
+  rw [← traceDigestF_eq]
+  decide +kernel
 
 /-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'T').hexdigest())"` -/
 theorem traceDigest_empty_kat : (traceDigest []).toList =
-    hex "5b09a6d58b2575e460bb840bd94533d1be58c8e4fabefdad16cad55e76b18920" := by decide +kernel
+    hex "5b09a6d58b2575e460bb840bd94533d1be58c8e4fabefdad16cad55e76b18920" := by
+  rw [← traceDigestF_eq]
+  decide +kernel
 
 /-- **A changed answer changes the digest** (`hashlib`: `0fcc0ca2…0e69` for `tr₁'`). -/
-theorem traceDigest_changed_answer : traceDigest tr₁' ≠ traceDigest tr₁ := by decide +kernel
+theorem traceDigest_changed_answer : traceDigest tr₁' ≠ traceDigest tr₁ := by
+  rw [← traceDigestF_eq, ← traceDigestF_eq]
+  decide +kernel
 
 example {tr tr' : Trace} (h : ∀ e ∈ tr, e.1.size < 2 ^ 64) (h' : ∀ e ∈ tr', e.1.size < 2 ^ 64)
     (hb : traceBytes tr = traceBytes tr') : tr = tr' := traceBytes_inj h h' hb
@@ -94,7 +101,9 @@ def x₀ : Digest := Vector.ofFn fun i => i.val.toUInt8
 /-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'W'+(5).to_bytes(8,'little')
 +bytes([7,1])+bytes(range(32))).hexdigest())"` -/
 theorem wotsStep_kat : (wotsStep 5 7 1 x₀).toList =
-    hex "d4c46d495c47284942f4723f7d28fc0f700c23dc6983b58bae5006bf6b4f39ea" := by decide +kernel
+    hex "d4c46d495c47284942f4723f7d28fc0f700c23dc6983b58bae5006bf6b4f39ea" := by
+  rw [← wotsStepF_eq]
+  decide +kernel
 
 /-- Two steps from position 1 are the steps of positions 1 and 2. -/
 theorem wotsChain_two (j i : ℕ) (x : Digest) :
@@ -107,7 +116,9 @@ theorem wotsLeaf_length (j : ℕ) (ends : List Digest) (h : ends.length = wotsLe
 /-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'M'+bytes([1]*32)+bytes([2]*32))
 .hexdigest())"` -/
 theorem sigNode_kat : (sigNode (Vector.replicate 32 1) (Vector.replicate 32 2)).toList =
-    hex "1d65faf711ab261cb6b223748dc8a6c48cf605d75c3476b6fc4cce4345e46111" := by decide +kernel
+    hex "1d65faf711ab261cb6b223748dc8a6c48cf605d75c3476b6fc4cce4345e46111" := by
+  rw [← sigNodeF_eq]
+  decide +kernel
 
 /-- **Bit order**: at index `2 = 0b10` the leaf is the left child at level 0 and the right child
 at level 1. -/
@@ -146,9 +157,7 @@ theorem sigOk_key_unique {vk vk' m : Digest} {σ : Sig} (h : SigOk vk m σ = tru
 
 /-- Under another key, a valid signature is rejected. -/
 theorem sigOk_other_key {vk vk' m : Digest} {σ : Sig} (h' : SigOk vk' m σ = true)
-    (hne : vk ≠ vk') : SigOk vk m σ = false := by
-  cases h : SigOk vk m σ
-  · rfl
-  · exact absurd (sigOk_key_unique h h') hne
+    (hne : vk ≠ vk') : SigOk vk m σ = false :=
+  Bool.eq_false_iff.mpr fun h => hne (sigOk_key_unique h h')
 
 end RecursionFast.Controls.Signature

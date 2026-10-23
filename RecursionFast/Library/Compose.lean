@@ -90,31 +90,23 @@ private theorem iterate_treeLevel_append : ∀ (r : ℕ) (xs ys : List Digest),
     xs.length = 2 ^ r → ys.length = 2 ^ r →
       treeLevel^[r] (xs ++ ys) = treeLevel^[r] xs ++ treeLevel^[r] ys
   | 0, _, _, _, _ => rfl
-  | r + 1, xs, ys, hx, hy => by
-    rw [Function.iterate_succ_apply, Function.iterate_succ_apply, Function.iterate_succ_apply,
-      treeLevel_append xs ys (by rw [hx, pow_succ]; omega),
-      iterate_treeLevel_append r _ _ (length_treeLevel_pow hx) (length_treeLevel_pow hy)]
+  | r + 1, xs, ys, hx, hy =>
+    (congrArg treeLevel^[r] (treeLevel_append xs ys (by rw [hx, pow_succ]; omega))).trans
+      (iterate_treeLevel_append r _ _ (length_treeLevel_pow hx) (length_treeLevel_pow hy))
 
 /-- `r` levels over `2^r` digests leave one. -/
 private theorem length_iterate_treeLevel_pow : ∀ (r : ℕ) (xs : List Digest),
     xs.length = 2 ^ r → (treeLevel^[r] xs).length = 1
   | 0, _, h => h
-  | r + 1, _, h => by
-    rw [Function.iterate_succ_apply]
-    exact length_iterate_treeLevel_pow r _ (length_treeLevel_pow h)
+  | r + 1, _, h => length_iterate_treeLevel_pow r _ (length_treeLevel_pow h)
 
 /-- A digest that some number of levels reaches alone is the root. -/
 private theorem treeRoot_of_iterate {cs : List Digest} {x : Digest} (k : ℕ)
     (h : treeLevel^[k] cs = [x]) : treeRoot cs = x := by
-  unfold treeRoot
-  rcases le_total k cs.length with hk | hk
-  · rw [← Nat.sub_add_cancel hk, Function.iterate_add_apply, h,
-      iterate_treeLevel_of_length_le_one (by simp)]
-    rfl
-  · rw [← Nat.sub_add_cancel hk, Function.iterate_add_apply,
-      iterate_treeLevel_of_length_le_one (length_iterate_length_le_one cs)] at h
-    rw [h]
-    rfl
+  -- `k` more levels change nothing after `|cs|`, and `|cs|` more change nothing after `k`.
+  rw [treeRoot, ← iterate_treeLevel_of_length_le_one (length_iterate_length_le_one cs) k,
+    ← Function.iterate_add_apply, Nat.add_comm k, Function.iterate_add_apply, h,
+    iterate_treeLevel_of_length_le_one (by simp), List.headD_cons]
 
 /-- **The root over two halves of `2^r` digests** is the node statement of the halves' roots. -/
 theorem treeRoot_append {r : ℕ} {xs ys : List Digest} (hx : xs.length = 2 ^ r)
@@ -141,17 +133,9 @@ private theorem treeRoot_map_split {r : ℕ} {hs : List Digest} (hr : hs.length 
     (f : Digest → Digest) :
     treeRoot (hs.map f) =
       nodeStmt (treeRoot ((hs.take (2 ^ r)).map f)) (treeRoot ((hs.drop (2 ^ r)).map f)) := by
-  conv_lhs => rw [← List.take_append_drop (2 ^ r) hs]
-  rw [List.map_append]
-  exact treeRoot_append (by rw [List.length_map, length_take_pow hr])
-    (by rw [List.length_map, length_drop_pow hr])
-
-/-- `Forall₂` of two appended lists, from `Forall₂` of the parts. -/
-private theorem forall₂_append {α β : Type} {R : α → β → Prop} :
-    ∀ {as₁ as₂ : List α} {bs₁ bs₂ : List β}, List.Forall₂ R as₁ bs₁ → List.Forall₂ R as₂ bs₂ →
-      List.Forall₂ R (as₁ ++ as₂) (bs₁ ++ bs₂)
-  | _, _, _, _, .nil, h => h
-  | _, _, _, _, .cons hab h₁, h₂ => .cons hab (forall₂_append h₁ h₂)
+  conv_lhs => rw [← List.take_append_drop (2 ^ r) hs, List.map_append]
+  exact treeRoot_append ((List.length_map _).trans (length_take_pow hr))
+    ((List.length_map _).trans (length_drop_pow hr))
 
 /-- **Two leaf statements**, one digest, different chain ends or lengths (both at most
 `chainCap`): a collision of the tagged preimages. -/
@@ -187,8 +171,8 @@ def extract (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) (hL : L.Functional)
   if hin : ∀ e ∈ p.tr, e ∈ L then
     have hex := k.final L c p.π hlen hμ (OProg.runLog_of_runSeq hL _ _ (acc_parts hacc).2 hin)
     match hE : S.E c p.π L with
-    | some w => .inl ⟨w, by obtain ⟨w', hw', hR⟩ := hex; rw [hE] at hw'; cases hw'; exact hR⟩
-    | none => False.elim (by obtain ⟨w', hw', -⟩ := hex; rw [hE] at hw'; cases hw')
+    | some w => .inl ⟨w, hex.elim fun _ ⟨hw, hR⟩ => Option.some.inj (hE.symm.trans hw) ▸ hR⟩
+    | none => False.elim (hex.elim fun _ ⟨hw, _⟩ => Option.some_ne_none _ (hw.symm.trans hE))
   else .inr ⟨p, (acc_parts hacc).1, hin⟩
 
 /-- **The walk over the tree** of `2^r` leaves with chain ends `hs` of length `n`. -/
@@ -201,7 +185,7 @@ def walk (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) (hL : L.Functional)
     | .inr f => .forgery f
     | .inl ⟨.leaf s m, hw⟩ =>
       if he : chainEnd s m = h ∧ m = n then
-        .starts [s] (.cons (by rw [← he.2]; exact he.1) .nil)
+        .starts [s] (.cons (he.2 ▸ he.1) .nil)
       else .collision (leafCollision (h := h) (n := n) hn hw.1 he hw.2)
     | .inl ⟨.node _ _ _ _, hw⟩ => .collision (leafNodeCollision (h := h) (n := n) hw.1)
   | 0, [], hr, _, _ => absurd hr (by simp)
@@ -214,13 +198,10 @@ def walk (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) (hL : L.Functional)
     | .inl ⟨.node c₁ c₂ p₁ p₂, hw⟩ =>
       if he : c₁ = treeRoot ((hs.take (2 ^ r)).map fun h => leafStmt h n) ∧
           c₂ = treeRoot ((hs.drop (2 ^ r)).map fun h => leafStmt h n) then
-        match walk k hL hlen hμ n hn r (hs.take (2 ^ r)) (length_take_pow hr) p₁
-            (by rw [← he.1]; exact hw.2.1),
-          walk k hL hlen hμ n hn r (hs.drop (2 ^ r)) (length_drop_pow hr) p₂
-            (by rw [← he.2]; exact hw.2.2) with
+        match walk k hL hlen hμ n hn r (hs.take (2 ^ r)) (length_take_pow hr) p₁ (he.1 ▸ hw.2.1),
+          walk k hL hlen hμ n hn r (hs.drop (2 ^ r)) (length_drop_pow hr) p₂ (he.2 ▸ hw.2.2) with
         | .starts ss₁ h₁, .starts ss₂ h₂ =>
-          .starts (ss₁ ++ ss₂)
-            (by rw [← List.take_append_drop (2 ^ r) hs]; exact forall₂_append h₁ h₂)
+          .starts (ss₁ ++ ss₂) (List.take_append_drop (2 ^ r) hs ▸ List.rel_append h₁ h₂)
         | .collision c, _ => .collision c
         | .forgery f, _ => .forgery f
         | .starts _ _, .collision c => .collision c

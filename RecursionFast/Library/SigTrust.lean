@@ -36,11 +36,8 @@ def sigProof (σ : Sig) : Proof := ⟨(wordsBytes (sigWords σ)).toArray⟩
 
 theorem sigOf_sigProof (σ : Sig) (hi : σ.idx < 2 ^ 64) (ho : σ.ots.length = wotsLen)
     (hp : σ.path.length = sigHeight) : sigOf (sigProof σ) = some σ := by
-  have h := readSig_sigWords σ hi ho hp []
-  rw [List.append_nil] at h
-  simp only [sigOf, sigProof, packBytes_wordsBytes, StateT.run', StateT.run] at h ⊢
-  show (fun p => p.1) <$> readSig (sigWords σ) = some σ
-  rw [show readSig (sigWords σ) = some (σ, []) from h]; rfl
+  rw [sigOf, sigProof, packBytes_wordsBytes]
+  exact congrArg (Prod.fst <$> ·) (List.append_nil (sigWords σ) ▸ readSig_sigWords σ hi ho hp [])
 
 /-- **The signature-trusting verifier**: accept, with no query, a proof carrying a signature of
 the statement under `vk`. -/
@@ -54,7 +51,7 @@ log. -/
 theorem Vsig_accepts (sk : ℕ → ℕ → Digest) (c : Digest) :
     (Vsig (Signer.pk sk) c (sigProof (Signer.sign sk 0 c))).runLog [] = some true := by
   have hs : sigOf (sigProof (Signer.sign sk 0 c)) = some (Signer.sign sk 0 c) :=
-    sigOf_sigProof _ (by simp [Signer.sign]) (by simp [Signer.sign, Signer.wotsDigits_length])
+    sigOf_sigProof _ (Nat.two_pow_pos 64) (by simp [Signer.sign, Signer.wotsDigits_length])
       (Signer.sibs_length _ _ _ _)
   simp only [Vsig, hs, OProg.runLog, Signer.sigOk_sign sk 0 (by decide) c]
 
@@ -62,7 +59,7 @@ theorem Vsig_accepts (sk : ℕ → ℕ → Digest) (c : Digest) :
 theorem sigTrust_extracts {R : Digest → Wit → Prop} {E : Digest → Proof → Log → Option Wit}
     {ε : ℝ≥0} (sk : ℕ → ℕ → Digest) (k : KState R (Vsig (Signer.pk sk)) E ε) (c : Digest) :
     ∃ w, E c (sigProof (Signer.sign sk 0 c)) [] = some w ∧ R c w :=
-  k.final [] c _ (Nat.zero_le _) (by rw [k.empty]; exact one_pos) (Vsig_accepts sk c)
+  k.final [] c _ (Nat.zero_le _) (k.empty ▸ one_pos) (Vsig_accepts sk c)
 
 /-- **A signature is no knowledge**: the signature-trusting verifier under a known signer's key
 has a knowledge state, for some extractor, exactly when every statement has a witness. -/
@@ -83,9 +80,7 @@ theorem sigTrust_ks_of_unsignable {vk : Digest} (hvk : ∀ m σ, SigOk vk m σ =
     (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
     KS R (Vsig vk) E 0 0 := by
   refine ⟨⟨KState.zero 0 fun L c π h => ?_⟩, fun _ _ _ => le_rfl⟩
-  simp only [Vsig, OProg.runLog, Option.some.injEq] at h
-  split at h
-  · rw [hvk] at h; cases h
-  · cases h
+  simp only [Vsig, OProg.runLog, Option.some.injEq, hvk] at h
+  split at h <;> cases h
 
 end RecursionFast.SigTrust
