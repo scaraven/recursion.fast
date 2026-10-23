@@ -41,9 +41,10 @@ in the user's absence.
 - **The v4 build record**: `docs/v4/` (the brief, the design attack, the stage results).
 - **v3**: the contract, library, controls and harness tools are on the branch
   `v3/contract-archive`. **v2**: the tag `v2-archive`.
-- **Entries**: [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions),
-  still pinned to this repository's commit `15e4ae5` (v3). Its guidance still calls v3 the design
-  in force; moving it to v4 needs a pull request there.
+- **Entries**: [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions).
+  Its branch `v4/flock-baseline` pins this branch's contract (`ea2e8ab`), carries the v4 rulebook
+  and the first certified v4 entry, `spartan-srom`; its `main` still pins `15e4ae5` (v3) until that
+  branch is merged.
 
 ## Build
 

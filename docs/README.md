@@ -72,7 +72,9 @@ next direction, the CGH guide's §0 and the D4 proposal's §1; the rest as neede
   entry is certified against the archived contract: S2a is certified at `15e4ae5` and the honest
   entry at `05fde28`, both with the interim harness. Its guidance (`CLAUDE.md`, `AGENTS.md`,
   `docs/README.md`) still describes DESIGN-v3 as the design in force and stage S2 as the task in
-  front of it; that guidance is frozen as of 2026-10-22, and a follow-up PR there should say so.
+  front of it; that guidance is frozen as of 2026-10-22. Its branch `v4/flock-baseline` moves the
+  pin to the v4 contract (`ea2e8ab`), replaces the guidance with the v4 rulebook and adds the first
+  certified v4 entry, `spartan-srom`.
 - **Logs** (`logs/` in both repositories) are gitignored and local to the development VM; the
   lessons document (§9) says which log each number comes from and which probes were archived.
 - The core's `main` was stripped to a skeleton when v3 stopped (this `docs/` folder, a stub Lean

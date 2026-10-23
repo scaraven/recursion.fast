@@ -37,10 +37,11 @@ and the Lean text differ, the Lean text is the rule and the design has a bug.
   branch `v3/contract-archive`, together with the original v3 design, its amendment ledger and the
   stage records and reviews that the `docs/v3-*.md` documents were compiled from.
 - **v2:** the tag `v2-archive` (`git show v2-archive:<path>`).
-- **Entries:** https://github.com/scaraven/recursion.fast-submissions, which pins this repository
-  at `15e4ae5` (v3) as its `.contract` submodule. Its own guidance (`CLAUDE.md`, `AGENTS.md`,
-  `docs/`) still calls v3 the design in force; moving the pin and the rulebook to v4 needs a pull
-  request there, and the pin moves only to a core commit on the remote, in its own commit (C14).
+- **Entries:** https://github.com/scaraven/recursion.fast-submissions. Its branch
+  `v4/flock-baseline` pins this repository at `ea2e8ab` (the v4 contract after its fix pass) as the
+  `.contract` submodule, with the v4 rulebook (`AGENTS.md`) and the certified baseline
+  `spartan-srom`; its `main` still pins `15e4ae5` (v3) until that branch is merged. The pin moves
+  only to a core commit on the remote, in its own commit (C14).
 - **Read-only references** (never edit, never build inside): the design workspace
   `/home/devops/CambridgePQ/recursion.fast/` (`DISCUSSION.md` holds the user's decisions Q1–Q6;
   `report/sections/*.tex` is the v1.0 report). Its `design/DESIGN-v3-narg-rom.md` is the
