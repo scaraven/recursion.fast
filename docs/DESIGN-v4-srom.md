@@ -74,7 +74,7 @@ season shape is.
 | Status | |
 |---|---|
 | ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape |
-| ran on a GitHub runner | CI run 39952420263 (AMD EPYC 9V45): Lean job 7 min 21 s, service and sandbox tests pass; earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms), signatures equal to the Lean signer's. The end-to-end smoke has not yet run there |
+| ran on a GitHub runner | CI run 39966237935, all green (AMD EPYC 9V45 and 9V74, image ubuntu24 20261012.334.1): Lean job 7 min 29 s; service and sandbox tests; the end-to-end smoke in 9 min 18 s, 16 checks: the witness-sending entry certified with the Lean kernel and ACCEPTed with the compiled `accF` badge and a toy assembly prover, PROVISIONAL and REJECT paths, the job plan's missing part ⇒ ERROR, liveness, canaries, the DoS column, and five broken provers rejected for their stated reasons. Earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms); signatures equal to the Lean signer's |
 | never ran | the evaluation workflow and its attestations; any entry at the season-1 shape (C-m10), so nothing is ranked |
 
 | | v3 | v4 |
@@ -1061,7 +1061,7 @@ V4-16 where they differ.
 
 1. **The full evaluation on GitHub**: the evaluation workflow, its six benchmark jobs and the
    attestation have never run; the caller template is not yet installed in the submissions
-   repository; the end-to-end smoke has not yet run on a runner (§2.8).
+   repository. (The end-to-end smoke of `ci.yml` does run on a runner: run 39966237935.)
 2. **Build caps from a runner run** of a real entry's certificate job (C-M2, C10).
 3. **`T_V` and binary fields** (Q11). Both sides of `T_V ≤ T_triv,best / R` are compiled Lean, but
    the chain checker's BLAKE2s compiles to fast word code while Lean has no carry-less multiply, so
