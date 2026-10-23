@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # The organiser's preparation of a machine (TRUSTED; run before any entry code exists on it):
-#   1. build the organiser's Lean targets (contract, library, controls) in ORG (Mathlib from its
-#      cache on CI: `lake exe cache get` happens before this script, never on a shared tree);
+#   1. build the organiser's Lean targets (contract, library, controls, and CompPoly's BF64/Ext3
+#      field with its byte codec) in ORG (Mathlib from its cache on CI: `lake exe cache get`
+#      happens before this script, never on a shared tree; CompPoly builds from source);
 #   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, chaincheck);
 #   3. write the import allowlist (gate rule 6: the import closure of the organiser's roots) and the
 #      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
 #   4. build, once and outside any sandbox, what Lake links into every badge executable: the
 #      compiled objects of every module of the organiser's import closure and the external C
-#      libraries of the package tree (a throw-away executable that imports `RecursionFast`), so that
+#      libraries of the package tree (a throw-away executable that imports `RecursionFast` and the
+#      CompPoly roots), so that
 #      a badge build in the sandbox writes the package tree only for modules an entry adds;
 #   5. build the service (`cargo build --release`).
 #
@@ -17,8 +19,13 @@ set -euo pipefail
 ORG=$(cd "${1:?usage: org-setup.sh ORG}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOG=$ORG/logs/org-setup; mkdir -p "$LOG" "$ORG/.lake/rf"
-ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls}
-TARGETS=${RF_ORG_TARGETS:-RecursionFast}
+# The organiser's roots: an entry may import any module of their import closure (gate rule 6).
+# CompPoly's binary field `BF64`/`Ext3` and its byte codec are organiser-built and pinned (v3
+# precedent 09668b5, FIXLIST Q2): their modules are in the manifest as pinned, so the gate reports
+# their `@[csimp]` lemma instead of rejecting it as an untrusted one.
+COMPPOLY=CompPoly.Fields.Binary.BF64.Ext3,CompPoly.Fields.Binary.BF64.Bytes
+ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls,$COMPPOLY}
+TARGETS=${RF_ORG_TARGETS:-RecursionFast +${COMPPOLY//,/ +}}
 t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
 
 step "1 organiser build ($TARGETS)"
@@ -36,7 +43,8 @@ step "4 compiled objects and external libraries for the badge executables"
 X=$(mktemp -d "$ORG/.lake/rf/extlibs.XXXXXX")
 PK=$(python3 -I -c 'import json,os,sys; o=sys.argv[1]; m=json.load(open(os.path.join(o,"lake-manifest.json"))); print(os.path.realpath(os.path.join(o, m.get("packagesDir") or ".lake/packages")))' "$ORG")
 cp "$ORG/lean-toolchain" "$X/"
-printf 'import RecursionFast\ndef main : IO Unit := pure ()\n' > "$X/Nop.lean"
+{ echo "import RecursionFast"; for m in ${COMPPOLY//,/ }; do echo "import $m"; done
+  echo "def main : IO Unit := pure ()"; } > "$X/Nop.lean"
 python3 -I - "$ORG" "$X" "$PK" <<'EOF'
 import json, os, sys
 org, x, pk = sys.argv[1:]

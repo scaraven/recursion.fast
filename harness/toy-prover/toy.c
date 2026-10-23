@@ -12,8 +12,9 @@
  *   prover node DIR       ready/go handshake; DIR/child{1,2}.{stmt,bin} -> DIR/proof.bin
  *
  * Built with -DBROKEN_CHAIN (proves a chain from a changed start), -DBROKEN_UNSIGNED (no SIGN, a
- * zero signature) or -DBROKEN_STALE (a signature made by another service, compiled in from
- * stale_sig.h) it is one of the smoke's deliberately broken provers. The committed assembly
+ * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
+ * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up) or
+ * -DBROKEN_OOM (allocates without bound) it is one of the smoke's deliberately broken provers. The committed assembly
  * (honest/prover.s) is `gcc -S -O2` of this file with no option.
  */
 #define _GNU_SOURCE
@@ -120,19 +121,21 @@ static int unhex(uint8_t *out, const char *s, size_t n) {
 /* ---- the oracle service: one SIGN of the empty trace --------------------------------------- */
 #define SIG_WIRE 4772   /* idx:u32 ‖ 133 × 32 ‖ 16 × 32 */
 static int svc = -1;
+static void connect_svc(void) {
+    if (svc >= 0) return;
+    const char *path = getenv("RF_ORACLE"); if (!path) die("RF_ORACLE unset");
+    struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, path, sizeof a.sun_path - 1);
+    svc = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (svc < 0 || connect(svc, (struct sockaddr *)&a, sizeof a)) die("cannot connect to the oracle service");
+}
 static void sign_empty(uint8_t sig[SIG_WIRE]) {
 #if defined(BROKEN_UNSIGNED)
     memset(sig, 0, SIG_WIRE);
 #elif defined(BROKEN_STALE)
     memcpy(sig, stale_sig, SIG_WIRE);
 #else
-    if (svc < 0) {
-        const char *path = getenv("RF_ORACLE"); if (!path) die("RF_ORACLE unset");
-        struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX;
-        strncpy(a.sun_path, path, sizeof a.sun_path - 1);
-        svc = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (svc < 0 || connect(svc, (struct sockaddr *)&a, sizeof a)) die("cannot connect to the oracle service");
-    }
+    connect_svc();
     uint8_t h[16] = {2};                      /* SIGN, count 0, body 0 */
     if (write(svc, h, 16) != 16) die("SIGN write");
     size_t got = 0;
@@ -206,7 +209,29 @@ static void handshake(void) {
     if (!fgets(line, sizeof line, stdin) || strncmp(line, "go", 2)) die("no go");
 }
 
+#ifdef BROKEN_CAP
+/* One QUERY of 2^20 + 1 bytes: the service refuses it (status 2) and closes the connection. */
+static void over_cap(void) {
+    connect_svc();
+    size_t n = (1u << 20) + 1;
+    buf b = {0, 0};
+    uint8_t h[16] = {1}; h[4] = 1; put64(h + 8, 4 + n);
+    app(&b, h, 16); uint8_t l[4] = {(uint8_t)n, (uint8_t)(n >> 8), (uint8_t)(n >> 16), 0}; app(&b, l, 4);
+    uint8_t *z = calloc(n, 1); app(&b, z, n);
+    if (write(svc, b.p, b.n) != (ssize_t)b.n) die("QUERY write");
+    if (read(svc, h, 16) != 16) die("QUERY read");
+    fprintf(stderr, "toy prover: the service answered status %d to a query of 2^20 + 1 bytes\n", h[0]);
+    exit(3);
+}
+#endif
+
 static int mode_tree(void) {
+#ifdef BROKEN_CAP
+    over_cap();
+#endif
+#ifdef BROKEN_OOM
+    for (;;) { char *p = malloc(1 << 26); if (!p) die("malloc"); memset(p, 1, 1 << 26); }
+#endif
     buf j = readfile("leaves.json");
     app(&j, "", 1);
     char *p = strstr((char *)j.p, "\"n\":"); if (!p) die("leaves.json: n");

@@ -89,6 +89,27 @@ def memcap(mem: str, unit: str):
     return ["prlimit", f"--as={parse_bytes(mem)}", "--"]
 
 
+def scope_oom(unit: str, wait: float = 2.0):
+    """`(True, peak bytes)` if the scope `unit` was killed for memory (systemd keeps a failed scope
+    with `Result=oom-kill`), else `(False, None)`; clears the failed unit. Always `(False, None)`
+    without systemd (an address-space limit shows as an allocation failure instead)."""
+    if memcap_method() != "systemd":
+        return False, None
+    deadline = time.monotonic() + wait
+    while True:
+        out = subprocess.run(["systemctl", "--user", "show", f"{unit}.scope", "-p", "Result", "-p", "MemoryPeak"],
+                             capture_output=True, text=True, timeout=30).stdout
+        kv = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
+        if kv.get("Result") == "oom-kill" or time.monotonic() > deadline:
+            break
+        time.sleep(0.1)
+    oom = kv.get("Result") == "oom-kill"
+    if oom:
+        subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True, timeout=30)
+    peak = kv.get("MemoryPeak", "")
+    return oom, int(peak) if peak.isdigit() else None
+
+
 def kill_unit(unit: str):
     """Kill every process left in the scope `unit` (no-op without systemd)."""
     if memcap_method() == "systemd":
@@ -183,6 +204,10 @@ class Sandbox:
             os.write(self.block_w, b"x")
             os.close(self.block_w)
             self.block_w = None
+
+    def oom(self, wait=2.0):
+        """`(killed for memory?, peak bytes)` of this sandbox's scope (after the command ended)."""
+        return scope_oom(self.unit, wait)
 
     def kill(self):
         """Kill the sandbox and everything in it."""

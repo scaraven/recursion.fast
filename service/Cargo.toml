@@ -9,6 +9,11 @@ publish = false
 # No dependencies: std only (trusted runtime, BRIEF §4.3).
 [dependencies]
 
+[features]
+# Fixed keys for the known-answer tests (`--insecure-test-keys`); never in the release binary the
+# runner uses: tests build it apart with `--features insecure-test-keys --target-dir target/test-keys`.
+insecure-test-keys = []
+
 [lib]
 name = "rf_oracle"
 path = "src/lib.rs"

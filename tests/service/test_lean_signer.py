@@ -26,7 +26,8 @@ from test_service import SEED, start, stop  # noqa: E402
 
 SIGNER = os.path.abspath(sys.argv[1])
 # test_service reads its binary from argv[1] at import; here argv[1] is the signer
-test_service.BIN = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "service", "target", "release", "rf-oracle")
+test_service.BIN = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "service", "target", "test-keys", "release",
+                                                                       "rf-oracle")
 
 
 def lean_sign(j, m):

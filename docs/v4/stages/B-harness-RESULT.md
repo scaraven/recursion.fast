@@ -1,12 +1,14 @@
 # Stage B (v4, SROM): the trusted runtime — RESULT
 
-Status (2026-10-23): **done, except a run on GitHub.** Everything below was built and run on the
-development VM: 32 vCPU, QEMU virtual CPU with AVX2 and AVX-512, 62 GB, other agents running, load
-average 14–25. The workflows are written and parse, but have not run on GitHub; the orchestrator
-pushes the branch to run them. Worktree `/home/devops/Verified-zkEVM/recursion.fast-v4h`, branch
-`v4/harness` on `85f0985` (stage A merged); nothing is committed.
+Status (2026-10-23): **done, with the fix pass (§9) applied.** Unless a row says otherwise,
+everything below was built and run on the development VM: 32 vCPU, QEMU virtual CPU with AVX2 and
+AVX-512, 62 GB, other agents running, load average 14–25.
 
-**End to end** (`tests/harness/smoke.py --org`, 11 checks pass in 5 min 38 s,
+The first GitHub run (run 39935079265) supplied the runner numbers in §3. The fix pass is
+uncommitted on top of `2e91171`; the orchestrator pushes it to run CI again. Worktree
+`/home/devops/Verified-zkEVM/recursion.fast-v4h`, branch `v4/harness`.
+
+**End to end** (`tests/harness/smoke.py --org`; 15 checks pass in 7 min 18 s after the fix pass,
 `logs/harness/smoke-e2e.log`; smoke shape `r = 2`, `n = 16`, `M = 4`):
 
 - **Certified.** The library's witness-sending entry, with its claim, passes the certificate job
@@ -22,8 +24,14 @@ pushes the branch to run them. Worktree `/home/devops/Verified-zkEVM/recursion.f
   extractor interpreter.
 - **REJECT**, each with the root rejected by `acc`: three deliberately broken provers, namely a
   wrong chain end, an unsigned trace, and a signature from another run's service.
+- **REJECT**, each with its cause named in the reason (fix pass):
+  - a prover that asks a query above the cap, with the service's refusal (Q13);
+  - a prover over its memory cap, as "killed: out of memory" (Q14).
 - **PROVISIONAL**, not comparable: the same entry with `certified := sorry`.
+- **PROVISIONAL** "unchecked, not refuted": the entry whose Lean-kernel run exceeds a 400 MiB cap
+  (Q12).
 - **REJECT** by the source rule, before anything is built: an entry with `#eval`.
+- **Never built**: an entry module that `Solution` does not import (Q7).
 
 ## 1. What was built
 
@@ -42,26 +50,27 @@ pushes the branch to run them. Worktree `/home/devops/Verified-zkEVM/recursion.f
 
 ### 1.1 Line counts
 
-Source: `logs/harness/loc-runtime.log`. "Code" means non-blank, non-comment lines.
+Source: `logs/harness/loc-runtime.log`, after the golf GB and the fix pass. "Code" means
+non-blank, non-comment lines.
 
 | Component | Lines | Code |
 |---|---:|---:|
-| service (includes 54 lines of unit tests; the AVX2 path is about 150) | 1,250 | 1,002 |
-| runner | 1,244 | 959 |
-| sandbox | 318 | 220 |
-| badge mains | 210 | 133 |
-| proof-side order | 557 | 404 |
+| service (includes the unit tests; GB golfed it from 1,002) | 1,224 | 963 |
+| runner | 1,332 | 1,028 |
+| sandbox | 343 | 238 |
+| badge mains | 214 | 135 |
+| proof-side order | 620 | 449 |
 | proof-side tools ported from v3 (source rule, olean manifest, gate) | 1,074 | 697 |
 | CI scripts | 73 | 49 |
 | calibration generator | 209 | 161 |
-| untrusted: `rf-bench`, toy prover | 415 | 362 |
+| untrusted: `rf-bench`, toy prover | 440 | 384 |
 
-**Total trusted: about 3,660 code lines.**
+**Total trusted: 3,559 code lines.**
 
 | Part of the total | Code lines |
 |---|---:|
-| Rust service | 1,002 |
-| Python, shell and Lean | about 2,660 |
+| Rust service | 963 |
+| Python, shell and Lean | 2,596 |
 | of which v3's ported proof-side tools | 697 |
 
 The service exceeds D4's estimate of 300–400 lines. The difference is the SIMD path, the caps,
@@ -120,9 +129,42 @@ the liveness log and the lifecycle. A scalar-only service would be about 850 cod
   - the instance (starts published after the run);
   - the score (`S`, `o_est`, every repeat).
 
-## 3. Measurements (development VM; not a GitHub runner)
+## 3. Measurements
 
-### Service
+### On the GitHub-hosted runner (run 39935079265, `ubuntu-24.04`, 4 vCPU)
+
+| What | Result |
+|---|---|
+| `lean` job: `lake exe cache get`, the organiser build, `org-setup.sh` and the checks | 8 min 53 s cold; 4 min 12 s with the package tree from `actions/cache` |
+| chain checker (`T_triv`), `2^24` compressions, one pinned core | 1.776–1.785 s, so `T_V` ≈ 178 ms at `R = 10` |
+| the service's signatures against the compiled Lean signer | passed |
+
+Two defects surfaced in that run:
+
+- Python 3.12's `communicate` failed the service and sandbox jobs (Q1, fixed in GB).
+- A failing `acc`-probe step passed, because `run:` had no `pipefail` (Q8, fixed here).
+
+The other numbers below are from the development VM.
+
+### Service (development VM; after the golf GB, `docs/v4/reviews/GB-golf.md` §1.2)
+
+GB's interleaved best-of measurements (`logs/golf-B/`):
+
+| What | Before golf | After golf |
+|---|---:|---:|
+| `QUERY` kernel, ns per block (4,096 × 64 B) | 50.8 | **38.7** |
+| `QUERY` kernel, ns per block (4,096 × 1 KiB) | 60.5 | 37.6 |
+| scalar path, ns per block | 270 | 147 |
+| `QUERY`, one connection, M calls/s (4,096 × 64 B) | 6.08 | **7.37** |
+| `QUERY`, 32 connections, M calls/s (4,096 × 64 B) | 101 | **125** |
+| round trip, µs | 28.4 | 26.9 |
+| `SIGN` of 2^16 queries, ms | 46 | 34 |
+| trace digest of the `acc` probe's trace, ms | 39.8 | 21.9 |
+| keygen, 1 thread, s | 2.66 | 2.22 |
+| keygen, 4 threads, s | about 0.70 | about 0.53 |
+| keygen, 32 threads, ms | 244 | 147 |
+
+The table below is the pre-golf build's own measurement, kept with its logs.
 
 | What | Result | Log |
 |---|---|---|
@@ -139,8 +181,8 @@ the liveness log and the lifecycle. A scalar-only service would be about 850 cod
 
 | What | Result | Log |
 |---|---|---|
-| **`acc` on a 2^16-query trace** (100 B per query, 9.18 MB file; badge `verify` on a pinned core) | accept: **135–155 ms**. Reject at `SigOk` (changed answer or signature): 102–116 ms, of which `traceDigestF` is about 72 ms (stage A) and parsing about 30 ms | `logs/harness/accprobe.log` |
-| **`T_triv,best`** (chain checker, season shape, `2^24` compressions, one pinned core) | **3.097 s**, 184.6 ns per compression (runs: 3.10, 3.44, 3.18 s). So `T_V` = 310 ms at `R = 10` | `logs/harness/chaincheck-season.log` |
+| **`acc` on a 2^16-query trace** (100 B per query, 9.18 MB file; badge `verify`, with the fix pass's timing barrier, on a pinned core; `tr.length ≤ qV` checked since `ea2e8ab`) | accept: **129–150 ms**. Reject at `SigOk` (changed answer or signature): 96–100 ms. GB's split of the check: parse 17 ms, `traceDigestF` 65 ms, `SigOkF` 0.24 ms, `runSeq` 44 ms. On the runner the cap is about 178 ms | `logs/harness/accprobe.log` |
+| **`T_triv,best`** (chain checker, season shape, `2^24` compressions, one pinned core) | VM: **3.097 s**, 184.6 ns per compression (runs: 3.10, 3.44, 3.18 s), so `T_V` = 310 ms at `R = 10`. Runner: 1.78 s, so `T_V` ≈ 178 ms | `logs/harness/chaincheck-season.log` |
 | sandbox overhead | trivial program: 1.4 ms plain; 55 ms in the sandbox from spawn to teardown. Timed part of a T run (from the release of `exec` to the reported exit): **8.2 ms** median, so the toy's T run fell from 64 ms to 9.2 ms. Timed handshake of a stream request: **0.43 ms** | `logs/harness/sandbox-overhead.log` |
 | witness-sending root check (smoke) | 50 ms for a 33,952-byte root, dominated by the verifier's word decoder (stage A open question 1) | `smoke-e2e.log` |
 
@@ -151,7 +193,8 @@ the liveness log and the lifecycle. A scalar-only service would be about 850 cod
 | organiser build (`lake build`, cold for this package) | 2 min 54 s | `logs/lean/build-org.log` |
 | `org-setup.sh` | first time 177 s, of which Lake's external C libraries took 138 s; compiled objects of the organiser's closure (964 Mathlib modules) 43 s; later runs 65 s | `logs/harness/org-setup.log`, `logs/org-setup/` |
 | certificate job, witness-sending entry | 2 min 33 s, of which the comparator (Lean kernel) took 68–81 s | `logs/harness/eval-cert-ws.log`, `smoke-e2e.log` |
-| **nanoda** on the same entry | **not finished: 17.6 GB RSS after 10 min 51 s**, still growing when the session stopped. It does not fit a 16 GB runner. The Lean kernel accepted the same export | `logs/harness/nanoda-ws.log` |
+| **nanoda** on the same entry | **not finished: 17.6 GB RSS after 10 min 51 s**, still growing when the session stopped. It does not fit a 16 GB runner. The Lean kernel accepted the same export. The baseline team's certified 17k-line entry: nanoda OOM-killed at 13.65 GB in a 14 GiB scope after 375 s; the Lean-kernel comparator accepted in 372 s at 3.7 GB peak | `logs/harness/nanoda-ws.log`; submissions `logs/f3/` |
+| Lean kernel over a 400 MiB cap (the Q12 smoke test) | killed for memory at 0.39 GiB, reported as its own outcome | `smoke-e2e.log` |
 | benchmark job, smoke shape | 9.4 s | `logs/harness/eval-bench-ws.log` |
 | axiom audit (compiled) | PASS, 28 s | `logs/lean/axiomaudit.log` |
 | badge executables | 140 MB each (every object of the import closure is linked) | — |
@@ -161,14 +204,16 @@ the liveness log and the lifecycle. A scalar-only service would be about 850 cod
 | Test | Result | Log |
 |---|---|---|
 | `cargo test` | 4 unit tests: RFC 7693 `"abc"`; the empty message; AVX2 = scalar on 20 lengths, keyed and unkeyed; the WOTS digits | — |
-| `tests/service/test_service.py` | **89 checks pass**: see the list below | `logs/service/test_service.log` |
+| `tests/service/test_service.py` (against the `insecure-test-keys` test build) | **90 checks pass**, on Python 3.14 and 3.12.15 (uv). The list is below; the 90th is that the release binary rejects `--insecure-test-keys` (RB-m5) | `logs/harness/test_service-py3.{14,12}.log` |
 | `tests/service/test_lean_signer.py` | **byte-identical to stage A's compiled Lean signer**: the service's `vk` and its first two signatures (an empty trace; 3 queries). The Lean `SigOkF` accepts them | `logs/service/test_lean_signer.log` |
-| `tests/harness/test_sandbox.py` | **45 checks pass** against a hostile prover: see the list below | `logs/harness/test_sandbox.log` |
-| `tests/gate/check.sh` | pass: the witness-sending certificate (9,767 constants, standard axioms); the backdoor, with `V`, `P`, `ext` compiled one by one. Rejected: a noncomputable `ext` (rule 4), `@[implemented_by]` (rule 3), a `partial` verifier (rule 2) | `logs/harness/gate-fixtures.log` |
+| `tests/harness/test_sandbox.py` | **45 checks pass** against a hostile prover, on Python 3.14 and 3.12.15. The list is below | `logs/harness/test_sandbox-py3.{14,12}.log` |
+| `tests/gate/check.sh` | pass: the witness-sending certificate (9,759 constants after `ea2e8ab`, standard axioms); the backdoor, with `V`, `P`, `ext` compiled one by one; an entry importing CompPoly's `BF64`/`Ext3`, whose `@[csimp]` lemma is reported as a pinned dependency's note (Q2). Rejected: a noncomputable `ext` (rule 4), `@[implemented_by]` (rule 3), a `partial` verifier (rule 2) | `logs/harness/gate-fixtures.log` |
 | `tests/source-rule/check.sh` | 95 rejected forms and 4 forgeries caught (v3's fixtures) | — |
 | axiom audit (stage A's, compiled in `harness/lean-tools`) | PASS on all `RecursionFast.*` modules | `logs/lean/axiomaudit.log` |
-| `tests/harness/smoke.py --mock` | the runner with a Python stand-in badge: honest PASS; the three broken provers rejected | `logs/harness/smoke-mock.log` |
-| `tests/harness/smoke.py --org` | as in the summary at the top | `logs/harness/smoke-e2e.log` |
+| `tests/harness/smoke.py --mock` | the runner with a Python stand-in badge: honest PASS; the five broken provers rejected, each with its cause | `logs/harness/smoke-mock.log` |
+| `tests/harness/smoke.py --org` | 15 checks, as in the summary at the top | `logs/harness/smoke-e2e.log` |
+| `tests/harness/timing/TimingProbe.lean` | the timing barrier holds (Q10, §9) | `logs/harness/timing-probe.log` |
+| `tests/harness/test_tv.py` | 5 checks of the `T_V` rule with a stub badge (RB-M1): a transient spike passes on its best time; three samples above the cap fail; only samples above the cap are measured again | — |
 
 The 89 service checks:
 
@@ -278,8 +323,12 @@ once in the gate tree. The gate and the badge build run inside it too.
     the tree's `.lake` (writable);
   - applies the same seccomp filter, with no network and an empty environment.
 - **The comparator runs outside the sandbox**, as in v3, so the entry's build cannot fake its
-  verdict. It runs under a 14 GB memory cap, with the Lean kernel, and with nanoda where it fits
-  (it does not at 16 GB, §3).
+  verdict.
+  - It runs twice, each run in its own memory-capped scope (default 14 GB): first with the Lean
+    kernel alone, then, with `--nanoda`, with nanoda (Q12).
+  - Each run's outcome is `ok`, `rejected`, `over budget` or `timeout`, and only its exit code
+    decides it (RB-m2).
+  - nanoda does not fit 16 GB (§3).
 - **Manifest and binding:**
   - the organiser's oleans are checked against the manifest before and after every step;
   - the gate tree's artifacts must equal the comparator's byte for byte.
@@ -368,6 +417,7 @@ With `split` (the default in `evaluate.yml` and the template), the benchmark is 
     for a paired (ABBA) record comparison. A paired comparison runs incumbent and challenger in the
     same job, one part at a time.
 - `split: false` runs everything in one job (the smoke shape).
+- `fail-fast: false` (RB-M1, RB-m1): one job's failure does not cancel the others.
 
 ## 6. Amendments V4-A1 … A7 as implemented here
 
@@ -422,6 +472,8 @@ With `split` (the default in `evaluate.yml` and the template), the benchmark is 
    - Excluding start-up keeps the smoke shape meaningful.
    - At the smoke shape `T_V` is reported, not enforced (`tv.enforce = false`), because the trivial
      check takes 0.1 ms there.
+   - A check above the cap is measured again and compared by its best of `checker_runs`, the
+     statistic of the cap itself (RB-M1).
 4. **The T run is timed** from bubblewrap's release of the held `exec` to its exit report. This
    excludes the sandbox's set-up and tear-down; v3 timed the whole process. 8 ms of overhead remain
    (§3).
@@ -449,9 +501,11 @@ With `split` (the default in `evaluate.yml` and the template), the benchmark is 
    - state in the rules that CI checks with the Lean kernel only (C10, v3 §15.4).
 
    The user's decision.
-2. **No run on GitHub yet.** Still unmeasured on a runner:
-   - the AppArmor relaxation, lingering and the systemd user scopes;
-   - the runner's `T_triv`, service throughput and certificate-job time;
+2. **The first GitHub run (39935079265)** measured the `lean` job and the runner's `T_triv` (§3).
+   The fix pass's workflows have not run. Still unmeasured on a runner:
+   - the sandbox under the AppArmor relaxation, lingering and the systemd user scopes (the harness
+     and smoke jobs failed on Q1 before reaching it);
+   - the runner's service throughput and certificate-job time;
    - the disk: the Mathlib cache, the compiled objects, two 140 MB badges.
 3. **A service user on CI** would add a uid boundary to the namespace one: `sudo useradd`, with the
    socket at mode 0666 in a directory the prover can see. The runner does not have this option yet.
@@ -470,3 +524,73 @@ With `split` (the default in `evaluate.yml` and the template), the benchmark is 
 7. **Two directories I created in the shared package tree on 2026-10-22:** `VCVio/.lake` and
    `leansqlite/.lake`, static C libraries from one `lake build gate`. My attempt to remove them was
    denied; the orchestrator is reporting them to the user.
+
+## 9. Fix pass (reviews RB and GB; FIXLIST Q1–Q14)
+
+Everything below is verified by the suites. The service tests (90 checks) and the sandbox tests
+(45) pass on Python 3.14 and 3.12.15. The gate fixtures pass, now with CompPoly. The stand-in smoke
+passes, with 5 broken provers. The end-to-end smoke passes 15 checks. The `acc` probe and the
+Lean-signer cross-check were rerun.
+
+### Major finding
+
+**RB-M1, fixed.** `T_V` is now enforced with the cap's own statistic (`harness/rfh/bench.py`,
+`check`):
+- The cap is the best of `checker_runs` chain-checker runs over `R`.
+- A check whose first sample is above the cap is measured again, up to `checker_runs` times in all.
+- Only its best time is compared. The result records `T_V.remeasured` and the statistic.
+- Re-measuring only the samples above the cap costs nothing on honest runs.
+
+`fail-fast: false` is set in `evaluate.yml`'s benchmark matrix. Option (c), recalibrating
+`T_triv` on the same core within the job, was not adopted: the best-of statistic on both sides
+already compares like with like, and every job calibrates on its own machine.
+
+### Minor findings
+
+| Id | What was done |
+|---|---|
+| RB-m1 | Fixed with RB-M1: `fail-fast: false`. `aggregate.py` decides from the parts that arrive. |
+| RB-m2 | Fixed. Each comparator run's exit code decides alone; no substring of the shared log is trusted. |
+| RB-m3 | Fixed (`evaluate.yml`). A rejected entry is a result. A crash of `evaluate.py cert` leaves no `cert.json` and fails the job. An unreadable status counts as `reject`. A benchmark part without a result JSON fails its job. |
+| RB-m4 | Fixed. `run-benchmark.py` raises a harness error if `T_V` is enforced and `tree` or `stream` runs without `calibrate`. |
+| RB-m5 | Fixed. `--insecure-test-keys` exists only with the non-default cargo feature `insecure-test-keys`. The tests build it apart (`--target-dir target/test-keys`). The release binary rejects the option, and a test checks that. |
+| RB-m6 | Fixed. The calibration column records `query_bytes`, `batch`, `compressions_per_query = max(1, ⌈q/64⌉)` and `compressions_per_s` derived from them. |
+| RB-m7 | Resolved by stage A's `ea2e8ab` (RA-M2): `acc` and `accF` check `tr.length ≤ qV`. The badge calls `accF` and did not change. The `acc` probe's submission declares `qV = 2^16` and is accepted. |
+| RB-m8 | Answered. Liveness runs at `r = 1`, `n = 16` only, by design (the security claim is the proved `Computes`). Open question 4 stands. |
+| RB-m9 | Fixed. A `trace-query` canary changes a byte of the first query (for a non-empty trace). |
+| RB-m10 | Fixed. The result records `liveness.ran`; "ok not run" (declared fuel or memory above the liveness caps) is no longer read as a run. |
+| RB-m11 | Fixed. The runner writes a request's inputs to a staging directory outside the sandbox before the clock starts, then renames them into `/work` (constant time). |
+| RB-m12 | Left for the user: the two directories in the shared package tree (open question 7). |
+
+### Fix-queue items (FIXLIST)
+
+| Id | What was done |
+|---|---|
+| Q1 | Fixed in GB (`Service.stop` on Python 3.12). Verified again on 3.12.15. |
+| Q2 | Fixed. `org-setup.sh`'s default roots and targets gain `CompPoly.Fields.Binary.BF64.Ext3` and `.Bytes`, and its object prebuild imports them. Their 28 modules are allowlisted and in the manifest as a pinned package (84 entries), so gate rule 3 reports `CompPoly.Fields.Extension.Arithmetic`'s `@[csimp]` lemma as a note. A new gate fixture shows it (`tests/gate/GateCompPoly.lean`), and the CI organiser build builds the modules from source. |
+| Q5 | Recorded (§3, open question 1). The fix for Q12 keeps an over-budget nanoda from affecting the verdict. |
+| Q6 | Moot: RA-M2 landed (`FORMAT.md` updated). |
+| Q7 | Fixed (`evaluate.py`). The gate tree builds exactly the comparator's targets (`+Challenge`, `+Solution`, and so `Solution`'s import closure). Byte equality is required on that set both ways. After the badge build, the entry's artifacts must be unchanged, with no module added (the badge's import closure lies inside the verified one). The certificate records `built_modules`. Entry modules that `Solution` does not import are never built by the harness, and the smoke entry carries one. |
+| Q8 | Fixed. Every workflow (`ci.yml`, `evaluate.yml`, the caller template) has `defaults: run: shell: bash` (`-eo pipefail`), and every job starts with `lscpu`. |
+| Q10 | Fixed. `timedCheck` reads the file's bytes from an `IO.Ref` after the first clock reading and writes the result into an `IO.Ref` before the second, so the check depends on an effect inside the window and is consumed by one. The probe shows each half matters (see below). |
+| Q12 | Fixed. The Lean kernel and nanoda are separate comparator runs, each in its own scope. The Lean kernel's verdict stands alone. A run killed for memory is `over budget` (the scope's `Result=oom-kill` and `MemoryPeak`), and a timeout is `timeout`. Both are distinct from `rejected`. For the Lean kernel either one makes the entry PROVISIONAL, "unchecked, not refuted", with no binding to check; for nanoda either one leaves the Lean verdict and is stated in `second_kernel`. nanoda rejecting what the Lean kernel accepted makes the entry PROVISIONAL. The smoke checks a 400 MiB cap. |
+| Q13 | Fixed. The service logs its first 32 refusals to stderr and counts them in its statistics. The runner records them per run (`service_refusals`), keeps the prover's output head (16 KiB) and tail (48 KiB), and quotes the tail and the refusals in a failure's reason. Smoke: "service refusals: ['rf-oracle: refused (status 2): a query above 2^20 bytes']". |
+| Q14 | Fixed. A sandbox whose scope systemd failed with `Result=oom-kill` is reported as "killed: out of memory (cap 256M, peak 0.25 GiB)", for the T run and for stream requests. |
+| Q3, Q4, Q11 | Stage D's (design text) and the user's; not stage B code. Q11, `T_V` being biased against binary fields, is an open design item. The runner's `T_V` rule is as specified. |
+
+**The Q10 probe** (`tests/harness/timing/TimingProbe.lean`, `logs/harness/timing-probe.log`). It
+times a 430 ms pure computation four ways:
+
+| Variant | Measured | What happened |
+|---|---:|---|
+| result discarded | 0 ms | the computation was removed |
+| result used only after the second clock reading | 0 ms | the generated C calls the work after both readings |
+| `if ok then now else now` (the old idiom) | 423 ms | correct today |
+| the barrier | 431 ms | C order: `mk_ref`, clock, `ref_get`, work, `mk_ref`, clock |
+
+So the old idiom was correct only by today's compiler behaviour, and a plain `let` would already be
+wrong.
+
+**Also fixed.** The `acc` probe now builds as its own Lake package requiring the organiser by path.
+Its earlier `lake -f` build had left `RFBadge*` and `AccProbeSub` modules in the organiser's
+`.lake/build`, which every evaluation tree sees; they were removed.

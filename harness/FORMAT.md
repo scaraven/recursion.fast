@@ -37,8 +37,8 @@ The file ends exactly after `path_15`. Its size is
   index as `u32`, the file as `u64`.
 - **The signature** is the contract's WOTS/Merkle signature (BRIEF §4.2): `j < 2^16`, 133 chain
   values, 16 siblings; the file format fixes the two counts.
-- **The trace's length**: with the contract change of review RA-M2, `acc` also requires
-  `m ≤ qV` of the entry (after the size cap); nothing in this format changes.
+- **The trace's length**: since the contract fix pass `ea2e8ab` (review RA-M2), `acc` also
+  requires `m ≤ qV` of the entry (right after the size cap); nothing in this format changes.
 - **Size caps of the runner**: a file above `file_cap` (64 MiB, `harness/season.toml`) is not read.
   `π` is capped at `proofCap` by `acc`; the trace is bounded by `qV ≤ 2^16` queries of at most
   `2^20` bytes each.

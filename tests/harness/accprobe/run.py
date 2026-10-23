@@ -4,11 +4,12 @@
   python3 tests/harness/accprobe/run.py         (from the repository root, after `lake build`)
 
 Renders the badge (`harness/badge/Common.lean.in`, `Verify.lean.in`) around `AccProbeSub`, builds it
-with a separate Lake configuration into `.lake/rf/accprobe`, gets the service to sign the probe's
+as its own Lake package in `.lake/rf/accprobe` (requiring the organiser by path), gets the service to sign the probe's
 2^16 queries (100 bytes each), writes the signed-proof file, and runs `verify` pinned to one core
 several times; also the same file with one answer changed (rejected at `SigOk`) and with the
 signature's first chain value changed.
 """
+import json
 import os
 import shutil
 import struct
@@ -30,13 +31,23 @@ def main():
     for name in ("Common", "Verify"):
         src = open(os.path.join(ROOT, "harness", "badge", f"{name}.lean.in")).read().replace("{{solution_module}}", "AccProbeSub")
         open(os.path.join(D, "src", f"RFBadge{name}.lean"), "w").write(src)
-    cfg = open(os.path.join(ROOT, "scripts", "speed", "lakefile.toml")).read()
-    cfg = cfg[:cfg.index("[[lean_exe]]")] + (
-        '[[lean_lib]]\nname = "AccProbe"\nsrcDir = ".lake/rf/accprobe/src"\nroots = ["AccProbeSub", "RFBadgeCommon"]\n\n'
-        '[[lean_exe]]\nname = "accprobe"\nsrcDir = ".lake/rf/accprobe/src"\nroot = "RFBadgeVerify"\n')
-    open(os.path.join(D, "lakefile.toml"), "w").write(cfg)
-    subprocess.run(["lake", "-f", os.path.join(D, "lakefile.toml"), "build", "accprobe"], cwd=ROOT, check=True, timeout=3600)
-    exe = os.path.join(ROOT, ".lake", "build", "bin", "accprobe")
+    # its own Lake package that requires the organiser by path, so that nothing is built into the
+    # organiser's `.lake/build` (whose modules every evaluation tree sees)
+    m = json.load(open(os.path.join(ROOT, "lake-manifest.json")))
+    pk = os.path.realpath(os.path.join(ROOT, m.get("packagesDir") or ".lake/packages"))
+    open(os.path.join(D, "lakefile.toml"), "w").write(
+        f'name = "accprobe"\npackagesDir = {json.dumps(pk)}\n[[require]]\nname = "RecursionFast"\npath = {json.dumps(ROOT)}\n'
+        '[[lean_lib]]\nname = "AccProbe"\nsrcDir = "src"\nroots = ["AccProbeSub", "RFBadgeCommon"]\n'
+        '[[lean_exe]]\nname = "accprobe"\nsrcDir = "src"\nroot = "RFBadgeVerify"\n')
+    for p in m["packages"]:
+        p["inherited"] = True
+    m["packages"].insert(0, {"type": "path", "scope": "", "name": "RecursionFast", "manifestFile": "lake-manifest.json",
+                             "inherited": False, "dir": ROOT, "configFile": "lakefile.toml"})
+    m["name"], m["packagesDir"] = "accprobe", pk
+    json.dump(m, open(os.path.join(D, "lake-manifest.json"), "w"), indent=1)
+    shutil.copy(os.path.join(ROOT, "lean-toolchain"), D)
+    subprocess.run(["lake", "build", "accprobe"], cwd=D, check=True, timeout=3600)
+    exe = os.path.join(D, ".lake", "build", "bin", "accprobe")
     qs = [struct.pack("<Q", k) + bytes(92) for k in range(1 << 16)]
     svc = Service(os.path.join(ROOT, "service", "target", "release", "rf-oracle"), os.path.join(D, "svc")).start()
     c = Client(svc.socket_path)

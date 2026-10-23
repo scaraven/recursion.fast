@@ -36,7 +36,7 @@ def main():
     res = {"schema": "recursion.fast/v4/result-1", "season": p.name,
            "season_sha256": hashlib.sha256(open(a.season, "rb").read()).hexdigest(), "job": a.job,
            "certificate": {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels",
-                                                     "second_kernel", "gate", "badge_sha256", "claim")},
+                                                     "second_kernel", "kernel_runs", "gate", "badge_sha256", "claim", "built_modules")},
            "parts": [], "reasons": list(cert.get("reasons", []))}
     trees, streams = [], []
     for r in parts:

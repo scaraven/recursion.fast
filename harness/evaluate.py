@@ -21,11 +21,13 @@ The certificate job (`cert`; deterministic, any machine with the package tree):
      and replays the exported proof of `certified` against the rendered statement in the Lean
      kernel, and in nanoda with `--nanoda` (the result says which kernels ran); the organiser's
      oleans are checked against the manifest before and after;
-  4. a second fresh tree at the same path: the solution built again in the sandbox, every artifact
-     byte-identical to the comparator-verified build; the gate (rules 1–8, badge fields V, P, ext)
-     in the sandbox;
+  4. a second fresh tree at the same path: the comparator's targets (the challenge and the
+     solution's import closure) built again in the sandbox, every artifact byte-identical to the
+     comparator-verified build and no other artifact; the gate (rules 1–8, badge fields V, P, ext)
+     in the sandbox. Entry modules that `Solution` does not import are never built (Q7);
   5. the badge executables (`verify`, `liveness`) rendered from `harness/badge/*.lean.in` and built
-     in the sandbox in that tree; the organiser's `chaincheck` copied beside them.
+     in the sandbox in that tree, which must neither build nor change an entry module (the badge's
+     import closure lies inside the verified one); the organiser's `chaincheck` copied beside them.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`.
 The benchmark job (`bench`; the GitHub-hosted runner): `harness/run-benchmark.py` with the badge.
@@ -44,7 +46,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from rfh.sandbox import Sandbox, memcap  # noqa: E402
+from rfh.sandbox import Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 3600
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
@@ -174,8 +176,7 @@ def cert_job(a):
     os.makedirs(work, exist_ok=False)
     entry = os.path.abspath(a.entry)
     res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": []}
-    logs = {k: os.path.join(work, f"{k}.log") for k in ("render", "source-rule", "comparator", "build", "gate", "badge",
-                                                         "manifest")}
+    logs = {k: os.path.join(work, f"{k}.log") for k in ("render", "source-rule", "build", "gate", "badge", "manifest")}
     try:
         files = entry_modules(entry)
         # 1. the challenge
@@ -196,11 +197,6 @@ def cert_job(a):
             raise Reject("organiser build does not match the olean manifest")
         tree = os.path.join(work, "tree")
         mkfresh(tree, org.dir, entry, challenge, files)
-        cfg = {"challenge_module": CHALLENGE_MODULE, "solution_module": SOLUTION_MODULE,
-               "theorem_names": ["RecursionFast.Challenge.certified"],
-               "definition_names": ["RecursionFast.Challenge.submission"],
-               "permitted_axioms": ["propext", "Classical.choice", "Quot.sound"], "enable_nanoda": bool(a.nanoda)}
-        json.dump(cfg, open(os.path.join(tree, "config.json"), "w"))
         home = os.environ.get("COMPARATOR_HOME", "")
         cmp_bin = os.path.join(home, ".lake", "build", "bin", "comparator")
         export = os.environ.get("COMPARATOR_LEAN4EXPORT",
@@ -210,43 +206,94 @@ def cert_job(a):
         env = dict(os.environ, COMPARATOR_LANDRUN=os.path.join(REPO, "scripts", "bwrap-landrun.sh"),
                    COMPARATOR_LEAN4EXPORT=export, RF_LANDRUN_MINIMAL="1",
                    RF_LANDRUN_RO=":".join(org.ro_roots(home, os.path.dirname(export))))
-        if a.nanoda:
-            env["COMPARATOR_NANODA"] = os.environ["COMPARATOR_NANODA"]
-            env["RF_LANDRUN_RO"] += ":" + os.path.dirname(os.path.abspath(os.environ["COMPARATOR_NANODA"]))
-            res["kernels"] = ["lean", "nanoda"]
-        else:
-            res["kernels"] = ["lean"]
-            res["second_kernel"] = "not run (no --nanoda): the result is checked by the Lean kernel only (V4-A2)"
-        t0 = time.monotonic()
-        # the comparator and both kernels under one memory cap (v3 §8.6 proposed 16 GB for nanoda)
-        rc = sh(memcap(a.cert_mem, f"rf-cmp-{os.getpid()}") + ["lake", "env", cmp_bin, "config.json"], cwd=tree, env=env,
-                log=logs["comparator"], timeout=a.timeout)
-        res["comparator_s"] = time.monotonic() - t0
-        out = open(logs["comparator"], errors="replace").read()
-        res["comparator_tail"] = out[-1500:]
+
+        def kernel_run(kernel, mem):
+            """One comparator run in its own memory-capped scope (Q12): `lean` checks with the Lean
+            kernel alone; `nanoda` adds nanoda (the comparator then also re-runs the Lean kernel).
+            Its outcome: ok, rejected, over budget (the scope was killed for memory) or timeout."""
+            cfg = {"challenge_module": CHALLENGE_MODULE, "solution_module": SOLUTION_MODULE,
+                   "theorem_names": ["RecursionFast.Challenge.certified"],
+                   "definition_names": ["RecursionFast.Challenge.submission"],
+                   "permitted_axioms": ["propext", "Classical.choice", "Quot.sound"], "enable_nanoda": kernel == "nanoda"}
+            json.dump(cfg, open(os.path.join(tree, f"config-{kernel}.json"), "w"))
+            e = dict(env)
+            if kernel == "nanoda":
+                e["COMPARATOR_NANODA"] = os.environ["COMPARATOR_NANODA"]
+                e["RF_LANDRUN_RO"] += ":" + os.path.dirname(os.path.abspath(os.environ["COMPARATOR_NANODA"]))
+            unit, log = f"rf-cmp-{kernel}-{os.getpid()}", os.path.join(work, f"comparator-{kernel}.log")
+            t0 = time.monotonic()
+            try:
+                rc = sh(memcap(mem, unit) + ["lake", "env", cmp_bin, f"config-{kernel}.json"], cwd=tree, env=e, log=log,
+                        timeout=a.timeout)
+            except subprocess.TimeoutExpired:
+                rc = "timeout"
+                kill_unit(unit)
+            oom, peak = scope_oom(unit)
+            out = open(log, errors="replace").read()
+            outcome = "ok" if rc == 0 else "over budget" if oom else "timeout" if rc == "timeout" else "rejected"
+            return {"outcome": outcome, "exit": rc, "seconds": round(time.monotonic() - t0, 1), "cap": mem,
+                    "peak_bytes": peak, "tail": out[-1500:]}
+
+        # RB-m2: a run's exit code decides (the comparator runs outside the sandbox; its log also holds
+        # the entry's build output, so no substring of it is trusted)
+        lean = kernel_run("lean", a.cert_mem)
+        res["kernel_runs"] = {"lean": lean}
+        res["comparator_s"] = lean["seconds"]
         if not org.manifest_ok(logs["manifest"]):
             raise Reject("organiser .olean changed during the comparator run")
-        if not os.path.isdir(os.path.join(tree, ".lake", "build", "lib", "lean")):
-            raise Reject("the solution does not build (comparator log: " + out[-400:] + ")")
-        certified = rc == 0 and "Your solution is okay" in out
-        if not certified:
-            res["provisional_reasons"].append(f"comparator: exit {rc}, the certificate does not check")
+        unchecked = lean["outcome"] in ("over budget", "timeout")     # Q12: the kernel's budget, not the entry
+        if not unchecked and not os.path.isdir(os.path.join(tree, ".lake", "build", "lib", "lean")):
+            raise Reject("the solution does not build (comparator log: " + lean["tail"][-400:] + ")")
+        budget = lambda r: f"cap {r['cap']}" + (f", peak {r['peak_bytes'] / 2 ** 30:.2f} GiB" if r["peak_bytes"] else "")  # noqa: E731
+        res["kernels"] = ["lean"] if lean["outcome"] == "ok" else []
+        if lean["outcome"] == "rejected":
+            res["provisional_reasons"].append(f"comparator (Lean kernel): exit {lean['exit']}, the certificate does not check")
+        elif lean["outcome"] == "over budget":
+            res["provisional_reasons"].append(f"the Lean kernel ran over its memory budget ({budget(lean)}): "
+                                              "the certificate is unchecked, not refuted")
+        elif lean["outcome"] == "timeout":
+            res["provisional_reasons"].append(f"the Lean kernel timed out after {a.timeout} s: the certificate is unchecked")
+        if not a.nanoda:
+            res["second_kernel"] = "not run (no --nanoda): checked by the Lean kernel only (V4-A2)"
+        elif lean["outcome"] != "ok":
+            res["second_kernel"] = "not run: the Lean kernel did not accept"
+        else:
+            nan = kernel_run("nanoda", a.nanoda_mem)
+            res["kernel_runs"]["nanoda"] = nan
+            if not org.manifest_ok(logs["manifest"]):
+                raise Reject("organiser .olean changed during the nanoda run")
+            if nan["outcome"] == "ok":
+                res["kernels"].append("nanoda")
+                res["second_kernel"] = "nanoda: accepted"
+            elif nan["outcome"] == "rejected":
+                res["second_kernel"] = "nanoda: rejected"
+                res["provisional_reasons"].append("nanoda rejected the certificate the Lean kernel accepted")
+            else:      # over budget or timeout: no second check, the Lean kernel's verdict stands (V4-A2)
+                res["second_kernel"] = f"nanoda: {nan['outcome']} ({budget(nan)}); checked by the Lean kernel only"
         cmp_arts = artifacts(tree)
         os.rename(tree, os.path.join(work, "cmp"))
         # 4. second tree, same path: rebuild in the sandbox, bind to the comparator's build, gate
         mkfresh(tree, org.dir, entry, challenge, files)
         lake = os.path.join(org.prefix, "bin", "lake")
         os.makedirs(os.path.join(tree, ".lake"))
-        rc = sandboxed(org, [lake, "build", "RFSubmission", "RFChallenge"], tree, logs["build"], rw=(os.path.join(tree, ".lake"),),
-                       timeout=a.timeout)
+        # Q7: exactly the comparator's targets, the challenge and the solution's import closure; an
+        # entry module that `Solution` does not import is never built by the harness
+        rc = sandboxed(org, [lake, "build", f"+{CHALLENGE_MODULE}", f"+{SOLUTION_MODULE}"], tree, logs["build"],
+                       rw=(os.path.join(tree, ".lake"),), timeout=a.timeout)
         if rc != 0:
             raise Reject(f"the solution does not build in the gate tree ({rc}): " + open(logs["build"], errors="replace").read()[-400:])
         if not org.manifest_ok(logs["manifest"]):
             raise Reject("organiser .olean changed during the solution build")
         arts = artifacts(tree)
-        diff = sorted(k for k in arts if cmp_arts.get(k) != arts[k])
-        if diff:
+        diff = sorted(k for k in set(arts) | set(cmp_arts) if cmp_arts.get(k) != arts.get(k))
+        if unchecked:      # no comparator-verified build to bind to; the entry stays provisional
+            res["binding"] = "not checked: the comparator's Lean-kernel run did not finish"
+        elif diff:
             raise Reject(f"the gate tree's build differs from the comparator-verified build ({len(diff)} artifacts, e.g. {diff[:3]})")
+        else:
+            res["binding"] = f"byte-identical ({len(arts)} artifacts)"
+        res["built_modules"] = sorted(k[len("lib/lean/"):-len(".olean")].replace("/", ".") for k in arts
+                                      if k.startswith("lib/lean/") and k.endswith(".olean"))
         lp = subprocess.run([lake, "env", "printenv", "LEAN_PATH"], cwd=tree, capture_output=True, text=True).stdout.strip()
         gate = os.path.join(org.tools, "gate")
         rc = sandboxed(org, [gate, SOLUTION_MODULE, "RecursionFast.Challenge.certified", "--manifest", org.manifest,
@@ -263,6 +310,12 @@ def cert_job(a):
             res["provisional_reasons"].append("gate rule 1: the certificate's closure uses sorryAx")
         # 5. the badge
         badge = build_badge(org, tree, res["claim"], logs["badge"], a.timeout)
+        # Q7: the badge's import closure lies inside the verified one: its build adds no entry
+        # module and changes no verified artifact
+        after = {k: v for k, v in artifacts(tree).items() if "/RFBadge" not in "/" + k.split("/", 2)[-1]}
+        moved = sorted(k for k in set(after) | set(arts) if after.get(k) != arts.get(k))
+        if moved:
+            raise Reject(f"the badge build built or changed entry modules outside the verified closure: {moved[:3]}")
         res["badge_dir"] = badge
         res["badge_sha256"] = {b: hashlib.sha256(open(os.path.join(badge, b), "rb").read()).hexdigest()
                                for b in os.listdir(badge)}
@@ -332,7 +385,8 @@ def bench_job(a, cert):
     subprocess.run(cmd, timeout=24 * 3600)
     res = json.load(open(a.out))
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
-                                                   "gate", "badge_sha256", "claim")}
+                                                   "kernel_runs", "binding", "gate", "badge_sha256", "claim",
+                                                   "built_modules")}
     ok = res["benchmark"] == "pass"
     res["verdict"] = ("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject" else "REJECT"
     res["comparable"] = res["verdict"] == "ACCEPT"
@@ -351,7 +405,8 @@ def main():
     ap.add_argument("--cert")
     ap.add_argument("--nanoda", action="store_true")
     ap.add_argument("--timeout", type=int, default=TIMEOUT)
-    ap.add_argument("--cert-mem", default="14G", help="memory cap of the comparator run (both kernels)")
+    ap.add_argument("--cert-mem", default="14G", help="memory cap of the comparator run with the Lean kernel")
+    ap.add_argument("--nanoda-mem", default="14G", help="memory cap of the comparator run with nanoda")
     ap.add_argument("--season", default=os.path.join(HERE, "season.toml"))
     ap.add_argument("--service", default=os.path.join(REPO, "service", "target", "release", "rf-oracle"))
     ap.add_argument("--bench", default=os.path.join(REPO, "service", "target", "release", "rf-bench"))

@@ -85,6 +85,14 @@ class Service:
             raise ServiceError(f"service exited with code {code}")
         return stats
 
+    def refusals(self, limit=8):
+        """The service's logged refusals so far (Q13): its first refusal messages, from its stderr."""
+        try:
+            lines = open(self.stderr_path, errors="replace").read().splitlines()
+        except OSError:
+            return []
+        return [l for l in lines if l.startswith("rf-oracle: refused")][:limit]
+
     def kill(self):
         if self.proc is not None:
             self.proc.kill()

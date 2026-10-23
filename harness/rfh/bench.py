@@ -105,7 +105,8 @@ class Bench:
         self.badge = Badge(badge_dir, p.mem_badge, p.verify_s, os.path.join(work, "badge-scratch"))
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.tv_cap_ns = None
-        self.tv_seen = []                    # (what, ns) of every T_V-capped check
+        self.tv_seen = []                    # (what, best ns) of every T_V-capped check
+        self.tv_remeasured = 0               # checks measured again because a sample was above the cap
 
     # -- the service ---------------------------------------------------------------------------
     def service(self, name, log=None):
@@ -115,7 +116,15 @@ class Bench:
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
         return svc.start()
 
+    @staticmethod
+    def diag(svc, output):
+        """What a failed run said (Q13): the prover's output tail and the service's refusals."""
+        out = f"; prover output (tail): {output.strip()[-1200:]!r}" if output.strip() else ""
+        ref = svc.refusals(5)
+        return out + (f"; service refusals: {ref}" if ref else "")
+
     def stop(self, svc, rec):
+        rec["service_refusals"] = svc.refusals()
         try:
             rec["service_stats"] = svc.stop()
         except ServiceError as e:
@@ -135,19 +144,39 @@ class Bench:
 
     def check(self, items, what, tv=True):
         """Run `acc` on items (vk, stmt, store-relative path, label); every one must be accepted, and
-        within the `T_V` cap if `tv`."""
+        within the `T_V` cap if `tv`. `T_V` is enforced with the cap's own statistic (RB-M1): the cap
+        is the best of `checker_runs` chain-checker runs over `R`, so a check above the cap is
+        measured again, up to `checker_runs` times in all, and only its best time is compared."""
         try:
             res = self.badge.verify([(vk, c, rel) for vk, c, rel, _ in items], self.store)
         except BadgeError as e:
             raise Fail(f"{what}: {e}")
-        for (_, _, _, label), (ok, ns) in zip(items, res):
+        for (_, _, _, label), (ok, _) in zip(items, res):
             if not ok:
                 raise Fail(f"{what}: {label} rejected by acc")
-            if tv:
-                self.tv_seen.append((label, ns))
-                if self.p.tv_enforce and self.tv_cap_ns is not None and ns > self.tv_cap_ns:
-                    raise Fail(f"{what}: {label} took {ns / 1e6:.3f} ms, above T_V = {self.tv_cap_ns / 1e6:.3f} ms")
-        return res
+        if not tv:
+            return res
+        best = [ns for _, ns in res]
+        enforce = self.p.tv_enforce and self.tv_cap_ns is not None
+        for _ in range(self.p.checker_runs - 1):
+            over = [k for k, ns in enumerate(best) if enforce and ns > self.tv_cap_ns]
+            if not over:
+                break
+            try:
+                again = self.badge.verify([items[k][:3] for k in over], self.store)
+            except BadgeError as e:
+                raise Fail(f"{what}: {e}")
+            for k, (ok, ns) in zip(over, again):
+                if not ok:
+                    raise Fail(f"{what}: {items[k][3]} rejected by acc when measured again")
+                best[k] = min(best[k], ns)
+            self.tv_remeasured += len(over)
+        for (_, _, _, label), ns in zip(items, best):
+            self.tv_seen.append((label, ns))
+            if enforce and ns > self.tv_cap_ns:
+                raise Fail(f"{what}: {label} took {ns / 1e6:.3f} ms (best of {self.p.checker_runs}), "
+                           f"above T_V = {self.tv_cap_ns / 1e6:.3f} ms")
+        return [(ok, ns) for (ok, _), ns in zip(res, best)]
 
     def canary_check(self, vk, targets, prefix):
         """Every canary of every target (store path, stmt, sibling stmt) must be rejected."""
@@ -182,10 +211,14 @@ class Bench:
                                       str(self.p.calib_s)], cwd=svc.sock_dir, capture_output=True, text=True,
                                      timeout=600).stdout
                 kv = dict(x.split("=") for x in out.split())
-                # a 64-byte keyed query is one compression after the cached key block
-                rec[f"threads_{threads}"] = {"calls_per_s": float(kv["calls_per_s"]),
-                                             "compressions_per_s": float(kv["calls_per_s"]),
-                                             "us_per_request_of_1024": float(kv["us_per_request"])}
+                # RB-m6: the probe is QUERY batches of 1,024 queries of 64 bytes; a keyed query of q
+                # bytes is max(1, ceil(q / 64)) compressions after the cached key block
+                per = max(1, -(-int(kv["size"]) // 64))
+                rec[f"threads_{threads}"] = {"query_bytes": int(kv["size"]), "batch": int(kv["batch"]),
+                                             "calls_per_s": float(kv["calls_per_s"]),
+                                             "compressions_per_query": per,
+                                             "compressions_per_s": float(kv["calls_per_s"]) * per,
+                                             "us_per_request": float(kv["us_per_request"])}
         finally:
             self.stop(svc, rec)
         cal["service"] = rec
@@ -204,11 +237,11 @@ class Bench:
                 f.write(svc.vk.hex() + "\n")
             self.log(f"[{name}] prover tree: r={r} n={n}")
             status, dt, plog = self.run.tree(work, svc.sock_dir, self.p.tree_s)
-            rec.update(status=status, seconds=dt, prover_log=plog[-2000:])
+            rec.update(status=status, seconds=dt, prover_log=plog[-4000:])
             self.log(f"[{name}] {status} in {dt:.3f} s")
             self.alive(svc)
             if status != "ok":
-                raise Fail(f"{name}: prover tree {status}")
+                raise Fail(f"{name}: prover tree {status}" + self.diag(svc, plog))
             stored = {}
             for rel, lvl, j in tree_files(r):
                 try:
@@ -233,7 +266,9 @@ class Bench:
             rec["root_bytes"] = os.path.getsize(os.path.join(self.store, stored[(r, 0)]))
             if liveness_log is not None:
                 ok, msg = self.badge.liveness(liveness_log, vk, stmt(r, 0), os.path.join(self.store, stored[(r, 0)]))
-                rec["liveness"] = {"ok": ok, "output": msg}
+                # RB-m10: an extractor whose declared fuel or memory is above the liveness caps is
+                # not run; the result says so (the security claim is the proved `Computes`)
+                rec["liveness"] = {"ok": ok, "ran": not msg.startswith("ok not run"), "output": msg}
                 if not ok:
                     raise Fail(f"liveness: the extractor did not produce an accepted witness: {msg[-300:]}")
             self.alive(svc)
@@ -304,8 +339,9 @@ class Bench:
         status, dt, proof, err = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap)
         self.alive(svc)
         if status != "ok":
-            raise Fail(f"{name} {tag}: {status}; stderr: {err[-300:]}")
+            raise Fail(f"{name} {tag}: {status}" + self.diag(svc, err))
         shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(work + ".stage", ignore_errors=True)
         return proof, dt
 
     # -- the DoS column -------------------------------------------------------------------------------

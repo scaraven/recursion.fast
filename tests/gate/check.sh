@@ -6,6 +6,8 @@
 #   ws        the witness-sending submission, computable as a whole: PASS
 #   backdoor  the backdoor submission (Controls/Backdoor), noncomputable as a whole: PASS, with each
 #             badge-path field V, P, ext compiled one by one
+#   comppoly  tests/gate/GateCompPoly.lean, importing CompPoly's BF64/Ext3: PASS, its `@[csimp]`
+#             lemma reported as a pinned dependency's note (Q2)
 #   neg       tests/gate/GateNeg.lean: REJECT `badS.ext` (rule 4), `@[implemented_by]` (rule 3),
 #             the `partial` definition (rule 2)
 set -euo pipefail
@@ -43,6 +45,14 @@ neg() {  # ROOT_THEOREM SUBMISSION EXPECTED_REJECT_SUBSTRING
   grep "^gate: REJECT" "$T/neg.log" | grep -q -- "$3" || { cat "$T/neg.log"; fail "$2: not rejected for $3"; }
   echo "$2: REJECT ($(grep -m1 "^gate: REJECT" "$T/neg.log" | grep -- "$3" | cut -c14-120 || grep -m1 -- "$3" "$T/neg.log" | cut -c14-120))"
 }
+lake env lean -o "$T/olean/GateCompPoly.olean" tests/gate/GateCompPoly.lean
+A=.lake/rf/allowlist.txt; [[ -f $A ]] || fail "run harness/org-setup.sh first (the allowlist)"
+gate GateCompPoly compS_fact --manifest "$M" --computable compS --allowed-imports "$A" > "$T/comppoly.log" 2>&1 \
+  || { cat "$T/comppoly.log"; fail "comppoly: rejected"; }
+grep -q "^gate: note: pinned dependency CompPoly.Fields.Extension.Arithmetic registers" "$T/comppoly.log" \
+  || { cat "$T/comppoly.log"; fail "comppoly: the csimp lemma is not reported as a pinned note"; }
+echo "comppoly: PASS ($(grep -c '^gate: note:' "$T/comppoly.log") note(s) on pinned dependencies)"
+
 neg badS_fact badS "badS.ext: badExt has no compiled code"
 neg implS_fact implS "@\[implemented_by"
 neg partialS_fact partialS "partial"
