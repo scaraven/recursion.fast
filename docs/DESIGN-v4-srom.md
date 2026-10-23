@@ -1124,16 +1124,18 @@ of `scaraven/recursion.fast-submissions`, and its dispositions here:
   gate, source rule, axiom audit); the service `service/` (`PROTOCOL.md` normative for provers); the
   runner `harness/` (`FORMAT.md` the signed-proof file, `PROVER.md` the prover interface,
   `season.toml`); `tests/`; `.github/workflows/` (`ci.yml`, `evaluate.yml`); stage records
-  `docs/v4/stages/A-contract-RESULT.md` and `B-harness-RESULT.md`. - **The brief and the attack**:
-  [`v4/BRIEF.md`](v4/BRIEF.md), [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md). -
-  **The record it inherits**: [V3]
-  [`v3-design-…`](v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md),
-  [O25]
-  [`v3-open-problem-…`](v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md),
-  [CGH]
-  [`CGH-circumvention-guide-…`](CGH-circumvention-guide-secret-keyed-signed-and-attested-random-oracles-with-reading-list.md),
-  [RD] [`DESIGN-relativized-recursion.md`](DESIGN-relativized-recursion.md), [CM]
-  [`DESIGN-cost-incentive-model.md`](DESIGN-cost-incentive-model.md).
+  `docs/v4/stages/A-contract-RESULT.md` and `B-harness-RESULT.md`.
+- **The brief, the reviews and the fix queue**: [`v4/BRIEF.md`](v4/BRIEF.md); the design attack
+  [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md), the stage reviews and golf
+  passes (`RA`, `GA`, `RB`, `GB`) and the whole-branch review `R-final-review.md` in
+  [`v4/reviews/`](v4/reviews/); [`v4/FIXLIST.md`](v4/FIXLIST.md); the checks against the record in
+  [`v4/CHECKS.md`](v4/CHECKS.md).
+- **The record it inherits**:
+  [V3] [`v3-design-…`](v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md),
+  [O25] [`v3-open-problem-…`](v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md),
+  [CGH] [`CGH-circumvention-guide-…`](CGH-circumvention-guide-secret-keyed-signed-and-attested-random-oracles-with-reading-list.md),
+  [RD] [`DESIGN-relativized-recursion.md`](DESIGN-relativized-recursion.md),
+  [CM] [`DESIGN-cost-incentive-model.md`](DESIGN-cost-incentive-model.md).
 - **Papers**: CGSY24, ePrint [2023/1646](https://eprint.iacr.org/2023/1646) (local copy in
   [`reference/papers/`](reference/papers/)); Chiesa–Tromer, ICS 2010 (CT10); Luykx–Mennink–Neves,
   ePrint [2016/827](https://eprint.iacr.org/2016/827); Hülsing–Kudinov, ePrint
