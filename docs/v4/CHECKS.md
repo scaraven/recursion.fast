@@ -14,7 +14,7 @@ decisions of the earlier proposals that v4 settles. Ids as in the sources.
 | C3 | KS satisfiable by a Merkle/BCS verifier | the potential form is v3's, and so are its controls (`Controls/Potential.lean`: `twoLucky`, `Vcol`, `V24`) |
 | C4 | extraction from what the log holds | the clause no longer instantiates the oracle; a bounded node still forces a decoding extractor, paper (#7) |
 | C5 | caps admit an honest recursive entry, sized first | **not met**: no sizing redone for v4 (design §4.2); the certified baseline's measured frontier stops far below the season shape (design §3.6) |
-| C6 | succinctness is not wall time | one `acc` check on one pinned core against the organiser's chain checker, calibrated in the same job (V4-12; design §3.5 says how it is timed); the SIMD caveat stays, and binary fields are disadvantaged (Q11) |
+| C6 | succinctness is not wall time | partly: the wall time of one `acc` check pinned to one core (an upper bound on its CPU time, not the unpinned wall time v3 found gameable), against the organiser's chain checker timed the same way in the same job (V4-12); the SIMD caveat stays, and binary fields are disadvantaged (Q11) |
 | C7 | the score prices recursion | `S = T_tree + K·t_link` |
 | C8 | completeness with error; the deployment checked concretely | kept; every scored proof checked with `acc`; liveness on the service's authentic log |
 | C9 | the badge path linear and strict | `runSeq` linear, strict `decodeWit`, `acc` ordered for rejection, word-level twins (`acc` on a `2^16`-query trace 135–155 ms); crafted-input DoS open (design §4.3) |

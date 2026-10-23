@@ -17,7 +17,6 @@ record [O25], the CGH guide [CGH], the attested-oracle proposal D4 [RD] and the 
 **Evidence tags.** **kernel**: a Lean theorem on `propext`, `Classical.choice`, `Quot.sound` only,
 named. **paper**: an argument, here or cited. **measured**: a number with its log under `logs/`.
 **estimate**: arithmetic from measured or published inputs. An untagged sentence is explanation.
-Two marked **PLACEHOLDER**s wait on the harness's final fix pass.
 
 **Reading paths.** Everyone: §0. Cryptographers: §1, §2. zkVM engineers: §1.3, §3, §4.
 Formal-verification readers: §1, §2.4, §5. The user: §0 and §6, and the checks against
@@ -480,7 +479,7 @@ evaluations has probability about `2^-141`; inverting one of `2^45` targets (`2^
 `2^80` evaluations about `2^-131`. Collision resistance (128-bit generic) is the binding term, at
 the scale of `errorCap`.
 
-**Operational conditions** (§3.2): the index is taken by one atomic read-modify-write before the
+**Operational conditions** (§3.2): the index is taken in one atomic step before the
 signature is computed, and never reused; the signer refuses after `2^16`; a restart is a new key and
 aborts the run (earlier proofs no longer verify under the new `vk`); `k` and the seed are
 independent `getrandom` draws.
@@ -610,9 +609,12 @@ comparator, the gate, the axiom audit) is deterministic and may run on any runne
 package tree. It uses the **Lean kernel only**: nanoda does not fit a 16 GB runner (§2.7, Q5); a
 larger machine can add it, and the result states which kernels ran. The **benchmark** must run on
 the GitHub-hosted runner; it is split into six jobs, each within the 6 h limit: calibration, one
-tree repeat, the DoS column and liveness; two more tree repeats; three stream repeats. Each job
-measures its own `T_triv,best` and service throughput, and a result whose jobs ran on different CPU
-models is marked `mixed_cpu` and never used for a paired record comparison (stage B RESULT §5.4).
+tree repeat, the DoS column and liveness; two more tree repeats; three stream repeats. The plan is
+defined once (`harness/aggregate.py`), and the verdict requires exactly its parts, from one harness
+commit and one season: a missing, duplicated or mismatched part, or parts from different commits,
+make the result `ERROR` and not comparable; a part the entry failed makes it `REJECT` (RF-M1). Each
+job measures its own `T_triv,best` and service throughput, and a result whose jobs ran on different
+CPU models is marked `mixed_cpu` and never used for a paired record comparison.
 
 **Measured** (CI runs 39935079265, 39940607844, 39952420263): the core's Lean job, which builds
 the contract, library and controls, takes 8 min 53 s cold, 4 min 12 s and 7 min 21 s with the
@@ -634,14 +636,14 @@ leaderboard would trust the submitter, who controls a pull request's own workflo
   its files, which is code execution.
 - A separate `attest` job, which runs no entry code, signs the result JSON (verdict, `vk`, CPU
   model, runner image, harness commit, service, badge and prover hashes) with a GitHub artifact
-  attestation. A record counts only if `gh attestation verify result.json --owner scaraven
-  --signer-workflow scaraven/recursion.fast/.github/workflows/evaluate.yml` passes, which rejects a
-  fork's copy of the workflow. That check matches the workflow's path, not the ref it ran at, and
-  the harness commit in the JSON is reported by the caller (RF-m1). So a reader also requires the
-  attestation certificate's `job_workflow_ref` (`…/evaluate.yml@<commit>`) to name the recorded
-  harness commit (the exact command is the one the harness's documentation gives, to be aligned
-  when the harness fix pass lands it). The full evaluation and its
-  attestation have not yet run on GitHub (§2.8).
+  attestation. A record counts only if `harness/verify-record.sh RESULT.json` passes: it runs
+  `gh attestation verify --owner scaraven --signer-workflow
+  scaraven/recursion.fast/.github/workflows/evaluate.yml --deny-self-hosted-runners`, which rejects
+  a fork's copy of the workflow, then requires the certificate's signer digest (the commit the
+  reusable workflow ran at) to equal the result's `harness_commit`, since `--signer-workflow`
+  matches the path and not the ref (RF-m1), and finally the verdict ACCEPT and comparable. It is
+  untested: neither the evaluation nor an attestation has run on GitHub yet (§2.8), and the
+  development VM's `gh` 2.46 has no `attestation` command.
 - GitHub's approval of first-time contributors' workflows is **compute admission**, not a verdict.
 
 ### 3.2 The service (V4-2, V4-3, V4-A4, V4-A5)
@@ -660,7 +662,8 @@ Operations (stage B's `service/PROTOCOL.md`, normative for provers):
 Every request is a batch so a prover amortises the round trip; one connection per prover thread
 hashes in parallel. **Caps**, each refused as an error that aborts the proof as a reject: a query of
 at most `2^20` bytes (`queryCap`); a request body of at most 16 MiB; at most `2^18` items per
-`QUERY` and `2^16` per `SIGN`; at most 64 connections; `2^16` signatures per lifetime.
+`QUERY` and `2^16` per `SIGN`; at most 32 connections, so that the worst case (about 1.3 GiB)
+fits the service's 2 GiB cgroup; `2^16` signatures per lifetime.
 
 **Lifecycle and key handling.** `k` and the signing seed are independent `getrandom` draws, never
 written to disk, destroyed at exit; chain starts are derived under tag `0x53` (§2.5). The signature
@@ -699,8 +702,11 @@ calibration column of each result.
 
 **The prover is x86-64 assembly** (P4, the user's request): one or more `prover/*.s` files in GNU `as`
 syntax (AT&T or `.intel_syntax`), linked with the runner image's `gcc -static -pthread … -lm`
-(static glibc, libgcc), no other build input; the image's `gcc` and binutils versions are part of
-the rules (§3.7). Source in any language may sit beside it for readers,
+(static glibc, libgcc), no other build input. The **reference toolchain is part of the rule**
+(`harness/PROVER.md` §1): GitHub's `ubuntu-24.04` image, GCC 13.3, binutils 2.42, glibc 2.39; CI
+assembles every committed `.s` fixture with it first, and `harness/tools/asm-compat.py` (an
+untrusted helper) rewrites a newer compiler's output for it. Source in any language may sit beside
+it for readers,
 unbuilt. Agents write in any language and submit the compiler's output. Soundness never depends on
 the prover: `acc` is the only check. The Lean `P` stays, since completeness is a theorem about it
 (P5).
@@ -739,7 +745,7 @@ namespaces for the job.
 | 6 | canaries | for 8 proofs of each kind, every mutation must be rejected: a byte appended to or removed from the file or `π`, a statement bit flipped, the sibling's statement, one trace answer or one query byte changed, a trace entry appended, a chain value or the index of the signature changed | none |
 | 7 | **stream** (×3) | `M + 1` leaves and `M` merges, a fresh process each, ready handshake, **timed**: `t_link`; every output checked with `acc` within `T_V` | a fresh lifetime per repeat, shared by its requests |
 | 8 | liveness | at `r = 1`, `n = 16`: the service logs every query; `ext` runs on `(c, π, L)` within the declared fuel; the output must decode to a witness (`Rel` for a leaf, `acc` on the extracted children for a node) | logging mode |
-| 9 | DoS | `acc` on 1,000 random and mutated signed proofs (random bytes; random `π` with the root's trace and signature; bit flips and truncations): any accept or crash rejects; the maximum time is published. **PLACEHOLDER (harness final fix pass): how a `V` that is slow on malformed input is treated (a per-item or total time bound, and its outcome).** | none |
+| 9 | DoS | `acc` on 1,000 random and mutated signed proofs (random bytes; random `π` with the root's trace and signature; bit flips and truncations): any accept or crash rejects. Each input may take at most 10 × `T_V`, the column at most 1,800 s in all; a breach fails the run (REJECT), and the slow input is kept and named in the result | none |
 | 10 | result | JSON with every number of §3.5, attested | — |
 
 The runner never passes a digest to `tree` and never a start to `node`; leaf and root digests are
@@ -757,12 +763,13 @@ the runner's (`treeRoot`, the contract's specification of it).
   `t_leaf` is the sum of the `M + 1` leaf times over `M`, `t_merge` the sum of the `M` merge times
   over `M`, and `t_link = t_leaf + t_merge`, each the median of three repeats. Under the SROM a link
   also pays its `SIGN` calls, on the clock.
-- **`T_V`** (V4-12, C6): one `acc` check on one pinned core, timed in the badge process (parse plus
-  `accF`, stage B's deviation 3), must take at most `T_triv,best / R`, `R = 10`. **PLACEHOLDER
-  (harness final fix pass): whether this is CPU time or the wall time of the pinned check (an upper
-  bound on its CPU time), the cap being measured the same way.** A sample above the cap is measured
-  again, up to `checker_runs` times, and its best time is compared, the statistic of the cap
-  (RB-M1, fixed). `T_triv,best` is the best of `checker_runs` runs, where
+- **`T_V`** (V4-12, C6): one `acc` check (parse plus `accF`, timed in the badge process) must take
+  at most `T_triv,best / R`, `R = 10`, measured as the **wall time of the check pinned to one core**
+  (an upper bound on its CPU time); the cap's calibration is measured the same way. A per-check CPU
+  time would need FFI in the badge or one 140 MB process per check. Every timed batch starts with an
+  untimed warm-up check; a sample above the cap is measured again, up to `checker_runs` times, and
+  its best time is compared, the statistic of the cap (RB-M1). `T_triv,best` is the best of
+  `checker_runs` runs, where
   it is measured **in the same job** by the organiser's compiled-Lean chain checker, interleaving
   8 chains, over the tree's chains (`2^24` compressions). It applies to the root, the
   samples and every stream output. **Measured**: 1.776–1.785 s on a GitHub runner, about 106 ns per
@@ -855,7 +862,7 @@ carries the same list.
 1. **The assembly must be accepted by the image's `as`.** `ubuntu-24.04` ships binutils 2.42; a
    `.s` from a newer GCC with `.base64` directives (binutils 2.43 and later) does not assemble
    there, which is how the organiser's own toy prover failed on the runner (RF-M2). Generate the
-   assembly with the image's toolchain, or rewrite such directives as `.byte`.
+   assembly with the reference toolchain (§3.3), or pass it through `harness/tools/asm-compat.py`.
 2. **A `Submission` must be computable** (Q4): the badge compiles `V`, `P` and `ext`, and a
    noncomputable `ε : ℝ≥0` literal fails the build; write it as a cast from `ℚ≥0`.
 3. **Compiled `ByteArray.data` copies the array** (Q4): a parser reading bytes through it is
@@ -940,9 +947,12 @@ re-sized (C5, C unsettled 4).
   `clmul` on the same clock. This is against V3-1 ("binary fields must not be disadvantaged").
 - **Crafted inputs can make `acc` slow** (C9; the baseline's review F1-M2): a 970 KB node built from
   public parts took the baseline's compiled `acc` 68–183 s against 0.43 s for its honest root, above
-  `verify_s = 60 s`. The DoS column draws random mutations and does not find such inputs, and no
-  rule bounds `V`'s time on adversarial proofs (see the DoS placeholder, §3.4).
+  `verify_s = 60 s`. The DoS column now fails a run whose input takes more than 10 × `T_V` (§3.4),
+  but it draws random mutations and does not search for such inputs; a crafted-input column is a
+  follow-up (FB-5, §6.3).
 - **One kernel on CI** (Q5, §2.7): no independent re-check of the certificate.
+- **The baseline's FB-7, FB-8, FB-9** (§6.3): the service tax on a recursion step, the cost of the
+  assembly-only build, and `errorCap` against GF(2^128).
 - **CM-R1 … R8** of the cost model, unchanged.
 
 ---
@@ -1026,7 +1036,7 @@ V4-16 where they differ.
 | V4-9 | the prover is x86-64 assembly; the Lean `P` stays | the request; completeness is about `P` |
 | V4-10 | `S = T_tree + K·t_link`, `K = 20` provisional, 100/200 ms reference lines, a fresh process per stream request | the cost model as written, with its illustration |
 | V4-11 | season 1: `r = 6`, `n = 2^18`; stream `M = 512`, `n_f = 2^16`; smoke `r = 2`, `n = 16`, `M = 4`; one season file | 16 GB runners; the same chain work as the long shape |
-| V4-12 | `T_V`: one `acc` check on one pinned core ≤ `T_triv,best / 10`, measured in the same job (CPU or wall time: §3.5's placeholder) | C6; self-calibrating |
+| V4-12 | `T_V`: wall time of one `acc` check pinned to one core ≤ `T_triv,best / 10`, the cap measured the same way in the same job | C6; self-calibrating |
 | V4-13 | v3's caps kept; memory 13 GB | minimal change |
 | V4-14 | no D4+, no W5, no key release; every query, Merkle hashes included, goes to the service | no extractability heuristic |
 | V4-15 | PROVISIONAL listing for entries whose certificate does not check | lets real entries be measured; never ranked |
@@ -1070,7 +1080,7 @@ V4-16 where they differ.
   v3's last estimate. **The first ranked shape** (C-m10): from the first certified recursive entry.
 - **The second kernel** (C-M2, Q5): run nanoda on a larger machine, or accept the Lean kernel alone
   (§2.7). The user's decision.
-- **Crafted-input DoS** (C9, F1-M2): see the DoS placeholder (§3.4).
+- **Crafted-input DoS** (C9, F1-M2, FB-5): the bounded DoS column is the first step (§3.4).
 - **Keyed BLAKE2s as a named assumption** (C unsettled 1): the alternative wording calls it the
   design's one heuristic, since its only analysis is in an ideal-cipher model.
 - **Runner facts** (C unsettled 2, 3): the CPU models, and whether `pclmulqdq` and AVX2 are on every
@@ -1079,6 +1089,30 @@ V4-16 where they differ.
   against `logCap`** (O-21, v3); **`K` and the targets on CI**, once a leader exists.
 - **The submissions repository**: its branch `v4/flock-baseline` pins `81e1ebf` and carries the v4
   rulebook and the baseline; its `main` still pins `15e4ae5` (v3) until that branch is merged.
+
+### 6.3 Feedback from the first entry
+
+The baseline team's report, `docs/v4/FLOCK-BASELINE-FEEDBACK.md` on the branch `v4/flock-baseline`
+of `scaraven/recursion.fast-submissions`, and its dispositions here:
+
+- **FB-1** (no non-recursive entry runs the season shape): (1) publish every entry's frontier as
+  unranked columns: adopted in principle, for the next harness stage; (2) an interim partial-stream
+  ranking: not adopted, since it suspends G2 and G3; (3) the first ranked shape is the first
+  recursive entry's: already adopted (§4.3).
+- **FB-2** (`T_V` untestable at small shapes; at node size a √-size PCS misses the season cap by
+  about 10×): Q11, open (§6.2).
+- **FB-3** (a signed child restates every hashed byte, so every non-recursive entry builds a
+  bundle): a Library bundle with `accWith` and `AtMost`, a Library follow-up with no trusted change.
+- **FB-4**: the computability rule is documented (§3.7); nanoda's absence is the user's decision Q5,
+  on the measured evidence (more than 20.9 GB and 10 min on the baseline's 17.9k-line entry, more
+  than 17.6 GB on the witness-sending one); package roots per declared need: a follow-up.
+- **FB-5** (a crafted-input column): a follow-up; the bounded DoS column is the first step (§3.4).
+- **FB-10** (accept an empty trace without a signature, `tr = [] ∨ SigOk …`; saves 4,776 B per
+  query-free child; sound, since an empty trace is trivially genuine): a candidate contract change
+  for the user, not applied.
+- **FB-7** (the service tax, about 30–100 ms per recursion step, **estimate**), **FB-8** (the
+  assembly-only build's cost in tooling and reviewability) and **FB-9** (`errorCap = 2^-128` per
+  query excludes Flock's GF(2^128) as published): residual risks, argued in the report.
 
 ---
 
