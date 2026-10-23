@@ -1,6 +1,6 @@
 # recursion.fast: the design record (v3, and the v4 proposal)
 
-**State of play (2026-10-22).** **v4, the signed-random-oracle (SROM) rules, is the proposal now
+**State of play (2026-10-23).** **v4, the signed-random-oracle (SROM) rules, is the proposal now
 implemented on the branch `v4/srom-rules`**, not yet adopted by the user: v3's certificate kept,
 O-25 closed by the oracle's deployment (a secret-keyed BLAKE2s service that signs the answers each
 proof used, checked by one trusted predicate `acc`), x86-64 assembly provers timed on GitHub-hosted
@@ -28,7 +28,7 @@ lives in the three v3 documents below, which also incorporate and close the GitH
 
 | File | What it is |
 |---|---|
-| [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md) | **The v4 design (SROM), a proposal implemented on `v4/srom-rules`.** The relation with signed children and the one acceptance predicate `acc`; the contract-fixed hash-based signature; why no certified verifier can trust a signature; the deployment argument that closes O-25; composition across the tree (kernel walk, paper reductions); the signature's EUF-CMA statement; the trust statement; the service, the sandbox, the assembly prover, CI as the attested trusted machine, the measurements and the season-1 score; incentives, the trusted base, checks against C1–C15 and O-25 §11, and every decision taken in the user's absence. |
+| [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md) | **The v4 design (SROM), a proposal implemented on `v4/srom-rules`.** The relation with signed children and the one acceptance predicate `acc`; the contract-fixed hash-based signature; why no certified verifier can trust a signature; the deployment argument that closes O-25; composition across the tree (kernel walk, paper reductions); the signature's EUF-CMA statement; the trust statement; the service, the sandbox, the assembly prover, CI as the attested trusted machine, the measurements and the season-1 score; incentives, the consequences that bite, the trusted base, and every decision taken in the user's absence. Its checks against C1–C15, the O-25 criteria and the earlier proposals' decisions are [`v4/CHECKS.md`](v4/CHECKS.md). |
 | [`v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md`](v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md) | **The design.** v3 as it finally stood, self-contained: the pitch, the relation, the submission, the security definitions as amended (potential-form knowledge soundness with `logCap`, completeness with error `2^-128`, the step-counted extractor language with a proved bound), scoring, the trusted base, the harness and the two-repository model. Then the record: the issues incorporated, the user's decisions, the open problems, the constraints any next design must satisfy, and the design space for the next iteration. |
 | [`v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md`](v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md) | **The iterations and the measurements.** Stages S1, S2a, S2-KS, S2b and S2R, what each review found, the cost by component (lines, theorems, build and check times), proof sizes, prover and verifier times, the second-kernel finding, the proof-size analysis, what reuse cost, and process lessons for agent-driven development. Every number names its log, its kernel theorem, or (for a handful of figures that exist only as text in the stage reports) says so. |
 | [`v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md`](v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md) | **The open problem O-25**, condensed but complete: the kernel-checked backdoor, its disguises, the two design rounds (Candidate E, Candidate T) and the reviews that broke or narrowed them, the post-hoc challenge verification attack, the "fields as data" variant, the user's rejection, the literature, the precise impossibility statement, the criteria a satisfying solution must meet, and (§13) the relativized-NARK exploration that proposes closing O-25 by the deployment. |
@@ -73,7 +73,7 @@ next direction, the CGH guide's §0 and the D4 proposal's §1; the rest as neede
   entry at `05fde28`, both with the interim harness. Its guidance (`CLAUDE.md`, `AGENTS.md`,
   `docs/README.md`) still describes DESIGN-v3 as the design in force and stage S2 as the task in
   front of it; that guidance is frozen as of 2026-10-22. Its branch `v4/flock-baseline` moves the
-  pin to the v4 contract (`ea2e8ab`), replaces the guidance with the v4 rulebook and adds the first
+  pin to this branch (`81e1ebf`), replaces the guidance with the v4 rulebook and adds the first
   certified v4 entry, `spartan-srom`.
 - **Logs** (`logs/` in both repositories) are gitignored and local to the development VM; the
   lessons document (§9) says which log each number comes from and which probes were archived.
