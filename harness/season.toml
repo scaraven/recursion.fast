@@ -1,0 +1,45 @@
+# recursion.fast v4, season 1: every shape and cap of the benchmark (BRIEF V4-10 … V4-13, V4-A5).
+# The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
+name = "season-1"
+K = 20.0          # score weight of the link time: S = T_tree + K * t_link (V4-10, provisional)
+R = 10            # T_V = T_triv,best / R (V4-12, CM-8)
+
+[tree]            # the T run (V4-11): 2^r leaves of chain length n
+r = 6
+n = 262144        # 2^18
+repeats = 3
+tree_s = 3600     # seconds per tree run
+samples = 16      # random inner proofs checked per repeat
+canaries_per_kind = 8
+
+[stream]          # the recursion term (cost model §3.3)
+M = 512
+n_f = 65536       # 2^16
+repeats = 3
+step_s = 600      # seconds per leaf or node request
+stream_s = 14400  # seconds per stream repeat
+check_every = 32  # outputs checked in batches of this many links (all before the service exits)
+
+[liveness]        # extractor liveness (v3 §8.3 step 8) on the service's query log
+r = 1
+n = 16
+
+[dos]
+proofs = 1000
+
+[caps]
+proof_cap = 1048576     # |π| ≤ 2^20 (checked by acc; V4-13)
+file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
+verify_s = 60           # one acc check
+setup_s = 3600
+build_s = 3600
+
+[memory]          # cgroup caps (13 GB for prover and service together, V4-13)
+prover = "11G"
+service = "2G"
+badge = "4G"
+
+[tv]
+enforce = true
+checker_runs = 3              # T_triv,best is the best of these chain-checker runs
+service_calibration_s = 2     # seconds per service throughput measurement (V4-A5)

@@ -1,0 +1,28 @@
+[package]
+name = "rf-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "recursion.fast v4 (SROM) oracle and signing service: keyed BLAKE2s-256 PRF and WOTS/Merkle signatures over a Unix socket (trusted runtime)"
+license = "Apache-2.0"
+publish = false
+
+# No dependencies: std only (trusted runtime, BRIEF §4.3).
+[dependencies]
+
+[lib]
+name = "rf_oracle"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rf-oracle"
+path = "src/main.rs"
+
+[[bin]]
+name = "rf-bench"
+path = "src/bin/rf-bench.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+debug = false

@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""The end-to-end smoke (`harness/smoke.toml`: r = 2, n = 16, M = 4).
+
+  python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
+  python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
+
+With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scripts/tools.env`):
+0. the witness-sending entry (`tests/harness/ws-entry/`: the library's submission, its claim) with
+   the toy prover (`harness/toy-prover/honest/prover.s`, C compiled to x86-64 assembly) goes
+   through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
+   certified;
+1. `evaluate.py bench` of that entry through every part (calibration, tree, canaries, DoS, stream,
+   liveness with the compiled extractor, score) with the compiled `accF` badge: verdict ACCEPT;
+2. three deliberately broken provers, built from the same C source with one option each, through
+   the T run with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
+   (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
+   compiled into the binary): each REJECT, the root rejected by `acc`;
+3. the same entry with `certified := sorry`: PROVISIONAL (V4-15), not comparable;
+4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built.
+With `--mock`: steps 1 and 2 with the Python stand-in badge (`tests/harness/mock_badge/`), which
+tests the runner without Lean.
+"""
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "harness"))
+from rfh.service import Client, Service  # noqa: E402
+
+SERVICE = os.path.join(ROOT, "service", "target", "release", "rf-oracle")
+BENCH = os.path.join(ROOT, "service", "target", "release", "rf-bench")
+TOY = os.path.join(ROOT, "harness", "toy-prover")
+
+
+def run_bench(entry, badge, work, out, parts=None):
+    cmd = [sys.executable, "-I", os.path.join(ROOT, "harness", "run-benchmark.py"), "--season",
+           os.path.join(ROOT, "harness", "smoke.toml"), "--entry", entry, "--badge", badge, "--service", SERVICE,
+           "--bench", BENCH, "--work", work, "--out", out]
+    if parts:
+        cmd += ["--parts", parts]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    print(p.stdout[-3000:], p.stderr[-2000:], sep="\n", flush=True)
+    return json.load(open(out))
+
+
+def entry_from(src_s, d):
+    os.makedirs(os.path.join(d, "prover"))
+    shutil.copy(src_s, os.path.join(d, "prover", "prover.s"))
+    return d
+
+
+def broken(tmp, flag, extra_header=None):
+    d = os.path.join(tmp, f"src-{flag}")
+    os.makedirs(d)
+    if extra_header:
+        with open(os.path.join(d, "stale_sig.h"), "w") as f:
+            f.write(extra_header)
+    s = os.path.join(d, "prover.s")
+    subprocess.run(["gcc", "-S", "-O2", f"-D{flag}", "-I", d, "-o", s, os.path.join(TOY, "toy.c")], check=True)
+    return entry_from(s, os.path.join(tmp, f"entry-{flag}"))
+
+
+def evaluate(*args):
+    p = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "evaluate.py"), *args],
+                       capture_output=True, text=True, timeout=7200)
+    print(p.stdout[-2500:], p.stderr[-1500:], sep="\n", flush=True)
+
+
+def ws_entry(tmp, name, prover_s, solution_patch=None):
+    d = os.path.join(tmp, name)
+    shutil.copytree(os.path.join(HERE, "ws-entry"), d)
+    os.makedirs(os.path.join(d, "prover"))
+    shutil.copy(prover_s, os.path.join(d, "prover", "prover.s"))
+    if solution_patch:
+        sol = os.path.join(d, "lean", "Solution.lean")
+        src = open(sol).read()
+        for old, new in solution_patch:
+            assert old in src
+            src = src.replace(old, new)
+        open(sol, "w").write(src)
+    return d
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--org", default=None)
+    ap.add_argument("--work", default=None)
+    ap.add_argument("--mock", action="store_true")
+    ap.add_argument("--nanoda", action="store_true")
+    a = ap.parse_args()
+    tmp = a.work or tempfile.mkdtemp(prefix="rf-smoke-", dir=os.environ.get("RF_TEST_TMP"))
+    os.makedirs(tmp, exist_ok=True)
+    fails = []
+
+    def check(cond, what):
+        print(("ok   " if cond else "FAIL ") + what, flush=True)
+        if not cond:
+            fails.append(what)
+
+    # a signature of the empty trace from another service (another run's key)
+    other = Service(SERVICE, os.path.join(tmp, "other-service")).start()
+    c = Client(other.socket_path)
+    body = c.sign([])
+    c.close()
+    other.stop()
+    header = "static const unsigned char stale_sig[4772] = {" + ",".join(str(b) for b in body) + "};\n"
+    broken_entries = [(flag, broken(tmp, flag, hdr)) for flag, hdr in
+                      (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header))]
+    honest_s = os.path.join(TOY, "honest", "prover.s")
+
+    if a.mock:
+        badge = os.path.join(tmp, "badge")
+        os.makedirs(badge)
+        for f in os.listdir(os.path.join(HERE, "mock_badge")):
+            shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
+        shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
+        shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)
+        honest = entry_from(honest_s, os.path.join(tmp, "entry-honest"))
+        r = run_bench(honest, badge, os.path.join(tmp, "work-honest"), os.path.join(tmp, "result-honest.json"))
+        check(r["benchmark"] == "pass", f"honest toy prover: {r['benchmark']} {r['reasons']}")
+        results = {"honest": r}
+        for flag, e in broken_entries:
+            results[flag] = run_bench(e, badge, os.path.join(tmp, f"work-{flag}"), os.path.join(tmp, f"result-{flag}.json"),
+                                      "calibrate,tree")
+    else:
+        if not a.org:
+            raise SystemExit("smoke: --org ORG or --mock")
+        entry = ws_entry(tmp, "entry-ws", honest_s)
+        cert = os.path.join(tmp, "cert.json")
+        evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert"), "--out", cert,
+                 *(["--nanoda"] if a.nanoda else []))
+        cj = json.load(open(cert))
+        check(cj["status"] == "ok", f"witness-sending entry certified: {cj['status']} {cj['reasons']} kernels {cj['kernels']}")
+        out = os.path.join(tmp, "result-honest.json")
+        evaluate("bench", "--entry", entry, "--cert", cert, "--work", os.path.join(tmp, "work-honest"), "--out", out,
+                 "--season", os.path.join(ROOT, "harness", "smoke.toml"))
+        r = json.load(open(out))
+        check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
+        results = {"honest": r}
+        for flag, e in broken_entries:
+            out = os.path.join(tmp, f"result-{flag}.json")
+            evaluate("bench", "--entry", e, "--cert", cert, "--work", os.path.join(tmp, f"work-{flag}"), "--out", out,
+                     "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
+            results[flag] = json.load(open(out))
+        # 3. provisional: the same entry, its certificate left open
+        pe = ws_entry(tmp, "entry-provisional", honest_s, [(
+            "theorem certified : CertificateR declared submission :=\n", "theorem certified : CertificateR declared submission := by\n  sorry\n\nexample : CertificateR declared submission :=\n")])
+        pc = os.path.join(tmp, "cert-provisional.json")
+        evaluate("all", "--entry", pe, "--org", a.org, "--work", os.path.join(tmp, "provisional"), "--out", pc,
+                 "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
+        pr = json.load(open(pc))
+        check(pr.get("verdict") == "PROVISIONAL" and pr.get("comparable") is False,
+              f"an open certificate is PROVISIONAL and not comparable: {pr.get('verdict')} "
+              f"{(pr.get('certificate') or {}).get('provisional_reasons')}")
+        # 4. the source rule
+        se = ws_entry(tmp, "entry-eval", honest_s, [("end RecursionFast.Challenge", "#eval 1\n\nend RecursionFast.Challenge")])
+        sc = os.path.join(tmp, "cert-eval.json")
+        evaluate("all", "--entry", se, "--org", a.org, "--work", os.path.join(tmp, "eval"), "--out", sc)
+        sr = json.load(open(sc))
+        check(sr.get("verdict") == "REJECT" and "source rule" in " ".join(sr["certificate"]["reasons"]),
+              f"`#eval` in the entry: {sr.get('verdict')} {sr['certificate']['reasons'][:1]}")
+
+    r = results["honest"]
+    if r.get("benchmark") == "pass":
+        sc = r["score"]
+        check(all(k in sc for k in ("T_tree", "t_leaf", "t_merge", "t_link", "S")), f"score components: {sc}")
+        check(r["liveness"]["ok"], f"liveness: {r['liveness']['output'][:120]}")
+        check(r["tree"][0]["canaries"] > 0 and r["stream"][0]["canaries"] > 0,
+              f"canaries rejected: tree {r['tree'][0]['canaries']}, stream {r['stream'][0]['canaries']}")
+        check(r["dos"]["proofs"] > 0, f"DoS column: {r['dos']}")
+    for flag, _ in broken_entries:
+        rb = results[flag]
+        why = " ".join(rb.get("reasons", []))
+        check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and "root" in why
+              and "rejected by acc" in why, f"{flag}: {rb.get('verdict', rb.get('benchmark'))}: {why}")
+    print(f"\n{len(fails)} failure(s); results in {tmp}")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

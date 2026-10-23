@@ -1,0 +1,30 @@
+/-
+  The v4 challenge stub (organiser data; TRUSTED). `harness/evaluate.py` renders it with
+  `harness/render-challenge.py` from the entry's `claim.json`; the entry supplies no stub.
+  Everything except `submission` and `certified` is the declared claim (`Declared`,
+  `Contract/Certificate.lean`): the knowledge error, the completeness error, the verifier query
+  bound and the affine extractor fuel. A solution defines `submission` and proves `certified`; the
+  comparator checks that it proves exactly this `certified` with `submission` its only changed
+  definition (`declared` copied verbatim).
+-/
+import RecursionFast.Contract
+
+namespace RecursionFast.Challenge
+open RecursionFast
+open scoped NNReal
+
+/-- The declared claim (rendered): the knowledge error, the completeness error, the verifier query
+bound and the fuel `fuel_base + fuel_per_word · t` for an input tape of `t` words. -/
+noncomputable def declared : Declared where
+  ε := {{rat:error}}
+  δ := {{rat:completeness_error}}
+  qV := {{nat:qV}}
+  fuel t := {{nat:fuel_base}} + {{nat:fuel_per_word}} * t
+
+/-- The submission (provided by the solution). -/
+def submission : Submission := sorry
+
+/-- **The certificate against the rendered claim** (`Contract/Certificate.lean`). -/
+theorem certified : CertificateR declared submission := sorry
+
+end RecursionFast.Challenge
