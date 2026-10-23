@@ -10,9 +10,10 @@ interface). Every step runs in `sandbox.Sandbox`.
   reported by bubblewrap and held first) to its exit as bubblewrap reports it (before the
   namespaces are torn down).
 * `Request`: one `prover leaf /work` or `prover node /work` in a fresh process: the process starts
-  and prints `ready`; the clock starts; the runner writes the inputs and sends `go`; the clock
-  stops at the prover's `done` line or its exit, whichever is first; then the whole sandbox is
-  killed and `proof.bin` is read.
+  and prints `ready`; the runner writes the inputs to a staging directory the prover cannot see;
+  the clock starts; the runner renames the inputs into /work and sends `go`; the clock stops at
+  the prover's `done` line or its exit, whichever is first; then the whole sandbox is killed and
+  `proof.bin` is read.
 """
 import glob
 import hashlib
@@ -23,7 +24,7 @@ import subprocess
 import threading
 import time
 
-from .files import OutputError, read_output, write_atomic
+from .files import OutputError, read_output
 from .sandbox import Sandbox
 
 PROVER = "/prover/prover"
@@ -32,12 +33,15 @@ LOG_CAP = 1 << 16
 
 
 class Drain(threading.Thread):
-    """Reads a pipe to its end, keeping the first `LOG_CAP` bytes (a prover cannot block on a full
-    pipe or fill the runner's disk with output)."""
+    """Reads a pipe to its end, keeping its first 16 KiB and its last 48 KiB (Q13: a refusal or a
+    crash message is usually at the end), so that a prover cannot block on a full pipe or fill the
+    runner's disk with output."""
+
+    HEAD, TAIL = 1 << 14, 3 << 14
 
     def __init__(self, f):
         super().__init__(daemon=True)
-        self.f, self.kept = f, bytearray()
+        self.f, self.head, self.tail, self.dropped = f, bytearray(), bytearray(), 0
         self.start()
 
     def run(self):
@@ -46,10 +50,29 @@ class Drain(threading.Thread):
                 c = os.read(self.f.fileno(), 1 << 16)
                 if not c:
                     return
-                if len(self.kept) < LOG_CAP:
-                    self.kept += c[:LOG_CAP - len(self.kept)]
+                if len(self.head) < self.HEAD:
+                    k = self.HEAD - len(self.head)
+                    self.head += c[:k]
+                    c = c[k:]
+                self.tail += c
+                if len(self.tail) > self.TAIL:
+                    self.dropped += len(self.tail) - self.TAIL
+                    del self.tail[:len(self.tail) - self.TAIL]
         except OSError:
             return
+
+    @property
+    def kept(self):
+        gap = f"\n[… {self.dropped} bytes dropped …]\n".encode() if self.dropped else b""
+        return bytes(self.head) + gap + bytes(self.tail)
+
+
+def oom_status(sb, mem):
+    """The status of a sandbox the memory cgroup killed (Q14), or None."""
+    oom, peak = sb.oom()
+    if not oom:
+        return None
+    return f"killed: out of memory (cap {mem}" + (f", peak {peak / 2 ** 30:.2f} GiB)" if peak else ")")
 
 
 def toolchain_versions():
@@ -158,6 +181,9 @@ class Run:
         code, t1 = sb.wait_exit(timeout)
         dt = t1 - t0
         status = "timeout" if code is None and dt >= timeout else ("ok" if code == 0 else f"exit {code}")
+        if status != "ok":
+            sb.proc.wait(timeout=30)
+            status = oom_status(sb, self.mem) or status
         sb.kill()
         out.join(5)
         return status, dt, out.kept.decode(errors="replace")
@@ -196,9 +222,16 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap):
         if wait_line("ready", time.monotonic() + step_s) != "line":
             status = "no ready line"
         else:
-            t0 = time.monotonic()
+            # RB-m11: the inputs are written to a staging directory outside the sandbox before the
+            # clock starts, and only renamed into /work (constant time) once it runs
+            stage = work.rstrip("/") + ".stage"
+            os.makedirs(stage, exist_ok=True)
             for name, data in inputs.items():
-                write_atomic(os.path.join(work, name), data)
+                with open(os.path.join(stage, name), "wb") as f:
+                    f.write(data)
+            t0 = time.monotonic()
+            for name in inputs:
+                os.rename(os.path.join(stage, name), os.path.join(work, name))
             try:
                 sb.proc.stdin.write(b"go\n")
                 sb.proc.stdin.flush()
@@ -214,13 +247,19 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap):
             if r == "timeout":
                 status = "timeout"
     finally:
+        if status != "ok" or sb.proc.poll() not in (None, 0):
+            try:
+                sb.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            status = oom_status(sb, run.mem) or status
         sb.kill()
         err.join(5)
     if status == "ok":
         try:
             proof = read_output(work, "proof.bin", file_cap)
         except OutputError as e:
-            status = str(e)
+            status = oom_status(sb, run.mem) or str(e)
     return status, dt, proof, err.kept.decode(errors="replace")
 
 

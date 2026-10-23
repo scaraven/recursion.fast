@@ -74,8 +74,9 @@ A fresh process for every request (cost model §3.3, CM-6). The handshake:
 
 1. The runner starts the process (with `vk.hex` already in `/work`). The prover loads its setup and
    prints the line **`ready`** on stdout. Start-up is untimed.
-2. The runner **starts the clock**, writes the inputs into `/work` (each by an atomic rename), and
-   writes the line **`go`** on the prover's stdin.
+2. The runner writes the inputs to a staging directory the prover cannot see, **starts the
+   clock**, renames them into `/work` (constant time, whatever their size; RB-m11) and writes the
+   line **`go`** on the prover's stdin.
 3. The prover writes `/work/proof.bin` and either prints the line **`done`** or exits. The clock
    stops at the first of the two (`step_s` cap). The runner then kills the request's sandbox and
    reads `proof.bin`.
@@ -100,6 +101,10 @@ queries. The service's measured throughput on the job's machine is published in 
 ## 5. What fails a run
 
 A non-zero exit of `tree`; a missing, non-regular or over-cap output; any output `acc` rejects; a
-canary `acc` accepts; a check above `T_V` (season shape) or `verify_s`; a timeout; the service
-dying during the run; a stream link that is not accepted. The first failure ends the evaluation
-(`harness/run-benchmark.py`).
+canary `acc` accepts; a check above `T_V` (season shape; a check above the cap is measured again,
+best of `checker_runs`, like the cap itself, RB-M1) or `verify_s`; a timeout; the service dying
+during the run; a stream link that is not accepted. The first failure ends the evaluation
+(`harness/run-benchmark.py`). The reason in the result names the cause: the prover's output (its
+first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's refusals of this
+run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13), and a kill by
+the memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).

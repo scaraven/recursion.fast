@@ -16,8 +16,10 @@
 //! cannot ptrace it or read its memory through /proc.
 //!
 //! `--insecure-test-keys PRFKEY_HEX SEED_HEX` replaces the random keys by given ones and prints
-//! `INSECURE` on stdout; it exists for the known-answer tests only (`tests/service/`), and the
-//! runner never passes it and refuses a service that prints `INSECURE`.
+//! `INSECURE` on stdout. It exists for the known-answer tests only (`tests/service/`) and is
+//! compiled only with the non-default cargo feature `insecure-test-keys` (RB-m5): the release
+//! binary the runner uses, whose hash every result records, rejects the option. The runner also
+//! refuses a service that prints `INSECURE`.
 
 use rf_oracle::blake2s::{self, Digest, Keyed};
 use rf_oracle::proto::*;
@@ -72,6 +74,7 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+#[cfg(feature = "insecure-test-keys")]
 fn unhex32(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -101,7 +104,15 @@ fn answers(prf: &Keyed, qs: &[&[u8]], out: &mut [Digest]) {
 }
 
 /// An error response; the connection is closed after it.
+/// Refusals so far; the first `REFUSALS_LOGGED` are written to stderr (Q13: the runner puts them in
+/// the result, so a prover's failure on a cap is visible).
+static REFUSALS: AtomicU64 = AtomicU64::new(0);
+const REFUSALS_LOGGED: u64 = 32;
+
 fn refuse(w: &mut UnixStream, status: u8, msg: &str) -> io::Result<()> {
+    if REFUSALS.fetch_add(1, Ordering::Relaxed) < REFUSALS_LOGGED {
+        eprintln!("rf-oracle: refused (status {status}): {msg}");
+    }
     let mut r = header(status, 0, msg.len() as u64).to_vec();
     r.extend_from_slice(msg.as_bytes());
     w.write_all(&r)
@@ -214,30 +225,34 @@ fn shutdown(st: &State) -> ! {
     }
     let _ = std::fs::remove_file(&st.socket);
     println!(
-        "stats requests={} queries={} query_bytes={} signatures={}",
+        "stats requests={} queries={} query_bytes={} signatures={} refusals={}",
         st.requests.load(Ordering::SeqCst),
         st.queries.load(Ordering::SeqCst),
         st.query_bytes.load(Ordering::SeqCst),
-        st.signatures.load(Ordering::SeqCst)
+        st.signatures.load(Ordering::SeqCst),
+        REFUSALS.load(Ordering::SeqCst)
     );
     let _ = io::stdout().flush();
     std::process::exit(code)
 }
 
 fn usage() -> ! {
-    eprintln!("usage: rf-oracle --socket PATH [--log FILE] [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX]");
+    eprintln!("usage: rf-oracle --socket PATH [--log FILE] [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX (test builds only)]");
     std::process::exit(2)
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut socket, mut log, mut threads, mut test) = (None, None, None, None);
+    let (mut socket, mut log, mut threads) = (None, None, None);
+    #[allow(unused_mut)]
+    let mut test: Option<([u8; 32], [u8; 32])> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--socket" if i + 1 < args.len() => socket = Some(args[i + 1].clone()),
             "--log" if i + 1 < args.len() => log = Some(args[i + 1].clone()),
             "--threads" if i + 1 < args.len() => threads = args[i + 1].parse::<usize>().ok(),
+            #[cfg(feature = "insecure-test-keys")]
             "--insecure-test-keys" if i + 2 < args.len() => {
                 test = Some((unhex32(&args[i + 1]).unwrap_or_else(|| usage()), unhex32(&args[i + 2]).unwrap_or_else(|| usage())));
                 i += 1;

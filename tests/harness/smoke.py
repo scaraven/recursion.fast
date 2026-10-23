@@ -11,12 +11,16 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    certified;
 1. `evaluate.py bench` of that entry through every part (calibration, tree, canaries, DoS, stream,
    liveness with the compiled extractor, score) with the compiled `accF` badge: verdict ACCEPT;
-2. three deliberately broken provers, built from the same C source with one option each, through
+2. five deliberately broken provers, built from the same C source with one option each, through
    the T run with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
-   compiled into the binary): each REJECT, the root rejected by `acc`;
+   compiled into the binary): each REJECT, the root rejected by `acc`; a query above the service's
+   cap (`BROKEN_CAP`): REJECT naming the service's refusal (Q13); unbounded allocation under a
+   256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory (Q14);
 3. the same entry with `certified := sorry`: PROVISIONAL (V4-15), not comparable;
-4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built.
+4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built;
+5. the entry's module that `Solution` does not import is never built (Q7), and a Lean-kernel run
+   over a 400 MiB budget is its own outcome, PROVISIONAL, not a failed certificate (Q12).
 With `--mock`: steps 1 and 2 with the Python stand-in badge (`tests/harness/mock_badge/`), which
 tests the runner without Lean.
 """
@@ -31,6 +35,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
+from rfh.sandbox import memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 
 SERVICE = os.path.join(ROOT, "service", "target", "release", "rf-oracle")
@@ -38,9 +43,9 @@ BENCH = os.path.join(ROOT, "service", "target", "release", "rf-bench")
 TOY = os.path.join(ROOT, "harness", "toy-prover")
 
 
-def run_bench(entry, badge, work, out, parts=None):
+def run_bench(entry, badge, work, out, parts=None, season=None):
     cmd = [sys.executable, "-I", os.path.join(ROOT, "harness", "run-benchmark.py"), "--season",
-           os.path.join(ROOT, "harness", "smoke.toml"), "--entry", entry, "--badge", badge, "--service", SERVICE,
+           season or os.path.join(ROOT, "harness", "smoke.toml"), "--entry", entry, "--badge", badge, "--service", SERVICE,
            "--bench", BENCH, "--work", work, "--out", out]
     if parts:
         cmd += ["--parts", parts]
@@ -111,7 +116,17 @@ def main():
     other.stop()
     header = "static const unsigned char stale_sig[4772] = {" + ",".join(str(b) for b in body) + "};\n"
     broken_entries = [(flag, broken(tmp, flag, hdr)) for flag, hdr in
-                      (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header))]
+                      (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
+                       ("BROKEN_CAP", None), ("BROKEN_OOM", None))]
+    # what each broken prover's rejection must say
+    expect = {"BROKEN_CHAIN": "root rejected by acc", "BROKEN_UNSIGNED": "root rejected by acc",
+              "BROKEN_STALE": "root rejected by acc",
+              "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # Q13
+              # Q14; under the prlimit fallback an allocation fails instead and the prover exits 1
+              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "prover tree exit 1"}
+    lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
+    open(lowmem, "w").write(open(os.path.join(ROOT, "harness", "smoke.toml")).read().replace('prover = "11G"', 'prover = "256M"'))
+    season_of = lambda flag: lowmem if flag == "BROKEN_OOM" else os.path.join(ROOT, "harness", "smoke.toml")  # noqa: E731
     honest_s = os.path.join(TOY, "honest", "prover.s")
 
     if a.mock:
@@ -127,7 +142,7 @@ def main():
         results = {"honest": r}
         for flag, e in broken_entries:
             results[flag] = run_bench(e, badge, os.path.join(tmp, f"work-{flag}"), os.path.join(tmp, f"result-{flag}.json"),
-                                      "calibrate,tree")
+                                      "calibrate,tree", season_of(flag))
     else:
         if not a.org:
             raise SystemExit("smoke: --org ORG or --mock")
@@ -137,6 +152,8 @@ def main():
                  *(["--nanoda"] if a.nanoda else []))
         cj = json.load(open(cert))
         check(cj["status"] == "ok", f"witness-sending entry certified: {cj['status']} {cj['reasons']} kernels {cj['kernels']}")
+        check("Solution" in cj.get("built_modules", []) and "RfSmokeUnused" not in cj.get("built_modules", []),
+              f"an entry module Solution does not import is never built (Q7): built {cj.get('built_modules')}")
         out = os.path.join(tmp, "result-honest.json")
         evaluate("bench", "--entry", entry, "--cert", cert, "--work", os.path.join(tmp, "work-honest"), "--out", out,
                  "--season", os.path.join(ROOT, "harness", "smoke.toml"))
@@ -146,8 +163,19 @@ def main():
         for flag, e in broken_entries:
             out = os.path.join(tmp, f"result-{flag}.json")
             evaluate("bench", "--entry", e, "--cert", cert, "--work", os.path.join(tmp, f"work-{flag}"), "--out", out,
-                     "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
+                     "--season", season_of(flag), "--parts", "calibrate,tree")
             results[flag] = json.load(open(out))
+        # Q12: a kernel over its memory budget is its own outcome, never a failed certificate
+        oc = os.path.join(tmp, "cert-overbudget.json")
+        evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert-overbudget"), "--out", oc,
+                 "--cert-mem", "400M")
+        ob = json.load(open(oc))
+        if memcap_method() == "systemd":
+            check(ob["status"] == "provisional" and any("over its memory budget" in r for r in ob["provisional_reasons"])
+                  and (ob.get("kernel_runs") or {}).get("lean", {}).get("outcome") == "over budget",
+                  f"the Lean kernel over a 400M budget: {ob['status']}, {ob['provisional_reasons']}")
+        else:      # an address-space limit cannot tell a kernel over budget from a failure
+            check(ob["status"] != "ok", f"the Lean kernel over a 400M address-space limit is not certified: {ob['status']}")
         # 3. provisional: the same entry, its certificate left open
         pe = ws_entry(tmp, "entry-provisional", honest_s, [(
             "theorem certified : CertificateR declared submission :=\n", "theorem certified : CertificateR declared submission := by\n  sorry\n\nexample : CertificateR declared submission :=\n")])
@@ -177,8 +205,8 @@ def main():
     for flag, _ in broken_entries:
         rb = results[flag]
         why = " ".join(rb.get("reasons", []))
-        check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and "root" in why
-              and "rejected by acc" in why, f"{flag}: {rb.get('verdict', rb.get('benchmark'))}: {why}")
+        check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and expect[flag] in why,
+              f"{flag}: {rb.get('verdict', rb.get('benchmark'))}: {why[:400]}")
     print(f"\n{len(fails)} failure(s); results in {tmp}")
     return 1 if fails else 0
 

@@ -14,11 +14,18 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+defaults:
+  run:
+    shell: bash
+
 jobs:
   lean:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
+      - name: machine
+        run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - name: elan
@@ -54,6 +61,7 @@ jobs:
         run: timeout 3600 tests/gate/check.sh
       - name: the service's signatures against the compiled Lean reference signer (V4-A4)
         run: |
+          (cd service && timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
           timeout 3600 lake -f scripts/speed/lakefile.toml build signer
           timeout 1800 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: acc on a 2^16-query signed trace, timed by the badge (C-m3)
@@ -80,12 +88,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - name: machine
+        run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - name: build and unit tests (toolchain pinned by service/rust-toolchain.toml)
         working-directory: service
         run: |
           timeout 1800 cargo build --release
+          timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys
           timeout 600 cargo test --release
       - name: service tests (hashlib, the reference WOTS signer, caps, liveness log, exhaustion)
         run: timeout 1800 python3 tests/service/test_service.py
@@ -98,6 +109,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
+      - name: machine
+        run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - name: runner setup (AppArmor user namespaces, bubblewrap, systemd user scopes)
@@ -107,6 +120,8 @@ jobs:
         run: timeout 1800 cargo build --release
       - name: sandbox tests (hostile prover)
         run: timeout 1800 python3 tests/harness/test_sandbox.py
+      - name: T_V enforcement with the cap's statistic (RB-M1)
+        run: timeout 300 python3 tests/harness/test_tv.py
       - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
         run: timeout 3600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
@@ -117,6 +132,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
+      - name: machine
+        run: lscpu
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
       - name: runner setup

@@ -121,6 +121,8 @@ def canaries(data: bytes, stmt: bytes, sibling: bytes = None):
         q, a = s.trace[0]
         tr = [(q, bytes([a[0] ^ 1]) + a[1:])] + s.trace[1:]
         out.append(("trace-answer", stmt, signed.Signed(s.pi, tr, s.idx, s.ots, s.path).encode()))
+        q2 = bytes([q[0] ^ 1]) + q[1:] if q else b"\x00"      # RB-m9: a changed query
+        out.append(("trace-query", stmt, signed.Signed(s.pi, [(q2, a)] + s.trace[1:], s.idx, s.ots, s.path).encode()))
     out.append(("trace-extra", stmt, signed.Signed(s.pi, s.trace + [(b"", bytes(32))], s.idx, s.ots, s.path).encode()))
     ots = [bytes([s.ots[0][0] ^ 1]) + s.ots[0][1:]] + s.ots[1:]
     out.append(("sig-ots", stmt, signed.Signed(s.pi, s.trace, s.idx, ots, s.path).encode()))

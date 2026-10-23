@@ -141,5 +141,8 @@ on a pipe. The service draws `k` and the signing seed from `getrandom`, generate
 one-time keys and the tree (multi-threaded), binds the socket and prints `vk <hex>`,
 `keygen_ms <ms>`, `simd <avx2|scalar>` and `ready`. When the runner closes the pipe, the service
 waits for in-flight requests, overwrites its keys, flushes the log, prints
-`stats requests=… queries=… query_bytes=… signatures=…`, removes the socket and exits 0. Keys are
+`stats requests=… queries=… query_bytes=… signatures=… refusals=…`, removes the socket and exits 0.
+The first 32 refusals of a lifetime are written to its stderr (`rf-oracle: refused (status S):
+MESSAGE`); the runner copies them into the result, so that a prover that fails on a cap can see
+which one. Keys are
 never written to disk; the process is non-dumpable (`PR_SET_DUMPABLE = 0`).

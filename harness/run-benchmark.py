@@ -87,6 +87,8 @@ def main():
         res["setup"] = {"ok": ok, "seconds": dt, "log": slog[-2000:]}
         if not ok:
             raise Fail("prover setup failed")
+        if p.tv_enforce and ("tree" in parts or "stream" in parts) and "calibrate" not in parts:
+            raise RuntimeError("T_V is enforced but no calibration runs in this job (RB-m4): add the part `calibrate`")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work, log)
         # the tree instance: fresh secret starts, held by the runner
         starts = [os.urandom(32) for _ in range(1 << p.r)]
@@ -120,10 +122,11 @@ def main():
             llev = digest.tree_levels(digest.leaf_digests(ls, p.live_n))
             lr = bench.tree_repeat(0, ls, p.live_n, llev, p.live_r, name="liveness",
                                    liveness_log=os.path.join(work, "liveness-log.bin"))
-            res["liveness"] = {"r": p.live_r, "n": p.live_n, "ok": lr["liveness"]["ok"],
+            res["liveness"] = {"r": p.live_r, "n": p.live_n, "ok": lr["liveness"]["ok"], "ran": lr["liveness"]["ran"],
                                "output": lr["liveness"]["output"], "service_stats": lr.get("service_stats")}
             log(f"liveness: {lr['liveness']['output'][:200]}")
-        res["T_V"] = {"cap_ns": bench.tv_cap_ns, "enforced": p.tv_enforce,
+        res["T_V"] = {"cap_ns": bench.tv_cap_ns, "enforced": p.tv_enforce, "remeasured": bench.tv_remeasured,
+                      "statistic": f"best of {p.checker_runs} for the cap and for a check above it",
                       "max_ns": max((ns for _, ns in bench.tv_seen), default=None),
                       "checks": len(bench.tv_seen),
                       "over_cap": sum(1 for _, ns in bench.tv_seen if bench.tv_cap_ns and ns > bench.tv_cap_ns)}

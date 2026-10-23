@@ -30,6 +30,11 @@ on:
       split: { description: "one job per repeat (needed for the season shape: 6 h per job)", type: boolean, default: true }
 permissions: {}
 
+# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+defaults:
+  run:
+    shell: bash
+
 jobs:
   select:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'evaluate'
@@ -40,6 +45,8 @@ jobs:
       root: ${{ steps.pr.outputs.root }}
       ref: ${{ steps.pr.outputs.ref }}
     steps:
+      - name: machine
+        run: lscpu
       - name: the pull request's commit and its one entry root
         id: pr
         env:
@@ -80,6 +87,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions: { pull-requests: write }
     steps:
+      - name: machine
+        run: lscpu
       - uses: actions/download-artifact@v4
         with: { name: result, path: result }
         continue-on-error: true

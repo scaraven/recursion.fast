@@ -2,7 +2,7 @@
 """Tests of the oracle service against Python's hashlib and the independent reading of BRIEF §4.2
 in `wots_ref.py`.
 
-  python3 tests/service/test_service.py [RF_ORACLE_BINARY]
+  python3 tests/service/test_service.py [RF_ORACLE_TEST_BINARY]
 
 1. keyed BLAKE2s (`QUERY`) against `hashlib.blake2s(key=…)` on the empty message (whose only block
    is the key block, V4-A5), one-block,
@@ -34,7 +34,10 @@ import wots_ref as W  # noqa: E402
 from rfh.service import Client, Service, ServiceError, OP_QUERY, OP_SIGN, OP_VK  # noqa: E402
 from rfh.signed import from_wire  # noqa: E402
 
-BIN = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "service", "target", "release", "rf-oracle")
+# the test build (`cargo build --release --features insecure-test-keys --target-dir target/test-keys`);
+# the release binary rejects `--insecure-test-keys` (RB-m5)
+BIN = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "service", "target", "test-keys", "release", "rf-oracle")
+RELEASE = os.path.join(ROOT, "service", "target", "release", "rf-oracle")
 PRF_KEY = bytes(range(32))
 SEED = bytes(range(100, 132))
 FAILS = []
@@ -192,6 +195,11 @@ def main():
     except ServiceError:
         refused = True
     check(refused, "the runner refuses a service that prints INSECURE")
+    if os.path.exists(RELEASE):
+        r = subprocess.run([RELEASE, "--socket", "x.sock", "--insecure-test-keys", PRF_KEY.hex(), SEED.hex()],
+                           cwd=tmp, capture_output=True, timeout=60)
+        check(r.returncode == 2 and not os.path.exists(os.path.join(tmp, "x.sock")),
+              f"the release binary rejects --insecure-test-keys (exit {r.returncode})")
     t0 = time.time()
     lock = threading.Lock()
     count = [0]
