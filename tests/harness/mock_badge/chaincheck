@@ -1,0 +1,10 @@
+#!/usr/bin/python3 -I
+import json, os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mock_acc as M
+j = json.load(open(sys.argv[1]))
+t0 = time.monotonic_ns()
+cs = [M.leaf_stmt(M.chain_end(bytes.fromhex(s), j["n"]), j["n"]) for s in j["starts"]]
+while len(cs) > 1:
+    cs = [M.node_stmt(cs[i], cs[i + 1]) for i in range(0, len(cs), 2)]
+print("ok" if cs[0].hex() == sys.argv[2] else "mismatch", time.monotonic_ns() - t0)

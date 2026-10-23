@@ -1,0 +1,118 @@
+# The submissions repository's evaluation workflow (template; copy to
+# scaraven/recursion.fast-submissions/.github/workflows/evaluate-entry.yml). V4-A1.
+#
+# Why it is safe against an untrusted pull request:
+# - The workflow definition comes from the base branch: `pull_request_target` (and
+#   `workflow_dispatch`) run the file on the default branch, never the pull request's copy. A pull
+#   request that edits this file changes nothing until a maintainer merges it.
+# - Evaluation needs a maintainer: the `evaluate` label (only users with triage access can label) or
+#   a manual dispatch with the pull request's number. GitHub's approval of first-time contributors'
+#   runs is compute admission, not a verdict.
+# - The pull request is never checked out. The evaluation fetches the labelled commit by SHA, as
+#   data, with plain git (`actions/checkout` refuses fork checkouts under `pull_request_target` by
+#   default since 2026-06; we do not use its `allow-unsafe-pr-checkout` opt-out), and runs entry
+#   code only inside the sandbox with an empty environment.
+# - Tokens: the jobs that touch entry code have read-only `contents` and nothing else; checkouts do
+#   not persist credentials; there are no secrets. Only the `report` job may write (a pull-request
+#   comment), and it reads the result JSON as data and runs no entry code.
+# - The verdict is the attested result of the organiser's reusable workflow, pinned by commit below;
+#   records are accepted only with
+#     gh attestation verify result.json --owner scaraven \
+#       --signer-workflow scaraven/recursion.fast/.github/workflows/evaluate.yml
+#   which rejects a result produced by any other workflow file (a fork's copy included).
+name: evaluate-entry
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      pr: { description: "pull request number", required: true }
+      split: { description: "one job per repeat (needed for the season shape: 6 h per job)", type: boolean, default: true }
+permissions: {}
+
+# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  select:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'evaluate'
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, pull-requests: read }
+    outputs:
+      sha: ${{ steps.pr.outputs.sha }}
+      root: ${{ steps.pr.outputs.root }}
+      ref: ${{ steps.pr.outputs.ref }}
+    steps:
+      - name: machine
+        run: lscpu
+      - name: the pull request's commit and its one entry root
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.pull_request.number || inputs.pr }}
+          LABELLED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$REPO/pulls/$NUM" --jq .head.sha)
+          # under pull_request_target, evaluate exactly the commit that was labelled
+          if [[ -n "$LABELLED_SHA" && "$sha" != "$LABELLED_SHA" ]]; then echo "the pull request moved after labelling"; exit 1; fi
+          files=$(gh api --paginate "repos/$REPO/pulls/$NUM/files" --jq '.[].filename')
+          roots=$(echo "$files" | awk -F/ '$1 == "submissions" && NF >= 3 {print $1 "/" $2}' | sort -u)
+          others=$(echo "$files" | awk -F/ '!($1 == "submissions" && NF >= 3)')
+          [[ -z "$others" ]] || { echo "the pull request changes files outside one entry root: $others"; exit 1; }
+          [[ $(echo "$roots" | wc -l) == 1 && -n "$roots" ]] || { echo "the pull request must change exactly one entry root"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "root=$roots" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/pull/$NUM/head" >> "$GITHUB_OUTPUT"
+
+  evaluate:
+    needs: select
+    # the organiser's workflow, pinned by commit (moved only with a contract change, in its own commit)
+    uses: scaraven/recursion.fast/.github/workflows/evaluate.yml@CORE_COMMIT_SHA
+    permissions: { contents: read, id-token: write, attestations: write }
+    with:
+      entry_repo: ${{ github.repository }}
+      entry_sha: ${{ needs.select.outputs.sha }}
+      entry_path: ${{ needs.select.outputs.root }}
+      pr_ref: ${{ needs.select.outputs.ref }}
+      core_ref: CORE_COMMIT_SHA
+      split: ${{ github.event_name != 'workflow_dispatch' || inputs.split }}
+
+  report:
+    needs: [select, evaluate]
+    if: always() && needs.select.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions: { pull-requests: write }
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/download-artifact@v4
+        with: { name: result, path: result }
+        continue-on-error: true
+      - name: comment the verdict (the JSON is data; no entry code runs here)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.pull_request.number || inputs.pr }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 -I - > body.md <<'EOF'
+          import json, os
+          try:
+              r = json.load(open("result/result.json"))
+          except (OSError, ValueError):
+              r = {"verdict": "ERROR", "reasons": ["no result"]}
+          v = r.get("verdict") if r.get("verdict") in ("ACCEPT", "PROVISIONAL", "REJECT", "ERROR") else "ERROR"
+          s = r.get("score") or {}
+          num = lambda k: f"{float(s[k]):.4f}" if isinstance(s.get(k), (int, float)) else "—"
+          lines = [f"**Verdict: {v}** ([run]({os.environ['RUN']}); attested result artifact `result`)", "",
+                   f"S = {num('S')} s, T_tree = {num('T_tree')} s, t_link = {num('t_link')} s, K = {num('K')}",
+                   f"CPU: {', '.join(str(m)[:80] for m in r.get('cpu_models', []))}"]
+          for reason in r.get("reasons", [])[:5]:
+              lines.append("- " + str(reason)[:300].replace("@", "@​"))
+          print("\n".join(lines))
+          EOF
+          gh pr comment "$NUM" --repo "$REPO" --body-file body.md

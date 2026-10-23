@@ -1,0 +1,11 @@
+#!/usr/bin/python3 -I
+import os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mock_acc
+assert sys.argv[1] == "--batch"
+for line in open(sys.argv[2]):
+    vk, c, path = line.split()
+    data = open(path, "rb").read()
+    t0 = time.monotonic_ns()
+    ok = mock_acc.acc(bytes.fromhex(vk), bytes.fromhex(c), data)
+    print("accept" if ok else "reject", time.monotonic_ns() - t0, flush=True)

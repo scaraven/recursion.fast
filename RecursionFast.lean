@@ -1,16 +1,19 @@
+import RecursionFast.Contract
+import RecursionFast.Library
+import RecursionFast.Controls
+
 /-!
-# recursion.fast
+# recursion.fast v4 (SROM)
 
 recursion.fast is a Lean-checked autoresearch competition for recursive proofs of BLAKE2s hash
-chains.
+chains. Version 4 keeps v3's model (knowledge soundness with a potential, a step-counted
+extractor, completeness with error) and replaces "BLAKE2s instantiates the oracle" by a keyed
+oracle service that signs the answers a proof used (the signed random oracle, SROM). The working
+brief is `docs/v4/BRIEF.md`.
 
-The project is in an **ideation phase**. Version 3 (a non-interactive argument in the random-oracle
-model, with Lean-certified knowledge soundness) hit a wall, and this library is deliberately empty
-until the next design is settled.
+* `RecursionFast.Contract`: the trusted contract (Lean core and Mathlib only).
+* `RecursionFast.Library`: the organiser's untrusted, kernel-checked library.
+* `RecursionFast.Controls`: a positive and a negative control for every trusted definition.
 
-* The v3 design, the lessons from building entries against it and the open problem that stopped
-  it are in `docs/` (start at `docs/README.md`).
-* The full v3 contract, organiser library, controls and harness tools are on the branch
-  `v3/contract-archive`.
-* Version 2 is at the tag `v2-archive`.
+Version 3 is on the branch `v3/contract-archive`; version 2 at the tag `v2-archive`.
 -/

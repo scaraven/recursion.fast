@@ -1,0 +1,55 @@
+/-
+  The badge `verify` (TRUSTED harness code; rendered per entry by `harness/evaluate.py`).
+
+    verify VK_HEX STMT_HEX FILE      prints `accept NS` or `reject NS`; exit 0 iff accepted
+    verify --batch LIST              LIST: lines `VK_HEX STMT_HEX FILE`; one `accept NS` or
+                                     `reject NS` line per input line; exit 0
+
+  The check is `RFBadge.check`: the strict file parser, then `acc` of the entry's submission
+  (through `accF`, proved equal). NS is the monotonic time of parsing the file's bytes and
+  evaluating `acc`; the runner pins the process to one core, so NS bounds the check's CPU time
+  (`T_V`, V4-12). A malformed input line is a harness error (exit 2).
+-/
+import RFBadgeCommon
+
+open RecursionFast RFBadge
+
+/-- One check, timed (Q10). The check's input comes out of a reference read after the first clock
+reading, and its result goes into a reference before the second, so the computation is data-
+dependent on an effect inside the window and consumed by one inside it: no compiler pass can move
+it before or after (`tests/harness/timing/` shows the effect of each half). -/
+def timedCheck (vk c : Digest) (bytes : ByteArray) : IO (Bool × Nat) := do
+  let input ← IO.mkRef bytes
+  let t0 ← IO.monoNanosNow
+  let b ← input.get
+  let out ← IO.mkRef (check vk c b)
+  let t1 ← IO.monoNanosNow
+  return (← out.get, t1 - t0)
+
+/-- One input line `VK_HEX STMT_HEX FILE`: its result line, or `none` if it is malformed. -/
+def runLine (line : String) : IO (Option (Bool × String)) := do
+  match (line.splitOn " ").filter (· ≠ "") with
+  | [vkh, ch, path] =>
+    let (some vk, some c) := (parseHex32 vkh, parseHex32 ch) | return none
+    let bytes ← IO.FS.readBinFile path
+    let (ok, ns) ← timedCheck vk c bytes
+    return some (ok, s!"{if ok then "accept" else "reject"} {ns}")
+  | _ => return none
+
+def main (args : List String) : IO UInt32 := do
+  let out ← IO.getStdout
+  match args with
+  | ["--batch", list] =>
+    for line in ← IO.FS.lines list do
+      if line.trimAscii.isEmpty then continue
+      let some (_, r) ← runLine line | IO.eprintln s!"verify: malformed line {line}"; return 2
+      out.putStrLn r
+      out.flush
+    return 0
+  | [vk, c, file] =>
+    let some (ok, r) ← runLine s!"{vk} {c} {file}" | IO.eprintln "verify: malformed arguments"; return 2
+    out.putStrLn r
+    return if ok then 0 else 1
+  | _ =>
+    IO.eprintln "usage: verify VK_HEX STMT_HEX FILE | verify --batch LIST"
+    return 2

@@ -1,0 +1,99 @@
+/-
+  The badge executables' shared code (TRUSTED harness code; rendered into each entry's tree by
+  `harness/evaluate.py`, which replaces `{{solution_module}}`). It reads the runner's inputs:
+
+  * `parseSigned`: the signed-proof file (`harness/FORMAT.md`, normative), strictly: `none` unless
+    the bytes are exactly one encoding. Lengths are read as little-endian `u64` at byte level (no
+    word list), so parsing is linear and cheap.
+  * `parseHex32`: a statement or key, 64 hexadecimal characters.
+  * `parseLog`: the service's liveness log (`service/PROTOCOL.md` §5), items `enc64 |q| ‖ q ‖ a`.
+
+  What is checked is the contract's `acc` through `Submission.accF`, proved equal to it
+  (`Library/Fast.lean`, `accF_eq`).
+-/
+import {{solution_module}}
+import RecursionFast.Library.Fast
+
+namespace RFBadge
+open RecursionFast
+
+/-- The number with the 8 little-endian bytes of `b` at offset `o` (zero beyond the end). -/
+def u64At (b : ByteArray) (o : Nat) : Nat :=
+  let g (i : Nat) : UInt64 := (b.get! (o + i)).toUInt64 <<< (8 * i).toUInt64
+  (g 0 ||| g 1 ||| g 2 ||| g 3 ||| g 4 ||| g 5 ||| g 6 ||| g 7).toNat
+
+/-- The 32 bytes of `b` at offset `o`, as a digest (zero bytes beyond the end). -/
+def digestAt (b : ByteArray) (o : Nat) : Digest :=
+  let a := (b.extract o (o + 32)).data
+  if h : a.size = 32 then ⟨a, h⟩ else Vector.ofFn fun i => b.get! (o + i.val)
+
+/-- **The signed proof a file encodes** (`harness/FORMAT.md`): `|π| ‖ π ‖ m ‖ (|q| ‖ q ‖ a)^m ‖
+idx ‖ 133 ots ‖ 16 path`, every length a `u64`; `none` if a length runs past the end or bytes
+follow the last digest. -/
+def parseSigned (b : ByteArray) : Option Signed := Id.run do
+  let n := b.size
+  let mut o := 0
+  if o + 8 > n then return none
+  let lp := u64At b o
+  o := o + 8
+  if lp > n - o then return none
+  let π := b.extract o (o + lp)
+  o := o + lp
+  if o + 8 > n then return none
+  let m := u64At b o
+  o := o + 8
+  if 40 * m > n - o then return none
+  let mut tr : Array (ByteArray × Digest) := #[]
+  for _ in [:m] do
+    if o + 8 > n then return none
+    let lq := u64At b o
+    o := o + 8
+    if lq > n - o then return none
+    let q := b.extract o (o + lq)
+    o := o + lq
+    if o + 32 > n then return none
+    tr := tr.push (q, digestAt b o)
+    o := o + 32
+  if o + 8 + 32 * (wotsLen + sigHeight) ≠ n then return none
+  let idx := u64At b o
+  o := o + 8
+  let ds := (List.range (wotsLen + sigHeight)).map fun k => digestAt b (o + 32 * k)
+  return some ⟨π, tr.toList, ⟨idx, ds.take wotsLen, ds.drop wotsLen⟩⟩
+
+/-- The liveness log: `enc64 |q| ‖ q ‖ a` items to the end of the file. -/
+def parseLog (b : ByteArray) : Option Log := Id.run do
+  let n := b.size
+  let mut o := 0
+  let mut L : Array (ByteArray × Digest) := #[]
+  while o < n do
+    if o + 8 > n then return none
+    let lq := u64At b o
+    o := o + 8
+    if lq + 32 > n - o then return none
+    L := L.push (b.extract o (o + lq), digestAt b (o + lq))
+    o := o + lq + 32
+  return some L.toList
+
+/-- A hexadecimal digit's value. -/
+def hexVal (c : Char) : Option Nat :=
+  if '0' ≤ c ∧ c ≤ '9' then some (c.toNat - '0'.toNat)
+  else if 'a' ≤ c ∧ c ≤ 'f' then some (c.toNat - 'a'.toNat + 10) else none
+
+/-- A digest from 64 lowercase hexadecimal characters. -/
+def parseHex32 (s : String) : Option Digest := do
+  let cs := s.trimAscii.toString.toList.toArray
+  if cs.size ≠ 64 then none
+  let bs ← (List.range 32).mapM fun i => do
+    return ((← hexVal cs[2 * i]!) * 16 + (← hexVal cs[2 * i + 1]!)).toUInt8
+  return Vector.ofFn fun i => bs.getD i.val 0
+
+/-- The submission under test. -/
+abbrev S : Submission := RecursionFast.Challenge.submission
+
+/-- **The check**: the file parses, and `acc vk c` accepts it (through `accF = acc`). -/
+def check (vk c : Digest) (bytes : ByteArray) : Bool :=
+  match parseSigned bytes with
+  | some p => S.accF vk c p
+  | none => false
+
+end RFBadge

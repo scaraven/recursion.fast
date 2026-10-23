@@ -1,0 +1,172 @@
+# The core CI of recursion.fast v4 (this repository): the Lean build with Mathlib from its cache,
+# the line budget, the axiom audit, the source rule and gate fixtures, the service's tests, the
+# sandbox tests, and the harness smoke end to end (BRIEF stage B; V4-A2: the certificate side and the
+# benchmark side are separate jobs). A push or a pull request to this repository triggers it; it
+# runs no submission.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lean:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: package tree from the cache
+        uses: actions/cache@v4
+        with:
+          path: .lake/packages
+          key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
+      - name: Mathlib cache
+        run: timeout 3600 lake exe cache get
+      - name: organiser setup (build, harness tools, allowlist, manifest, external libraries, service)
+        run: |
+          mkdir -p logs
+          timeout 14400 harness/org-setup.sh "$PWD"
+      - name: line budget (trusted contract <= 500 code lines)
+        run: |
+          python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/*.lean | tee logs/loc.log
+          code=$(awk '/^TOTAL/ {print $5}' logs/loc.log); echo "trusted code lines: $code"; [ "$code" -le 500 ]
+      - name: axiom audit
+        run: timeout 3600 lake env harness/lean-tools/.lake/build/bin/axiomaudit
+      - name: hygiene and source rule fixtures
+        run: |
+          scripts/check-hygiene.sh
+          tests/source-rule/check.sh
+      - name: source rule token sweep
+        run: |
+          timeout 1800 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
+          python3 -I tests/source-rule/sweep.py scripts/source-rule.py logs/tokens.txt tests/source-rule/reviewed-tokens.txt
+      - name: gate fixtures
+        run: timeout 3600 tests/gate/check.sh
+      - name: the service's signatures against the compiled Lean reference signer (V4-A4)
+        run: |
+          (cd service && timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
+          timeout 3600 lake -f scripts/speed/lakefile.toml build signer
+          timeout 1800 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
+      - name: acc on a 2^16-query signed trace, timed by the badge (C-m3)
+        run: timeout 3600 python3 tests/harness/accprobe/run.py | tail -12 | tee logs/accprobe.log
+      - name: chain checker (T_triv,best) at the season shape
+        run: |
+          python3 -I - <<'PY' | tee logs/chaincheck.log
+          import json, os, subprocess, sys
+          sys.path.insert(0, "harness")
+          from rfh import digest
+          starts = [os.urandom(32) for _ in range(64)]
+          root = digest.tree_root(digest.leaf_digests(starts, 1 << 18))
+          json.dump({"n": 1 << 18, "starts": [s.hex() for s in starts]}, open("logs/leaves.json", "w"))
+          core = str(max(os.sched_getaffinity(0)))
+          for _ in range(3):
+              print(subprocess.run(["taskset", "-c", core, "harness/lean-tools/.lake/build/bin/chaincheck", "logs/leaves.json",
+                                    root.hex()], capture_output=True, text=True).stdout.strip())
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: lean-logs, path: logs/ }
+
+  service:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: build and unit tests (toolchain pinned by service/rust-toolchain.toml)
+        working-directory: service
+        run: |
+          timeout 1800 cargo build --release
+          timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys
+          timeout 600 cargo test --release
+      - name: service tests (hashlib, the reference WOTS signer, caps, liveness log, exhaustion)
+        run: timeout 1800 python3 tests/service/test_service.py
+      - name: service measurements on this runner
+        run: timeout 900 tests/service/measure.sh 4 | tee service-measure.log
+      - uses: actions/upload-artifact@v4
+        with: { name: service-measure, path: service-measure.log }
+
+  harness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: committed assembly assembles with this image's toolchain (RF-M2)
+        run: |
+          gcc --version | head -1; as --version | head -1; ldd --version | head -1
+          for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
+      - name: runner setup (AppArmor user namespaces, bubblewrap, systemd user scopes)
+        run: harness/ci/runner-setup.sh
+      - name: service
+        working-directory: service
+        run: timeout 1800 cargo build --release
+      - name: sandbox tests (hostile prover)
+        run: timeout 1800 python3 tests/harness/test_sandbox.py
+      - name: T_V enforcement with the cap's statistic (RB-M1)
+        run: timeout 300 python3 tests/harness/test_tv.py
+      - name: the aggregation requires every planned part, and the DoS column is bounded (RF-M1)
+        run: |
+          timeout 300 python3 tests/harness/test_aggregate.py
+          timeout 300 python3 tests/harness/test_dos.py
+      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
+        run: timeout 3600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
+
+  smoke:
+    # the end-to-end smoke with the real badge: the library's witness-sending entry, certified by the
+    # certificate job, benchmarked by the toy assembly prover
+    needs: [lean, harness]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: committed assembly assembles with this image's toolchain (RF-M2)
+        run: |
+          gcc --version | head -1; as --version | head -1; ldd --version | head -1
+          for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
+      - name: runner setup
+        run: harness/ci/runner-setup.sh
+      - name: elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: .lake/packages
+          key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
+      - run: timeout 3600 lake exe cache get
+      - run: mkdir -p logs && timeout 14400 harness/org-setup.sh "$PWD"
+      - name: comparator and lean4export (pinned in scripts/tools.env)
+        run: timeout 3600 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
+      - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, broken provers, provisional, source rule)
+        run: timeout 7200 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: smoke, path: "${{ runner.temp }}/smoke/*.json" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: ci-logs, path: logs/ }
