@@ -66,10 +66,10 @@ class Service:
         return self
 
     def stop(self, timeout=120):
-        """Close stdin (the service wipes its keys and exits); its `stats` as a dict."""
+        """Close stdin (the service wipes its keys and exits); its `stats` as a dict. `communicate`
+        closes stdin itself (closing it first fails on Python 3.12: flush of a closed file)."""
         if self.proc is None:
             return {}
-        self.proc.stdin.close()
         try:
             out, _ = self.proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
