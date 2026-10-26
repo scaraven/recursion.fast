@@ -7,16 +7,19 @@
 #   3. write the import allowlist (gate rule 6: the import closure of the organiser's roots) and the
 #      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
 #   4. build, once and outside any sandbox, what Lake links into every badge executable: the
-#      compiled objects of every module of the organiser's import closure and the external C
-#      libraries of the package tree (a throw-away executable that imports `RecursionFast` and the
-#      CompPoly roots), so that
-#      a badge build in the sandbox writes the package tree only for modules an entry adds;
-#   5. build the service (`cargo build --release`).
+#      compiled objects of every module of the organiser's import closure, of `Mathlib.Tactic`'s
+#      (what entries import for their proofs; review D-trim m-1) and the external C libraries of the
+#      package tree (a throw-away executable that imports `RecursionFast`, the CompPoly roots and
+#      `RF_BADGE_OBJECTS`, default `Mathlib.Tactic`), so that a badge build in the sandbox compiles
+#      only the modules an entry adds beyond these, within its cap (`badge_s`);
+#   5. build the service (`cargo build --release`), unless `RF_ORG_SERVICE=0` (the evaluation's
+#      `setup` job, whose `setup-tools` job builds and caches the service).
 #
 #   harness/org-setup.sh ORG          (ORG: the organiser checkout, e.g. the repository root)
-# Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`; the timeouts sum to 17 min, the
-# evaluation's `setup` job's bound for this script (V4-A9; measured on a runner with the package tree
-# cached: 237 s, CI run 39966237935).
+# Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`; the timeouts of steps 1–4 sum
+# to 18 min, the evaluation's `setup` job's bound for this script (V4-A9; measured on a runner with
+# the package tree cached: 237 s, CI run 39966237935; step 4's `Mathlib.Tactic` objects 221 s on 4
+# cores of the development VM, `logs/trim-fix/objects-mathlib-tactic-4cores.log`).
 set -euo pipefail
 ORG=$(cd "${1:?usage: org-setup.sh ORG}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -28,6 +31,9 @@ LOG=$ORG/logs/org-setup; mkdir -p "$LOG" "$ORG/.lake/rf"
 COMPPOLY=CompPoly.Fields.Binary.BF64.Ext3,CompPoly.Fields.Binary.BF64.Bytes
 ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls,$COMPPOLY}
 TARGETS=${RF_ORG_TARGETS:-RecursionFast +${COMPPOLY//,/ +}}
+# Further modules whose objects step 4 precompiles for the badge (empty in the core CI, whose badges
+# import nothing beyond the organiser's closure).
+BADGE_OBJECTS=${RF_BADGE_OBJECTS-Mathlib.Tactic}
 t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
 
 step "1 organiser build ($TARGETS)"
@@ -45,7 +51,7 @@ step "4 compiled objects and external libraries for the badge executables"
 X=$(mktemp -d "$ORG/.lake/rf/extlibs.XXXXXX")
 PK=$(python3 -I -c 'import json,os,sys; o=sys.argv[1]; m=json.load(open(os.path.join(o,"lake-manifest.json"))); print(os.path.realpath(os.path.join(o, m.get("packagesDir") or ".lake/packages")))' "$ORG")
 cp "$ORG/lean-toolchain" "$X/"
-{ echo "import RecursionFast"; for m in ${COMPPOLY//,/ }; do echo "import $m"; done
+{ echo "import RecursionFast"; for m in ${COMPPOLY//,/ } ${BADGE_OBJECTS//,/ }; do echo "import $m"; done
   echo "def main : IO Unit := pure ()"; } > "$X/Nop.lean"
 python3 -I - "$ORG" "$X" "$PK" <<'EOF'
 import json, os, sys
@@ -61,8 +67,10 @@ m["packages"].insert(0, {"type": "path", "scope": "", "name": "RecursionFast", "
 m["name"], m["packagesDir"] = "rfextlibs", pk
 json.dump(m, open(os.path.join(x, "lake-manifest.json"), "w"), indent=1)
 EOF
-(cd "$X" && timeout 360 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
+(cd "$X" && timeout 540 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
 rm -rf "$X"
-step "5 service"
-(cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }
+if [[ "${RF_ORG_SERVICE:-1}" != 0 ]]; then
+  step "5 service"
+  (cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }
+fi
 step "done"

@@ -52,11 +52,3 @@ def read_output(base: str, rel: str, cap: int) -> bytes:
         return data
     finally:
         os.close(ffd)
-
-
-def write_atomic(path: str, data: bytes):
-    """Write `data` to `path` through a temporary name and a rename."""
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)

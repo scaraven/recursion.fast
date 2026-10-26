@@ -32,13 +32,13 @@ class StubBadge:
         if self.stop_after is not None:
             raise BadgeError(f"verify: exit {self.kind}", self.kind, res[:self.stop_after])
         if self.slow:
-            raise BadgeError("verify: a check took 61.0 s, above verify_s", "slow", res)
+            raise BadgeError("verify: a check took 11.0 s, above verify_s", "slow", res)
         return res
 
 
 def bench(badge):
     b = Bench.__new__(Bench)
-    b.p = SimpleNamespace(dos_proofs=50, dos_item_factor=10.0, dos_total_s=300, verify_s=60, tv_enforce=True)
+    b.p = SimpleNamespace(dos_proofs=100, dos_item_factor=10.0, dos_total_s=180, verify_s=10, tv_enforce=True)
     b.store = tempfile.mkdtemp(prefix="rf-dos-", dir=os.environ.get("RF_TEST_TMP"))
     b.tv_cap_ns, b.badge = 1_000_000, badge            # T_V = 1 ms, so the per-item cap is 10 ms
     b.keep("tree/root.bin", signed.Signed(b"pi" * 20).encode())
@@ -61,11 +61,11 @@ def main():
     r = outcome(StubBadge({7: 25_000_000}))
     check(isinstance(r, str) and "input 7" in r and "per-item cap of 10.0 ms" in r and "store/dos/7.bin" in r,
           f"an input above 10 · T_V fails the entry, named and kept: {r}")
-    r = outcome(StubBadge({4: 61_000_000_000}, slow=True))
+    r = outcome(StubBadge({4: 11_000_000_000}, slow=True))
     check(isinstance(r, str) and "input 4" in r and "store/dos/4.bin" in r,
           f"a check the badge reports above verify_s fails the entry as a slow input, named: {r}")
     r = outcome(StubBadge(stop_after=12))
-    check(isinstance(r, str) and "not finished within 300 s" in r and "input 12" in r,
+    check(isinstance(r, str) and "not finished within 180 s" in r and "input 12" in r,
           f"a column over its total budget fails the entry at the input being checked: {r[:160]}")
     r = outcome(StubBadge(stop_after=5, kind="crash"))
     check(isinstance(r, str) and "crashed" in r and "input 5" in r, f"a crash of the checker fails the entry: {r[:160]}")
@@ -75,7 +75,7 @@ def main():
     b = StubBadge({9: 2_000_000})
     r = outcome(b)
     check(isinstance(r, dict) and r["max_input"] == "dos/9.bin" and r["over_T_V"] == 1 and r["accepted"] == 0
-          and b.timeout == 300, f"within its bounds the column reports its worst input and the budget is passed to the badge: {r}")
+          and b.timeout == 180, f"within its bounds the column reports its worst input and the budget is passed to the badge: {r}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

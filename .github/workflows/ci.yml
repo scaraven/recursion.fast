@@ -46,7 +46,8 @@ jobs:
       - name: organiser setup (build, harness tools, allowlist, manifest, external libraries, service)
         run: |
           mkdir -p logs
-          timeout 600 harness/org-setup.sh "$PWD"
+          # no `Mathlib.Tactic` objects here: the core CI's badges import only the organiser's closure
+          RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
       - name: line budget (trusted contract <= 500 code lines)
         run: |
           python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/*.lean | tee logs/loc.log
@@ -67,7 +68,7 @@ jobs:
         run: |
           (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
           timeout 120 lake -f scripts/speed/lakefile.toml build signer extract
-          timeout 60 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
+          timeout 120 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: the compiled extractor interpreter on the witness-sending entry (V4-A9; liveness left the evaluation)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
       - name: acc on a 2^16-query signed trace, timed by the badge (C-m3), and the organiser's canaries (V4-A9)
@@ -166,11 +167,11 @@ jobs:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
       - run: timeout 300 lake exe cache get
-      - run: mkdir -p logs && timeout 600 harness/org-setup.sh "$PWD"
+      - run: mkdir -p logs && RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
       - name: comparator and lean4export (pinned in scripts/tools.env)
-        run: timeout 120 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
+        run: timeout 240 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
       - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, organiser canaries, broken provers, provisional, source rule)
-        run: timeout 540 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
+        run: timeout 480 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: smoke, path: "${{ runner.temp }}/smoke/*.json" }

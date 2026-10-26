@@ -100,7 +100,7 @@ def main():
         res["instance"] = {"root": levels[-1][0].hex(), "leaf_digests": [d.hex() for d in levels[0]],
                            "starts": [s.hex() for s in starts]}
         if "calibrate" in parts:
-            res["calibration"] = bench.calibrate(inst, starts, p.n, levels[-1][0])
+            res["calibration"] = bench.calibrate(inst, p.n, levels[-1][0])
             log(f"T_triv,best = {res['calibration']['T_triv_best_ns'] / 1e6:.3f} ms, "
                 f"T_V cap = {bench.tv_cap_ns / 1e6:.3f} ms; service {res['calibration']['service']}")
         if "tree" in parts:

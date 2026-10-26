@@ -52,7 +52,7 @@ audit, every test of `ci.yml` and the end-to-end smoke pass (§4).
 `harness/FORMAT.md` is unchanged: nothing in it states the inner proofs, the samples or the
 removed checks.
 
-## 2. The limits
+## 2. The limits (as amended by the fix pass, §9)
 
 | Limit | Old | New |
 |---|---|---|
@@ -66,34 +66,36 @@ removed checks.
 | prover build, prover setup | 3,600 s, 3,600 s | 300 s, 300 s |
 | tree run | 3,600 s | 600 s |
 | stream request (`step_s`; also the wait for `ready`) | 600 s | 60 s |
-| the stream | 14,400 s, tested at each link's start | 900 s, a deadline over every request, check and canary |
+| the stream | 14,400 s, tested at each link's start | 960 s of wall time (900 s for the entry, 60 s for the organiser's overhead inside it), a deadline over every request, check and canary |
 | one `acc` check (`verify_s`) | 60 s | 10 s; a badge batch `verify_s · n + 30 s` |
 | DoS column | 1,800 s; 10 × `T_V` per input | 180 s; 10 × `T_V` per input |
 | chain checker run, service throughput probe | 3,600 s, 600 s | 120 s, 60 s |
-| `org-setup.sh` steps | 7,200 + 1,800 + 1,800 + 1,800 + 7,200 + 1,800 s; outer 14,400 s | 300 + 60 + 90 + 90 + 360 + 120 = 1,020 s; outer 1,020 s (setup job), 600 s (`ci.yml`) |
-| `lake exe cache get`; `build-kernels.sh` | 3,600 s; 5,400 s (evaluation), 3,600 s (ci) | 240 s (setup), 300 s (ci); 300 s, 120 s |
+| `org-setup.sh` steps | 7,200 + 1,800 + 1,800 + 1,800 + 7,200 + 1,800 s; outer 14,400 s | 300 + 60 + 90 + 90 + 540 = 1,080 s for steps 1–4 (outer 1,080 s, `setup`; the service is `setup-tools`'), + 120 s for the service in `ci.yml` (outer 540 s) |
+| `lake exe cache get`; `build-kernels.sh` (inner) | 3,600 s; 5,400 s (evaluation), 3,600 s (ci); inner 600 + 600 s, nanoda 900 s | 240 s (setup), 300 s (ci); outer 240 s (540 s with nanoda); inner 120 + 60 s, nanoda 300 s |
 
 **Nesting per job** (season 1; design §3.4 has the table):
 
-- **setup** (no entry code): on a miss, an earlier commit's cache, `lake exe cache get` ≤ 240 s,
-  `org-setup.sh` ≤ 1,020 s, the comparator ≤ 300 s, the save: about 26 min plus the cache
-  transfers. **Measured** on a runner (CI run 39966237935, the core's Lean and smoke jobs, the
-  package tree cached): 39 s, 237 s and 14 s (`logs/trim/ci-39966237935-lean.log`,
-  `ci-39966237935-smoke.log`); cold (CI run 39935079265, before CompPoly joined the roots): 139 s
-  and 270 s, of which the objects step 191 s against its new 360 s
-  (`logs/trim/ci-39935079265-lean.log`). On a hit it does nothing.
+- **setup** (no entry code): on a cold miss, an earlier commit's cache, `lake exe cache get`
+  ≤ 240 s, `org-setup.sh` steps 1–4 ≤ 1,080 s, the save and its check: 22 min of timeouts and
+  about 3 min of transfers (**estimate**), about 25 of 30 min. **Measured** on a runner (CI run
+  39966237935, the package tree cached): `cache get` 39 s, `org-setup.sh` 237 s
+  (`logs/trim/ci-39966237935-lean.log`); cold (CI run 39935079265, before CompPoly and
+  `Mathlib.Tactic` joined): 139 s and 270 s, of which the objects 191 s
+  (`logs/trim/ci-39935079265-lean.log`); the `Mathlib.Tactic` objects 221 s on 4 cores of the
+  development VM (`logs/trim-fix/objects-mathlib-tactic-4cores.log`). On a hit it does nothing.
+- **setup-tools** (no entry code): the comparator ≤ 240 s (14 s **measured**), the service ≤ 120 s,
+  two small saves: about 6 min.
 - **certificate**: build 600 + kernel 600 + gate 120 + badge 180 = 1,500 s (25 min) capped by the
-  entry; fixed steps about 2.5 min (**estimate**: checkout, runner setup 8 s, the cache restore,
-  which takes 35–38 s for the package tree in the core CI, the toolchain, three manifest checks, the
-  source rule): 27.5 of 30 min.
-- **benchmark, tree**: prover build 300 + setup 300 + tree 600 + root check ≤ 75 (three badge
-  runs of 2 checks of ≤ 10 s) + its canary ≤ 40 + DoS 180 = 1,495 s (24.9 min); calibration,
-  digests and service lifetimes under 1 min (**estimate**; three chain-checker runs of 1.8 s
-  **measured**): 25.5 min inside `PART_S` = 28 min, inside 30.
-- **benchmark, stream**: prover build 300 + setup 300 + the stream 900 = 1,500 s; calibration and
-  the stream's digests under 1 min (**estimate**): 26 min inside 28, inside 30.
+  entry; fixed steps about 3 min, itemised in design §3.4 (runner setup 8 s, elan 1 s and the
+  toolchain 29 s **measured**; two manifest checks at 15.5 s each warm on 4 cores **measured**,
+  allowed 40 s cold; the two restores about 45 s, **estimate**): 28 of 30 min.
+- **benchmark, tree**: prover build 300 + setup 300 + tree 600 + root check ≤ 150 (up to three
+  badge runs of `2 · verify_s + 30` s) + its canary ≤ 40 + DoS 180 = 1,570 s (26.2 min); the
+  organiser's steps under 30 s: 26.7 min inside `PART_S` = 28 min, inside 30.
+- **benchmark, stream**: prover build 300 + setup 300 + the stream 960 = 1,560 s (26 min); the
+  organiser's steps under 30 s: 26.5 min inside 28, inside 30.
 - **`ci.yml`**: step timeouts sum to 26 min (`lean`), 22 (`service`), 23 (`harness`), 26 (`smoke`)
-  against measured jobs of 7.5, 1.6, 1.4 and 9.3 min (`logs/trim/yaml-parse.log` sums them).
+  against measured jobs of 7.5, 1.6, 1.4 and 9.3 min (`logs/trim-fix/yaml-parse.log` sums them).
 
 The binding: each cap's breach is the entry's REJECT with the cap named (a kernel over its cap is
 "unchecked", PROVISIONAL, Q12); the organiser's steps are outside the caps and a breach of the job
@@ -106,7 +108,7 @@ by them is an ERROR, as before.
 docstring; the `Security.lean` header (which says v4 changed exactly these two values, the guard's
 arithmetic at the new cap, and the two reasons). No definition's shape changed. **Trusted lines:
 355 → 355** (`scripts/loc.py`, `logs/trim/loc.log`; budget 500). Library 1,856 code lines and 233
-theorems, Controls 2,089 and 309, both unchanged in count.
+theorems, Controls 2,089 and 309, both unchanged in count (2,082 after the golf).
 
 **Controls touched** (each keeps a positive and a negative; no statement of a theorem about a
 definition changed, only instances tied to the cap's exponent):
@@ -185,7 +187,7 @@ on the witness-sending entry: 2 min 2 s → 1 min 33 s; the baseline's rebuild w
 | `cargo build` of the service (benchmark jobs) | environment | **stays**, moved to `setup`, cached (`rf-svc-…`) |
 | `lscpu`, runner setup, the machine and toolchain record | environment, record | **stays** |
 | render, source rule, module-root check, the build, comparator, gate, badge build, binding checks (`evaluate.py`) | the entry | **stays** |
-| olean-manifest checks (`evaluate.py`) | the environment the entry builds against | **stays**, 3 per evaluation (was 4): before the build, after the build and the comparator, after the badge build |
+| olean-manifest checks (`evaluate.py`) | the environment the entry builds against | **stays**, 2 per evaluation since the fix pass (was 4): before the build, and after the badge build, which covers every step in between |
 | the byte-identical second build (`evaluate.py`) | the entry's binding | **dropped** (item 9) |
 | the badge's claim-fuel check (`evaluate.py`) | duplicate of the renderer's | **dropped** with the liveness badge |
 | liveness: the logging service, `ext` on the compiled interpreter (`bench.py`, badge `liveness`) | organiser code (the interpreter), the entry's extractor | **dropped**; the interpreter test **moved to `ci.yml`** (`extract`) |
@@ -213,9 +215,10 @@ on the witness-sending entry: 2 min 2 s → 1 min 33 s; the baseline's rebuild w
    assembly would change 2,164 lines for nothing.
 6. **A missing comparator is an ERROR**, not a REJECT whose text said "harness error".
 7. **The service lost its logging mode** (−26 Rust code lines), since nothing uses it; the
-   trusted runtime is **3,800 → 3,677 code lines** by stage B's groups and rule
-   (`logs/trim/loc-runtime-before.log`, `loc-runtime-after.log`, the script `logs/trim/loc_runtime.py`;
-   the design's old 3,559 predates stage B's final fix pass).
+   trusted runtime is **3,800 → 3,670 code lines** by stage B's groups and rule, after the golf and
+   the fix pass (3,675 at the stage's commit; `logs/trim/loc-runtime-before.log`,
+   `logs/trim-fix/loc-runtime-after.log`, the script `logs/trim-fix/loc_runtime.py`; the design's
+   old 3,559 predates stage B's final fix pass).
 8. **Gate rule 4 unchanged**: it still requires `P` and `ext` compiled although no badge runs them
    (comments corrected); relaxing it is the user's (§8).
 9. **The certificate caps live in the season file** (`[certificate]`), read by `evaluate.py cert
@@ -240,3 +243,65 @@ on the witness-sending entry: 2 min 2 s → 1 min 33 s; the baseline's rebuild w
    available here.
 8. Unchanged and still open: `T_V` on compiled Lean against binary fields (Q11), the second
    kernel (Q5), FB-10.
+
+## 9. Fix pass (review `docs/v4/reviews/D-trim-review.md`, golf `docs/v4/stages/D-trim-GOLF.md`)
+
+On top of `fcb1d5b`, uncommitted. The review found no major finding and six minors; every one is
+fixed. Logs are under `logs/trim-fix/`.
+
+| Finding | Disposition |
+|---|---|
+| **m-1** the badge cap also compiles organiser objects | **Fixed.** `org-setup.sh` step 4 now also precompiles the objects of `Mathlib.Tactic`'s closure (`RF_BADGE_OBJECTS`, default `Mathlib.Tactic`; the core CI sets it empty, since its badges import only the organiser's closure). The precompiled set is the closures of `RecursionFast`, the CompPoly roots and `Mathlib.Tactic`: 4,716 modules, 2,825 of Mathlib's 8,530. **Measured**: 1,063 more objects in 221 s on 4 cores of the development VM (`objects-mathlib-tactic-4cores.log`). The witness-sending entry with `import Mathlib.Tactic` added then certifies with a badge build of about 19 s that compiles 5 objects (`cert-ws-mathlib-tactic.log`). The residual rule (about 860 further modules fit `badge_s` at 4.8 objects/s; `import Mathlib` does not) is stated in `PROVER.md` §6 and design §3.6 and §6.2. Step 4's timeout went from 360 to 540 s |
+| **m-2** organiser timeout as REJECT; fixed steps unitemised | **Fixed.** A `TimeoutExpired` (only organiser commands raise it) is now `error` with the command and its limit. A failed pre-build manifest check is now a harness ERROR (no entry code has run). The manifest is checked twice, not three times: before the build and after the badge build, which covers every step in between (the gate itself re-verifies every trusted module's hash). The certificate job's fixed steps are itemised in design §3.4: runner setup 8 s, elan 1 s and the toolchain 29 s **measured**; two manifest checks at 15.5 s each on 4 cores warm **measured** (`manifest-check-time.log`), allowed 40 s cold; the restores about 45 s **estimate**, scaled from the measured 35 s for 2.7 GB. Total about 3 min against 25 min of entry caps: 28 of 30 min, and 29 at twice the restore estimate. Not yet measured on a runner (open, §8 item 7) |
+| **m-3** the nesting table not the code's | **Fixed.** Root check ≤ 150 s, so the tree job's entry caps total 1,570 s (26.2 min) inside `PART_S` = 1,680 s. The setup job is split so that a cold miss nests: `setup` runs `lake exe cache get` (240 s) and `org-setup.sh` steps 1–4 (1,080 s), 22 min of timeouts plus about 3 min of transfers. The comparator and the service moved to a parallel `setup-tools` job (`RF_ORG_SERVICE=0` in `setup`), about 6 min |
+| **m-4** cache provenance | **Fixed.** (a) Design §2.7 item 9 names the cache store and its three facts. (b) `cert.json` and the result record `environment` (the core commit and the hashes of `manifest.sha256` and `allowlist.txt`), carried by `evaluate.py bench` and `aggregate.py`, checked in the smoke. (c) A `plan` job resolves `core_ref` to its commit; every job checks out that SHA and the caches are keyed on it (`rf-org-SHA`, `rf-kernels-lean|nanoda-SHA`, `rf-svc-SHA`); `RF_HARNESS_COMMIT` is the SHA. (d) Each save is followed by a `lookup-only` restore with `fail-on-cache-miss`, so a failed upload fails its setup job with an `::error::` reason. A cache missing in the certificate or benchmark job writes a `cert.json` or part result with status `error` and the reason, so the evaluation ends as an attested ERROR, not a missing part |
+| **m-5** `stream_s` charges organiser overhead; budget unstated | **Kept wall time and added the measured overhead to the cap**: `stream_s` = 960 s, of which 60 s allow for the organiser's work inside it. **Measured** about 30 s: a request's sandbox start, staging, kill and read ≤ 50 ms × 513; a badge batch's start ≤ 0.2 s × about 20 (`stream-overhead.log`). The implied per-link budget, about 3.1 s per link with every check at `T_V` ≈ 178 ms, is stated in design §3.6 and `PROVER.md` §3. Charging only the entry's time would need a separate wall bound for the job anyway |
+| **m-6** stale text | **Fixed**: BRIEF V4-7, V4-11, V4-12 annotated as design §6.1 is; "75 s" gone from design §3.4 and §2 here; `test_dos.py`'s stub uses the season's numbers (`verify_s` 10, `total_s` 180, 100 inputs); the blank lines after `HarnessError` removed |
+
+**The golf record's items for the fix step.**
+- Runtime count: **3,670 code lines** (service 948, runner 1,023, sandbox 233, badge 88, proof-side
+  order 456, tools 697, CI scripts 64, calibration 161; `loc-runtime-after.log`). Design §0 and §5
+  and §7 above are corrected; Controls 2,082 code lines, 309 theorems.
+- `build-kernels.sh`: inner `timeout 120` (comparator) + `60` (lean4export), nanoda `300`, inside
+  the callers' outer 240 s (540 s with nanoda). `setup-tools`' service build is `timeout 120`, as
+  `org-setup.sh`'s.
+- `test_lean_signer` in `ci.yml`: `timeout 120` (55 s here, 44 s on the runner).
+- Golf suggestion 1 applied: the three `by_contra hno` in `Controls/Potential.lean` are
+  `refine Classical.byContradiction fun hno => ?_`; statements unchanged; build and audit green.
+- Golf suggestion 2 applied: `rfh/files.py` `write_atomic`, `rfh/signed.py` `Signed.sig_bytes` and
+  `Bench.calibrate`'s unused `starts` removed.
+- Golf suggestion 3 not applied, as asked. The `plan` job now also resolves the core commit (m-4)
+  and runs first, but it is not merged into `setup`. The golf's `ci.yml` change (`smoke` needs only
+  `harness`) is kept.
+
+**`ci.yml` after the fix pass.** `org-setup.sh` 540 s (with `RF_BADGE_OBJECTS=`),
+`build-kernels.sh` 240 s, the e2e smoke 480 s, the signer test 120 s. The step sums are 26, 22, 23
+and 26 min (`yaml-parse.log`).
+
+**Checks** (all pass; `logs/trim-fix/`):
+
+| Check | Outcome | Log |
+|---|---|---|
+| `lake build` | green, 1,264 jobs, no warning; again against the shared `pkgs-local` under a read-only bind, nothing written there | `lake-build.log`, `lake-build-final.log` |
+| axiom audit; `loc.py` | PASS; 355 ≤ 500 | `axiom-audit.log`, `axiom-audit-final.log`, `loc.log` |
+| hygiene, source-rule fixtures, token sweep, gate fixtures | OK | `hygiene.log`, `token-sweep.log`, `gate-fixtures.log` |
+| `org-setup.sh` with the `Mathlib.Tactic` objects (warm) | 47 s | `org-setup.log` |
+| service builds, `cargo test`, `test_service.py` (90), `measure.sh 4` | OK | `service-build.log`, `service-cargo-test.log`, `test_service.log`, `service-measure.log` |
+| Lean signer (55 s), `extract` (4 cases), `accprobe` (12 answers, all 7 canaries rejected), chain checker | OK | `test_lean_signer.log`, `extract-run.log`, `accprobe.log`, `chaincheck.log` |
+| assembly; `test_sandbox.py` (45), `test_tv.py` (6), `test_aggregate.py` (12), `test_dos.py` (6) | OK | `asm.log`, `test_sandbox.log`, `test_tv.log`, `test_aggregate.log`, `test_dos.log` |
+| `smoke.py --mock` | 10 checks, 26.6 s | `smoke-mock.log` |
+| `smoke.py --org` (on the private package copy, as before) | **16 checks, 4 min 21 s**; `environment` recorded in `cert.json` and the result; two manifest checks | `smoke-e2e.log`, `smoke-cert-comparator-lean.log` |
+| a certificate of the witness-sending entry importing `Mathlib.Tactic` | ok; build 29.5 s, comparator 38.2 s, badge about 19 s (5 objects) | `cert-ws-mathlib-tactic.log` |
+| `py_compile`, `bash -n` | OK | `py-compile.log` |
+| workflows (PyYAML; job limits; step-timeout sums) | parsed; every job ≤ 30 min | `yaml-parse.log` |
+
+**Still open** (beyond §8):
+- The new workflow structure (`plan` → `setup` and `setup-tools` → certificate → benchmark) has not
+  run on GitHub. Neither has its signalled-ERROR paths, nor its cache sizes: `rf-org` now also
+  holds the objects, 3,135 of them in 195 MB uncompressed here (`*.c.o.export` in the package
+  copy, the `Mathlib.Tactic` ones included), beside a package tree whose cache is 2.7 GB
+  compressed.
+- The certificate job's restore time and cold manifest checks on a runner, which bound the 2-minute
+  margin.
+- Whether `Mathlib.Tactic` is the right precompiled set. A larger one costs the setup job's
+  budget: about 5,700 more Mathlib objects would not fit it.

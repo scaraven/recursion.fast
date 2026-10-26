@@ -28,7 +28,8 @@ kernel's, Q12):
      Lean kernel, and in nanoda with `--nanoda` (the result says which kernels ran), within
      `kernel_s`; the build's artifacts must be unchanged by it, so the gate and the badge read the
      artifacts the kernel's exports were made from; the organiser's oleans are checked against the
-     manifest before and after;
+     manifest before the build and after the badge build (step 6), and the result records the
+     manifest's and the allowlist's hashes (`environment`);
   5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
   6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
      in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
@@ -65,7 +66,6 @@ class Reject(Exception):
 
 class HarnessError(Exception):
     """A failure of the organiser's side (toolchain, comparator), not the entry's: verdict ERROR."""
-
 
 
 def sh(cmd, cwd=None, env=None, timeout=TIMEOUT, log=None):
@@ -165,6 +165,14 @@ class Org:
         return sh([sys.executable, "-I", os.path.join(REPO, "scripts", "olean-manifest.py"), "check", "--org", self.dir,
                    self.manifest], log=log) == 0
 
+    def environment(self):
+        """What the certificate was checked against (review D-trim m-4): the organiser's commit and the
+        hashes of its olean manifest and import allowlist, which came with the restored cache."""
+        sha = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()  # noqa: E731
+        commit = subprocess.run(["git", "-C", self.dir, "rev-parse", "HEAD"], capture_output=True, text=True,
+                                timeout=TIMEOUT).stdout.strip() or None
+        return {"core_commit": commit, "manifest_sha256": sha(self.manifest), "allowlist_sha256": sha(self.allowlist)}
+
 
 def sandboxed(org, cmd, tree, log, rw=(), mem="12G", env=None, timeout=TIMEOUT, extra=()):
     """Run `cmd` in the sandbox with `tree` visible at its own path (read-only unless in `rw`)."""
@@ -207,9 +215,11 @@ def cert_job(a):
             raise Reject("source rule: " + open(logs["source-rule"]).read()[-600:])
         # 3. the one build (V4-A9), in a fresh tree, in the sandbox: exactly the comparator's targets,
         # the challenge and the solution's import closure; an entry module that `Solution` does not
-        # import is never built by the harness (Q7)
+        # import is never built by the harness (Q7). The manifest is checked here, on the restored
+        # environment, and once more after the badge build, which covers every step in between.
+        res["environment"] = org.environment()
         if not org.manifest_ok(logs["manifest"]):
-            raise Reject("organiser build does not match the olean manifest")
+            raise HarnessError("the organiser's build does not match its olean manifest")
         tree = os.path.join(work, "tree")
         mkfresh(tree, org.dir, entry, challenge, files)
         lake = os.path.join(org.prefix, "bin", "lake")
@@ -273,8 +283,6 @@ def cert_job(a):
             # the comparator failed on the organiser's challenge, before it reached the solution (e.g.
             # a lean4export of another Lean: "incompatible header", CI run 39960437824)
             raise HarnessError("the comparator stopped before building the solution: " + lean["tail"][-600:])
-        if not org.manifest_ok(logs["manifest"]):
-            raise Reject("organiser .olean changed during the solution build or the comparator run")
         unchecked = lean["outcome"] in ("over budget", "timeout")     # Q12: the kernel's budget, not the entry
         budget = lambda r: f"cap {r['cap']}" + (f", peak {r['peak_bytes'] / 2 ** 30:.2f} GiB" if r["peak_bytes"] else "")  # noqa: E731
         res["kernels"] = ["lean"] if lean["outcome"] == "ok" else []
@@ -293,8 +301,6 @@ def cert_job(a):
         else:
             nan = kernel_run("nanoda", a.nanoda_mem)
             res["kernel_runs"]["nanoda"] = nan
-            if not org.manifest_ok(logs["manifest"]):
-                raise Reject("organiser .olean changed during the nanoda run")
             if nan["outcome"] == "ok":
                 res["kernels"].append("nanoda")
                 res["second_kernel"] = "nanoda: accepted"
@@ -350,9 +356,10 @@ def cert_job(a):
     except HarnessError as e:
         res["status"] = "error"
         res["reasons"].append(f"harness error: {e}")
-    except subprocess.TimeoutExpired as e:
-        res["status"] = "reject"
-        res["reasons"].append(f"timeout: {e.cmd[0] if e.cmd else ''}")
+    except subprocess.TimeoutExpired as e:      # only an organiser command raises it (entry steps return "timeout")
+        res["status"] = "error"
+        res["reasons"].append(f"harness error: an organiser command did not finish within {e.timeout} s: "
+                              f"{' '.join(map(str, e.cmd))[:200] if e.cmd else ''}")
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"certificate: {res['status']} {res['reasons'] or res['provisional_reasons']}")
     return res
@@ -385,7 +392,7 @@ def build_badge(org, tree, log, timeout):
     if rc != 0:
         raise Reject(f"badge build failed ({rc}): " + open(log, errors="replace").read()[-400:])
     if not org.manifest_ok(log):
-        raise Reject("organiser .olean changed during the badge build")
+        raise Reject("organiser .olean changed during the build, the comparator, the gate or the badge build")
     out = os.path.join(os.path.dirname(tree), "badge")
     os.makedirs(out)
     shutil.copy(os.path.join(tree, ".lake", "build", "bin", "verify"), out)
@@ -406,7 +413,7 @@ def bench_job(a, cert):
     res = json.load(open(a.out))
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
-                                                   "built_modules")}
+                                                   "built_modules", "environment")}
     ok = res["benchmark"] == "pass"
     res["verdict"] = ("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject" else "REJECT"
     res["comparable"] = res["verdict"] == "ACCEPT"

@@ -208,7 +208,7 @@ bad. -/
 theorem exists_lucky {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
     {E : Digest → Proof → Log → Option Wit} (k : BoolKState R V E) (L : Log) (q : ByteArray)
     (h : Nat.card {a // k.bad L q a} < 2 ^ 160) : ∃ a, lucky a ∧ ¬ k.bad L q a := by
-  by_contra hno
+  refine Classical.byContradiction fun hno => ?_
   push Not at hno
   have := Nat.card_le_card_of_injective (fun x : {a // lucky a} => (⟨x.1, hno x.1 x.2⟩ :
     {a // k.bad L q a})) fun x y h => Subtype.ext (by simpa using h)
@@ -327,7 +327,7 @@ theorem collision_no_bound (K : ℕ) (hK : ∀ L q, Nat.card {a // ks.bad L q a}
       intro hN
       obtain ⟨f, hg, hinj⟩ := ih (by omega)
       have hnew : ∃ a, (∀ i < N, f i ≠ a) ∧ ¬ ks.bad (logOf f N) (z N) a := by
-        by_contra hno
+        refine Classical.byContradiction fun hno => ?_
         push Not at hno
         have hs : Function.Surjective (Sum.elim (fun i : Fin N => f i)
             (fun b : {a // ks.bad (logOf f N) (z N) a} => b.1)) := by
@@ -553,7 +553,7 @@ theorem v24_no_bound (K M : ℕ)
       intro hN
       obtain ⟨f, hg, hinj⟩ := ih (by omega)
       have hnew : ∃ a, (∀ i < N, trunc (f i) ≠ trunc a) ∧ ¬ ks.bad (logOf f N) (z N) a := by
-        by_contra hno
+        refine Classical.byContradiction fun hno => ?_
         push Not at hno
         have hs : Function.Surjective (Sum.elim
             (fun p : Fin N × (Fin 8 → Fin 256) => split.symm (trunc (f p.1), p.2))

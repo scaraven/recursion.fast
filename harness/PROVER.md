@@ -98,10 +98,14 @@ signed proof of `nodeStmt child1 child2`.
 
 One request at a time; a start is released only after the previous output is written; nothing
 survives a request except the proofs the runner copies. The whole stream, every request and every
-check from the first request on, runs within `stream_s` (15 min in season 1, `M = 256`): a link
-that would end after it fails the run. Every output is checked with `acc` within `T_V`; the first
-two leaf and two node outputs are also checked against their statement with one bit flipped and
-against their sibling's statement, and must be rejected.
+check from the first request on, runs within `stream_s`, wall time: 960 s in season 1 (`M = 256`),
+of which 60 s allow for the runner's own overhead inside it (sandbox starts, badge starts; about
+30 s measured). A link that would end after it fails the run. So the entry has about 900 s for its
+513 requests, each from its process's start (its start-up to `ready` included) to its output, and
+for the checks of its outputs: with every check at `T_V` (about 178 ms on a runner), **about 3.1 s
+per link**, a leaf and a merge with their start-ups. Every output is checked with `acc` within
+`T_V`; the first two leaf and two node outputs are also checked against their statement with one
+bit flipped and against their sibling's statement, and must be rejected.
 
 ## 4. The oracle
 
@@ -126,3 +130,15 @@ evaluation (`harness/run-benchmark.py`). The reason in the result names the caus
 output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's
 refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13),
 and a kill by the memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).
+
+## 6. The Lean side's caps (the certificate job)
+
+Each within a GitHub job of 30 minutes on a 4-vCPU runner (V4-A9, `[certificate]` of the season
+file): the entry's `lake build` of the challenge and `Solution`'s import closure 600 s; the kernel's
+check of the exported proofs 600 s (a breach leaves the certificate unchecked: PROVISIONAL); the
+gate 120 s; the badge build 180 s. The badge build compiles the object code of every module of
+`Solution`'s import closure that the organiser has not precompiled. Precompiled, once per core
+commit: the import closures of `RecursionFast`, `CompPoly.Fields.Binary.BF64.Ext3`, `.Bytes` and
+`Mathlib.Tactic` (`harness/org-setup.sh` step 4). The entry's own modules and any other module it
+imports are compiled inside the 180 s, at about 4.8 objects per second on 4 cores (measured on the
+development VM): about 860 such modules fit; `import Mathlib` (about 5,700 more) does not.

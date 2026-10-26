@@ -67,7 +67,7 @@ paper (§2.4). Error `(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`, the firs
 workflow). One idealised assumption, keyed BLAKE2s is a PRF, beside collision resistance and
 one-wayness, from which the signature's EUF-CMA follows (§2.5). Every oracle call goes to the
 service on the prover's own cores. Per child, a node circuit checks one signature and hashes the
-child's trace (§4.2). Trusted code: 355 Lean lines (v3: 292; budget 500) and 3,677 runtime lines
+child's trace (§4.2). Trusted code: 355 Lean lines (v3: 292; budget 500) and 3,670 runtime lines
 (§5; 3,800 before V4-A9). Two walls of v3 stand: node extraction is decoding (#7), and no honest
 recursive entry is sized against the caps (C5); the certified baseline's measured frontier (§3.6)
 shows how far the season shape is.
@@ -84,7 +84,7 @@ GF(2^128) designs, FB-9) and `completenessCap = 2^-40`.
 
 | Status | |
 |---|---|
-| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape. After V4-A9: the build, the audit, every test of `ci.yml` and the end-to-end smoke, 16 checks in 4 min 30 s (`docs/v4/stages/D-trim-RESULT.md`, `logs/trim/smoke-e2e.log`) |
+| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape. After V4-A9: the build, the audit, every test of `ci.yml` and the end-to-end smoke, 16 checks in 4 min 21 s after the fix pass (`docs/v4/stages/D-trim-RESULT.md`, `logs/trim-fix/smoke-e2e.log`) |
 | ran on a GitHub runner | before V4-A9: CI run 39966237935, all green (AMD EPYC 9V45 and 9V74, image ubuntu24 20261012.334.1): Lean job 7 min 29 s; service and sandbox tests; the end-to-end smoke in 9 min 18 s, 16 checks: the witness-sending entry certified with the Lean kernel and ACCEPTed with the compiled `accF` badge and a toy assembly prover, PROVISIONAL and REJECT paths, the job plan's missing part ⇒ ERROR, liveness, canaries, the DoS column, and five broken provers rejected for their stated reasons. Earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms); signatures equal to the Lean signer's |
 | never ran | the evaluation workflow and its attestations; the trimmed harness (V4-A9) on a runner; any entry at the season-1 shape (C-m10), so nothing is ranked |
 
@@ -567,7 +567,14 @@ fails the same way.
 >    trusts that `vk` came from the service of the attested job and that `sk` never left it.
 > 9. **The trusted machine**: a GitHub-hosted runner of the recorded image, running the organiser's
 >    workflow at the recorded commit; GitHub's artifact attestations as the anchor (V4-A1); the
->    sandbox's isolation of untrusted code from the service and from the job's credentials.
+>    sandbox's isolation of untrusted code from the service and from the job's credentials; and
+>    **the cache store** that carries the organiser's environment from the setup jobs to the jobs
+>    that run the entry (V4-A9, review D-trim m-4): the GitHub Actions cache of the submissions
+>    repository's default-branch scope, to which only the `setup` and `setup-tools` jobs save, whose
+>    saved keys are immutable and name the resolved core commit, and from which a new commit's
+>    setup starts with the latest cache under the same prefix. The olean manifest travels inside the
+>    cache, so it cannot detect a poisoned one; every result records the environment it was checked
+>    against (`environment`: the core commit and the manifest's and allowlist's hashes).
 > 10. **The calibration**: `T_triv,best` measured in the same job (§3.5); the service's measured
 >     throughput, published beside every score.
 >
@@ -623,11 +630,14 @@ guaranteed). Hence: the benchmark shape fits 16 GB; `T_V` self-calibrates in the
 result records the CPU model; records are only ever compared in pairs within one job (v3's ABBA
 rule).
 
-**Separate jobs** (V4-A2, C-M2, V4-A9). A **setup job** builds the organiser's environment, the
-package tree, the organiser build with its olean manifest and import allowlist, the comparator and
-the service, and caches it per core commit; it never fetches the entry, so what it saves exists
-before any entry code is on any machine of the run, and a cache miss costs its time, never an
-entry's. The **certificate job** (source rule, the entry's one `lake build`, the comparator, the
+**Separate jobs** (V4-A2, C-M2, V4-A9). A `plan` job resolves the core commit every later job
+checks out and keys its caches on. Two **setup jobs** build the organiser's environment: `setup`
+the package tree, the organiser build with its olean manifest and import allowlist, and the
+objects the badge links (§3.6); `setup-tools`, beside it, the comparator and the service. Each
+caches its output per core commit; neither fetches the entry, so what they save exists before any
+entry code is on any machine of the run, and a cache miss costs their time, never an entry's. A
+save that did not land fails its setup job with the reason; a later job that finds a cache missing
+ends as an attested ERROR with the reason, never as a missing part. The **certificate job** (source rule, the entry's one `lake build`, the comparator, the
 gate, the badge build) restores that cache, is deterministic and may run on any runner. It uses
 the **Lean kernel only**: nanoda does not fit a 16 GB runner (§2.7, Q5) nor the 30-minute job; a
 larger machine can add it, and the result states which kernels ran. The **benchmark** must run on
@@ -776,7 +786,7 @@ namespaces for the job.
 
 | # | Step | Checked or measured | Service |
 |---|---|---|---|
-| 0 | setup job | the organiser's environment, cached per core commit (§3.1); no entry code | none |
+| 0 | setup jobs | the organiser's environment, cached per core commit (§3.1); no entry code | none |
 | 1 | certificate job | source rule, the one build, comparator, gate, badge build (§3.1) | none |
 | 2 | build | the assembly prover, in the sandbox, hashes recorded (each benchmark job) | none |
 | 3 | calibration | `T_triv,best`; the service's calls/s and compressions/s (§3.5; each benchmark job) | a calibration instance |
@@ -797,10 +807,11 @@ cap leaves the certificate unchecked, Q12, as before). The worst case of each jo
 
 | Job | Entry-capped steps (worst case) | Organiser steps | Bound |
 |---|---|---|---|
-| setup (no entry code) | — | on a miss: an earlier commit's cache, `lake exe cache get` ≤ 240 s, `org-setup.sh` ≤ 1,020 s (its steps' timeouts sum to that), the comparator ≤ 300 s, the cache save; **measured** on a runner: 39 s, 237 s, 14 s with the package tree cached (CI run 39966237935); cold 139 s and 270 s, of which the objects 191 s (CI run 39935079265, before CompPoly joined the roots). On a hit: nothing | 30 min |
-| certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 25 min | checkout, runner setup, the cache restore (the package-tree cache restores in 35–38 s, **measured**), the toolchain, three manifest checks, the source rule: about 2.5 min (**estimate**) | 27.5 of 30 min |
-| benchmark, tree | prover build 300 s + setup 300 s + tree 600 s + root check ≤ 75 s (three badge runs) + its canary ≤ 40 s + DoS 180 s = 24.9 min | calibration (three chain-checker runs of 1.8 s, **measured**; the service probe 4 s), the instance's digests, service start and stop: under 1 min (**estimate**) | 25.5 min, inside the part's 28 min (`evaluate.py` `PART_S`), inside 30 |
-| benchmark, stream | prover build 300 s + setup 300 s + the stream 900 s, a hard deadline over every request, check and canary from its first request = 25 min | calibration, the stream's digests: under 1 min (**estimate**) | 26 min, inside 28, inside 30 |
+| setup (no entry code) | — | on a cold miss: an earlier commit's cache restore (about 45 s, **estimate**), `lake exe cache get` ≤ 240 s, `org-setup.sh` steps 1–4 ≤ 1,080 s (their timeouts), the save and its check (about 2 min, **estimate**): 22 min of timeouts and about 3 min of transfers. **Measured**: `cache get` 39 s warm and 139 s cold, `org-setup.sh` 237 s warm and 270 s cold (CI runs 39966237935, 39935079265, before CompPoly and `Mathlib.Tactic` joined), the `Mathlib.Tactic` objects 221 s on 4 cores of the development VM. On a hit: nothing | about 25 of 30 min |
+| setup-tools (no entry code) | — | on a miss: the comparator ≤ 240 s (14 s **measured**; 540 s with nanoda), the service ≤ 120 s (12–17 s **measured**), two small saves | 6 of 30 min |
+| certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 1,500 s (25 min) | checkout and runner setup 10 s (8 s **measured**); elan 1 s (**measured**); the two cache restores about 45 s (**estimate**: the 2.7 GB package-tree cache restores in 35 s, **measured**, and the organiser build and objects add some hundreds of MB); the Lean toolchain 29 s (**measured**, CI run 39966237935); fetch, render, source rule about 5 s; two olean-manifest checks over 7.58 GB, 15.5 s each on 4 cores with a warm page cache (**measured**, `logs/trim-fix/manifest-check-time.log`), allowed 40 s each cold; `lake env`, the upload about 10 s: about 3 min | 28 of 30 min; even at twice the restore estimate the job ends inside 30 |
+| benchmark, tree | prover build 300 s + setup 300 s + tree 600 s + root check ≤ 150 s (up to three badge runs of `2 · verify_s + 30` s) + its canary ≤ 40 s + DoS 180 s = 1,570 s (26.2 min) | calibration (three chain-checker runs of 1.8 s, **measured**; the service probes about 5 s), the instance's digests (2.2 s, **measured** by the review), three service lifetimes: under 30 s | 26.7 min, inside the part's 28 min (`evaluate.py` `PART_S`), the job's fixed steps (about 30 s) and upload inside 30 |
+| benchmark, stream | prover build 300 s + setup 300 s + the stream 960 s, a hard wall deadline over every request, check and canary from its first request (§3.6) = 1,560 s (26 min) | calibration, the stream's digests (about 3 s): under 30 s | 26.5 min, inside 28, inside 30 |
 | plan, attest | — | data only | 10 min each |
 
 The core CI's jobs (`ci.yml`) are bounded the same way: every step has a timeout, their sums are
@@ -871,7 +882,7 @@ of `S` (CM-7).
 | runs (tree, stream) | 1, 1; no medians | 1, 1 | V4-A9 |
 | statement canaries per kind; DoS proofs | 2; 100 | 2; 64 | V4-A9 |
 | certificate caps: the entry's build, the kernel, the gate, the badge build | 600 s, 600 s, 120 s, 180 s | same | V4-A9 |
-| benchmark caps: prover build, prover setup, tree run, stream request, the stream, one `acc` check, DoS column | 300 s, 300 s, 600 s, 60 s, 900 s, 10 s, 180 s (10 × `T_V` per input) | 300 s, 300 s, 120 s, 60 s, 300 s, 10 s, 180 s | V4-A9, [CM] §3.5 |
+| benchmark caps: prover build, prover setup, tree run, stream request, the stream, one `acc` check, DoS column | 300 s, 300 s, 600 s, 60 s, 960 s (900 s for the entry), 10 s, 180 s (10 × `T_V` per input) | 300 s, 300 s, 120 s, 60 s, 300 s, 10 s, 180 s | V4-A9, [CM] §3.5 |
 | `proofCap`, `queryCap`, `qV` | 1 MiB, `2^20` B, `≤ 2^16` | same | V4-13, V4-A3 |
 | signed-proof file the runner reads | ≤ 64 MiB | same | V4-13 |
 | `errorCap`, `completenessCap`, `logCap` | `2^-120`, `2^-40`, `2^96` | same | V4-13, V4-A9 |
@@ -882,6 +893,23 @@ of `S` (CM-7).
 The table is a selection of `harness/season.toml` and `harness/smoke.toml`, which also fix the
 check batching and the number of calibration runs; the season benchmark runs as two parallel jobs
 (§3.1), the smoke as one.
+
+**What the badge cap pays for** (review D-trim m-1). The badge build links the object code of every
+module of `Solution`'s import closure. The `setup` job precompiles those of `RecursionFast`, the
+CompPoly roots and `Mathlib.Tactic` (4,716 modules, 2,825 of Mathlib's 8,530); every other module
+the entry imports, its own included, is compiled inside `badge_s = 180 s`, at about 4.8 objects per
+second on 4 cores (**measured** on the development VM: 1,063 objects in 221 s,
+`logs/trim-fix/objects-mathlib-tactic-4cores.log`), so about 860 such modules fit (**estimate** for
+a runner). Importing all of Mathlib (about 5,700 more) does not fit.
+
+**What the stream's cap holds** (review D-trim m-5). `stream_s` is wall time from the stream's
+first request: 960 s, of which 60 s allow for the organiser's overhead inside it (about 30 s
+**measured**: a request's sandbox start, staging, kill and read at most 50 ms, 513 times; a badge
+batch's start at most 0.2 s, about 20 times; `logs/trim-fix/stream-overhead.log`). The entry's
+900 s hold its 513 requests from their process's start, its own start-up to `ready` included, and
+the checks of its outputs. With every check at `T_V` ≈ 178 ms (about 530 checks, warm-ups included,
+about 95 s), that leaves **about 3.1 s per link**, a leaf and a merge with their start-ups, at the
+season shape; an entry slower than that is REJECTed at the cap, not scored.
 
 **The stream's tail at `M = 256`** (CM-R2, **estimate**). The last merges of the stream can bundle
 or leave chain hashing to the verifier and never pay: at most `c − 1` of them escape, where `c` is
@@ -1114,7 +1142,7 @@ jobs, `logs/D-final-build.log`, after V4-A9 `logs/trim/lake-build-final.log`; a 
 1 min 56 s to 2 min 55 s on the development VM, `logs/A-fix-build-cold.log`), and the axiom audit
 passes on every module (`propext`, `Classical.choice`, `Quot.sound`; `logs/A-fix-axiom-audit.log`,
 `logs/trim/axiom-audit.log`). The contract imports Lean core and Mathlib only. By `loc.py`, the
-Library has 1,856 code lines and 233 theorems, the Controls 2,089 lines and 309 theorems.
+Library has 1,856 code lines and 233 theorems, the Controls 2,082 lines and 309 theorems.
 
 **Controls**: every trusted definition has a positive and a negative control (the full table is
 stage A RESULT §3). The ones that carry the v4 changes:
@@ -1134,11 +1162,11 @@ The Library theorems the badge and the decoder rest on, `Fast.accF_eq` (the badg
 and `Words.decodeWit_witWords` (every fitting witness can be denoted), are theorems, not controls.
 
 **The trusted runtime** (the groups and rule of stage B RESULT §1.1; recounted by
-`logs/trim/loc_runtime.py`, `logs/trim/loc-runtime-after.log`): **3,677 code lines** after V4-A9:
-the service 953 Rust lines (std only), the runner 1,024, the sandbox 238, the badge main 88, the
-proof-side order 452, v3's ported tools 697, the calibration generator 161, CI scripts 64. Before
-V4-A9 the same count gave 3,800 (`logs/trim/loc-runtime-before.log`; stage B counted 3,559 before
-its final fix pass). The measurement client `rf-bench` is trusted for nothing a record's soundness
+`logs/trim-fix/loc_runtime.py`, `logs/trim-fix/loc-runtime-after.log`): **3,670 code lines** after
+V4-A9, its golf and its fix pass: the service 948 Rust lines (std only), the runner 1,023, the
+sandbox 233, the badge main 88, the proof-side order 456, v3's ported tools 697, the calibration
+generator 161, CI scripts 64. Before V4-A9 the same count gave 3,800
+(`logs/trim/loc-runtime-before.log`; stage B counted 3,559 before its final fix pass). The measurement client `rf-bench` is trusted for nothing a record's soundness
 rests on (the calibration column is published, not enforced).
 
 | Component | Trusted for |
@@ -1195,13 +1223,16 @@ V4-16 where they differ. V4-A9 is the user's own (2026-10-26).
 
 **Not yet done** (the three items the implementation still owes):
 
-1. **The full evaluation on GitHub**: the evaluation workflow, its setup job and caches, its two
+1. **The full evaluation on GitHub**: the evaluation workflow, its setup jobs and caches, its two
    benchmark jobs and the attestation have never run; the caller template is not yet installed in
    the submissions repository. (The end-to-end smoke of `ci.yml` ran on a runner before V4-A9: run
    39966237935.)
 2. **The 30-minute caps against a real entry on a runner** (C-M2, C10, V4-A9): the entry's build
-   and kernel caps (10 min each) bind entries and are a rule; the baseline's figures are from the
-   32-vCPU development VM (§3.1). The user's alternative: a larger runner for the certificate job.
+   and kernel caps (10 min each), the badge cap (3 min, which also compiles any module the entry
+   imports beyond the precompiled set, §3.6) and the stream's (about 3.1 s per link) bind entries
+   and are a rule; the baseline's figures are from the 32-vCPU development VM (§3.1), and the
+   certificate job's fixed steps are partly estimated (§3.4). The user's alternative: a larger
+   runner for the certificate job.
 3. **`T_V` and binary fields** (Q11). Both sides of `T_V ≤ T_triv,best / R` are compiled Lean, but
    the chain checker's BLAKE2s compiles to fast word code while Lean has no carry-less multiply, so
    a GF(2^k) verifier pays a software `clmul`: the baseline's 2-leaf bundle takes 0.5 s of `acc` and

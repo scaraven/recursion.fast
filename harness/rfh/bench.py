@@ -196,7 +196,7 @@ class Bench:
         return len(items)
 
     # -- calibration -------------------------------------------------------------------------------
-    def calibrate(self, inst_dir, starts, n, root):
+    def calibrate(self, inst_dir, n, root):
         """`T_triv,best` (V4-12) from the chain checker on the tree's chains, pinned to one core, and the
         service's calls/s and compressions/s (V4-A5, C-m8; published, not enforced)."""
         runs = [self.badge.chaincheck(os.path.join(inst_dir, "leaves.json"), root) for _ in range(self.p.checker_runs)]

@@ -5,7 +5,8 @@
 # (COMPARATOR_HOME, COMPARATOR_LEAN4EXPORT, COMPARATOR_NANODA) for $GITHUB_ENV. A checkout already
 # at its pin with its binaries built is kept (the evaluation's `setup` job may restore an earlier
 # core commit's); with --env-only nothing is built, and a missing binary is an error (the
-# certificate job, after restoring the setup job's cache).
+# certificate job, after restoring the setup job's cache). The inner timeouts sum to 180 s (and
+# 300 s more for nanoda), inside every caller's outer bound (240 s; 540 s with nanoda).
 #
 # Both are built with the organiser's Lean toolchain (this repository's `lean-toolchain`, v4.34.1):
 # the pin d03acab names v4.34.0, and a lean4export built with another Lean than the one that wrote
@@ -27,7 +28,7 @@ if ! { at_pin "$D/comparator" d03acab && [[ -x "$CMP" && -x "$EXPORT" ]] && cmp 
     git -c advice.detachedHead=false clone -q https://github.com/leanprover/comparator "$D/comparator"
     git -C "$D/comparator" checkout -q d03acab
     cp "$TOOLCHAIN" "$D/comparator/lean-toolchain"
-    (cd "$D/comparator" && timeout 600 lake build && timeout 600 lake build lean4export)
+    (cd "$D/comparator" && timeout 120 lake build && timeout 60 lake build lean4export)
   } >&2
 fi
 echo "COMPARATOR_HOME=$D/comparator"
@@ -39,7 +40,7 @@ if [[ "${RF_NANODA:-0}" == 1 ]]; then
       rm -rf "$D/nanoda_lib"
       git clone -q https://github.com/ammkrn/nanoda_lib "$D/nanoda_lib"
       git -C "$D/nanoda_lib" checkout -q 3a24072
-      (cd "$D/nanoda_lib" && timeout 900 cargo build --release)
+      (cd "$D/nanoda_lib" && timeout 300 cargo build --release)
     } >&2
   fi
   echo "COMPARATOR_NANODA=$NANODA"

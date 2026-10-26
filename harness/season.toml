@@ -23,7 +23,9 @@ tree_s = 600      # seconds for the tree run
 M = 256
 n_f = 65536       # 2^16
 step_s = 60       # seconds per leaf or node request (and again for its `ready` line)
-stream_s = 900    # seconds for the whole stream, its checks included
+stream_s = 960    # wall seconds for the whole stream from its first request, checks included: 900 s
+                  # for the entry and 60 s for the organiser's overhead inside it (about 30 s measured:
+                  # 513 request sandboxes at <= 50 ms, about 20 badge starts at <= 0.2 s; review D-trim m-5)
 check_every = 32  # outputs checked in batches of this many (all before the service exits)
 
 [canaries]        # statement canaries (C15): `stmt-bit` and `swapped-child` on the tree's root and on

@@ -30,9 +30,6 @@ class Signed:
         out += self.ots + self.path
         return b"".join(out)
 
-    def sig_bytes(self) -> bytes:
-        return struct.pack("<Q", self.idx) + b"".join(self.ots + self.path)
-
 
 def parse(b: bytes):
     """The signed proof `b` encodes, or `None` if `b` is not exactly one encoding."""
