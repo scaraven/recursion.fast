@@ -17,7 +17,7 @@ trusted predicate `acc` (the node clause, the harness's check and third parties'
 verifier on the signed trace and checks the signature. Provers are x86-64 assembly, timed on
 GitHub-hosted runners with attested results, and scored `S = T_tree + K·t_link`.
 
-**Start at `docs/DESIGN-v4-srom.md`** (the normative design; §0 is the summary, §7 the decisions
+**Start at `docs/DESIGN-v4-srom.md`** (the normative design; §0 is the summary, §6 the decisions
 taken in the user's absence), then `docs/README.md` for the record it inherits. Where the design
 and the Lean text differ, the Lean text is the rule and the design has a bug.
 
@@ -31,7 +31,7 @@ and the Lean text differ, the Lean text is the rule and the design has a bug.
 - **v4 runtime** (trusted, tested not proved): the oracle and signing service `service/` (Rust;
   its wire protocol `service/PROTOCOL.md` is normative for provers), the runner `harness/`
   (Python), `tests/`, the CI workflows `.github/workflows/`.
-- **v4 build record:** `docs/v4/BRIEF.md` (the brief and the amendments V4-A1 … A8),
+- **v4 build record:** `docs/v4/BRIEF.md` (the brief and the amendments V4-A1 … A9),
   `docs/v4/reviews/` (the design attack), `docs/v4/stages/` (the stage RESULTs).
 - **v3 code:** the contract, the organiser library, the controls and the harness tools are on the
   branch `v3/contract-archive`, together with the original v3 design, its amendment ledger and the

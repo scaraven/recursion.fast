@@ -16,8 +16,12 @@ signed traces and a certified verifier has nothing to recognise. Provers are x86
 timed on GitHub-hosted runners whose results are attested, and scored `S = T_tree + K·t_link`.
 
 v4 is implemented on the branch `v4/srom-rules` and has not yet been adopted by the user. Its
-design is [`docs/DESIGN-v4-srom.md`](docs/DESIGN-v4-srom.md); §7 there lists every decision taken
-in the user's absence.
+design is [`docs/DESIGN-v4-srom.md`](docs/DESIGN-v4-srom.md); §6 there lists every decision taken
+in the user's absence. On 2026-10-26 the user trimmed the rules to what serves valid verifiers and
+honest, fast, recursion-priced proving (V4-A9, design §4.4): every evaluation job ends within 30
+minutes, the tree and the stream run once each, only the tree's root is checked, the organiser's
+own checks run in this repository's CI only, and the error caps are `2^-120` (knowledge, per
+query) and `2^-40` (completeness).
 
 ## Read
 

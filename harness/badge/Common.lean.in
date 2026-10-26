@@ -6,7 +6,6 @@
     the bytes are exactly one encoding. Lengths are read as little-endian `u64` at byte level (no
     word list), so parsing is linear and cheap.
   * `parseHex32`: a statement or key, 64 hexadecimal characters.
-  * `parseLog`: the service's liveness log (`service/PROTOCOL.md` §5), items `enc64 |q| ‖ q ‖ a`.
 
   What is checked is the contract's `acc` through `Submission.accF`, proved equal to it
   (`Library/Fast.lean`, `accF_eq`).
@@ -59,20 +58,6 @@ def parseSigned (b : ByteArray) : Option Signed := Id.run do
   o := o + 8
   let ds := (List.range (wotsLen + sigHeight)).map fun k => digestAt b (o + 32 * k)
   return some ⟨π, tr.toList, ⟨idx, ds.take wotsLen, ds.drop wotsLen⟩⟩
-
-/-- The liveness log: `enc64 |q| ‖ q ‖ a` items to the end of the file. -/
-def parseLog (b : ByteArray) : Option Log := Id.run do
-  let n := b.size
-  let mut o := 0
-  let mut L : Array (ByteArray × Digest) := #[]
-  while o < n do
-    if o + 8 > n then return none
-    let lq := u64At b o
-    o := o + 8
-    if lq + 32 > n - o then return none
-    L := L.push (b.extract o (o + lq), digestAt b (o + lq))
-    o := o + lq + 32
-  return some L.toList
 
 /-- A hexadecimal digit's value. -/
 def hexVal (c : Char) : Option Nat :=

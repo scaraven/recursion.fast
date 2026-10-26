@@ -1,7 +1,7 @@
 /-
 # Controls: completeness with error (`Contract/Security.lean`, V3-S2R-A2), positive and negative
 
-`failProb` over a lazily sampled oracle, `CompleteWithError` and `completenessCap = 2^-128`. The
+`failProb` over a lazily sampled oracle, `CompleteWithError` and `completenessCap = 2^-40`. The
 answers are split by the top bit of their first byte (`good`); flipping that bit is a bijection
 of the digests, so exactly half are good (`sum_bad`).
 
@@ -9,7 +9,7 @@ Positive:
 * `grind_exact`: a verifier that accepts the proof `z i` iff the answer to the query `z i` is good,
   with a prover that tries the nonces `0, …, k − 1` and falls back to nonce `0` (already tried,
   bad), fails with probability **exactly** `2^-k` for every `k ≥ 1` (review H-m1: the fallback is
-  what makes it exact). `grind128_complete`: at `k = 128` it is complete at the cap. This is
+  what makes it exact). `grind40_complete`: at `k = 40` it is complete at the cap. This is
   proof-of-work grinding, which `Complete ∀ H` excluded.
 * `fixed_complete_half`: a verifier that accepts iff the answer to one fixed query is good is
   complete at `δ = 1/2`, with every prover.
@@ -18,7 +18,7 @@ Positive:
   `ws_complete`).
 
 Negative:
-* `grind127_not_complete`: with 127 nonces (`2^-127`) it is not complete at the cap, for any
+* `grind39_not_complete`: with 39 nonces (`2^-39`) it is not complete at the cap, for any
   relation with a witness.
 * `fixed_not_complete`: the fixed-query verifier is not complete at any `δ < 1/2`, **whatever the
   prover does**: a prover can ask the query too, and cannot change its answer.
@@ -129,14 +129,14 @@ theorem grind_exact (c : Digest) {k : ℕ} (hk : 0 < k) :
     failProb ((grindP k 0).bind (Vg c)) [] = 2⁻¹ ^ k :=
   grind_fail c k 0 [] ⟨fun _ h => absurd h (Nat.not_lt_zero _), fun _ _ => rfl⟩ (by omega)
 
-/-- **128 nonces are complete at the cap**, for every relation. -/
-theorem grind128_complete (R : Digest → Wit → Prop) :
-    CompleteWithError R (fun _ _ => grindP 128 0) Vg completenessCap :=
+/-- **40 nonces are complete at the cap**, for every relation. -/
+theorem grind40_complete (R : Digest → Wit → Prop) :
+    CompleteWithError R (fun _ _ => grindP 40 0) Vg completenessCap :=
   fun c _ _ => (grind_exact c (by decide)).le
 
-/-- **127 nonces are not**, for any relation with a witness. -/
-theorem grind127_not_complete (R : Digest → Wit → Prop) {c : Digest} {w : Wit} (h : R c w) :
-    ¬ CompleteWithError R (fun _ _ => grindP 127 0) Vg completenessCap := fun hc => by
+/-- **39 nonces are not**, for any relation with a witness. -/
+theorem grind39_not_complete (R : Digest → Wit → Prop) {c : Digest} {w : Wit} (h : R c w) :
+    ¬ CompleteWithError R (fun _ _ => grindP 39 0) Vg completenessCap := fun hc => by
   have := hc c w h
   rw [grind_exact c (by decide), completenessCap] at this
   exact absurd this (not_le.mpr (pow_lt_pow_right_of_lt_one₀ (by norm_num) (by norm_num)

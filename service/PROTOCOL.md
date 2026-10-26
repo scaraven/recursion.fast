@@ -2,8 +2,8 @@
 
 This is the interface between a prover and `rf-oracle`, the oracle and signing service of
 recursion.fast v4 (SROM; `docs/v4/BRIEF.md` §4.3). One service process lives for one timed run
-(one tree repeat, one stream repeat, the liveness run). It holds a fresh secret PRF key `k` and a
-fresh signing key pair `(sk, vk)`; neither ever leaves the process.
+(the tree run, the stream run). It holds a fresh secret PRF key `k` and a fresh signing key pair
+`(sk, vk)`; neither ever leaves the process.
 
 ## 1. Transport
 
@@ -127,24 +127,20 @@ kills the prover first (V4-A5).
 - Each request is computed on the connection's thread; use several connections to use several
   cores.
 
-## 5. Liveness mode (informative; the runner's)
+## 5. No logging mode
 
-Started with `--log FILE`, the service appends every query it evaluates (in `QUERY` and in `SIGN`)
-with its answer to FILE as `enc64 |q| ‖ q ‖ a`, in evaluation order (interleaved across
-connections). The runner uses FILE as the query log `L` of the extractor liveness check. In this mode
-every request writes and flushes the log under one lock, so connections are serialised there and a
-prover can notice the mode by its latency (RF-m21); nothing depends on it, since the liveness run
-is unscored and its shape (`r = 1`, `n = 16`) is public.
+The service has one mode. Its liveness mode (`--log FILE`, every evaluated query written to a file
+for the per-entry extractor liveness check) was removed with that check (V4-A9): the extractor's
+correctness is the kernel-checked `Computes`.
 
 ## 6. Lifecycle (informative; the runner's)
 
-The runner starts the service with `--socket PATH` (and `--log FILE` for liveness) and its stdin
-on a pipe. The service draws `k` and the signing seed from `getrandom`, generates the `2^16`
-one-time keys and the tree (multi-threaded), binds the socket and prints `vk <hex>`,
-`keygen_ms <ms>`, `simd <avx2|scalar>` and `ready`. When the runner closes the pipe, the service
-waits for in-flight requests, overwrites its keys, flushes the log, prints
-`stats requests=… queries=… query_bytes=… signatures=… refusals=…`, removes the socket and exits 0.
-The first 32 refusals of a lifetime are written to its stderr (`rf-oracle: refused (status S):
-MESSAGE`); the runner copies them into the result, so that a prover that fails on a cap can see
-which one. Keys are
-never written to disk; the process is non-dumpable (`PR_SET_DUMPABLE = 0`).
+The runner starts the service with `--socket PATH` and its stdin on a pipe. The service draws `k`
+and the signing seed from `getrandom`, generates the `2^16` one-time keys and the tree
+(multi-threaded), binds the socket and prints `vk <hex>`, `keygen_ms <ms>`, `simd <avx2|scalar>` and
+`ready`. When the runner closes the pipe, the service waits for in-flight requests, overwrites its
+keys, prints `stats requests=… queries=… query_bytes=… signatures=… refusals=…`, removes the socket
+and exits 0. The first 32 refusals of a lifetime are written to its stderr (`rf-oracle: refused
+(status S): MESSAGE`); the runner copies them into the result, so that a prover that fails on a cap
+can see which one. Keys are never written to disk; the process is non-dumpable
+(`PR_SET_DUMPABLE = 0`).

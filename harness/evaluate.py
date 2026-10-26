@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """The evaluation of one entry, in the harness order (TRUSTED RUNTIME; v3 §9.3 as amended by
-V4-A1, V4-A2, V4-15).
+V4-A1, V4-A2, V4-15, V4-A9).
 
   python3 -I harness/evaluate.py cert  --entry ENTRY --org ORG --work WORK --out CERT.json [--nanoda]
+                                       [--season harness/season.toml]
   python3 -I harness/evaluate.py bench --entry ENTRY --cert CERT.json --work WORK --out RESULT.json
-                                       [--season harness/season.toml] [run-benchmark options]
+                                       [--season harness/season.toml] [--parts PARTS]
   python3 -I harness/evaluate.py all   --entry ENTRY --org ORG --work WORK --out RESULT.json [...]
 
 ENTRY: `claim.json` (the declared numbers: `error`, `completeness_error` as "a/b" strings, `qV`,
@@ -14,20 +15,24 @@ defines `RecursionFast.Challenge.submission` and proves `RecursionFast.Challenge
 (`ORG/.lake/rf/manifest.sha256`) and import allowlist (`ORG/.lake/rf/allowlist.txt`) written by
 `harness/org-setup.sh` before any entry code ran.
 
-The certificate job (`cert`; deterministic, any machine with the package tree):
+The certificate job (`cert`; deterministic, any machine with the package tree), every Lean step
+capped by the season file's `[certificate]` (V4-A9; a breach is the entry's REJECT, except the
+kernel's, Q12):
   1. render the challenge from the organiser's stub and the claim (the entry supplies no stub);
   2. the source rule on the entry's Lean files (no elaboration-time code);
-  3. the comparator in a fresh tree: it builds the solution in the sandbox (`scripts/bwrap-landrun.sh`)
-     and replays the exported proof of `certified` against the rendered statement in the Lean
-     kernel, and in nanoda with `--nanoda` (the result says which kernels ran); the organiser's
-     oleans are checked against the manifest before and after;
-  4. a second fresh tree at the same path: the comparator's targets (the challenge and the
-     solution's import closure) built again in the sandbox, every artifact byte-identical to the
-     comparator-verified build and no other artifact; the gate (rules 1–8, badge fields V, P, ext)
-     in the sandbox. Entry modules that `Solution` does not import are never built (Q7);
-  5. the badge executables (`verify`, `liveness`) rendered from `harness/badge/*.lean.in` and built
-     in the sandbox in that tree, which must neither build nor change an entry module (the badge's
-     import closure lies inside the verified one); the organiser's `chaincheck` copied beside them.
+  3. the one build (V4-A9): in a fresh tree, in the sandbox, the comparator's targets (the
+     challenge and the solution's import closure; entry modules that `Solution` does not import are
+     never built, Q7), within `build_s`;
+  4. the comparator on that build (`scripts/bwrap-landrun.sh`; its `lake build` finds it up to
+     date): it replays the exported proof of `certified` against the rendered statement in the
+     Lean kernel, and in nanoda with `--nanoda` (the result says which kernels ran), within
+     `kernel_s`; the build's artifacts must be unchanged by it, so the gate and the badge read the
+     artifacts the kernel's exports were made from; the organiser's oleans are checked against the
+     manifest before and after;
+  5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
+  6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
+     in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
+     import closure lies inside the verified one); the organiser's `chaincheck` copied beside it.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`.
 The benchmark job (`bench`; the GitHub-hosted runner): `harness/run-benchmark.py` with the badge.
@@ -42,13 +47,15 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from rfh.sandbox import Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
-TIMEOUT = 3600
+TIMEOUT = 300           # an organiser command: render, source rule, manifest check
+PART_S = 1680           # a benchmark part (28 min): the outer bound of its capped steps (V4-A9)
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
 
 
@@ -177,10 +184,11 @@ def sandboxed(org, cmd, tree, log, rw=(), mem="12G", env=None, timeout=TIMEOUT, 
 
 def cert_job(a):
     org = Org(a.org)
+    caps = tomllib.load(open(a.season, "rb"))["certificate"]
     work = os.path.abspath(a.work)
     os.makedirs(work, exist_ok=False)
     entry = os.path.abspath(a.entry)
-    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": []}
+    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": [], "caps": caps}
     logs = {k: os.path.join(work, f"{k}.log") for k in ("render", "source-rule", "build", "gate", "badge", "manifest")}
     try:
         files = entry_modules(entry)
@@ -197,25 +205,41 @@ def cert_job(a):
             shutil.copy(os.path.join(entry, "lean", f), sr)
         if sh([sys.executable, "-I", os.path.join(REPO, "scripts", "source-rule.py"), sr], log=logs["source-rule"]):
             raise Reject("source rule: " + open(logs["source-rule"]).read()[-600:])
-        # 3. the comparator, fresh tree
+        # 3. the one build (V4-A9), in a fresh tree, in the sandbox: exactly the comparator's targets,
+        # the challenge and the solution's import closure; an entry module that `Solution` does not
+        # import is never built by the harness (Q7)
         if not org.manifest_ok(logs["manifest"]):
             raise Reject("organiser build does not match the olean manifest")
         tree = os.path.join(work, "tree")
         mkfresh(tree, org.dir, entry, challenge, files)
+        lake = os.path.join(org.prefix, "bin", "lake")
+        os.makedirs(os.path.join(tree, ".lake"))
+        t0 = time.monotonic()
+        rc = sandboxed(org, [lake, "build", f"+{CHALLENGE_MODULE}", f"+{SOLUTION_MODULE}"], tree, logs["build"],
+                       rw=(os.path.join(tree, ".lake"),), timeout=caps["build_s"])
+        res["build_s"] = round(time.monotonic() - t0, 1)
+        if rc == "timeout":
+            raise Reject(f"the solution did not build within build_s = {caps['build_s']} s (V4-A9)")
+        if rc != 0:
+            raise Reject(f"the solution does not build ({rc}): " + open(logs["build"], errors="replace").read()[-400:])
+        built = artifacts(tree)
+        # 4. the comparator on that build: its own `lake build` of the two targets finds them up to
+        # date, and it exports them and replays the proofs in the kernel
         home = os.environ.get("COMPARATOR_HOME", "")
         cmp_bin = os.path.join(home, ".lake", "build", "bin", "comparator")
         export = os.environ.get("COMPARATOR_LEAN4EXPORT",
                                 os.path.join(home, ".lake/packages/lean4export/.lake/build/bin/lean4export"))
         if not (os.access(cmp_bin, os.X_OK) and os.access(export, os.X_OK)):
-            raise Reject("harness error: the comparator or lean4export is missing (scripts/tools.env)")
+            raise HarnessError("the comparator or lean4export is missing (scripts/tools.env)")
         env = dict(os.environ, COMPARATOR_LANDRUN=os.path.join(REPO, "scripts", "bwrap-landrun.sh"),
                    COMPARATOR_LEAN4EXPORT=export, RF_LANDRUN_MINIMAL="1",
                    RF_LANDRUN_RO=":".join(org.ro_roots(home, os.path.dirname(export))))
 
         def kernel_run(kernel, mem):
-            """One comparator run in its own memory-capped scope (Q12): `lean` checks with the Lean
-            kernel alone; `nanoda` adds nanoda (the comparator then also re-runs the Lean kernel).
-            Its outcome: ok, rejected, over budget (the scope was killed for memory) or timeout."""
+            """One comparator run in its own memory-capped scope (Q12), within `kernel_s`: `lean`
+            checks with the Lean kernel alone; `nanoda` adds nanoda (the comparator then also re-runs
+            the Lean kernel). Its outcome: ok, rejected, over budget (the scope was killed for
+            memory) or timeout."""
             cfg = {"challenge_module": CHALLENGE_MODULE, "solution_module": SOLUTION_MODULE,
                    "theorem_names": ["RecursionFast.Challenge.certified"],
                    "definition_names": ["RecursionFast.Challenge.submission"],
@@ -229,7 +253,7 @@ def cert_job(a):
             t0 = time.monotonic()
             try:
                 rc = sh(memcap(mem, unit) + ["lake", "env", cmp_bin, f"config-{kernel}.json"], cwd=tree, env=e, log=log,
-                        timeout=a.timeout)
+                        timeout=caps["kernel_s"])
             except subprocess.TimeoutExpired:
                 rc = "timeout"
                 kill_unit(unit)
@@ -246,14 +270,12 @@ def cert_job(a):
         res["comparator_s"] = lean["seconds"]
         full = open(os.path.join(work, "comparator-lean.log"), errors="replace").read()
         if lean["outcome"] == "rejected" and f"Building {SOLUTION_MODULE}" not in full:
-            # the comparator failed on the organiser's challenge, before it built the entry (e.g. a
-            # lean4export of another Lean: "incompatible header", CI run 39960437824)
+            # the comparator failed on the organiser's challenge, before it reached the solution (e.g.
+            # a lean4export of another Lean: "incompatible header", CI run 39960437824)
             raise HarnessError("the comparator stopped before building the solution: " + lean["tail"][-600:])
         if not org.manifest_ok(logs["manifest"]):
-            raise Reject("organiser .olean changed during the comparator run")
+            raise Reject("organiser .olean changed during the solution build or the comparator run")
         unchecked = lean["outcome"] in ("over budget", "timeout")     # Q12: the kernel's budget, not the entry
-        if not unchecked and not os.path.isdir(os.path.join(tree, ".lake", "build", "lib", "lean")):
-            raise Reject("the solution does not build (comparator log: " + lean["tail"][-400:] + ")")
         budget = lambda r: f"cap {r['cap']}" + (f", peak {r['peak_bytes'] / 2 ** 30:.2f} GiB" if r["peak_bytes"] else "")  # noqa: E731
         res["kernels"] = ["lean"] if lean["outcome"] == "ok" else []
         if lean["outcome"] == "rejected":
@@ -262,7 +284,8 @@ def cert_job(a):
             res["provisional_reasons"].append(f"the Lean kernel ran over its memory budget ({budget(lean)}): "
                                               "the certificate is unchecked, not refuted")
         elif lean["outcome"] == "timeout":
-            res["provisional_reasons"].append(f"the Lean kernel timed out after {a.timeout} s: the certificate is unchecked")
+            res["provisional_reasons"].append(f"the Lean kernel did not finish within kernel_s = {caps['kernel_s']} s: "
+                                              "the certificate is unchecked")
         if not a.nanoda:
             res["second_kernel"] = "not run (no --nanoda): checked by the Lean kernel only (V4-A2)"
         elif lean["outcome"] != "ok":
@@ -280,36 +303,27 @@ def cert_job(a):
                 res["provisional_reasons"].append("nanoda rejected the certificate the Lean kernel accepted")
             else:      # over budget or timeout: no second check, the Lean kernel's verdict stands (V4-A2)
                 res["second_kernel"] = f"nanoda: {nan['outcome']} ({budget(nan)}); checked by the Lean kernel only"
-        cmp_arts = artifacts(tree)
-        os.rename(tree, os.path.join(work, "cmp"))
-        # 4. second tree, same path: rebuild in the sandbox, bind to the comparator's build, gate
-        mkfresh(tree, org.dir, entry, challenge, files)
-        lake = os.path.join(org.prefix, "bin", "lake")
-        os.makedirs(os.path.join(tree, ".lake"))
-        # Q7: exactly the comparator's targets, the challenge and the solution's import closure; an
-        # entry module that `Solution` does not import is never built by the harness
-        rc = sandboxed(org, [lake, "build", f"+{CHALLENGE_MODULE}", f"+{SOLUTION_MODULE}"], tree, logs["build"],
-                       rw=(os.path.join(tree, ".lake"),), timeout=a.timeout)
-        if rc != 0:
-            raise Reject(f"the solution does not build in the gate tree ({rc}): " + open(logs["build"], errors="replace").read()[-400:])
-        if not org.manifest_ok(logs["manifest"]):
-            raise Reject("organiser .olean changed during the solution build")
+        # the binding (V4-A9): the artifacts the kernel's exports were read from are the build's, unchanged
         arts = artifacts(tree)
-        diff = sorted(k for k in set(arts) | set(cmp_arts) if cmp_arts.get(k) != arts.get(k))
-        if unchecked:      # no comparator-verified build to bind to; the entry stays provisional
-            res["binding"] = "not checked: the comparator's Lean-kernel run did not finish"
-        elif diff:
-            raise Reject(f"the gate tree's build differs from the comparator-verified build ({len(diff)} artifacts, e.g. {diff[:3]})")
-        else:
-            res["binding"] = f"byte-identical ({len(arts)} artifacts)"
+        diff = sorted(k for k in set(arts) | set(built) if built.get(k) != arts.get(k))
+        if diff:
+            raise Reject(f"the build changed during the comparator run ({len(diff)} artifacts, e.g. {diff[:3]}): "
+                         "the comparator's check is not of this build")
+        res["binding"] = (f"one build ({len(arts)} artifacts), read by the comparator, the gate and the badge build"
+                          + ("; the kernel did not finish, so the entry stays provisional" if unchecked else ""))
         res["built_modules"] = sorted(k[len("lib/lean/"):-len(".olean")].replace("/", ".") for k in arts
                                       if k.startswith("lib/lean/") and k.endswith(".olean"))
-        lp = subprocess.run([lake, "env", "printenv", "LEAN_PATH"], cwd=tree, capture_output=True, text=True).stdout.strip()
+        # 5. the gate, in the sandbox
+        lp = subprocess.run([lake, "env", "printenv", "LEAN_PATH"], cwd=tree, capture_output=True, text=True,
+                            timeout=TIMEOUT).stdout.strip()
         gate = os.path.join(org.tools, "gate")
         rc = sandboxed(org, [gate, SOLUTION_MODULE, "RecursionFast.Challenge.certified", "--manifest", org.manifest,
                              "--computable", "RecursionFast.Challenge.submission", "--allowed-imports", org.allowlist,
                              "--badge-root", "RecursionFast.Challenge.submission"],
-                       tree, logs["gate"], env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)))
+                       tree, logs["gate"], env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)),
+                       timeout=caps["gate_s"])
+        if rc == "timeout":
+            raise Reject(f"the gate did not finish within gate_s = {caps['gate_s']} s (V4-A9)")
         rejects = [l for l in open(logs["gate"], errors="replace").read().splitlines() if l.startswith("gate: REJECT")]
         res["gate"] = rejects or ["PASS"]
         open_cert = ("gate: REJECT closure uses sorryAx", "gate: REJECT non-standard axiom sorryAx")
@@ -318,8 +332,8 @@ def cert_job(a):
             raise Reject("gate: " + "; ".join(hard[:5] or [f"exit {rc}"]))
         if rejects:
             res["provisional_reasons"].append("gate rule 1: the certificate's closure uses sorryAx")
-        # 5. the badge
-        badge = build_badge(org, tree, res["claim"], logs["badge"], a.timeout)
+        # 6. the badge
+        badge = build_badge(org, tree, logs["badge"], caps["badge_s"])
         # Q7: the badge's import closure lies inside the verified one: its build adds no entry
         # module and changes no verified artifact
         after = {k: v for k, v in artifacts(tree).items() if "/RFBadge" not in "/" + k.split("/", 2)[-1]}
@@ -344,27 +358,18 @@ def cert_job(a):
     return res
 
 
-def build_badge(org, tree, claim, log, timeout):
-    """Render the badge executables into `tree` (`harness/badge/*.lean.in`: the solution module and
-    the claim's declared fuel) and build them in the sandbox; returns the directory holding
-    `verify`, `liveness` and the organiser's `chaincheck`."""
+def build_badge(org, tree, log, timeout):
+    """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
+    solution module) and build it in the sandbox within `timeout`; returns the directory holding
+    `verify` and the organiser's `chaincheck`."""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
-    subst = {"{{solution_module}}": SOLUTION_MODULE}
-    for k in ("fuel_base", "fuel_per_word"):
-        v = claim.get(k)
-        if type(v) is not int or not 0 <= v < 2 ** 64:
-            raise Reject(f"claim: {k} is not a natural number below 2^64")
-        subst["{{" + k + "}}"] = str(v)
-    for name in ("Common", "Verify", "Liveness"):
-        src = open(os.path.join(HERE, "badge", f"{name}.lean.in")).read()
-        for k, v in subst.items():
-            src = src.replace(k, v)
+    for name in ("Common", "Verify"):
+        src = open(os.path.join(HERE, "badge", f"{name}.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
         open(os.path.join(bdir, f"RFBadge{name}.lean"), "w").write(src)
     with open(os.path.join(tree, "lakefile.toml"), "a") as f:
-        f.write('\n[[lean_lib]]\nname = "RFBadge"\nsrcDir = "badge"\nroots = ["RFBadgeCommon"]\n')
-        for exe, root in (("verify", "RFBadgeVerify"), ("liveness", "RFBadgeLiveness")):
-            f.write(f'\n[[lean_exe]]\nname = "{exe}"\nsrcDir = "badge"\nroot = "{root}"\n')
+        f.write('\n[[lean_lib]]\nname = "RFBadge"\nsrcDir = "badge"\nroots = ["RFBadgeCommon"]\n'
+                '\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
     # An executable links the compiled object of every module it imports. `org-setup.sh` built those
     # of the organiser's closure; the objects of other modules an entry imports are compiled here,
     # into the package tree, so its build directories are writable for this step. No entry code runs
@@ -373,16 +378,17 @@ def build_badge(org, tree, claim, log, timeout):
     rw = [os.path.join(tree, ".lake"), os.path.join(org.dir, ".lake", "build")]
     rw += [os.path.join(org.packages, p, ".lake") for p in sorted(os.listdir(org.packages))
            if os.path.isdir(os.path.join(org.packages, p, ".lake"))]
-    rc = sandboxed(org, [os.path.join(org.prefix, "bin", "lake"), "build", "verify", "liveness"], tree, log,
+    rc = sandboxed(org, [os.path.join(org.prefix, "bin", "lake"), "build", "verify"], tree, log,
                    rw=tuple(rw), timeout=timeout)
+    if rc == "timeout":
+        raise Reject(f"the badge did not build within badge_s = {timeout} s (V4-A9)")
     if rc != 0:
         raise Reject(f"badge build failed ({rc}): " + open(log, errors="replace").read()[-400:])
     if not org.manifest_ok(log):
         raise Reject("organiser .olean changed during the badge build")
     out = os.path.join(os.path.dirname(tree), "badge")
     os.makedirs(out)
-    for exe in ("verify", "liveness"):
-        shutil.copy(os.path.join(tree, ".lake", "build", "bin", exe), out)
+    shutil.copy(os.path.join(tree, ".lake", "build", "bin", "verify"), out)
     shutil.copy(os.path.join(org.tools, "chaincheck"), out)
     return out
 
@@ -392,10 +398,11 @@ def bench_job(a, cert):
            "--badge", cert["badge_dir"], "--service", a.service, "--bench", a.bench, "--work", a.work, "--out", a.out]
     if cert["status"] == "provisional":
         cmd.append("--provisional")
-    for k in ("parts", "tree_repeats", "stream_repeats"):
-        if getattr(a, k):
-            cmd += [f"--{k.replace('_', '-')}", str(getattr(a, k))]
-    subprocess.run(cmd, timeout=24 * 3600)
+    if a.parts:
+        cmd += ["--parts", a.parts]
+    # every step the entry controls is capped inside (season file); this bounds the organiser's own
+    # steps, so that a part ends inside its 30-minute job (V4-A9)
+    subprocess.run(cmd, timeout=PART_S)
     res = json.load(open(a.out))
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
@@ -417,15 +424,12 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--cert")
     ap.add_argument("--nanoda", action="store_true")
-    ap.add_argument("--timeout", type=int, default=TIMEOUT)
     ap.add_argument("--cert-mem", default="14G", help="memory cap of the comparator run with the Lean kernel")
     ap.add_argument("--nanoda-mem", default="14G", help="memory cap of the comparator run with nanoda")
     ap.add_argument("--season", default=os.path.join(HERE, "season.toml"))
     ap.add_argument("--service", default=os.path.join(REPO, "service", "target", "release", "rf-oracle"))
     ap.add_argument("--bench", default=os.path.join(REPO, "service", "target", "release", "rf-bench"))
     ap.add_argument("--parts")
-    ap.add_argument("--tree-repeats", type=int)
-    ap.add_argument("--stream-repeats", type=int)
     a = ap.parse_args()
     if a.mode == "bench":
         res = bench_job(a, json.load(open(a.cert)))

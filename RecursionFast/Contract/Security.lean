@@ -2,10 +2,10 @@
 # Contract: knowledge soundness and completeness in the random-oracle model        (TRUSTED)
 
 DESIGN-v3 §4, V3-3, V3-4, amended by V3-KS-A1 … A7 (`docs/DESIGN-AMENDMENTS.md`). **Unchanged
-in v4** (V4-1): the definitions below are v3's, word for word; `Certificate.lean` now requires
-them for the verifier and prover under **every** public key. Mathlib only; no probability monad
-and no adversary type: the uniform average over the `2^256` digests (a sum over `Digest`) is the
-only measure.
+in v4** (V4-1): the definitions below are v3's, word for word, except the values of `errorCap`
+and `completenessCap` (V4-A9); `Certificate.lean` now requires them for the verifier and prover
+under **every** public key. Mathlib only; no probability monad and no adversary type: the uniform
+average over the `2^256` digests (a sum over `Digest`) is the only measure.
 
 **Knowledge soundness (`KS`)** is stated query by query over the oracle's query log. A submitter
 exhibits a **knowledge state** (`KState`) with error `ε`: a potential `μ` on logs, a non-negative
@@ -50,10 +50,11 @@ entries. Over logs of unbounded length that charge exceeds every useful `ε` (V3
 `Controls/Potential.lean`, `collision_no_bool_kstate`). The guard gives this up: the claim stops
 at `Q + qV = logCap`, where S1's form claimed `(Q + qV) · ε` for every `Q`. Its value fixes which
 collision-type events are chargeable at `errorCap`: a comparison of `t` bits costs about
-`logCap · 2^-t` per query, so at `logCap = 2^96` events of at least `224` bits are (birthday cost
-`2^112`), a full digest costs `2^-160`, and an honest Merkle verifier comparing at most `2^15`
-digests per query about `2^-145`. At the caps the bound is `2^96 · 2^-128 = 2^-32` at `2^96`
-queries and `2^-64` at `2^64` (V3-KS-A6; `Controls/Potential.lean`, `v24_no_bool_kstate`).
+`logCap · 2^-t` per query, so at `logCap = 2^96` events of at least `216` bits are (birthday cost
+`2^108`), a full digest costs `2^-160`, and an honest Merkle verifier comparing at most `2^15`
+digests per query about `2^-145`, both below the cap. At the caps the bound is
+`2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64` (V3-KS-A6, with v4's cap;
+`Controls/Potential.lean`, `v24_no_bool_kstate`).
 
 **What this file does not exclude (V3-S1-A13, A23).** `KState` alone excludes little: a verifier
 that accepts everything has one exactly when every statement has some witness, which no digest
@@ -69,7 +70,7 @@ deployed one except with negligible probability.
 **Completeness (`CompleteWithError`, V3-S2R-A2, O-23; the user's decision of 2026-10-20).** On
 every statement and witness of the relation, the honest prover's proof, produced and then verified
 against one **uniformly random** oracle, is rejected with probability at most `δ`, a declared
-number at most `completenessCap = 2^-128` (`Certificate.lean`). The oracle is sampled lazily
+number at most `completenessCap = 2^-40` (`Certificate.lean`). The oracle is sampled lazily
 (`failProb`): a fresh query, the prover's or the verifier's, is answered uniformly over the `2^256`
 digests and recorded, and a repeated one is answered from the record, so the verifier sees the
 answers the prover saw. This admits grinding and challenge-dependent exceptional cases, which
@@ -77,6 +78,17 @@ perfect completeness over every oracle function (S1's `Complete`, now `Library/C
 forbids; `Complete` implies `CompleteWithError` at `δ = 0`. Nothing here says that an honest proof
 verifies under the one deployed oracle (keyed BLAKE2s, V4-2); the harness's concrete checks of
 `acc` do (DESIGN-v3 §5.4, V3-S2R-H-M4).
+
+**Why `2^-40` (V4-A9, the user's decision of 2026-10-26; v3 had `2^-128`).** A completeness
+failure is no security event: it costs only its entrant, as one rejected proof and a failed run.
+An evaluation's prover makes about 640 proofs (the tree's 127, the stream's 513), so at `2^-40`
+each a run fails this way with probability about `2^-30.7`. Grinding to difficulty `2^g` meets
+the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2^-128`).
+
+**Why `errorCap = 2^-120` (V4-A9, the user's decision of 2026-10-26; v3 had `2^-128`).** It
+admits designs over GF(2^128): a degree-2 sumcheck round costs `2^-127` and a univariate-skip
+round about `126 / 2^128 ≈ 2^-121` per fresh query (FB-9). The deployed tree's first error term
+stays negligible: `(Q + qV) · ε ≈ 2^30 · 2^-120 = 2^-90` (design §2.4).
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs
@@ -93,8 +105,8 @@ noncomputable instance : Fintype Digest :=
   Fintype.ofSurjective (fun f : Fin 32 → Fin 256 => Vector.ofFn fun i => UInt8.ofFin (f i))
     fun d => ⟨fun i => d[i].toFin, by ext i hi; simp⟩
 
-/-- The contract's cap on the per-query knowledge error: `2^-128`. -/
-noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 128
+/-- The contract's cap on the per-query knowledge error: `2^-120`. -/
+noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 120
 
 /-- The longest log the knowledge laws cover: `2^96` entries, an adversary's query budget. -/
 def logCap : ℕ := 2 ^ 96
@@ -139,7 +151,7 @@ def CompleteWithError (R : Digest → Wit → Prop) (P : Digest → Wit → OPro
     (V : Digest → Proof → OProg Bool) (δ : ℝ≥0) : Prop :=
   ∀ c w, R c w → failProb ((P c w).bind (V c)) [] ≤ δ
 
-/-- The contract's cap on the completeness error: `2^-128`. -/
-noncomputable def completenessCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 128
+/-- The contract's cap on the completeness error: `2^-40`. -/
+noncomputable def completenessCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 40
 
 end RecursionFast

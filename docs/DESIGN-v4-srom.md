@@ -1,11 +1,12 @@
 # recursion.fast v4: the signed-random-oracle (SROM) rules
 
 **Status.** The normative design of v4 (2026-10-22, updated 2026-10-23 after stages A and B, their
-reviews RA, RB, GA, GB and the contract fix pass), implemented on the branch `v4/srom-rules`: the
-Lean contract under `RecursionFast/Contract/` (stage A) and the oracle service, runner and CI
-workflows (stage B). It is a proposal: the user was away while it was built, and every decision
-taken without them is listed in §6, each reversible. It supersedes the working brief
-[`v4/BRIEF.md`](v4/BRIEF.md) (decisions V4-1 … V4-16, amendments V4-A1 … A8) where the two differ,
+reviews RA, RB, GA, GB and the contract fix pass, and 2026-10-26 by the trim V4-A9), implemented on
+the branch `v4/srom-rules`: the Lean contract under `RecursionFast/Contract/` (stage A) and the
+oracle service, runner and CI workflows (stage B). It is a proposal: the user was away while it was
+built, and every decision taken without them is listed in §6, each reversible; V4-A9 is the user's
+own. It supersedes the working brief
+[`v4/BRIEF.md`](v4/BRIEF.md) (decisions V4-1 … V4-16, amendments V4-A1 … A9) where the two differ,
 and answers the adversarial review [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md)
 (findings C-M1 … M4, C-m1 … m13). Where this document and the Lean text differ, the Lean text is the
 rule and the difference is a bug here.
@@ -60,22 +61,32 @@ once, outside every certificate, to compose the tree. Nothing is left for a revi
 **The tree.** On the run's one query log, signed traces are genuine unless a signature was forged,
 so the one-level extractor applies node after node down to the leaves (CGSY24 Thm 5.1, no factor
 per node). The walk is kernel (`Compose.walk`); the PRF hybrid and the forgery/collision split are
-paper (§2.4). Error `(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`, the first term about `2^-98`.
+paper (§2.4). Error `(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`, the first term about `2^-90`.
 
 **What it costs.** A trusted runtime (the service, whose bug can be accept-all; the attested CI
 workflow). One idealised assumption, keyed BLAKE2s is a PRF, beside collision resistance and
 one-wayness, from which the signature's EUF-CMA follows (§2.5). Every oracle call goes to the
 service on the prover's own cores. Per child, a node circuit checks one signature and hashes the
-child's trace (§4.2). Trusted code: 355 Lean lines (v3: 292; budget 500) and 3,559 runtime lines
-(§5). Two walls of v3 stand: node extraction is decoding (#7), and no honest recursive entry is
-sized against the caps (C5); the certified baseline's measured frontier (§3.6) shows how far the
-season shape is.
+child's trace (§4.2). Trusted code: 355 Lean lines (v3: 292; budget 500) and 3,677 runtime lines
+(§5; 3,800 before V4-A9). Two walls of v3 stand: node extraction is decoding (#7), and no honest
+recursive entry is sized against the caps (C5); the certified baseline's measured frontier (§3.6)
+shows how far the season shape is.
+
+**The trim (V4-A9, the user's decisions of 2026-10-26).** Every rule is kept only if it serves
+valid verifiers or honest, fast proving with priced recursion (§4.4 says what each is for). So:
+one run of the tree and one of the stream, no medians; two parallel benchmark jobs; every GitHub
+job within 30 minutes, with the caps nested inside it, so a slow entry is REJECTed with the reason,
+never killed; only the tree's root is read; per entry only the statement canaries, on 2 proofs per
+kind, and a DoS column of 100 inputs that fails on time and crashes only; no per-entry liveness;
+the organiser's own checks (the canaries that never reach `V`, the extractor interpreter) in the
+core CI only; one Lean build per certificate; stream `M = 256`; `errorCap = 2^-120` (admits
+GF(2^128) designs, FB-9) and `completenessCap = 2^-40`.
 
 | Status | |
 |---|---|
-| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape |
-| ran on a GitHub runner | CI run 39966237935, all green (AMD EPYC 9V45 and 9V74, image ubuntu24 20261012.334.1): Lean job 7 min 29 s; service and sandbox tests; the end-to-end smoke in 9 min 18 s, 16 checks: the witness-sending entry certified with the Lean kernel and ACCEPTed with the compiled `accF` badge and a toy assembly prover, PROVISIONAL and REJECT paths, the job plan's missing part ⇒ ERROR, liveness, canaries, the DoS column, and five broken provers rejected for their stated reasons. Earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms); signatures equal to the Lean signer's |
-| never ran | the evaluation workflow and its attestations; any entry at the season-1 shape (C-m10), so nothing is ranked |
+| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape. After V4-A9: the build, the audit, every test of `ci.yml` and the end-to-end smoke, 16 checks in 4 min 30 s (`docs/v4/stages/D-trim-RESULT.md`, `logs/trim/smoke-e2e.log`) |
+| ran on a GitHub runner | before V4-A9: CI run 39966237935, all green (AMD EPYC 9V45 and 9V74, image ubuntu24 20261012.334.1): Lean job 7 min 29 s; service and sandbox tests; the end-to-end smoke in 9 min 18 s, 16 checks: the witness-sending entry certified with the Lean kernel and ACCEPTed with the compiled `accF` badge and a toy assembly prover, PROVISIONAL and REJECT paths, the job plan's missing part ⇒ ERROR, liveness, canaries, the DoS column, and five broken provers rejected for their stated reasons. Earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms); signatures equal to the Lean signer's |
+| never ran | the evaluation workflow and its attestations; the trimmed harness (V4-A9) on a runner; any entry at the season-1 shape (C-m10), so nothing is ranked |
 
 | | v3 | v4 |
 |---|---|---|
@@ -234,7 +245,8 @@ not adopted (V4-A4), and is the fallback if a reviewer insists on a published sc
 
 ### 1.4 What v3 contributes verbatim
 
-`Contract/Security.lean`, `Machine.lean` and `Tree.lean` are v3's, word for word (V4-1, V4-16); v3
+`Contract/Security.lean`, `Machine.lean` and `Tree.lean` are v3's, word for word (V4-1, V4-16),
+except the values of the two error caps (V4-A9: `errorCap = 2^-120`, `completenessCap = 2^-40`); v3
 §6 and §7.1 explain them. In `final` below, `runLog L` answers each query from the first matching
 entry of the log `L` (`none` on a miss), where `runSeq tr` answers from the next entry of the trace.
 In brief:
@@ -251,13 +263,14 @@ structure KState (R : Digest → Wit → Prop) (V : Digest → Proof → OProg B
 ```
 
 - **Knowledge soundness** (`KS`): the submitter exhibits a potential `μ` on query logs that starts
-  at 0, rises by at most `ε` on average per fresh answer, and below 1 makes every proof `V` accepts
-  on the log extractable by `E`. The paper theorem, kernel-checked in v3 (`Library/PaperTheorem.lean`,
-  `paper`, ported unchanged), turns it into `(Q + qV)·ε` by Markov's inequality on the
-  stopped potential, for `Q + qV ≤ logCap = 2^96`.
+  at 0, rises by at most `ε ≤ errorCap = 2^-120` (V4-A9) on average per fresh answer, and below 1
+  makes every proof `V` accepts on the log extractable by `E`. The paper theorem, kernel-checked in
+  v3 (`Library/PaperTheorem.lean`, `paper`, ported unchanged), turns it into `(Q + qV)·ε` by
+  Markov's inequality on the stopped potential, for `Q + qV ≤ logCap = 2^96`.
 - **Completeness** (`CompleteWithError`): on every statement and witness of the relation, the honest
   prover's proof, produced and verified against one lazily sampled random oracle, is rejected with
-  probability at most `δ ≤ 2^-128`.
+  probability at most `δ ≤ 2^-40` (V4-A9: a failure costs only its entrant a run; grinding to
+  difficulty `2^g` needs about `28 · 2^g` attempts, `89 · 2^g` at v3's `2^-128`).
 - **The extractor** (`Computes`): `ext` is a program of the contract's word machine (no
   function-typed field, every step charged), and computes `E` within `fuel t ≤ B t = 2^48 + 2^16·t`
   steps on a tape of `t` words, on every proof up to `proofCap` and every log whose tape the machine
@@ -292,7 +305,7 @@ The relation is **oracle-free given `vk`**, so completeness means what it says: 
 fresh oracle only for `P`'s and `V`'s own queries, and a node witness carries its children's
 signatures as data (C §2 item 6). The Lean `P` needs no signer. In deployment the native prover
 obtains its own proof's signature from the service; the Lean `P` exists so that completeness is a
-theorem and so that the harness can produce honest logs for the liveness check.
+theorem.
 
 Completeness for every `vk` is vacuous on the node clause for a `vk` under which nothing is signed,
 so its positive control signs the children with the Lean reference signer and proves `SigOk`
@@ -314,7 +327,7 @@ outside the language because of a predicate `Φ(vk, π, answers)` that an unboun
 oracle access can make true for every oracle: a valid signature under `vk` in `π`, `sk` in `π`, a
 signed answer in `π` that agrees with the oracle's. Then for that `vk` no knowledge state exists
 with `ε < 1/q`, where `q` is the number of oracle queries on the branch; in particular none at
-`errorCap = 2^-128`, since `q ≤ qV ≤ 2^16`.
+`errorCap = 2^-120`, since `q ≤ qV ≤ 2^16`.
 
 **Proof.** The adversary asks the branch's queries itself, then makes `Φ` true (it is unbounded, so
 it can sign anything under `vk`). On every resulting log `L`, `(V vk c π).runLog L = some true`, so
@@ -429,7 +442,10 @@ counts them all. If the potential of `L` is below 1, which fails with probabilit
 run the evaluation and the walk: about `2^58` steps (**estimate**, [RD] §4.9 fine print; the walk
 runs `E` per node within `B t`). At the season shape `Q ≈ 2^28–2^30` (**estimate**, C §2 item 1),
 inside `logCap = 2^96` and the efficient-extraction domain of about `2^61` entries, so the first term
-is at most about `2^-98` at `ε = 2^-128`.
+is at most about `2^30 · 2^-120 = 2^-90` at `ε = errorCap = 2^-120` (`2^-98` at v3's `2^-128`). At
+the caps the bound is `2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64`; collision-type
+events are chargeable at the cap from `216` bits up (`logCap · 2^-t ≤ 2^-120`; a full digest costs
+`2^-160` and an honest Merkle verifier comparing `2^15` digests per query `2^-145`, both below it).
 
 **Fiore–Nitulescu** (ePrint 2016/112) show that SNARK extraction can fail against adversaries with
 an exogenous signing oracle. It does not bite here (**paper**, C §2 item 5): the extractor is
@@ -476,8 +492,8 @@ resistance and one-wayness are the assumptions every hash-based signature makes.
 
 **Margins** (**estimate**). Generic attacks on 256-bit BLAKE2s: a collision among `2^58`
 evaluations has probability about `2^-141`; inverting one of `2^45` targets (`2^20` key trees) with
-`2^80` evaluations about `2^-131`. Collision resistance (128-bit generic) is the binding term, at
-the scale of `errorCap`.
+`2^80` evaluations about `2^-131`. Collision resistance (128-bit generic) is the binding term,
+below `errorCap = 2^-120`.
 
 **Operational conditions** (§3.2): the index is taken in one atomic step before the
 signature is computed, and never reused; the signer refuses after `2^16`; a restart is a new key and
@@ -494,11 +510,13 @@ BLAKE2s's parameter block would be the hardening for a shared key. The Lean refe
 ### 2.6 Completeness, and the checks under the deployment
 
 Completeness is over a random oracle, so it does not say that an honest proof passes `acc` under
-the deployed `PRF_k` and `vk`; the harness's concrete checks do (C8): every root, sampled proof and
-stream output is checked with the compiled `acc`, and the extractor's liveness runs on the native
-prover's proofs with the service's own log. That log is now **authentic**: nobody can evaluate the
-oracle except through the service, so the service's log is the complete query log the theorem's
-extractor reads (in v3 the native prover emitted its own log, #9 item 1).
+the deployed `PRF_k` and `vk`; the harness's concrete checks do (C8): the tree's root and every
+stream output are checked with the compiled `acc`. The extractor is not run per entry (V4-A9): its
+correctness and its cost are the kernel-checked `Computes`, and the core CI runs the compiled
+contract interpreter on the library's witness-sending entry once per harness commit
+(`scripts/speed/Extract.lean`). The service therefore keeps no query log (its liveness mode is
+gone); the composition argument's log is the run's query log as a mathematical object (§2.4), not
+a file.
 
 `CompleteWithError` is about `V`, not `acc`: a `V` that accepts only proofs longer than `proofCap`
 is certified and fails every harness check (v3 §6.4). A verifier whose queries on one proof exceed
@@ -508,12 +526,12 @@ fails the same way.
 ### 2.7 The trust statement
 
 > **A ranked record means:** the certificate job's Lean kernel accepted `CertificateR` for the
-> rendered challenge; the benchmark job, on a
-> GitHub-hosted runner, started a fresh service for every timed run, checked every signed proof it
-> was given with the compiled `acc` under that run's `vk` within `T_V`, and measured `T_tree` and
-> the stream; and the result JSON, binding `vk`, the CPU model, the runner image, the harness commit
-> and the service binary's hash, carries a GitHub artifact attestation that verifies against the
-> organiser's evaluation workflow. Its reader trusts:
+> rendered challenge; the benchmark jobs, on GitHub-hosted runners, started a fresh service for
+> every timed run, checked the tree's root and every stream output with the compiled `acc` under
+> that run's `vk` within `T_V`, and measured `T_tree` and the stream, one run each; and the result
+> JSON, binding `vk`, the CPU model, the runner image, the harness commit and the service binary's
+> hash, carries a GitHub artifact attestation that verifies against the organiser's evaluation
+> workflow. Its reader trusts:
 >
 > 1. **One kernel**: Lean v4.34.1's, the comparator that replays the proofs in it, and Lean core,
 >    Mathlib and the pinned packages as hashed in the olean manifest. *v3 also had nanoda as a
@@ -533,12 +551,12 @@ fails the same way.
 >    composition theorem) is gone.* Completeness is over a random oracle; that honest proofs pass
 >    `acc` under the deployment is the harness's concrete checks.
 > 5. **The badge code**: what Lean's compiler emitted for `acc` (through the word-level BLAKE2s twin
->    proved equal to the contract's, V4-A7), `P` and the contract interpreter on `ext`, guarded by the
->    source rule and gate rules 3 and 6–8 (v3's rule 9 went with the frontend); residual O-12.
->    *(v3 item 5)*
+>    proved equal to the contract's, V4-A7), compiled from the one build whose exports the kernel
+>    checked (V4-A9), guarded by the source rule and gate rules 3 and 6–8 (v3's rule 9 went with
+>    the frontend); residual O-12. No badge runs `P` or `ext` any more (V4-A9). *(v3 item 5)*
 > 6. **The harness tools**: gate, source rule, axiom audit, manifest, renderer, sandbox. *(v3 item 6)*
 > 7. **Tested, not proved: the runner and the service.** The runner: Python `treeRoot`, the prover
->    interface, the caps, the measurements, the stream protocol, liveness. The service: tested against
+>    interface, the caps, the measurements, the stream protocol. The service: tested against
 >    `hashlib.blake2s(key=…)` (the empty message included) and against the Lean reference signer
 >    (derivation, signatures, `SigOk`), and under concurrent `sign` load. Its failures that would be
 >    accept-all: an answer that is not `PRF_k` signed, an index used twice, the key reachable from the
@@ -584,9 +602,9 @@ together. Running nanoda on a larger machine restores the check (§6.2).
   workflow.
 
 **What has been exercised** (as in §0): the development VM ran the build, the tests and two
-entries end to end at the smoke shape; a GitHub runner (CI run 39952420263, AMD EPYC 9V45) ran the
-Lean job and the service and sandbox tests, but not yet the end-to-end smoke; the evaluation
-workflow and its attestations have never run. Until they do, every end-to-end claim here is from
+entries end to end at the smoke shape, and the trimmed harness of V4-A9; a GitHub runner (CI run
+39966237935) ran the core CI with the end-to-end smoke before V4-A9; the evaluation workflow and
+its attestations have never run. Until they do, every end-to-end claim here is from
 the development VM, and no record of the kind the trust statement describes exists.
 
 ---
@@ -599,29 +617,51 @@ the development VM, and no record of the kind the trust statement describes exis
 GitHub-hosted runner is a public, identical-image machine that anyone can re-run, and GitHub's
 artifact attestations give a checkable statement "this result was produced by that workflow at
 that commit on GitHub's runner". The costs are stated in P3 of the brief: `ubuntu-24.04`, x86-64, 4
-vCPU, 16 GB RAM, 14 GB disk, 6 h per job, and **heterogeneous CPU models** (AMD EPYC and Intel Xeon;
-carry-less multiply available; AVX-512 and GFNI not guaranteed). Hence: the benchmark shape fits 16
-GB; `T_V` self-calibrates in the same job; every result records the CPU model; records are only ever
-compared in pairs within one job (v3's ABBA rule).
+vCPU, 16 GB RAM, 14 GB disk, 6 h per job (the rules allow 30 minutes, V4-A9), and **heterogeneous
+CPU models** (AMD EPYC and Intel Xeon; carry-less multiply available; AVX-512 and GFNI not
+guaranteed). Hence: the benchmark shape fits 16 GB; `T_V` self-calibrates in the same job; every
+result records the CPU model; records are only ever compared in pairs within one job (v3's ABBA
+rule).
 
-**Separate jobs** (V4-A2, C-M2). The **certificate job** (source rule, the entry's `lake build`, the
-comparator, the gate, the axiom audit) is deterministic and may run on any runner with the cached
-package tree. It uses the **Lean kernel only**: nanoda does not fit a 16 GB runner (§2.7, Q5); a
+**Separate jobs** (V4-A2, C-M2, V4-A9). A **setup job** builds the organiser's environment, the
+package tree, the organiser build with its olean manifest and import allowlist, the comparator and
+the service, and caches it per core commit; it never fetches the entry, so what it saves exists
+before any entry code is on any machine of the run, and a cache miss costs its time, never an
+entry's. The **certificate job** (source rule, the entry's one `lake build`, the comparator, the
+gate, the badge build) restores that cache, is deterministic and may run on any runner. It uses
+the **Lean kernel only**: nanoda does not fit a 16 GB runner (§2.7, Q5) nor the 30-minute job; a
 larger machine can add it, and the result states which kernels ran. The **benchmark** must run on
-the GitHub-hosted runner; it is split into six jobs, each within the 6 h limit: calibration, one
-tree repeat, the DoS column and liveness; two more tree repeats; three stream repeats. The plan is
+the GitHub-hosted runner; it is two parallel jobs (V4-A9): the tree job (calibration, the tree run,
+the DoS column) and the stream job (calibration, the stream run), one run each. The plan is
 defined once (`harness/aggregate.py`), and the verdict requires exactly its parts, from one harness
 commit and one season: a missing, duplicated or mismatched part, or parts from different commits,
 make the result `ERROR` and not comparable; a part the entry failed makes it `REJECT` (RF-M1). Each
 job measures its own `T_triv,best` and service throughput, and a result whose jobs ran on different
-CPU models is marked `mixed_cpu` and never used for a paired record comparison.
+CPU models is marked `mixed_cpu` and never used for a paired record comparison. Every job ends
+within 30 minutes, the caps inside it nested (§3.4).
+
+**The submission pipeline and the organiser's CI are separate** (V4-A9). The evaluation
+(`evaluate.yml`, called from the submissions repository) runs only what is about the entry: the
+source rule, its build, the comparator, the gate, the badge build, the prover's build and runs, the
+root and stream checks, the statement canaries, the DoS column, the score. It also builds or
+restores the environment the entry runs in, which is not a check: the package tree, with its
+olean-manifest check per evaluation (it guards what the entry builds against), the comparator, the
+service, `T_triv,best` (the cap needs it) and the service's throughput (informational, a few
+seconds). Every check whose subject is organiser code, the contract's `acc` before the entry's `V`
+(the file parser, the trace digest, the signature), the service, the sandbox, the badge template,
+the compiled extractor interpreter and the harness itself, runs in the core repository's `ci.yml`,
+once per harness commit, and never in an evaluation.
 
 **Measured** (CI runs 39935079265, 39940607844, 39952420263): the core's Lean job, which builds
 the contract, library and controls, takes 8 min 53 s cold, 4 min 12 s and 7 min 21 s with the
-package cache. On the development VM the witness-sending entry's certificate job takes 2 min 33 s,
-of which the comparator with the Lean kernel takes 68–81 s; the baseline's comparator takes 372 s
-and 3.7 GB (submissions repository, `logs/f3/cert-lean.log`). The build caps are not yet set from a
-runner run of a real entry (§6.2).
+package cache. On the development VM the witness-sending entry's certificate job took 2 min 2 s with
+v4's byte-identical rebuild and takes 1 min 33 s with the one build of V4-A9 (build 25 s,
+comparator 34 s; `logs/trim/cert-ws-before.log`, `cert-ws-after.log`). The baseline's certificate
+job on the same VM (32 vCPU): the comparator 354–372 s and 3.7 GB, of which its `Solution` build
+147 s and the kernel phase about 144 s, then the rebuild V4-A9 removes 173 s, the gate 18 s, the
+badge 16 s (submissions repository, branch `v4/flock-baseline`, `logs/f3/cert-lean.log` and
+`docs/v4/flock-baseline/stages/F4-final-harness-RESULT.md`). The 30-minute caps (§3.6) are the
+user's rule; no real entry has been run against them on a 4-vCPU runner (§6.2).
 
 **The anchor** (V4-A1, C-M1). A result is a JSON file plus a job log; without an anchor the
 leaderboard would trust the submitter, who controls a pull request's own workflow file. So:
@@ -648,7 +688,7 @@ leaderboard would trust the submitter, who controls a pull request's own workflo
 
 ### 3.2 The service (V4-2, V4-3, V4-A4, V4-A5)
 
-**What it is.** One process per timed run (one tree repeat, one stream repeat, the liveness run),
+**What it is.** One process per timed run (the tree run, the stream run; and the calibration's),
 outside the prover's sandbox, reachable from the prover only through a Unix socket whose path is in
 `RF_ORACLE`.
 Operations (stage B's `service/PROTOCOL.md`, normative for provers):
@@ -670,7 +710,7 @@ written to disk, destroyed at exit; chain starts are derived under tag `0x53` (�
 index is taken by one atomic step before the signature is computed and never reused, even if the
 request then fails. A crash or restart is a new key and aborts the run.
 
-**No memoisation** (C-m2). The service persists across a stream repeat's otherwise stateless
+**No memoisation** (C-m2). The service persists across the stream's otherwise stateless
 requests; a cache of answers would be a timing channel between them, so every answer is computed
 when asked. The visible 16-bit signature index is the one channel left, harmless at that width.
 **`SIGN` re-evaluates every query** (C-m4): one extra PRF per query of the verifier's trace, small
@@ -736,32 +776,51 @@ namespaces for the job.
 
 | # | Step | Checked or measured | Service |
 |---|---|---|---|
-| 0 | certificate job | source rule, build, comparator, gate, axiom audit (§3.1) | none |
-| 1 | build | the assembly prover, in the sandbox, hashes recorded | none |
-| 2 | calibration | `T_triv,best`; the service's calls/s and compressions/s (§3.5) | a calibration instance |
-| 3 | **tree** (×3) | fresh starts per evaluation; `PROVER tree DIR`; **timed**: `T_tree` | a fresh lifetime per repeat: every `QUERY` and `SIGN` |
-| 4 | root check | compiled `acc` on (`treeRoot`, root signed proof) under that repeat's `vk`, within `T_V` (§3.5) | none: offline |
-| 5 | samples | `acc` on 16 randomly chosen inner signed proofs against the runner's digests | none |
-| 6 | canaries | for 8 proofs of each kind, every mutation must be rejected: a byte appended to or removed from the file or `π`, a statement bit flipped, the sibling's statement, one trace answer or one query byte changed, a trace entry appended, a chain value or the index of the signature changed | none |
-| 7 | **stream** (×3) | `M + 1` leaves and `M` merges, a fresh process each, ready handshake, **timed**: `t_link`; every output checked with `acc` within `T_V` | a fresh lifetime per repeat, shared by its requests |
-| 8 | liveness | at `r = 1`, `n = 16`: the service logs every query; `ext` runs on `(c, π, L)` within the declared fuel; the output must decode to a witness (`Rel` for a leaf, `acc` on the extracted children for a node) | logging mode |
-| 9 | DoS | `acc` on 1,000 random and mutated signed proofs (random bytes; random `π` with the root's trace and signature; bit flips and truncations): any accept or crash rejects. Each input may take at most 10 × `T_V`, the column at most 1,800 s in all; a breach fails the run (REJECT), and the slow input is kept and named in the result | none |
-| 10 | result | JSON with every number of §3.5, attested | — |
+| 0 | setup job | the organiser's environment, cached per core commit (§3.1); no entry code | none |
+| 1 | certificate job | source rule, the one build, comparator, gate, badge build (§3.1) | none |
+| 2 | build | the assembly prover, in the sandbox, hashes recorded (each benchmark job) | none |
+| 3 | calibration | `T_triv,best`; the service's calls/s and compressions/s (§3.5; each benchmark job) | a calibration instance |
+| 4 | **tree** (one run) | fresh starts per evaluation; `PROVER tree DIR`; **timed**: `T_tree`; only `root.bin` is read | a fresh lifetime: every `QUERY` and `SIGN` |
+| 5 | root check | compiled `acc` on (`treeRoot`, root signed proof) under that run's `vk`, within `T_V` (§3.5) | none: offline |
+| 6 | **stream** (one run) | `M + 1` leaves and `M` merges, a fresh process each, ready handshake, **timed**: `t_link`; every output checked with `acc` within `T_V` | a fresh lifetime, shared by its requests |
+| 7 | statement canaries | the root against its statement with one bit flipped; the first 2 leaf and 2 node outputs of the stream against that and against their sibling's statement: each must be rejected (C15) | none |
+| 8 | DoS | `acc` on 100 random and mutated signed proofs of the root's statement (random bytes; random `π` with the root's trace and signature; bit flips and truncations). Each input may take at most 10 × `T_V`, the column at most 180 s in all; a breach or a crash of the checker fails the run (REJECT), and the slow input is kept and named; an accepted input is recorded, not failed (V4-A9) | none |
+| 9 | result | JSON with every number of §3.5, attested | — |
+
+Steps 2–5, 7 and 8 are the tree job, steps 2, 3, 6 and 7 the stream job; they run in parallel.
+
+**Every job within 30 minutes** (V4-A9). A job killed at its limit is a missing part and makes the
+verdict ERROR, so the caps the entry controls are nested inside each job with room for its fixed
+steps: an entry that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its
+cap leaves the certificate unchecked, Q12, as before). The worst case of each job, with the caps of
+§3.6 and the organiser's own steps as measured or estimated:
+
+| Job | Entry-capped steps (worst case) | Organiser steps | Bound |
+|---|---|---|---|
+| setup (no entry code) | — | on a miss: an earlier commit's cache, `lake exe cache get` ≤ 240 s, `org-setup.sh` ≤ 1,020 s (its steps' timeouts sum to that), the comparator ≤ 300 s, the cache save; **measured** on a runner: 39 s, 237 s, 14 s with the package tree cached (CI run 39966237935); cold 139 s and 270 s, of which the objects 191 s (CI run 39935079265, before CompPoly joined the roots). On a hit: nothing | 30 min |
+| certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 25 min | checkout, runner setup, the cache restore (the package-tree cache restores in 35–38 s, **measured**), the toolchain, three manifest checks, the source rule: about 2.5 min (**estimate**) | 27.5 of 30 min |
+| benchmark, tree | prover build 300 s + setup 300 s + tree 600 s + root check ≤ 75 s (three badge runs) + its canary ≤ 40 s + DoS 180 s = 24.9 min | calibration (three chain-checker runs of 1.8 s, **measured**; the service probe 4 s), the instance's digests, service start and stop: under 1 min (**estimate**) | 25.5 min, inside the part's 28 min (`evaluate.py` `PART_S`), inside 30 |
+| benchmark, stream | prover build 300 s + setup 300 s + the stream 900 s, a hard deadline over every request, check and canary from its first request = 25 min | calibration, the stream's digests: under 1 min (**estimate**) | 26 min, inside 28, inside 30 |
+| plan, attest | — | data only | 10 min each |
+
+The core CI's jobs (`ci.yml`) are bounded the same way: every step has a timeout, their sums are
+22–26 min per job, and the jobs took 1.4–9.3 min on a runner (CI run 39966237935).
 
 The runner never passes a digest to `tree` and never a start to `node`; leaf and root digests are
 the runner's (`treeRoot`, the contract's specification of it).
 
 ### 3.5 What is measured, and how
 
-- **`T_tree`**: wall time of one `PROVER tree` process proving the whole tree, median of three
-  repeats. Anything goes inside: flattening, proof of parent, bundling near the root, grinding.
+- **`T_tree`**: wall time of one `PROVER tree` process proving the whole tree, one run (V4-A9; no
+  repeats, no median). Anything goes inside: flattening, proof of parent, bundling near the root,
+  grinding. Only the root is read and checked; inner proofs, if written, are ignored.
 - **The stream** ([CM] §3.3, CM-4, CM-6): link `i` draws a fresh start of length `n_f`; a leaf
   request proves it and a merge request folds it into the running proof (`π_i` proves
   `nodeStmt c_{i−1} d_i`), or one 1→1 request does both. Every request is a fresh process whose
   start-up is untimed (ready handshake); the clock runs from the inputs to the output; one start per
   process, released one at a time. As the runner computes it (`harness/rfh/bench.py`, [CM] §3.3),
   `t_leaf` is the sum of the `M + 1` leaf times over `M`, `t_merge` the sum of the `M` merge times
-  over `M`, and `t_link = t_leaf + t_merge`, each the median of three repeats. Under the SROM a link
+  over `M`, and `t_link = t_leaf + t_merge`, from the one stream run (V4-A9). Under the SROM a link
   also pays its `SIGN` calls, on the clock.
 - **`T_V`** (V4-12, C6): one `acc` check (parse plus `accF`, timed in the badge process) must take
   at most `T_triv,best / R`, `R = 10`, measured as the **wall time of the check pinned to one core**
@@ -771,8 +830,8 @@ the runner's (`treeRoot`, the contract's specification of it).
   its best time is compared, the statistic of the cap (RB-M1). `T_triv,best` is the best of
   `checker_runs` runs, where
   it is measured **in the same job** by the organiser's compiled-Lean chain checker, interleaving
-  8 chains, over the tree's chains (`2^24` compressions). It applies to the root, the
-  samples and every stream output. **Measured**: 1.776–1.785 s on a GitHub runner, about 106 ns per
+  8 chains, over the tree's chains (`2^24` compressions). It applies to the root and every
+  stream output. **Measured**: 1.776–1.785 s on a GitHub runner, about 106 ns per
   compression, so `T_V` ≈ 178 ms (orchestrator's run); 3.10 s on the development VM
   (`logs/harness/chaincheck-season.log`). The trusted part of `acc` is small: the word-level twin
   takes 0.23 ms per `SigOk` and 72 ms for the trace digest of `2^16` queries of 100 bytes, and a
@@ -788,7 +847,8 @@ the runner's (`treeRoot`, the contract's specification of it).
 - **Recorded with every result**: CPU model, runner image version, `gcc`/`as` versions, the prover
   binary's hash, the harness commit, the service binary's hash, `vk`, the kernels that ran.
 - **Records**: paired ABBA confirmation within one job (5 pairs, median ratio ≤ 0.97, v3 §8.4),
-  the incumbent rebuilt in the same job; cross-model results are never compared unpaired.
+  the incumbent rebuilt in the same job; cross-model results are never compared unpaired. This is
+  what decides a record, so the score itself needs no repeats (V4-A9).
 
 ### 3.6 The score, season 1, and provisional entries
 
@@ -805,22 +865,30 @@ of `S` (CM-7).
 |---|---|---|---|
 | tree depth `r`; leaves | 6; 64 leaves, 63 nodes | 2 | V4-11 |
 | chain length `n` | `2^18` (`2^24` compressions per tree) | 16 | V4-11 |
-| stream: links `M`, chain length `n_f` | 512, `2^16` | 4, 16 | V4-11, CM-5 |
+| stream: links `M`, chain length `n_f` | 256, `2^16` | 4, 16 | V4-11, CM-5, V4-A9 |
 | `K` | 20, provisional | 20 | V4-10, CM-2 |
 | `T_V` ratio `R` | 10, enforced | 10, reported only (the trivial check takes microseconds) | V4-12, CM-8 |
-| repeats (tree, stream) | 3, 3; medians | 1, 1 | v3 §8.3 |
-| samples; canaries per kind; DoS proofs | 16; 8; 1,000 | 16; 8; 64 | v3 §8.3 |
-| time caps: tree run, stream request, stream repeat, one `acc` check | 1 h, 600 s, 4 h, 60 s | 300 s, 120 s, 30 min, 60 s | [CM] §3.5 |
+| runs (tree, stream) | 1, 1; no medians | 1, 1 | V4-A9 |
+| statement canaries per kind; DoS proofs | 2; 100 | 2; 64 | V4-A9 |
+| certificate caps: the entry's build, the kernel, the gate, the badge build | 600 s, 600 s, 120 s, 180 s | same | V4-A9 |
+| benchmark caps: prover build, prover setup, tree run, stream request, the stream, one `acc` check, DoS column | 300 s, 300 s, 600 s, 60 s, 900 s, 10 s, 180 s (10 × `T_V` per input) | 300 s, 300 s, 120 s, 60 s, 300 s, 10 s, 180 s | V4-A9, [CM] §3.5 |
 | `proofCap`, `queryCap`, `qV` | 1 MiB, `2^20` B, `≤ 2^16` | same | V4-13, V4-A3 |
 | signed-proof file the runner reads | ≤ 64 MiB | same | V4-13 |
-| `errorCap`, `completenessCap`, `logCap` | `2^-128`, `2^-128`, `2^96` | same | V4-13 |
+| `errorCap`, `completenessCap`, `logCap` | `2^-120`, `2^-40`, `2^96` | same | V4-13, V4-A9 |
 | signatures per service lifetime | `2^16` | same | V4-3 |
 | memory cgroups | prover 11 GB, service 2 GB (13 GB together), badge 4 GB | same | V4-13 |
-| job limit | 6 h | 6 h | P3 |
+| job limit | 30 min | 30 min | V4-A9 (the runner allows 6 h, P3) |
 
 The table is a selection of `harness/season.toml` and `harness/smoke.toml`, which also fix the
-check batching, the number of calibration runs and the setup and build caps; the season benchmark
-runs as six jobs (§3.1), the smoke as one.
+check batching and the number of calibration runs; the season benchmark runs as two parallel jobs
+(§3.1), the smoke as one.
+
+**The stream's tail at `M = 256`** (CM-R2, **estimate**). The last merges of the stream can bundle
+or leave chain hashing to the verifier and never pay: at most `c − 1` of them escape, where `c` is
+the number of `2^16`-step chains a verifier can check natively within `T_V`. `T_V` is `T_triv,best
+/ R` and `T_triv,best` checks `2^24` compressions with the same chain checker, so
+`c ≈ 2^24 / (R · n_f) ≈ 25` at `R = 10`, whatever the machine. The escaped share is therefore at
+most about `24 / 256 ≈ 9.4%` of the stream's merges at `M = 256` (it was about 4.7% at `M = 512`).
 
 **Why this shape** (V4-11). The cost model's long shape (`r = 4`, `n = 2^20`) does not fit 16 GB
 for a Flock-class prover (**estimate**); `r = 6`, `n = 2^18` keeps its total chain work (`2^24`
@@ -863,8 +931,9 @@ carries the same list.
    `.s` from a newer GCC with `.base64` directives (binutils 2.43 and later) does not assemble
    there, which is how the organiser's own toy prover failed on the runner (RF-M2). Generate the
    assembly with the reference toolchain (§3.3), or pass it through `harness/tools/asm-compat.py`.
-2. **A `Submission` must be computable** (Q4): the badge compiles `V`, `P` and `ext`, and a
-   noncomputable `ε : ℝ≥0` literal fails the build; write it as a cast from `ℚ≥0`.
+2. **A `Submission` must be computable** (Q4): gate rule 4 requires `V`, `P` and `ext` compiled
+   (the badge itself runs only `V` since V4-A9), and a noncomputable `ε : ℝ≥0` literal fails the
+   build; write it as a cast from `ℚ≥0`.
 3. **Compiled `ByteArray.data` copies the array** (Q4): a parser reading bytes through it is
    quadratic (88 s on 539 KB for a v3-style parser); use `ByteArray.get!` or the library's twins.
 4. **Every query is at most `queryCap = 2^20` bytes** (Q15, a consequence of V4-A3): v3's Ligero
@@ -947,13 +1016,76 @@ re-sized (C5, C unsettled 4).
   `clmul` on the same clock. This is against V3-1 ("binary fields must not be disadvantaged").
 - **Crafted inputs can make `acc` slow** (C9; the baseline's review F1-M2): a 970 KB node built from
   public parts took the baseline's compiled `acc` 68–183 s against 0.43 s for its honest root, above
-  `verify_s = 60 s`. The DoS column now fails a run whose input takes more than 10 × `T_V` (§3.4),
-  but it draws random mutations and does not search for such inputs; a crafted-input column is a
-  follow-up (FB-5, §6.3).
+  the then `verify_s = 60 s`. The DoS column fails a run whose input takes more than 10 × `T_V`
+  (§3.4), but it draws 100 random mutations and does not search for such inputs; a crafted-input
+  column is a follow-up (FB-5, §6.3).
+- **The 30-minute jobs bind entries** (V4-A9): an entry's Lean must build within 10 min and check
+  within 10 min on a 4-vCPU runner, and its prover must build, set up and prove the tree within
+  their caps. The baseline's build took 147 s and its kernel phase about 144 s on the 32-vCPU
+  development VM (§3.1); on a runner neither has been measured. A larger runner for the
+  certificate job is the alternative (§6.2).
 - **One kernel on CI** (Q5, §2.7): no independent re-check of the certificate.
-- **The baseline's FB-7, FB-8, FB-9** (§6.3): the service tax on a recursion step, the cost of the
-  assembly-only build, and `errorCap` against GF(2^128).
+- **The baseline's FB-7, FB-8** (§6.3): the service tax on a recursion step and the cost of the
+  assembly-only build. FB-9 (`errorCap` against GF(2^128)) is answered by `errorCap = 2^-120`
+  (V4-A9).
 - **CM-R1 … R8** of the cost model, unchanged.
+
+### 4.4 What each rule is for (V4-A9)
+
+A rule stays if it serves one of two goals: (a) entries are valid, sound verifier designs; (b)
+proving is honest and fast, and recursion is priced. What served neither was cut (c), the user's
+decisions of 2026-10-26.
+
+**(a) Vital for valid verifiers.**
+
+| Rule | What breaks without it |
+|---|---|
+| the relation and `acc`: exact in-order replay of the trace, `\|tr\| ≤ qV`, the 1 MiB caps | witnesses are unbounded, so no recursive design is complete (C-M3), and the trace digest is ambiguous |
+| knowledge soundness at `errorCap = 2^-120` per fresh query, `logCap = 2^96` | no soundness; the run's bound `(Q + qV)·ε` is about `2^-90` (§2.4) |
+| the efficient straight-line extractor: `Computes` within the budget `B t` | an accept-all verifier holds a knowledge state when every statement has a witness (`acceptAll_kstate_iff`), and the tree does not compose from one log (§2.4) |
+| completeness for every witness, `δ ≤ 2^-40` | reject-all verifiers, and verifiers that accept only the benchmark's shapes, are certified |
+| the certificate for every `vk` | it is proved before the key exists, so no verifier can lean on a signature (§2.2) |
+| proof hygiene: the kernel check, the axiom audit, the gate's rules, the source rule | the certificate is not a proof (`sorry`, an axiom, elaboration-time code, a code-changing attribute) |
+| the badge bound to the checked code | the code that checks proofs is not the verifier the kernel certified; the binding is vital, how it is made is not (one build since V4-A9, §3.1) |
+
+**(b) Vital for honest fast proving and priced recursion.**
+
+| Rule | What breaks without it |
+|---|---|
+| the signed oracle, a fresh secret key per run, unreachable from the sandbox | with a public oracle v3's certified backdoor is a scoring exploit, a magic root proof with no chain work (O-25); without fresh keys proofs and signatures replay across runs |
+| fresh random starts per evaluation; the runner's own root and digests | the instance is precomputed, or the prover names the statement it proves |
+| `T_V` relative to the same job's chain checker | witness-sending: the verifier redoes the chain work the prover skips (CM-R7 bounds the rest) |
+| `proofCap` | bundling the children's proofs in place of recursion |
+| the stream: a fresh process per request, one start per process released one at a time, enough links | recursion is unpriced (the tree may be flattened); with state or preparation across links, work leaves the clock |
+| the sandbox: no network, no persistent writable path, a memory cap, the service on the prover's CPUs | outside help, state across requests, a free co-processor (RR-8) |
+| `S = T_tree + K·t_link` | one wall time cannot weight recursion (CM-1) |
+| attested results | the leaderboard trusts the submitter (C-M1) |
+| paired comparison for records, the CPU model recorded | heterogeneous runners make unpaired times incomparable (P3) |
+| short, nested time limits | a slow entry kills its job, an ERROR instead of its REJECT, and holds runners for hours |
+
+**Changed parameters.** `errorCap` from `2^-128` to `2^-120`: it admits GF(2^128) designs such as
+Flock's (a degree-2 sumcheck round costs `2^-127`, a univariate-skip round `126 / 2^128 ≈ 2^-121`;
+FB-9), and the run's bound stays about `2^-90`. `completenessCap` from `2^-128` to `2^-40`: a
+failure costs only its entrant, and about 640 proofs per evaluation fail a run with probability
+about `2^-30.7`. `M` from 512 to 256: the stream fits its 15-minute cap; the tail's share grows to
+about 9.4% (§3.6). The time limits (§3.4).
+
+**(c) Removed as fat.**
+
+| Removed | Why |
+|---|---|
+| three repeats of the tree and of the stream, and their medians | records are decided by the paired comparison anyway (§3.5) |
+| the file, trace and signature canaries per entry (`file±1`, `trace-answer`, `trace-query`, `trace-extra`, `sig-ots`, `sig-idx`) | they test organiser code (the parser, `traceDigest`, `SigOk`) before the entry's `V` runs: the core CI runs them once per harness commit |
+| the `pi±1` canaries, and "an accepted mutation fails" in the DoS column | non-malleability, which nothing needs and which can reject a sound entry; an accepted DoS input is recorded |
+| 1,000 random DoS inputs (now 100) | random inputs never found a slow input; a crafted-input column is the real check (FB-5) |
+| the tree's inner proofs and the 16 sampled checks of them | the root's certificate covers its children (§2.4), and the stream prices recursion |
+| extractor liveness per entry, and the service's logging mode | `Computes` is kernel; the core CI runs the compiled interpreter on the library's entry |
+| the second, byte-identical Lean build | one build serves the comparator, the gate and the badge, and the badge is compiled from the artifacts the kernel's exports were made from (§3.1) |
+| `δ ≤ 2^-128` (now `2^-40`) | see the changed parameters |
+
+Two vital rules are under-built and stay open: `T_V` is measured on compiled Lean, which
+disadvantages binary fields (Q11, §6.2), and the verifier's time on crafted inputs is not searched
+(FB-5).
 
 ---
 
@@ -968,7 +1100,7 @@ re-sized (C5, C unsettled 4).
 | `Relation.lean` | 38 | digests, tags, caps, chain, statements, `Trace`, `Sig`, `Signed`, `Wit`, `Rel` | signed children; tags `T W K M` added, `R` removed; `queryCap` |
 | `Signature.lean` | 31 | `traceDigest`, WOTS digits, chain, leaf, Merkle path, `SigOk` | new |
 | `Oracle.lean` | 24 | `OProg`, `runLog`, `runSeq`, `queries`, `bind` | `runSeq` added, `run` moved to Library |
-| `Security.lean` | 33 | `KState`, `KS`, `failProb`, `CompleteWithError`, caps | unchanged |
+| `Security.lean` | 33 | `KState`, `KS`, `failProb`, `CompleteWithError`, caps | the caps' values (V4-A9: `2^-120`, `2^-40`) |
 | `Machine.lean` | 62 | the step-counting word machine | unchanged |
 | `Extractor.lean` | 50 | tape, `decodeWit` for signed children, budget, `Computes` | output format |
 | `Tree.lean` | 8 | `treeRoot` | unchanged |
@@ -977,10 +1109,11 @@ re-sized (C5, C unsettled 4).
 
 What a human must trust it for: that `Rel` and `acc` say what §1.1 says; that `SigOk` and
 `traceDigest` hash exactly the bytes of §1.3 (the service and runner are tested against them); that
-v3's definitions are unchanged. `lake build` is green (1,264 jobs, `logs/D-final-build.log`; a cold
-build takes 1 min 56 s to 2 min 55 s on the development VM, `logs/A-fix-build-cold.log`), and the
-axiom audit passes on every module (`propext`, `Classical.choice`, `Quot.sound`;
-`logs/A-fix-axiom-audit.log`). The contract imports Lean core and Mathlib only. By `loc.py`, the
+v3's definitions are unchanged but for the two caps' values (V4-A9). `lake build` is green (1,264
+jobs, `logs/D-final-build.log`, after V4-A9 `logs/trim/lake-build-final.log`; a cold build takes
+1 min 56 s to 2 min 55 s on the development VM, `logs/A-fix-build-cold.log`), and the axiom audit
+passes on every module (`propext`, `Classical.choice`, `Quot.sound`; `logs/A-fix-axiom-audit.log`,
+`logs/trim/axiom-audit.log`). The contract imports Lean core and Mathlib only. By `loc.py`, the
 Library has 1,856 code lines and 233 theorems, the Controls 2,089 lines and 309 theorems.
 
 **Controls**: every trusted definition has a positive and a negative control (the full table is
@@ -994,22 +1127,24 @@ stage A RESULT §3). The ones that carry the v4 changes:
 | `traceDigest`, WOTS, `SigOk` | `traceDigest_kat` (hashlib), `sigOk_sign` (every `sk`), `wotsDigits_dominates` (the checksum) | `traceDigest_changed_answer`, `sigOk_other_key`, `sigOk_key_unique`, `sigOk_ots_length`, `sigOk_path_length` |
 | `decodeWit` | `decodeWit_node_kat`, `decodeWit_leaf_kat` | `decodeWit_long_trace`, `decodeWit_short_sig`, `decodeWit_long_proof` |
 | `Certificate` with `∀ vk` | `ws_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` | `sigTrust_no_certificate`, `sigTrust_certificate_opens`, v3's negatives |
+| `errorCap = 2^-120`, `completenessCap = 2^-40` (V4-A9) | `twoLucky_ks`, `collision_ks` (potentials at the cap), `grind40_complete` (40 nonces: exactly `2^-40`) | `twoLucky_no_bool_kstate`, `collision_no_bool_kstate` (a log of `2^136 + 1` answers), `v24_no_bool_kstate` (`2^72 + 1` answers within the guard), `grind39_not_complete` |
 | composition (Library) | `walk_one_leaf`, `walk_two_leaves` | `forgery_trivial`, `compose_exists_free` |
 
 The Library theorems the badge and the decoder rest on, `Fast.accF_eq` (the badge's `accF` is `acc`)
 and `Words.decodeWit_witWords` (every fitting witness can be denoted), are theorems, not controls.
 
-**The trusted runtime** (stage B RESULT §1.1, `logs/harness/loc-runtime.log`, after the golf and
-the fix pass): **3,559 code lines**: the service 963 Rust lines (std only), the runner 1,028, the
-sandbox 238, the badge mains 135, the proof-side order 449, v3's ported tools 697, the calibration
-generator 161, CI scripts 49. Two parts are trusted for nothing a record's soundness rests on: the
-liveness badge (a smoke test; the security claim is the proved `Computes`) and the measurement
-client `rf-bench` (the calibration column is published, not enforced).
+**The trusted runtime** (the groups and rule of stage B RESULT §1.1; recounted by
+`logs/trim/loc_runtime.py`, `logs/trim/loc-runtime-after.log`): **3,677 code lines** after V4-A9:
+the service 953 Rust lines (std only), the runner 1,024, the sandbox 238, the badge main 88, the
+proof-side order 452, v3's ported tools 697, the calibration generator 161, CI scripts 64. Before
+V4-A9 the same count gave 3,800 (`logs/trim/loc-runtime-before.log`; stage B counted 3,559 before
+its final fix pass). The measurement client `rf-bench` is trusted for nothing a record's soundness
+rests on (the calibration column is published, not enforced).
 
 | Component | Trusted for |
 |---|---|
 | the service (Rust: PRF, signer, wire protocol, caps) | answers are `PRF_k`; signatures only on traces it computed; index uniqueness; key isolation and freshness; no memoisation |
-| the runner (Python: sandbox, assembly build, tree, stream, `acc` badge, canaries, `T_V` calibration, liveness, DoS, score JSON, season file) | the instances, the clock, the caps, running the compiled `acc` on every proof, the published numbers |
+| the runner (Python: sandbox, assembly build, tree, stream, `acc` badge, statement canaries, `T_V` calibration, DoS, score JSON, season file) | the instances, the clock, the caps, running the compiled `acc` on every proof, the published numbers |
 | the gate, source rule, axiom audit, manifest (ported from v3) | the badge executables are the kernel-checked terms |
 | the CI workflows (the core's reusable evaluation workflow; the submissions repository's caller) | the anchor: untrusted code runs only in the sandbox; the result is attested |
 
@@ -1019,8 +1154,8 @@ client `rf-bench` (the calibration column is published, not enforced).
 
 ### 6.1 The decisions
 
-Each is reversible; the reason is one line. Overrides: the amendments V4-A1 … A8 win over V4-1 …
-V4-16 where they differ.
+Each is reversible; the reason is one line. Overrides: the amendments V4-A1 … A9 win over V4-1 …
+V4-16 where they differ. V4-A9 is the user's own (2026-10-26).
 
 | Id | Decision | Reason |
 |---|---|---|
@@ -1035,9 +1170,9 @@ V4-16 where they differ.
 | V4-8 | composition as a Library theorem returning witnesses, a collision or a forgery | kernel content for CGSY24's argument |
 | V4-9 | the prover is x86-64 assembly; the Lean `P` stays | the request; completeness is about `P` |
 | V4-10 | `S = T_tree + K·t_link`, `K = 20` provisional, 100/200 ms reference lines, a fresh process per stream request | the cost model as written, with its illustration |
-| V4-11 | season 1: `r = 6`, `n = 2^18`; stream `M = 512`, `n_f = 2^16`; smoke `r = 2`, `n = 16`, `M = 4`; one season file | 16 GB runners; the same chain work as the long shape |
+| V4-11 | season 1: `r = 6`, `n = 2^18`; stream `M = 512` (256 since V4-A9), `n_f = 2^16`; smoke `r = 2`, `n = 16`, `M = 4`; one season file | 16 GB runners; the same chain work as the long shape |
 | V4-12 | `T_V`: wall time of one `acc` check pinned to one core ≤ `T_triv,best / 10`, the cap measured the same way in the same job | C6; self-calibrating |
-| V4-13 | v3's caps kept; memory 13 GB in all (as built: 11 GB prover + 2 GB service, B dev. 1) | minimal change |
+| V4-13 | v3's caps kept; memory 13 GB in all (as built: 11 GB prover + 2 GB service, B dev. 1); the two error caps changed by V4-A9 | minimal change |
 | V4-14 | no D4+, no W5, no key release; every query, Merkle hashes included, goes to the service | no extractability heuristic |
 | V4-15 | PROVISIONAL listing for entries whose certificate does not check | lets real entries be measured; never ranked |
 | V4-16 | tree, leaf clause, `chainCap`, statements unchanged; tags `T`, `W`, `K`, `M` added | distinct first bytes for every contract hash |
@@ -1049,20 +1184,24 @@ V4-16 where they differ.
 | V4-A6 | assembly built inside the sandbox; image and hashes recorded; seccomp; AppArmor handled | C-m7 |
 | V4-A7 | controls: the impossibility, the node clause with the Lean signer, the negatives, the word-level twin | C-m1, C-m3, C-m11, C-m12 |
 | V4-A8 | this document states the impossibility, the `vk` caveat, `E` without `vk`, the unrankable season shape, the paper split, the trace-hash cost | C-m6, C-m9, C-m10 |
+| V4-A9 | the trim (the user's): every job within 30 min with nested caps and a cached organiser setup; one tree run and one stream run, no medians, two parallel jobs; `M = 256`; no per-entry liveness; per entry only the statement canaries, 2 per kind; the organiser's checks in the core CI only; DoS 100 inputs, failing on time and crashes only; only the root read; one Lean build; `errorCap = 2^-120`, `completenessCap = 2^-40` | keep only what serves valid verifiers or honest, fast, recursion-priced proving (§4.4) |
 | RA-M2 | `acc` checks `\|tr\| ≤ qV` (one trusted line) | `KS`'s query bound ranges over oracle functions and does not bound a non-functional trace |
 | Q5 | CI checks certificates with the Lean kernel only | nanoda needs more than 16 GB (§2.7) |
 | B dev. 1 | the prover isolated by namespaces, not a separate uid; two memory cgroups (11 GB + 2 GB) | no system user needed; the prover cannot make the OOM killer pick the service |
-| B §5.4 | the season benchmark split into six jobs; mixed CPU models never paired | the 6 h job limit |
+| B §5.4 | the season benchmark split into six jobs (two since V4-A9); mixed CPU models never paired | the 6 h job limit (30 min since V4-A9) |
 | B dev. 2, 3 | the badge parses files at byte level; `T_V` times parse plus `accF` in process | the word-level parser costs 0.4 µs per byte; start-up excluded |
 
 ### 6.2 Open items
 
 **Not yet done** (the three items the implementation still owes):
 
-1. **The full evaluation on GitHub**: the evaluation workflow, its six benchmark jobs and the
-   attestation have never run; the caller template is not yet installed in the submissions
-   repository. (The end-to-end smoke of `ci.yml` does run on a runner: run 39966237935.)
-2. **Build caps from a runner run** of a real entry's certificate job (C-M2, C10).
+1. **The full evaluation on GitHub**: the evaluation workflow, its setup job and caches, its two
+   benchmark jobs and the attestation have never run; the caller template is not yet installed in
+   the submissions repository. (The end-to-end smoke of `ci.yml` ran on a runner before V4-A9: run
+   39966237935.)
+2. **The 30-minute caps against a real entry on a runner** (C-M2, C10, V4-A9): the entry's build
+   and kernel caps (10 min each) bind entries and are a rule; the baseline's figures are from the
+   32-vCPU development VM (§3.1). The user's alternative: a larger runner for the certificate job.
 3. **`T_V` and binary fields** (Q11). Both sides of `T_V ≤ T_triv,best / R` are compiled Lean, but
    the chain checker's BLAKE2s compiles to fast word code while Lean has no carry-less multiply, so
    a GF(2^k) verifier pays a software `clmul`: the baseline's 2-leaf bundle takes 0.5 s of `acc` and
@@ -1080,7 +1219,12 @@ V4-16 where they differ.
   v3's last estimate. **The first ranked shape** (C-m10): from the first certified recursive entry.
 - **The second kernel** (C-M2, Q5): run nanoda on a larger machine, or accept the Lean kernel alone
   (§2.7). The user's decision.
-- **Crafted-input DoS** (C9, F1-M2, FB-5): the bounded DoS column is the first step (§3.4).
+- **Crafted-input DoS** (C9, F1-M2, FB-5): the bounded DoS column of 100 random inputs is the
+  first step (§3.4); a crafted-input column is the follow-up.
+- **Gate rule 4 still requires `P` and `ext` compiled** (V4-A9): no badge runs them any more, so
+  the rule could be relaxed to `V`; relaxing it changes what entries may submit and is the user's.
+- **The deployment's whole-run bound at `errorCap = 2^-120`**: about `2^-90` at `2^30` queries
+  (§2.4); a season whose runs ask far more queries moves it.
 - **Keyed BLAKE2s as a named assumption** (C unsettled 1): the alternative wording calls it the
   design's one heuristic, since its only analysis is in an ideal-cipher model.
 - **Runner facts** (C unsettled 2, 3): the CPU models, and whether `pclmulqdq` and AVX2 are on every
@@ -1110,9 +1254,10 @@ of `scaraven/recursion.fast-submissions`, and its dispositions here:
 - **FB-10** (accept an empty trace without a signature, `tr = [] ∨ SigOk …`; saves 4,776 B per
   query-free child; sound, since an empty trace is trivially genuine): a candidate contract change
   for the user, not applied.
-- **FB-7** (the service tax, about 30–100 ms per recursion step, **estimate**), **FB-8** (the
-  assembly-only build's cost in tooling and reviewability) and **FB-9** (`errorCap = 2^-128` per
-  query excludes Flock's GF(2^128) as published): residual risks, argued in the report.
+- **FB-7** (the service tax, about 30–100 ms per recursion step, **estimate**) and **FB-8** (the
+  assembly-only build's cost in tooling and reviewability): residual risks, argued in the report.
+  **FB-9** (`errorCap = 2^-128` per query excludes Flock's GF(2^128) as published): adopted by
+  V4-A9, `errorCap = 2^-120`.
 
 ---
 
@@ -1124,7 +1269,7 @@ of `scaraven/recursion.fast-submissions`, and its dispositions here:
   gate, source rule, axiom audit); the service `service/` (`PROTOCOL.md` normative for provers); the
   runner `harness/` (`FORMAT.md` the signed-proof file, `PROVER.md` the prover interface,
   `season.toml`); `tests/`; `.github/workflows/` (`ci.yml`, `evaluate.yml`); stage records
-  `docs/v4/stages/A-contract-RESULT.md` and `B-harness-RESULT.md`.
+  `docs/v4/stages/A-contract-RESULT.md`, `B-harness-RESULT.md` and `D-trim-RESULT.md` (V4-A9).
 - **The brief, the reviews and the fix queue**: [`v4/BRIEF.md`](v4/BRIEF.md); the design attack
   [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md), the stage reviews and golf
   passes (`RA`, `GA`, `RB`, `GB`) and the whole-branch review `R-final-review.md` in

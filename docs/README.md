@@ -1,12 +1,14 @@
 # recursion.fast: the design record (v3, and the v4 proposal)
 
-**State of play (2026-10-23).** **v4, the signed-random-oracle (SROM) rules, is the proposal now
+**State of play (2026-10-26).** **v4, the signed-random-oracle (SROM) rules, is the proposal now
 implemented on the branch `v4/srom-rules`**, not yet adopted by the user: v3's certificate kept,
 O-25 closed by the oracle's deployment (a secret-keyed BLAKE2s service that signs the answers each
 proof used, checked by one trusted predicate `acc`), x86-64 assembly provers timed on GitHub-hosted
 runners with attested results, and the score `S = T_tree + K·t_link`. Its normative design is
 [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md); its build record (the brief, the design attack, the stage
-results) is under [`v4/`](v4/). The next paragraph is the record v4 starts from.
+results) is under [`v4/`](v4/). On 2026-10-26 the user trimmed it (V4-A9, design §4.4: 30-minute
+jobs, one run each of the tree and the stream, the organiser's checks in the core CI only,
+`errorCap = 2^-120`, `completenessCap = 2^-40`). The next paragraph is the record v4 starts from.
 
 **v3.** The third iteration of the competition, v3 (a non-interactive argument in the
 random-oracle model over a digest relation, scored by whole-tree wall time), was

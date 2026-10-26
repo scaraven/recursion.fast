@@ -11,13 +11,13 @@ Badge executables (`harness/badge/`, built by `evaluate.py`; the command-line co
   chaincheck LEAVES ROOT_HEX the organiser's compiled-Lean interleaved chain checker: recompute the
                              leaf statements of LEAVES (`leaves.json`) and their tree root; prints
                              `ok NS` if it equals ROOT_HEX, else `mismatch NS`.
-  liveness LOG VK_HEX STMT_HEX FILE
-                             the extractor liveness check (`evaluate.py` renders it with the entry's
-                             `ext`): runs `ext` on the root's tape with the service's query log LOG,
-                             decodes the witness, checks it against `Rel (acc vk)` and recurses into
-                             the children; prints `ok …` or `fail REASON`.
 
 `verify` runs the entry's compiled verifier, so it runs in the sandbox, pinned to one core.
+
+Only checks about the entry are made here (V4-A9): a proof the entry produced, accepted for its
+statement, and the same proof rejected for another statement. Mutations that `acc` rejects before
+the entry's `V` runs (the file parser, the trace digest, the signature) test organiser code and run
+in the core CI (`tests/harness/canaries.py`).
 """
 import os
 import random
@@ -31,7 +31,13 @@ LIB_ROOT = ("/usr", "/bin", "/lib", "/lib64", "/etc/ld.so.cache")
 
 
 class BadgeError(Exception):
-    pass
+    """A badge run that did not give every answer in time. `kind`: `timeout` (killed at its time
+    limit), `crash` (another exit or missing answers) or `slow` (every answer given, one of them
+    above `verify_s`); `partial`: the answers given."""
+
+    def __init__(self, msg, kind, partial):
+        super().__init__(msg)
+        self.kind, self.partial = kind, partial
 
 
 def pinned_core():
@@ -64,8 +70,8 @@ class Badge:
         """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns). With
         `warm`, the first item is checked once more before the timed ones and that result dropped,
         so no timed item is the fresh process's first, coldest check (RF-m3). `timeout` bounds the
-        whole batch (default `verify_s` per item); a batch that times out or crashes raises
-        `BadgeError` with the answers so far in `.partial`."""
+        whole batch (default `verify_s` per item and 60 s); a batch that times out, crashes or has a
+        check above `verify_s` raises `BadgeError`."""
         if not items:
             return []
         lst = ([items[0]] if warm else []) + list(items)
@@ -84,56 +90,34 @@ class Badge:
             res.append((w[0] == "accept", int(w[1])))
         res = res[1:] if warm else res
         if code != 0 or len(res) != len(items):
-            e = BadgeError(f"verify: exit {code}, {len(res)} of {len(items)} answers; stderr: {err[-500:]}")
-            e.partial = res
-            raise e
+            raise BadgeError(f"verify: exit {code}, {len(res)} of {len(items)} answers; stderr: {err[-500:]}",
+                             "timeout" if code == "timeout" else "crash", res)
         slow = [ns for _, ns in res if ns > self.verify_s * 1e9]
         if slow:
-            raise BadgeError(f"verify: a check took {max(slow) / 1e9:.1f} s, above verify_s")
+            raise BadgeError(f"verify: a check took {max(slow) / 1e9:.1f} s, above verify_s", "slow", res)
         return res
 
     def chaincheck(self, leaves_json, root):
         d = os.path.dirname(leaves_json)
         code, out, err = self._run(["chaincheck", f"/in/{os.path.basename(leaves_json)}", root.hex()],
-                                   [("ro", d, "/in")], 3600)
+                                   [("ro", d, "/in")], 120)
         w = out.split()
         if code != 0 or len(w) < 2 or w[0] != "ok":
-            raise BadgeError(f"chaincheck: exit {code}, output {out[:200]!r} {err[-300:]!r}")
+            raise RuntimeError(f"chaincheck: exit {code}, output {out[:200]!r} {err[-300:]!r}")
         return int(w[1])
-
-    def liveness(self, log, vk, stmt, proof_file):
-        code, out, err = self._run(["liveness", "/in/log.bin", vk.hex(), stmt.hex(), "/in/root.bin"],
-                                   [("ro", log, "/in/log.bin"), ("ro", proof_file, "/in/root.bin")], 3600)
-        return code == 0 and out.startswith("ok"), (out.strip() or err.strip())[-2000:]
 
 
 # ---- canaries -------------------------------------------------------------------------------------
 
-def canaries(data: bytes, stmt: bytes, sibling: bytes = None):
-    """The mutations of one accepted signed proof that must all be rejected (v3 §8.3 step 7 for
-    signed proofs): (name, statement, file bytes)."""
-    s = signed.parse(data)
-    out = [("file+1", stmt, data + b"\x00"), ("file-1", stmt, data[:-1])]
-    if s is None:
-        return out
+def canaries(stmt: bytes, sibling: bytes = None):
+    """The statement canaries (C15, v3 §8.3 step 7) of a proof accepted for `stmt`: the statements it
+    must be rejected for, as (name, statement): `stmt` with its first bit flipped, and the statement
+    of its sibling in the tree it belongs to, if there is one."""
     flip = bytearray(stmt)
     flip[0] ^= 1
-    out.append(("stmt-bit", bytes(flip), data))
+    out = [("stmt-bit", bytes(flip))]
     if sibling is not None and sibling != stmt:
-        out.append(("swapped-child", sibling, data))
-    out.append(("pi+1", stmt, signed.Signed(s.pi + b"\x00", s.trace, s.idx, s.ots, s.path).encode()))
-    if s.pi:
-        out.append(("pi-1", stmt, signed.Signed(s.pi[:-1], s.trace, s.idx, s.ots, s.path).encode()))
-    if s.trace:
-        q, a = s.trace[0]
-        tr = [(q, bytes([a[0] ^ 1]) + a[1:])] + s.trace[1:]
-        out.append(("trace-answer", stmt, signed.Signed(s.pi, tr, s.idx, s.ots, s.path).encode()))
-        q2 = bytes([q[0] ^ 1]) + q[1:] if q else b"\x00"      # RB-m9: a changed query
-        out.append(("trace-query", stmt, signed.Signed(s.pi, [(q2, a)] + s.trace[1:], s.idx, s.ots, s.path).encode()))
-    out.append(("trace-extra", stmt, signed.Signed(s.pi, s.trace + [(b"", bytes(32))], s.idx, s.ots, s.path).encode()))
-    ots = [bytes([s.ots[0][0] ^ 1]) + s.ots[0][1:]] + s.ots[1:]
-    out.append(("sig-ots", stmt, signed.Signed(s.pi, s.trace, s.idx, ots, s.path).encode()))
-    out.append(("sig-idx", stmt, signed.Signed(s.pi, s.trace, s.idx ^ 1, s.ots, s.path).encode()))
+        out.append(("swapped-child", sibling))
     return out
 
 

@@ -9,15 +9,16 @@
 its matrix from `--print-matrix`, and the aggregation requires **exactly** that multiset of parts.
 Each part is identified by the `parts` its result JSON records. A missing, extra, duplicated or
 mismatched part, or parts that disagree on the season or the harness commit, make the verdict
-ERROR and the result not comparable. So a job lost to the 6 h limit or to a runner failure can
-never yield an ACCEPT from the jobs that remain, and in particular the DoS column and liveness
-(job 0 only) are always in an ACCEPT.
+ERROR and the result not comparable. So a job lost to its time limit or to a runner failure can
+never yield an ACCEPT from the job that remains, and in particular the DoS column (the tree job's)
+is always in an ACCEPT.
 
-A run split over several jobs (`.github/workflows/evaluate.yml`, `split`) has one partial result per
-job; each job calibrated `T_V` and the service on its own machine and checked its own outputs
-against that calibration, so the parts are combined only by collecting the repeats: `T_tree` is the
-median of all tree repeats and `t_leaf`, `t_merge`, `t_link` the medians of all stream repeats, as
-in a single job (V4-10). The CPU model of every part is listed; a result whose parts ran on
+A run split over two jobs (`.github/workflows/evaluate.yml`, `split`) has one partial result per
+job: the tree job (calibration, the tree run, the DoS column) and the stream job (calibration, the
+stream run). Each job calibrated `T_V` and the service on its own machine and checked its own
+outputs against that calibration, so the parts are combined only by collecting the runs: `T_tree`
+is the tree run's and `t_leaf`, `t_merge`, `t_link` the stream run's, one run each, no repeats
+and no medians (V4-A9). The CPU model of every part is listed; a result whose parts ran on
 different CPU models says so (`mixed_cpu`), and such a result is never used for a paired record
 comparison (P3 (d)). Verdict: REJECT if the certificate was rejected or any part failed; ERROR if a
 part had a harness error; otherwise ACCEPT, or PROVISIONAL for a provisional certificate (V4-15).
@@ -29,11 +30,9 @@ import json
 import os
 import sys
 
-ALL_PARTS = "calibrate,tree,dos,stream,liveness"
-# Every job calibrates on its own machine; job 0 alone runs the DoS column and liveness.
-PLANS = {"split": ["calibrate,tree,dos,liveness", "calibrate,tree", "calibrate,tree",
-                   "calibrate,stream", "calibrate,stream", "calibrate,stream"],
-         "single": ["all"]}
+ALL_PARTS = "calibrate,tree,dos,stream"
+# Every job calibrates on its own machine; the tree job also runs the DoS column on its root.
+PLANS = {"split": ["calibrate,tree,dos", "calibrate,stream"], "single": ["all"]}
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rfh.bench import Params, score  # noqa: E402
@@ -62,15 +61,14 @@ def main():
            "certificate": {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels",
                                                      "second_kernel", "kernel_runs", "gate", "badge_sha256", "claim", "built_modules")},
            "parts": [], "reasons": list(cert.get("reasons", []))}
-    trees, streams = [], []
+    res["tree"] = res["stream"] = None
     for r in parts:
         res["parts"].append({k: r.get(k) for k in ("parts", "machine", "harness", "prover", "calibration", "T_V", "dos",
-                                                    "liveness", "benchmark", "reasons", "started", "finished",
+                                                    "benchmark", "reasons", "started", "finished",
                                                     "instance", "comparable", "provisional")})
-        trees += r.get("tree", [])
-        streams += r.get("stream", [])
+        for k in ("tree", "stream"):
+            res[k] = r.get(k) or res[k]       # one run each; the plan check below rejects a second
         res["reasons"] += r.get("reasons", [])
-    res["tree"], res["stream"] = trees, streams
     # RF-M1: exactly the planned parts, one result each, from one season and one harness commit
     want = collections.Counter(ALL_PARTS if p == "all" else p for p in PLANS[a.plan])
     got = collections.Counter(",".join(r.get("parts") or []) for r in parts)
@@ -102,7 +100,7 @@ def main():
     res["verdict"] = verdict
     res["comparable"] = verdict == "ACCEPT" and not res["mixed_cpu"] and not plan_errors
     if verdict in ("ACCEPT", "PROVISIONAL"):
-        res["score"] = score(p, trees, streams)
+        res["score"] = score(p, res["tree"], res["stream"])
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {verdict} ({len(parts)} part(s), CPU {models})")
     return 0

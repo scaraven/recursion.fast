@@ -9,8 +9,11 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    the toy prover (`harness/toy-prover/honest/prover.s`, C compiled to x86-64 assembly) goes
    through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
    certified;
-1. `evaluate.py bench` of that entry through every part (calibration, tree, canaries, DoS, stream,
-   liveness with the compiled extractor, score) with the compiled `accF` badge: verdict ACCEPT;
+1. `evaluate.py bench` of that entry through every part (calibration, the tree run, its root's
+   statement canary, DoS, the stream run, its statement canaries, score) with the compiled `accF`
+   badge: verdict ACCEPT; then the organiser's canaries (`tests/harness/canaries.py`: the file
+   parser, the trace digest and the signature check, core CI only, V4-A9) on the honest root and
+   a stream leaf through the same badge: the files accepted, every mutation rejected;
 2. five deliberately broken provers, built from the same C source with one option each, through
    the T run with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
@@ -35,8 +38,11 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
+sys.path.insert(0, HERE)
+from rfh.checks import Badge  # noqa: E402
 from rfh.sandbox import memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
+from canaries import organiser_canaries  # noqa: E402
 
 SERVICE = os.path.join(ROOT, "service", "target", "release", "rf-oracle")
 BENCH = os.path.join(ROOT, "service", "target", "release", "rf-bench")
@@ -100,6 +106,29 @@ def ws_entry(tmp, name, prover_s, solution_patch=None):
             src = src.replace(old, new)
         open(sol, "w").write(src)
     return d
+
+
+def organiser_check(badge_dir, work, r):
+    """The organiser's canaries (V4-A9: core CI only) on the honest run's root and first stream leaf,
+    through the entry's compiled badge: (number of mutations, the answers that were wrong); each file
+    must be accepted and each mutation rejected."""
+    store = os.path.join(work, "store")
+    os.makedirs(os.path.join(store, "organiser-canaries"))
+    badge = Badge(badge_dir, "4G", 60, os.path.join(work, "organiser-canaries-scratch"))
+    os.makedirs(badge.scratch)
+    targets = [(bytes.fromhex(r["tree"]["vk"]), bytes.fromhex(r["instance"]["root"]), r["tree"]["root_file"]),
+               (bytes.fromhex(r["stream"]["vk"]), bytes.fromhex(r["stream"]["leaf_digests"][0]), "stream/leaf0.bin")]
+    items, want = [], []
+    for vk, c, rel in targets:
+        items.append((vk, c, rel))
+        want.append((rel, True))
+        for name, data in organiser_canaries(open(os.path.join(store, rel), "rb").read()):
+            m = f"organiser-canaries/{rel.replace('/', '_')}.{name}"
+            open(os.path.join(store, m), "wb").write(data)
+            items.append((vk, c, m))
+            want.append((f"{rel} {name}", False))
+    res = badge.verify(items, store)
+    return len(items) - len(targets), [what for (what, ok), (got, _) in zip(want, res) if got != ok]
 
 
 def main():
@@ -184,6 +213,12 @@ def main():
             r = load(out)
             check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
             results["honest"] = r
+            def organiser():
+                n, wrong = organiser_check(cj["badge_dir"], os.path.join(tmp, "work-honest"), r)
+                check(n > 0 and not wrong, f"organiser canaries (core CI only): {n} mutations of the root and a stream "
+                                           f"leaf rejected, both files accepted; wrong answers: {wrong}")
+            if r.get("verdict") == "ACCEPT":
+                step("organiser canaries", organiser)
             for flag, e in broken_entries:
                 out = os.path.join(tmp, f"result-{flag}.json")
                 step(flag, lambda e=e, flag=flag, out=out: evaluate(
@@ -247,9 +282,8 @@ def main():
     if r.get("benchmark") == "pass":
         sc = r["score"]
         check(all(k in sc for k in ("T_tree", "t_leaf", "t_merge", "t_link", "S")), f"score components: {sc}")
-        check(r["liveness"]["ok"], f"liveness: {r['liveness']['output'][:120]}")
-        check(r["tree"][0]["canaries"] > 0 and r["stream"][0]["canaries"] > 0,
-              f"canaries rejected: tree {r['tree'][0]['canaries']}, stream {r['stream'][0]['canaries']}")
+        check(r["tree"]["canaries"] > 0 and r["stream"]["canaries"] > 0,
+              f"statement canaries rejected: tree {r['tree']['canaries']}, stream {r['stream']['canaries']}")
         check(r["dos"]["proofs"] > 0, f"DoS column: {r['dos']}")
     for flag, _ in broken_entries:
         rb = results.get(flag, {})

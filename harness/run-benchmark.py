@@ -3,15 +3,16 @@
 
   python3 -I harness/run-benchmark.py --season harness/season.toml --entry ENTRY --badge BADGE_DIR \
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
-      [--parts calibrate,tree,dos,stream,liveness] [--tree-repeats K] [--stream-repeats K] [--provisional]
+      [--parts calibrate,tree,dos,stream] [--provisional]
 
-ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify`, `liveness` and the organiser's
+ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
 `chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; prover build in
 the sandbox; `prover setup`; a fresh tree instance from `os.urandom`; `T_triv,best` and the service
-calibration; the tree repeats (each its own service; root, samples, canaries, `T_V`); the DoS
-column on the first repeat's root; the stream repeats; extractor liveness at the liveness shape;
-the score. The first failure ends the run with `benchmark: fail` and its reason. A run split over
-several jobs (`--parts`, `--*-repeats`) writes partial results that `aggregate.py` combines.
+calibration; the tree run (its own service; the root, its statement canary, `T_V`); the DoS column
+on its root; the stream run (its own service; every output, the statement canaries, `T_V`); the
+score. One run of each, no repeats (V4-A9). The first failure ends the run with `benchmark: fail`
+and its reason. A run split over two jobs (`--parts`) writes partial results that `aggregate.py`
+combines.
 """
 import argparse
 import hashlib
@@ -27,7 +28,7 @@ from rfh import digest  # noqa: E402
 from rfh.bench import Bench, Fail, Params, leaves_json, machine, score  # noqa: E402
 from rfh.prover import Run, build  # noqa: E402
 
-ALL_PARTS = ["calibrate", "tree", "dos", "stream", "liveness"]
+ALL_PARTS = ["calibrate", "tree", "dos", "stream"]
 
 
 def sha256(path):
@@ -52,8 +53,6 @@ def main():
     for a in ("--season", "--entry", "--badge", "--service", "--bench", "--work", "--out"):
         ap.add_argument(a, required=True)
     ap.add_argument("--parts", default=",".join(ALL_PARTS))
-    ap.add_argument("--tree-repeats", type=int, default=None)
-    ap.add_argument("--stream-repeats", type=int, default=None)
     ap.add_argument("--provisional", action="store_true")
     a = ap.parse_args()
     p = Params.load(a.season)
@@ -73,7 +72,7 @@ def main():
            "comparable": not a.provisional, "machine": machine(),
            "harness": {"commit": harness_commit(), "service_sha256": sha256(a.service),
                        "bench_sha256": sha256(a.bench),
-                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify", "chaincheck", "liveness")}},
+                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify", "chaincheck")}},
            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "pass", "reasons": []}
     log(f"recursion.fast v4 benchmark, season {p.name}, parts {parts}, machine {res['machine']['cpu_model']}")
     try:
@@ -104,33 +103,19 @@ def main():
             res["calibration"] = bench.calibrate(inst, starts, p.n, levels[-1][0])
             log(f"T_triv,best = {res['calibration']['T_triv_best_ns'] / 1e6:.3f} ms, "
                 f"T_V cap = {bench.tv_cap_ns / 1e6:.3f} ms; service {res['calibration']['service']}")
-        trees = []
         if "tree" in parts:
-            for k in range(1, (a.tree_repeats or p.tree_repeats) + 1):
-                trees.append(bench.tree_repeat(k, starts, p.n, levels, p.r))
-                res["tree"] = trees
-        if "dos" in parts and trees:
-            res["dos"] = bench.dos(bytes.fromhex(trees[0]["vk"]), levels[-1][0], trees[0]["root_file"])
+            res["tree"] = bench.tree_run(starts, p.n, levels[-1][0])
+        if "dos" in parts and "tree" in res:
+            res["dos"] = bench.dos(bytes.fromhex(res["tree"]["vk"]), levels[-1][0], res["tree"]["root_file"])
             log(f"DoS column: {res['dos']}")
-        streams = []
         if "stream" in parts:
-            for k in range(1, (a.stream_repeats or p.stream_repeats) + 1):
-                streams.append(bench.stream_repeat(k))
-                res["stream"] = streams
-        if "liveness" in parts:
-            ls = [os.urandom(32) for _ in range(1 << p.live_r)]
-            llev = digest.tree_levels(digest.leaf_digests(ls, p.live_n))
-            lr = bench.tree_repeat(0, ls, p.live_n, llev, p.live_r, name="liveness",
-                                   liveness_log=os.path.join(work, "liveness-log.bin"))
-            res["liveness"] = {"r": p.live_r, "n": p.live_n, "ok": lr["liveness"]["ok"], "ran": lr["liveness"]["ran"],
-                               "output": lr["liveness"]["output"], "service_stats": lr.get("service_stats")}
-            log(f"liveness: {lr['liveness']['output'][:200]}")
+            res["stream"] = bench.stream_run()
         res["T_V"] = {"cap_ns": bench.tv_cap_ns, "enforced": p.tv_enforce, "remeasured": bench.tv_remeasured,
                       "statistic": f"best of {p.checker_runs} for the cap and for a check above it",
                       "max_ns": max((ns for _, ns in bench.tv_seen), default=None),
                       "checks": len(bench.tv_seen),
                       "over_cap": sum(1 for _, ns in bench.tv_seen if bench.tv_cap_ns and ns > bench.tv_cap_ns)}
-        res["score"] = score(p, trees, streams)
+        res["score"] = score(p, res.get("tree"), res.get("stream"))
         log(f"score: {res['score']}")
     except Fail as e:
         res["benchmark"] = "fail"

@@ -1,40 +1,45 @@
-# recursion.fast v4, season 1: every shape and cap of the benchmark (BRIEF V4-10 … V4-13, V4-A5).
-# The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
+# recursion.fast v4, season 1: every shape and cap of an evaluation (BRIEF V4-10 … V4-13, V4-A5,
+# V4-A9). The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
+# Every GitHub job of an evaluation runs at most 30 minutes, and the caps below are nested inside
+# that limit (design §3.4): an entry that is slow or hangs fails a cap and is REJECTed with the
+# reason, never killed with its job.
 name = "season-1"
 K = 20.0          # score weight of the link time: S = T_tree + K * t_link (V4-10, provisional)
 R = 10            # T_V = T_triv,best / R (V4-12, CM-8)
 
-[tree]            # the T run (V4-11): 2^r leaves of chain length n
+[certificate]     # the certificate job's Lean steps (V4-A9), on a 4-vCPU runner; a breach is the
+                  # entry's REJECT, except the kernel's, which leaves the certificate unchecked (Q12)
+build_s = 600     # the entry's `lake build` of the challenge and Solution's import closure
+kernel_s = 600    # the comparator: the exports and the Lean kernel's replay
+gate_s = 120      # the gate
+badge_s = 180     # the badge build
+
+[tree]            # the T run (V4-11): 2^r leaves of chain length n; one run, only its root is read
 r = 6
 n = 262144        # 2^18
-repeats = 3
-tree_s = 3600     # seconds per tree run
-samples = 16      # random inner proofs checked per repeat
-canaries_per_kind = 8
+tree_s = 600      # seconds for the tree run
 
-[stream]          # the recursion term (cost model §3.3)
-M = 512
+[stream]          # the recursion term (cost model §3.3); one run
+M = 256
 n_f = 65536       # 2^16
-repeats = 3
-step_s = 600      # seconds per leaf or node request
-stream_s = 14400  # seconds per stream repeat
-check_every = 32  # outputs checked in batches of this many links (all before the service exits)
+step_s = 60       # seconds per leaf or node request (and again for its `ready` line)
+stream_s = 900    # seconds for the whole stream, its checks included
+check_every = 32  # outputs checked in batches of this many (all before the service exits)
 
-[liveness]        # extractor liveness (v3 §8.3 step 8) on the service's query log
-r = 1
-n = 16
+[canaries]        # statement canaries (C15): `stmt-bit` and `swapped-child` on the tree's root and on
+per_kind = 2      # the first `per_kind` leaf and node outputs of the stream; each must be rejected
 
 [dos]
-proofs = 1000
+proofs = 100
 item_factor = 10     # an input may take at most item_factor · T_V (verify_s where T_V is not enforced)
-total_s = 1800       # the whole column's budget; a breach is the entry's failure (RF-M1)
+total_s = 180        # the whole column's budget; a breach is the entry's failure (RF-M1)
 
 [caps]
 proof_cap = 1048576     # |π| ≤ 2^20 (checked by acc; V4-13)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
-verify_s = 60           # one acc check
-setup_s = 3600
-build_s = 3600
+verify_s = 10           # one acc check
+setup_s = 300           # `prover setup`
+build_s = 300           # the prover's build
 
 [memory]          # cgroup caps (13 GB for prover and service together, V4-13)
 prover = "11G"

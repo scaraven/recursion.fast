@@ -22,10 +22,10 @@ class ServiceError(RuntimeError):
 
 class Service:
     """One `rf-oracle` process. `wrap` is the command prefix that applies the memory cap
-    (`sandbox.memcap`); `log` the liveness log path (liveness mode)."""
+    (`sandbox.memcap`)."""
 
-    def __init__(self, binary, sock_dir, log=None, wrap=(), stderr_path=None):
-        self.binary, self.sock_dir, self.log, self.wrap = binary, sock_dir, log, list(wrap)
+    def __init__(self, binary, sock_dir, wrap=(), stderr_path=None):
+        self.binary, self.sock_dir, self.wrap = binary, sock_dir, list(wrap)
         self.stderr_path = stderr_path or os.path.join(sock_dir + ".service.log")
         self.proc, self.vk, self.info = None, None, {}
 
@@ -35,7 +35,7 @@ class Service:
 
     def start(self, timeout=600):
         os.makedirs(self.sock_dir, exist_ok=False)
-        cmd = self.wrap + [self.binary, "--socket", SOCKET_NAME] + (["--log", self.log] if self.log else [])
+        cmd = self.wrap + [self.binary, "--socket", SOCKET_NAME]
         self._err = open(self.stderr_path, "ab")
         # the socket is bound relative to the service's cwd: Unix socket paths are capped at 108 bytes
         self.proc = subprocess.Popen(cmd, cwd=self.sock_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

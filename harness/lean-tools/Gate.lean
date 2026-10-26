@@ -40,10 +40,10 @@ It rejects (exit code 1) if:
    equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
    others; these are reported;
 4. with `--computable N`, a **badge-path field** of `N` has no compiled code (A7-M2, S5-A9;
-   v3: V3-S2R-A3; v4: unchanged). The v4 badge path executes the compiled `acc` (the field `V`,
-   run on the signed trace), the compiled prover `P` (the field is kept on the badge path as in v3)
-   and the compiled contract interpreter on the extractor program `ext` (liveness), and nothing
-   else of the submission.
+   v3: V3-S2R-A3; v4: unchanged). The v4 badge executes the compiled `acc` (the field `V`, run on
+   the signed trace) and nothing else of the submission; `P` (kept as in v3) and `ext` (run by the
+   per-entry liveness check until V4-A9 removed it) are still required to be compiled, a rule
+   whose relaxation to `V` alone is an open question of V4-A9.
    `badgeFields`: `Submission`: `V`, `P`, `ext`. If `N` itself has compiled code, every field has.
    Otherwise `N` is unfolded (`whnf`, all transparency) to its constructor, and each badge-path
    field term is **compiled in this process** as an auxiliary definition; it passes iff the
@@ -221,11 +221,11 @@ def closure (env : Environment) (root : Name) : NameSet :=
 
 open Meta
 
-/-- The computational fields the **badge path executes**, per contract structure (v4, as v3's
+/-- The computational fields **rule 4 requires compiled**, per contract structure (v4, as v3's
 V3-S2R-A3): the verifier `V` (the badge `verify` is the compiled `Submission.acc`, which runs `V`
-on the signed trace), the prover `P`, and the extractor program `ext` (run by the compiled contract
-interpreter in the liveness check). Everything else (`E`, `ε`, `δ`, `qV`, `fuel`) is
-specification data. -/
+on the signed trace), the prover `P`, and the extractor program `ext` (the last two no longer run
+by any badge since V4-A9 removed the liveness check). Everything else (`E`, `ε`, `δ`, `qV`,
+`fuel`) is specification data. -/
 def badgeFields : List (Name × List Name) :=
   [(`RecursionFast.Submission, [`V, `P, `ext])]
 

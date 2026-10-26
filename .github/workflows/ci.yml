@@ -2,7 +2,11 @@
 # the line budget, the axiom audit, the source rule and gate fixtures, the service's tests, the
 # sandbox tests, and the harness smoke end to end (BRIEF stage B; V4-A2: the certificate side and the
 # benchmark side are separate jobs). A push or a pull request to this repository triggers it; it
-# runs no submission.
+# runs no submission. Every check whose subject is organiser code runs here and only here, once per
+# harness commit, never in an evaluation (V4-A9): the contract's `acc` before the entry's `V` (the
+# organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
+# template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
+# steps' timeouts nested inside that (V4-A9; the measured step times are in design §3.4).
 name: ci
 on:
   push:
@@ -22,7 +26,7 @@ defaults:
 jobs:
   lean:
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 30
     steps:
       - name: machine
         run: lscpu
@@ -38,37 +42,39 @@ jobs:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
       - name: Mathlib cache
-        run: timeout 3600 lake exe cache get
+        run: timeout 300 lake exe cache get
       - name: organiser setup (build, harness tools, allowlist, manifest, external libraries, service)
         run: |
           mkdir -p logs
-          timeout 14400 harness/org-setup.sh "$PWD"
+          timeout 600 harness/org-setup.sh "$PWD"
       - name: line budget (trusted contract <= 500 code lines)
         run: |
           python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/*.lean | tee logs/loc.log
           code=$(awk '/^TOTAL/ {print $5}' logs/loc.log); echo "trusted code lines: $code"; [ "$code" -le 500 ]
       - name: axiom audit
-        run: timeout 3600 lake env harness/lean-tools/.lake/build/bin/axiomaudit
+        run: timeout 60 lake env harness/lean-tools/.lake/build/bin/axiomaudit
       - name: hygiene and source rule fixtures
         run: |
           scripts/check-hygiene.sh
           tests/source-rule/check.sh
       - name: source rule token sweep
         run: |
-          timeout 1800 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
+          timeout 60 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
           python3 -I tests/source-rule/sweep.py scripts/source-rule.py logs/tokens.txt tests/source-rule/reviewed-tokens.txt
       - name: gate fixtures
-        run: timeout 3600 tests/gate/check.sh
+        run: timeout 90 tests/gate/check.sh
       - name: the service's signatures against the compiled Lean reference signer (V4-A4)
         run: |
-          (cd service && timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
-          timeout 3600 lake -f scripts/speed/lakefile.toml build signer
-          timeout 1800 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
-      - name: acc on a 2^16-query signed trace, timed by the badge (C-m3)
-        run: timeout 3600 python3 tests/harness/accprobe/run.py | tail -12 | tee logs/accprobe.log
+          (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
+          timeout 120 lake -f scripts/speed/lakefile.toml build signer extract
+          timeout 60 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
+      - name: the compiled extractor interpreter on the witness-sending entry (V4-A9; liveness left the evaluation)
+        run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
+      - name: acc on a 2^16-query signed trace, timed by the badge (C-m3), and the organiser's canaries (V4-A9)
+        run: timeout 120 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
       - name: chain checker (T_triv,best) at the season shape
         run: |
-          python3 -I - <<'PY' | tee logs/chaincheck.log
+          timeout 60 python3 -I - <<'PY' | tee logs/chaincheck.log
           import json, os, subprocess, sys
           sys.path.insert(0, "harness")
           from rfh import digest
@@ -86,7 +92,7 @@ jobs:
 
   service:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: machine
         run: lscpu
@@ -95,19 +101,19 @@ jobs:
       - name: build and unit tests (toolchain pinned by service/rust-toolchain.toml)
         working-directory: service
         run: |
-          timeout 1800 cargo build --release
-          timeout 1800 cargo build --release --features insecure-test-keys --target-dir target/test-keys
-          timeout 600 cargo test --release
-      - name: service tests (hashlib, the reference WOTS signer, caps, liveness log, exhaustion)
-        run: timeout 1800 python3 tests/service/test_service.py
+          timeout 300 cargo build --release
+          timeout 300 cargo build --release --features insecure-test-keys --target-dir target/test-keys
+          timeout 120 cargo test --release
+      - name: service tests (hashlib, the reference WOTS signer, caps, exhaustion)
+        run: timeout 300 python3 tests/service/test_service.py
       - name: service measurements on this runner
-        run: timeout 900 tests/service/measure.sh 4 | tee service-measure.log
+        run: timeout 300 tests/service/measure.sh 4 | tee service-measure.log
       - uses: actions/upload-artifact@v4
         with: { name: service-measure, path: service-measure.log }
 
   harness:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
       - name: machine
         run: lscpu
@@ -121,24 +127,24 @@ jobs:
         run: harness/ci/runner-setup.sh
       - name: service
         working-directory: service
-        run: timeout 1800 cargo build --release
+        run: timeout 300 cargo build --release
       - name: sandbox tests (hostile prover)
-        run: timeout 1800 python3 tests/harness/test_sandbox.py
+        run: timeout 300 python3 tests/harness/test_sandbox.py
       - name: T_V enforcement with the cap's statistic (RB-M1)
-        run: timeout 300 python3 tests/harness/test_tv.py
-      - name: the aggregation requires every planned part, and the DoS column is bounded (RF-M1)
+        run: timeout 60 python3 tests/harness/test_tv.py
+      - name: the aggregation requires every planned part (two jobs, single runs), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
         run: |
-          timeout 300 python3 tests/harness/test_aggregate.py
-          timeout 300 python3 tests/harness/test_dos.py
+          timeout 60 python3 tests/harness/test_aggregate.py
+          timeout 60 python3 tests/harness/test_dos.py
       - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
-        run: timeout 3600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
+        run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
   smoke:
     # the end-to-end smoke with the real badge: the library's witness-sending entry, certified by the
     # certificate job, benchmarked by the toy assembly prover
     needs: [lean, harness]
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 30
     steps:
       - name: machine
         run: lscpu
@@ -158,12 +164,12 @@ jobs:
         with:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
-      - run: timeout 3600 lake exe cache get
-      - run: mkdir -p logs && timeout 14400 harness/org-setup.sh "$PWD"
+      - run: timeout 300 lake exe cache get
+      - run: mkdir -p logs && timeout 600 harness/org-setup.sh "$PWD"
       - name: comparator and lean4export (pinned in scripts/tools.env)
-        run: timeout 3600 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
-      - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, broken provers, provisional, source rule)
-        run: timeout 7200 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
+        run: timeout 120 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
+      - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, organiser canaries, broken provers, provisional, source rule)
+        run: timeout 540 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: smoke, path: "${{ runner.temp }}/smoke/*.json" }

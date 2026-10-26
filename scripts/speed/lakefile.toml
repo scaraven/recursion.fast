@@ -1,6 +1,7 @@
-# Speed probe of the badge path (not a default target, not trusted). Run from the repository root:
+# Speed probe of the badge path, the Lean signer and the extractor test (not default targets, not
+# trusted). Run from the repository root:
 #   lake -f scripts/speed/lakefile.toml build speed && .lake/build/bin/speed
-# It is the main lakefile's library plus one executable, kept in its own configuration file so
+# It is the main lakefile's library plus these executables, kept in its own configuration file so
 # that the repository's lakefile is unchanged (stage A may adjust only its [[lean_lib]] blocks).
 name = "RecursionFast"
 defaultTargets = ["speed"]
@@ -48,3 +49,8 @@ root = "Speed"
 name = "signer"
 srcDir = "scripts/speed"
 root = "Signer"
+
+[[lean_exe]]
+name = "extract"
+srcDir = "scripts/speed"
+root = "Extract"

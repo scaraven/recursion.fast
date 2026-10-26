@@ -11,7 +11,7 @@ use blake2s::{Digest, Hasher};
 /// Domain tag of the trace digest (V4-16, `T`).
 pub const TAG_T: u8 = 0x54;
 
-/// One trace item as the trace digest and the liveness log encode it: `enc64 |q| ‖ q ‖ a`.
+/// One trace item as the trace digest encodes it: `enc64 |q| ‖ q ‖ a`.
 pub fn push_item(out: &mut Vec<u8>, q: &[u8], a: &Digest) {
     out.extend_from_slice(&(q.len() as u64).to_le_bytes());
     out.extend_from_slice(q);

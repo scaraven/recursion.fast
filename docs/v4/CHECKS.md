@@ -11,14 +11,14 @@ decisions of the earlier proposals that v4 settles. Ids as in the sources.
 |---|---|---|
 | C1 | knowledge is a bounded program | kept verbatim (`XProg`, `Computes`, `B t`); the node decoder's fit to the budget remains an estimate (F-D1) |
 | C2 | the certificate says what it does not say | the trust statement names the PRF assumption and every paper step (design §2.7); no property rests on review |
-| C3 | KS satisfiable by a Merkle/BCS verifier | the potential form is v3's, and so are its controls (`Controls/Potential.lean`: `twoLucky`, `Vcol`, `V24`) |
+| C3 | KS satisfiable by a Merkle/BCS verifier | the potential form is v3's, and so are its controls (`Controls/Potential.lean`: `twoLucky`, `Vcol`, `V24`), re-instanced for `errorCap = 2^-120` (V4-A9, which also admits GF(2^128) rounds, FB-9) |
 | C4 | extraction from what the log holds | the clause no longer instantiates the oracle; a bounded node still forces a decoding extractor, paper (#7) |
 | C5 | caps admit an honest recursive entry, sized first | **not met**: no sizing redone for v4 (design §4.2); the certified baseline's measured frontier stops far below the season shape (design §3.6) |
 | C6 | succinctness is not wall time | partly: the wall time of one `acc` check pinned to one core (an upper bound on its CPU time, not the unpinned wall time v3 found gameable), against the organiser's chain checker timed the same way in the same job (V4-12); the SIMD caveat stays, and binary fields are disadvantaged (Q11) |
 | C7 | the score prices recursion | `S = T_tree + K·t_link` |
-| C8 | completeness with error; the deployment checked concretely | kept; every scored proof checked with `acc`; liveness on the service's authentic log |
+| C8 | completeness with error; the deployment checked concretely | kept (`δ ≤ 2^-40` since V4-A9); every scored proof, the tree's root and every stream output, checked with `acc`; no per-entry extractor liveness since V4-A9 (`Computes` is kernel; the core CI runs the compiled interpreter on the library's entry) |
 | C9 | the badge path linear and strict | `runSeq` linear, strict `decodeWit`, `acc` ordered for rejection, word-level twins (`acc` on a `2^16`-query trace 135–155 ms); crafted-input DoS open (design §4.3) |
-| C10 | the toolchain is part of the rules | certificate job separated; Lean kernel only on CI (nanoda above 16 GB); the image's `gcc`/`as` versions are part of the rules; the compile traps listed (design §3.7); build caps from a runner run still to be set |
+| C10 | the toolchain is part of the rules | certificate job separated; Lean kernel only on CI (nanoda above 16 GB); the image's `gcc`/`as` versions are part of the rules; the compile traps listed (design §3.7); the 30-minute caps of V4-A9 (build and kernel 10 min each on a 4-vCPU runner) are a rule, not yet run against a real entry on a runner |
 | C11 | the design space stays open | no menu, no review of `V`, no manual step; the assembly rule fixes the prover's delivery format, not its proof system |
 | C12 | the trusted base stays readable | 355 of 500 code lines, core and Mathlib only, controls for every definition, three axioms |
 | C13 | a reference machine before any cap is valued | the GitHub-hosted runner, measured (`T_triv,best` 1.78 s); `T_V` and the service self-calibrate per job; `K` and `R` provisional |
@@ -30,7 +30,7 @@ decisions of the earlier proposals that v4 settles. Ids as in the sources.
 | # | Criterion | v4 |
 |---|---|---|
 | 1 | no narrowing of the design space | met in the authors' reading: the rule restricts how the oracle is deployed and what `V` reads (a signed trace), not which proof system; not put to the user |
-| 2 | no large human review surface | the recognition rule and the review of `V` are deleted; the contract (355 code lines) and the runtime (3,559, of which the service 963) are read once |
+| 2 | no large human review surface | the recognition rule and the review of `V` are deleted; the contract (355 code lines) and the runtime (3,677 after V4-A9, of which the service 953) are read once |
 | 3 | no manual intervention | the harness decides; approving a first-time contributor's workflow is compute admission; unlike D4 there is no key release and no designated-verifier window |
 | 4 | survives the kernel attacks and the post-hoc one | the backdoor is ported and certified in the model (kernel, `Controls/Backdoor.lean`, `backdoor`; `magic_needs_trigger`: its magic proof is accepted only on a signed trace answering the empty query with the public hash) and stopped by the PRF hybrid (paper); the post-hoc attack needs `PRF_k` wires nobody outside the service can make; its signed-trace variant is uncertifiable (design §2.2) |
 | 5 | a kernel certificate within the trusted budget | yes: 355 of 500 code lines |
@@ -55,5 +55,5 @@ decisions of the earlier proposals that v4 settles. Ids as in the sources.
 | CM-1, CM-4, CM-6, CM-7 | adopted |
 | CM-2 | `K = 20` for season 1, provisional |
 | CM-3 | modified: `r = 6`, `n = 2^18` instead of `r = 4`, `n = 2^20` (16 GB) |
-| CM-5 | `M = 512`, `n_f = 2^16` |
+| CM-5 | `M = 512`, `n_f = 2^16`; `M = 256` since V4-A9 |
 | CM-8 | `R = 10`, provisional (Q11); R3 not run |

@@ -1,17 +1,16 @@
 //! `rf-oracle`: the oracle and signing service of one timed run (TRUSTED RUNTIME; BRIEF §4.3,
 //! wire format `PROTOCOL.md`).
 //!
-//!   rf-oracle --socket PATH [--log FILE] [--threads N]
+//!   rf-oracle --socket PATH [--threads N]
 //!
 //! At start it draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed from
 //! `getrandom`, generates the `2^16` one-time keys and the Merkle tree (`vk` its root), binds the
 //! Unix socket PATH, and prints `vk <hex>`, `keygen_ms <ms>` and `ready` on stdout. It serves one
 //! thread per connection: `QUERY` (a batch of byte strings → `PRF_k` of each, keyed BLAKE2s-256),
 //! `SIGN` (a batch of byte strings → their answers, computed here, and a signature on the trace
-//! digest with the next one-time key; refused after `2^16`), `VK`. With `--log FILE` (liveness
-//! mode) every query it evaluates and its answer is appended to FILE as `enc64 |q| ‖ q ‖ a`.
-//! It exits when its stdin reaches end of file (the runner closes it): it then takes the key lock,
-//! overwrites the keys, flushes the log, prints `stats …`, removes the socket and exits 0. The keys
+//! digest with the next one-time key; refused after `2^16`), `VK`. It exits when its stdin reaches
+//! end of file (the runner closes it): it then takes the key lock, overwrites the keys, prints
+//! `stats …`, removes the socket and exits 0. The keys
 //! are never written anywhere; the process is made non-dumpable, so a process of the same uid
 //! cannot ptrace it or read its memory through /proc.
 //!
@@ -26,11 +25,11 @@ use rf_oracle::proto::*;
 use rf_oracle::wots::Signer;
 use rf_oracle::trace_digest;
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::RwLock;
 use std::time::Instant;
 
 extern "C" {
@@ -60,7 +59,6 @@ struct Keys {
 
 struct State {
     keys: RwLock<Option<Keys>>,
-    log: Option<Mutex<BufWriter<File>>>,
     conns: AtomicUsize,
     requests: AtomicU64,
     queries: AtomicU64,
@@ -185,16 +183,6 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
                 None
             };
             drop(guard);
-            if let Some(log) = &st.log {
-                // straight into the buffered writer, under its lock: no copy of the request (RF-m20)
-                let mut l = log.lock().unwrap();
-                for (q, a) in qs.iter().zip(ans.iter()) {
-                    l.write_all(&(q.len() as u64).to_le_bytes())?;
-                    l.write_all(q)?;
-                    l.write_all(a)?;
-                }
-                l.flush()?; // the liveness check reads the log before the service exits
-            }
             let n = 32 * qs.len() + if sig.is_some() { rf_oracle::wots::Sig::BYTES } else { 0 };
             resp[..16].copy_from_slice(&header(ST_OK, count, n as u64));
             if let Some(s) = &sig {
@@ -209,19 +197,12 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
     }
 }
 
-/// Wipe the keys (after in-flight requests finish), flush the log, report, remove the socket, exit.
+/// Wipe the keys (after in-flight requests finish), report, remove the socket, exit.
 fn shutdown(st: &State) -> ! {
     let mut g = st.keys.write().unwrap_or_else(|e| e.into_inner());
     if let Some(mut k) = g.take() {
         k.prf.wipe();
         k.signer.wipe();
-    }
-    let mut code = 0;
-    if let Some(log) = &st.log {
-        let mut l = log.lock().unwrap_or_else(|e| e.into_inner());
-        if l.flush().and_then(|_| l.get_ref().sync_all()).is_err() {
-            code = 1;
-        }
     }
     let _ = std::fs::remove_file(&st.socket);
     println!(
@@ -233,24 +214,23 @@ fn shutdown(st: &State) -> ! {
         REFUSALS.load(Ordering::SeqCst)
     );
     let _ = io::stdout().flush();
-    std::process::exit(code)
+    std::process::exit(0)
 }
 
 fn usage() -> ! {
-    eprintln!("usage: rf-oracle --socket PATH [--log FILE] [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX (test builds only)]");
+    eprintln!("usage: rf-oracle --socket PATH [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX (test builds only)]");
     std::process::exit(2)
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut socket, mut log, mut threads) = (None, None, None);
+    let (mut socket, mut threads) = (None, None);
     #[allow(unused_mut)]
     let mut test: Option<([u8; 32], [u8; 32])> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--socket" if i + 1 < args.len() => socket = Some(args[i + 1].clone()),
-            "--log" if i + 1 < args.len() => log = Some(args[i + 1].clone()),
             "--threads" if i + 1 < args.len() => threads = args[i + 1].parse::<usize>().ok(),
             #[cfg(feature = "insecure-test-keys")]
             "--insecure-test-keys" if i + 2 < args.len() => {
@@ -286,13 +266,6 @@ fn main() {
     let prf = Keyed::new(&prf_key);
     blake2s::wipe(&mut prf_key);
     blake2s::wipe(&mut seed);
-    let log = log.map(|p| {
-        let f = File::options().write(true).create_new(true).open(&p).unwrap_or_else(|e| {
-            eprintln!("rf-oracle: cannot create the log {p}: {e}");
-            std::process::exit(1)
-        });
-        Mutex::new(BufWriter::with_capacity(1 << 20, f))
-    });
     let listener = UnixListener::bind(&socket).unwrap_or_else(|e| {
         eprintln!("rf-oracle: cannot bind {socket}: {e}");
         std::process::exit(1)
@@ -301,7 +274,6 @@ fn main() {
     let vk = signer.vk();
     let st: &'static State = Box::leak(Box::new(State {
         keys: RwLock::new(Some(Keys { prf, signer })),
-        log,
         conns: AtomicUsize::new(0),
         requests: AtomicU64::new(0),
         queries: AtomicU64::new(0),

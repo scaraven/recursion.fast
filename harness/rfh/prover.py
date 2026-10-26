@@ -189,9 +189,11 @@ class Run:
         return status, dt, out.kept.decode(errors="replace")
 
 
-def request(run, kind, work, sock_dir, inputs, step_s, file_cap):
+def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None):
     """One timed `leaf` or `node` request in a fresh sandbox. `inputs`: name → bytes, written after
-    `ready`. Returns (status, seconds, proof bytes or None, log)."""
+    `ready`. `step_s` bounds the wait for `ready` and, again, the proving; `deadline` (a monotonic
+    time) bounds both too (the stream's cap). Returns (status, seconds, proof bytes or None, log)."""
+    cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
     sb = Sandbox([PROVER, kind, "/work"], run.binds(work, sock_dir), run.mem, env=run.env(sock_dir),
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     err = Drain(sb.proc.stderr)
@@ -219,7 +221,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap):
 
     status, dt, proof = "ok", None, None
     try:
-        if wait_line("ready", time.monotonic() + step_s) != "line":
+        if wait_line("ready", cap(time.monotonic() + step_s)) != "line":
             status = "no ready line"
         else:
             # RB-m11: the inputs are written to a staging directory outside the sandbox before the
@@ -237,10 +239,10 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap):
                 sb.proc.stdin.flush()
             except BrokenPipeError:
                 pass
-            r = wait_line("done", t0 + step_s)
+            r = wait_line("done", cap(t0 + step_s))
             if r == "eof":                        # the prover closed stdout: wait for its exit
                 try:
-                    sb.proc.wait(timeout=max(0.0, t0 + step_s - time.monotonic()))
+                    sb.proc.wait(timeout=max(0.0, cap(t0 + step_s) - time.monotonic()))
                 except subprocess.TimeoutExpired:
                     r = "timeout"
             dt = time.monotonic() - t0

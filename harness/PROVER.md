@@ -19,7 +19,8 @@ produces is checked by the compiled `acc` (`harness/FORMAT.md`); nothing it says
   `harness/tools/asm-compat.py IN.s OUT.s` (untrusted, a convenience) rewrites them; the
   committed toy prover went through it. CI assembles every committed `.s` file with the image's
   toolchain first (RF-M2).
-- Command, inside the build sandbox (V4-A6), in a directory holding only copies of the `.s` files:
+- Command, inside the build sandbox (V4-A6), in a directory holding only copies of the `.s` files,
+  within `build_s` (5 min in season 1):
 
   ```
   gcc -static -O2 -pthread /build/*.s -o /build/prover -lm
@@ -60,24 +61,22 @@ characters plus an optional newline; `vk.hex` is the service's public key.
 ### `prover setup /setup` (optional, untimed)
 
 Runs once per evaluation, before any instance or service exists, with `/setup` writable and no
-socket. It may write tables, keys or code there (up to `setup_s`, 1 h). A prover with nothing to
-set up exits 0.
+socket. It may write tables, keys or code there (up to `setup_s`, 5 min in season 1). A prover
+with nothing to set up exits 0.
 
 ### `prover tree /work` (the T run, timed)
 
 Inputs: `leaves.json` = `{"n": N, "starts": ["HEX", …]}` with `2^r` starts (the runner's secret
-chain starts, fresh per evaluation), `vk.hex`, and the service. Outputs:
+chain starts, fresh per evaluation), `vk.hex`, and the service. Output:
 
-- `proofs/L<i>.bin` for every leaf `i = 0 … 2^r − 1`: a signed proof of
-  `leafStmt (chainEnd s_i n) n`;
-- `proofs/N<l>_<j>.bin` for every inner node, level `l = 1 … r − 1` (level 1 joins leaves),
-  `j = 0 … 2^(r−l) − 1`: a signed proof of `treeLevel^l(leaves)[j]` (node `j` of level `l` joins
-  nodes `2j` and `2j + 1` of level `l − 1`);
-- `root.bin`: a signed proof of the tree root `treeRoot`.
+- `root.bin`: a signed proof of the tree root `treeRoot` (adjacent leaf statements
+  `leafStmt (chainEnd s_i n) n` joined by `nodeStmt`, level by level).
 
-The clock runs from the `exec` of the prover to its exit (`tree_s` cap). Every file must exist and
-be a regular file; the runner checks `root.bin`, 16 random other proofs and the canaries of the
-first 8 leaf and node proofs, all with `acc` under this run's `vk`.
+Only `root.bin` is required and read (V4-A9): other files the prover writes, such as inner proofs,
+are ignored. The clock runs from the `exec` of the prover to its exit (`tree_s` cap, 10 min in
+season 1). `root.bin` must be a regular file; the runner checks it with `acc` under this run's
+`vk`, within `T_V`, and checks that it is rejected for the root's statement with one bit flipped
+(the statement canary).
 
 ### `prover leaf /work` and `prover node /work` (the stream, timed per request)
 
@@ -89,8 +88,8 @@ A fresh process for every request (cost model §3.3, CM-6). The handshake:
    clock**, renames them into `/work` (constant time, whatever their size; RB-m11) and writes the
    line **`go`** on the prover's stdin.
 3. The prover writes `/work/proof.bin` and either prints the line **`done`** or exits. The clock
-   stops at the first of the two (`step_s` cap). The runner then kills the request's sandbox and
-   reads `proof.bin`.
+   stops at the first of the two (`step_s` cap, 60 s in season 1; the wait for `ready` has the
+   same cap). The runner then kills the request's sandbox and reads `proof.bin`.
 
 Inputs: `leaf`: `leaf.json` = `{"n": N, "start": "HEX"}`. `node`: `child1.stmt`, `child1.bin`
 (the running statement and its signed proof) and `child2.stmt`, `child2.bin` (the new leaf's
@@ -98,7 +97,11 @@ statement and the signed proof the previous `leaf` request produced). The output
 signed proof of `nodeStmt child1 child2`.
 
 One request at a time; a start is released only after the previous output is written; nothing
-survives a request except the proofs the runner copies.
+survives a request except the proofs the runner copies. The whole stream, every request and every
+check from the first request on, runs within `stream_s` (15 min in season 1, `M = 256`): a link
+that would end after it fails the run. Every output is checked with `acc` within `T_V`; the first
+two leaf and two node outputs are also checked against their statement with one bit flipped and
+against their sibling's statement, and must be rejected.
 
 ## 4. The oracle
 
@@ -112,10 +115,14 @@ queries. The service's measured throughput on the job's machine is published in 
 ## 5. What fails a run
 
 A non-zero exit of `tree`; a missing, non-regular or over-cap output; any output `acc` rejects; a
-canary `acc` accepts; a check above `T_V` (season shape; a check above the cap is measured again,
-best of `checker_runs`, like the cap itself, RB-M1) or `verify_s`; a timeout; the service dying
-during the run; a stream link that is not accepted. The first failure ends the evaluation
-(`harness/run-benchmark.py`). The reason in the result names the cause: the prover's output (its
-first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's refusals of this
-run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13), and a kill by
-the memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).
+statement canary `acc` accepts; a check above `T_V` (season shape; a check above the cap is measured
+again, best of `checker_runs`, like the cap itself, RB-M1) or `verify_s` (10 s); a timeout of any
+cap (`build_s`, `setup_s`, `tree_s`, `step_s`, `stream_s`; `harness/season.toml`); the service dying
+during the run; a stream link that is not accepted; in the DoS column, a mutated or random input
+that `acc` takes more than 10 × `T_V` to decide, the column above its 180 s, or a crash of the
+checker (an accepted DoS input is recorded, not failed). Every GitHub job of an evaluation ends
+within 30 minutes, and these caps are nested inside it (V4-A9). The first failure ends the
+evaluation (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's
+output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's
+refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13),
+and a kill by the memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).

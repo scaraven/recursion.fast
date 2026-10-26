@@ -192,6 +192,27 @@ All four majors and the minors are adopted; these override §3–§4 where they 
 | V4-A7 | **Controls and Library** (stage A): the "no certified `V` trusts a signature" impossibility as a Library theorem/control (`sigTrust_kstate_iff` shape); the node-clause positive control built with the Lean reference signer, proved symbolically; negatives: a child signed under another key, a changed answer, `|ots| ≠ 133`, a malformed trace length in `decodeWit`; the badge path uses a word-level BLAKE2s twin proved equal to the contract's. | C-m1, C-m3, C-m11, C-m12 |
 | V4-A8 | **Design document must state**: the impossibility of C-m1 as the answer to O-25 §6.7's rule; that a published `vk` certifies relative to the organiser's key management (bound into the attested result); that `E` without `vk` restricts nothing (a design may put `vk` in `π`); that no certified entry can yet run the season-1 shape (the ranked path is exercised end to end at the smoke shape only); that the composition's split of the "forgery" outcome into EUF-CMA forgery or collision is paper; the in-circuit trace-hash cost (about 1.6× a public-hash Merkle step per 64-byte preimage, on top of the signature). | C-m6, C-m9, C-m10, §2 item 4, unsettled 4 |
 
+## 5b. Amendment V4-A9: the trim (the user's decisions of 2026-10-26)
+
+The user cut every check and step that serves neither goal: (a) agents submit valid, sound
+verifier designs; (b) fast hash-chain proving with honestly priced recursion and minimal cheating.
+These override §3–§4, V4-A1 … A8 and the stage B harness where they differ; the design's §4.4 says
+what each remaining rule is for. Implemented in stage D-trim (`docs/v4/stages/D-trim-RESULT.md`).
+
+| Item | Decision | Reason |
+|---|---|---|
+| 1 | **Every GitHub job at most 30 minutes**, the caps inside each nested below it: certificate job build 10 min, kernel 10 min, gate 2 min, badge 3 min; prover build 5 min, setup 5 min, tree run 10 min, stream 15 min (a hard deadline, checks included), one stream request 60 s, one `acc` check 10 s, DoS column 3 min. The organiser's setup (package tree, build, manifest, comparator, service) is cached per core commit by its own job, which never fetches the entry. The caps bind entries: their Lean must build and check within them on a 4-vCPU runner | a slow or hung entry must end as its REJECT with a reason, not as a killed job (a missing part, ERROR); a cache miss must never cost an entry's time; runners are not held for hours |
+| 2 | **One run of the tree and one of the stream; no repeats, no medians.** Two parallel benchmark jobs: (calibration, tree, DoS) and (calibration, stream) | records are decided by the paired comparison anyway |
+| 3 | **Stream `M = 512 → 256`** (`n_f = 2^16`) | the stream fits its cap; the escaped tail grows from about 4.7% to about 9.4% of the merges (`c ≈ 2^24 / (R · n_f) ≈ 25`) |
+| 4 | **No per-entry liveness** (the badge's `liveness`, the service's logging mode); the core CI runs the compiled extractor interpreter on the library's witness-sending entry | the extractor's correctness and cost are the kernel-checked `Computes` |
+| 5 | **Canaries**: the non-malleability canaries `pi±1` dropped; the canaries that never reach the entry's `V` (`file±1`, `trace-answer`, `trace-query`, `trace-extra`, `sig-ots`, `sig-idx`) move to the core CI; per entry only `stmt-bit` and `swapped-child`, on 2 proofs per kind | non-malleability is required by nothing and can reject a sound entry; the others test organiser code |
+| 6 | **DoS column: 100 inputs**; it fails only on time (an input above 10 × `T_V`, the column above its cap) and on a crash of the checker; an accepted input is recorded. A crafted-input column (FB-5) is a follow-up | an accepted mutation of a true statement's proof is malleability (item 5); random inputs never found a slow input |
+| 7 | **Only the tree's root is read and checked**; inner proofs, if written, are ignored; the statement canaries run on the root and on stream outputs | the root's certificate covers its children; the stream prices recursion |
+| 8 | **`completenessCap = 2^-128 → 2^-40`** | a completeness failure only costs its entrant a run: about 640 proofs per evaluation at `2^-40` each fail a run with probability about `2^-30.7` |
+| 9 | **One Lean build** instead of the byte-identical rebuild: the comparator, the gate and the badge use the build the kernel's exports were made from | the binding (the badge runs code compiled from exactly the checked modules) holds without a second build; it saved 173 s on the baseline |
+| 10 | **`errorCap = 2^-128 → 2^-120`** per fresh query; `logCap = 2^96` unchanged | admits GF(2^128) designs such as Flock (a degree-2 sumcheck round costs `2^-127`, the univariate-skip round `126/2^128 ≈ 2^-121`; FB-9), and keeps the whole-run bound negligible (about `2^-90` at `2^30` queries) |
+| 11 | **The submission pipeline and the organiser's CI are separate**: every check whose subject is organiser code (`acc` before `V`, the file parser, the service, the sandbox, the badge template, the compiled extractor interpreter, the harness) runs only in the core repository's `ci.yml`; an evaluation runs only what is about the entry, plus the environment it runs in (the package tree and its manifest check, the comparator, the service, `T_triv,best`) | each check runs once per harness commit where its subject changes, not once per entry |
+
 ## 6. Conventions for every agent
 
 - Work only in `/home/devops/Verified-zkEVM/recursion.fast-v4` (branch `v4/srom-rules`); never in

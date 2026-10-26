@@ -6,8 +6,11 @@
 Renders the badge (`harness/badge/Common.lean.in`, `Verify.lean.in`) around `AccProbeSub`, builds it
 as its own Lake package in `.lake/rf/accprobe` (requiring the organiser by path), gets the service to sign the probe's
 2^16 queries (100 bytes each), writes the signed-proof file, and runs `verify` pinned to one core
-several times; also the same file with one answer changed (rejected at `SigOk`) and with the
-signature's first chain value changed.
+several times. It is also the core CI's test of the organiser's canaries on a non-empty trace
+(V4-A9, `tests/harness/canaries.py`): the probe's verifier accepts once it has asked its queries, so
+every mutation that `acc` rejects (the file one byte longer or shorter, one answer or one query
+changed, an entry appended, a chain value or the index of the signature changed) is rejected by
+organiser code alone; each must be rejected, and the file itself accepted (exit 1 otherwise).
 """
 import json
 import os
@@ -19,7 +22,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh.service import Client, Service  # noqa: E402
-from rfh.signed import Signed, from_wire  # noqa: E402
+from rfh.signed import from_wire  # noqa: E402
+
+sys.path.insert(0, os.path.join(ROOT, "tests", "harness"))
+from canaries import organiser_canaries  # noqa: E402
 
 D = os.path.join(ROOT, ".lake", "rf", "accprobe")
 
@@ -56,23 +62,29 @@ def main():
     svc.stop()
     good = os.path.join(D, "good.bin")
     open(good, "wb").write(s.encode())
-    bad_answer = Signed(s.pi, [(qs[0], bytes([s.trace[0][1][0] ^ 1]) + s.trace[0][1][1:])] + s.trace[1:], s.idx, s.ots, s.path)
-    open(os.path.join(D, "bad-answer.bin"), "wb").write(bad_answer.encode())
-    bad_sig = Signed(s.pi, s.trace, s.idx, [bytes([s.ots[0][0] ^ 1]) + s.ots[0][1:]] + s.ots[1:], s.path)
-    open(os.path.join(D, "bad-sig.bin"), "wb").write(bad_sig.encode())
+    cases = [("good", "good.bin", "accept")] * 5
+    for name, data in organiser_canaries(s.encode()):
+        open(os.path.join(D, f"{name}.bin"), "wb").write(data)
+        cases.append((name, f"{name}.bin", "reject"))
     stmt = bytes(32).hex()
     with open(os.path.join(D, "list.txt"), "w") as f:
-        for name in ["good.bin"] * 5 + ["bad-answer.bin"] * 2 + ["bad-sig.bin"] * 2:
-            f.write(f"{svc.vk.hex()} {stmt} {os.path.join(D, name)}\n")
+        for _, file, _ in cases:
+            f.write(f"{svc.vk.hex()} {stmt} {os.path.join(D, file)}\n")
     core = max(os.sched_getaffinity(0))
     out = subprocess.run(["taskset", "-c", str(core), exe, "--batch", os.path.join(D, "list.txt")], capture_output=True,
                          text=True, timeout=600).stdout.split("\n")
     size = os.path.getsize(good)
     print(f"file: {size} bytes, 2^16 queries of 100 bytes, pinned core {core}")
-    for name, line in zip(["good"] * 5 + ["changed answer"] * 2 + ["changed signature"] * 2, out):
-        r, ns = line.split()
-        print(f"{name:18} {r:7} {int(ns) / 1e6:9.2f} ms")
+    fails = 0
+    for (name, _, want), line in zip(cases, out + [""] * len(cases)):
+        w = line.split()
+        ok = len(w) == 2 and w[0] == want and w[1].isdigit()
+        fails += not ok
+        got = f"{w[0]:7} {int(w[1]) / 1e6:9.2f} ms" if ok or (len(w) == 2 and w[1].isdigit()) else repr(line)
+        print(f"{'ok  ' if ok else 'FAIL'} {name:14} {got} (must {want})")
+    print(f"{fails} failure(s)")
+    return 1 if fails else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

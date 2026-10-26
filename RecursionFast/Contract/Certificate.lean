@@ -103,8 +103,9 @@ structure Certificate (S : Submission) : Prop where
   complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ
   /-- The program computes the extractor within the fuel. -/
   computes : Computes S.ext S.E S.fuel
-  /-- The caps: both errors at most `2^-128`, at most `2^16` verifier queries, fuel within the
-  budget `B`, the program within `progCap` statements. -/
+  /-- The caps: the knowledge error at most `2^-120` per fresh query, the completeness error at
+  most `2^-40`, at most `2^16` verifier queries, fuel within the budget `B`, the program within
+  `progCap` statements. -/
   cap : S.ε ≤ errorCap ∧ S.δ ≤ completenessCap ∧ S.qV ≤ 2 ^ 16 ∧
     (∀ t, S.fuel t ≤ extractorBudget t) ∧ S.ext.body.size ≤ progCap
 

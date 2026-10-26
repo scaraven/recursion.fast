@@ -11,12 +11,11 @@ in `wots_ref.py`.
 2. `SIGN`: the answers, the signature byte for byte against `wots_ref` (from the fixed test seed),
    `SigOk` against `vk`, the index sequence, the empty trace;
 3. `VK` against the root of the full Merkle tree computed by `wots_ref` from the seed;
-4. the liveness log against the queries asked;
-5. malformed and over-cap requests are refused and close the connection;
-6. 32 concurrent connections, a 33rd refused; 8 concurrent signers get a permutation of indices;
+4. malformed and over-cap requests are refused and close the connection;
+5. 32 concurrent connections, a 33rd refused; 8 concurrent signers get a permutation of indices;
    32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
-7. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
-8. shutdown on stdin end of file: exit 0, socket removed, statistics printed.
+6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
+7. shutdown on stdin end of file: exit 0, socket removed, statistics printed.
 """
 import os
 import random
@@ -50,10 +49,10 @@ def check(cond, what):
         FAILS.append(what)
 
 
-def start(d, env_extra=None, test_keys=True, log=None, wrap=()):
+def start(d, env_extra=None, test_keys=True, wrap=()):
     """A service with fixed test keys (raw Popen: the runner's `Service` refuses test keys)."""
     os.makedirs(d)
-    cmd = list(wrap) + [BIN, "--socket", "oracle.sock"] + (["--log", log] if log else [])
+    cmd = list(wrap) + [BIN, "--socket", "oracle.sock"]
     if test_keys:
         cmd += ["--insecure-test-keys", PRF_KEY.hex(), SEED.hex()]
     env = dict(os.environ, **(env_extra or {}))
@@ -94,8 +93,7 @@ def main():
 
     for simd in ("avx2", "scalar"):
         env = {"RF_ORACLE_NO_SIMD": "1"} if simd == "scalar" else {}
-        log = os.path.join(tmp, f"log-{simd}.bin")
-        p, info, sock = start(os.path.join(tmp, f"svc-{simd}"), env, log=log)
+        p, info, sock = start(os.path.join(tmp, f"svc-{simd}"), env)
         check(info.get("simd") == simd or simd == "avx2", f"[{simd}] service reports simd={info.get('simd')}")
         check(bytes.fromhex(info["vk"]) == levels[16][0], f"[{simd}] vk equals the reference Merkle root")
         c = Client(sock)
@@ -122,17 +120,8 @@ def main():
         code, out = stop(p)
         check(code == 0 and "stats " in out, f"[{simd}] shutdown on stdin EOF: exit {code}, stats printed")
         check(not os.path.exists(sock), f"[{simd}] socket removed at exit")
-        # the liveness log: every evaluated query with its answer, in request order
-        data = open(log, "rb").read()
-        items, off = [], 0
-        while off < len(data):
-            n = struct.unpack("<Q", data[off:off + 8])[0]
-            items.append((data[off + 8:off + 8 + n], data[off + 8 + n:off + 40 + n]))
-            off += 40 + n
-        asked = msgs + msgs[:10] + [b"abc"] + msgs[:7] + [bytes(64)] * 9
-        check(items == [(q, W.H(q, key=PRF_KEY)) for q in asked], f"[{simd}] liveness log = {len(asked)} queries asked, with answers")
 
-    # 5. malformed and over-cap requests
+    # 4. malformed and over-cap requests
     p, info, sock = start(os.path.join(tmp, "svc-errors"))
     cases = [
         ("unknown op", struct.pack("<B3xIQ", 9, 0, 0), 1),
@@ -153,7 +142,7 @@ def main():
         closed = c.s.recv(1) == b""
         check(got == st and closed, f"refused: {what} (status {got}, {msg.decode(errors='replace')!r}), connection closed")
         c.close()
-    # 6. concurrency
+    # 5. concurrency
     errs = []
 
     def worker(t):
@@ -231,7 +220,7 @@ def main():
     else:
         print("skip the 2 GiB cgroup test: no systemd user scope here")
 
-    # 7. random keys, exhaustion; the runner's Service class
+    # 6. random keys, exhaustion; the runner's Service class
     s1 = Service(BIN, os.path.join(tmp, "rand1")).start()
     s2 = Service(BIN, os.path.join(tmp, "rand2")).start()
     a1, a2 = Client(s1.socket_path).query([b"x"]), Client(s2.socket_path).query([b"x"])

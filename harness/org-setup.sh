@@ -14,7 +14,9 @@
 #   5. build the service (`cargo build --release`).
 #
 #   harness/org-setup.sh ORG          (ORG: the organiser checkout, e.g. the repository root)
-# Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`.
+# Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`; the timeouts sum to 17 min, the
+# evaluation's `setup` job's bound for this script (V4-A9; measured on a runner with the package tree
+# cached: 237 s, CI run 39966237935).
 set -euo pipefail
 ORG=$(cd "${1:?usage: org-setup.sh ORG}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -29,14 +31,14 @@ TARGETS=${RF_ORG_TARGETS:-RecursionFast +${COMPPOLY//,/ +}}
 t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
 
 step "1 organiser build ($TARGETS)"
-(cd "$ORG" && timeout 7200 lake build $TARGETS) > "$LOG/build.log" 2>&1 || { tail -20 "$LOG/build.log"; exit 1; }
+(cd "$ORG" && timeout 300 lake build $TARGETS) > "$LOG/build.log" 2>&1 || { tail -20 "$LOG/build.log"; exit 1; }
 step "2 harness tools"
-(cd "$HERE/lean-tools" && timeout 1800 lake build gate axiomaudit chaincheck tokensweep) > "$LOG/tools.log" 2>&1 \
+(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit chaincheck tokensweep) > "$LOG/tools.log" 2>&1 \
   || { tail -20 "$LOG/tools.log"; exit 1; }
 step "3 allowlist and olean manifest"
-(cd "$ORG" && timeout 1800 lake env "$HERE/lean-tools/.lake/build/bin/gate" --closure "$ROOTS" "$ORG/.lake/rf/allowlist.txt") \
+(cd "$ORG" && timeout 90 lake env "$HERE/lean-tools/.lake/build/bin/gate" --closure "$ROOTS" "$ORG/.lake/rf/allowlist.txt") \
   > "$LOG/allowlist.log" 2>&1 || { cat "$LOG/allowlist.log"; exit 1; }
-timeout 1800 python3 -I "$ORG/scripts/olean-manifest.py" gen --org "$ORG" --closure "$ORG/.lake/rf/allowlist.txt" \
+timeout 90 python3 -I "$ORG/scripts/olean-manifest.py" gen --org "$ORG" --closure "$ORG/.lake/rf/allowlist.txt" \
   "$ORG/.lake/rf/manifest.sha256" > "$LOG/manifest.log" 2>&1 || { cat "$LOG/manifest.log"; exit 1; }
 tail -1 "$LOG/allowlist.log"; tail -1 "$LOG/manifest.log"
 step "4 compiled objects and external libraries for the badge executables"
@@ -59,8 +61,8 @@ m["packages"].insert(0, {"type": "path", "scope": "", "name": "RecursionFast", "
 m["name"], m["packagesDir"] = "rfextlibs", pk
 json.dump(m, open(os.path.join(x, "lake-manifest.json"), "w"), indent=1)
 EOF
-(cd "$X" && timeout 7200 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
+(cd "$X" && timeout 360 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
 rm -rf "$X"
 step "5 service"
-(cd "$ORG/service" && timeout 1800 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }
+(cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }
 step "done"

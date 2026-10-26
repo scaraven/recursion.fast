@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       pr: { description: "pull request number", required: true }
-      split: { description: "one job per repeat (needed for the season shape: 6 h per job)", type: boolean, default: true }
+      split: { description: "the tree and the stream in two parallel jobs (needed for the season shape: 30 min per job)", type: boolean, default: true }
 permissions: {}
 
 # Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
@@ -39,6 +39,7 @@ jobs:
   select:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'evaluate'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions: { contents: read, pull-requests: read }
     outputs:
       sha: ${{ steps.pr.outputs.sha }}
@@ -85,6 +86,7 @@ jobs:
     needs: [select, evaluate]
     if: always() && needs.select.result == 'success'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions: { pull-requests: write }
     steps:
       - name: machine

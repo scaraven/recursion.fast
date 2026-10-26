@@ -1,7 +1,9 @@
-"""The benchmark of one entry (TRUSTED RUNTIME): the T run, the stream, extractor liveness, the
-DoS column, the `T_V` calibration, the service calibration and the score (`docs/v4/BRIEF.md`
-V4-10 … V4-12, `docs/DESIGN-cost-incentive-model.md` §3). One service lifetime per timed run; every
-check of a run is made before its service exits; a service that dies aborts the run.
+"""The benchmark of one entry (TRUSTED RUNTIME): the T run, the stream, the DoS column, the `T_V`
+calibration, the service calibration and the score (`docs/v4/BRIEF.md` V4-10 … V4-12, V4-A9,
+`docs/DESIGN-cost-incentive-model.md` §3). One run of the tree and one of the stream, each with its
+own service lifetime; every check of a run is made before its service exits; a service that dies
+aborts the run. Every step the entry controls is capped by the season file, so an entry that is
+slow or hangs fails with the reason, inside its job's time limit (V4-A9).
 """
 import json
 import os
@@ -33,18 +35,13 @@ class Params:
     R: float
     r: int
     n: int
-    tree_repeats: int
     tree_s: float
-    samples: int
-    canaries_per_kind: int
     M: int
     n_f: int
-    stream_repeats: int
     step_s: float
     stream_s: float
     check_every: int
-    live_r: int
-    live_n: int
+    canaries_per_kind: int
     dos_proofs: int
     dos_item_factor: float
     dos_total_s: float
@@ -66,11 +63,10 @@ class Params:
         g = lambda sec, k: t[sec][k]  # noqa: E731 (a KeyError names the missing parameter)
         return Params(
             name=t["name"], K=float(t["K"]), R=float(t["R"]),
-            r=g("tree", "r"), n=g("tree", "n"), tree_repeats=g("tree", "repeats"), tree_s=g("tree", "tree_s"),
-            samples=g("tree", "samples"), canaries_per_kind=g("tree", "canaries_per_kind"),
-            M=g("stream", "M"), n_f=g("stream", "n_f"), stream_repeats=g("stream", "repeats"),
-            step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
-            live_r=g("liveness", "r"), live_n=g("liveness", "n"), dos_proofs=g("dos", "proofs"),
+            r=g("tree", "r"), n=g("tree", "n"), tree_s=g("tree", "tree_s"),
+            M=g("stream", "M"), n_f=g("stream", "n_f"), step_s=g("stream", "step_s"),
+            stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
+            canaries_per_kind=g("canaries", "per_kind"), dos_proofs=g("dos", "proofs"),
             dos_item_factor=float(g("dos", "item_factor")), dos_total_s=g("dos", "total_s"),
             proof_cap=g("caps", "proof_cap"), file_cap=g("caps", "file_cap"), verify_s=g("caps", "verify_s"),
             setup_s=g("caps", "setup_s"), build_s=g("caps", "build_s"),
@@ -80,13 +76,6 @@ class Params:
 
 def leaves_json(starts, n):
     return json.dumps({"n": n, "starts": [s.hex() for s in starts]}).encode()
-
-
-def tree_files(r):
-    """(output name, level, index) of every proof a tree run writes: leaves, inner nodes, root."""
-    out = [(f"proofs/L{i}.bin", 0, i) for i in range(1 << r)]
-    out += [(f"proofs/N{l}_{j}.bin", l, j) for l in range(1, r) for j in range(1 << (r - l))]
-    return out + [("root.bin", r, 0)]
 
 
 def machine():
@@ -110,10 +99,11 @@ class Bench:
         self.tv_cap_ns = None
         self.tv_seen = []                    # (what, best ns) of every T_V-capped check
         self.tv_remeasured = 0               # checks measured again because a sample was above the cap
+        self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
 
     # -- the service ---------------------------------------------------------------------------
-    def service(self, name, log=None):
-        svc = Service(self.service_bin, os.path.join(self.work, "svc", name), log=log,
+    def service(self, name):
+        svc = Service(self.service_bin, os.path.join(self.work, "svc", name),
                       wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
                       stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
@@ -145,15 +135,32 @@ class Bench:
             f.write(data)
         return rel
 
+    def left(self, what):
+        """Seconds left before the running cap (None without one); reaching it is the entry's failure."""
+        if self.deadline is None:
+            return None
+        t = self.deadline[0] - time.monotonic()
+        if t <= 0:
+            raise Fail(f"{what}: {self.deadline[1]}")
+        return t
+
+    def verify(self, items, what, warm=False):
+        """The badge on (vk, stmt, store-relative path) items, `verify_s` per check and 30 s to start,
+        within the running cap; a badge failure is the entry's."""
+        timeout = self.p.verify_s * (len(items) + warm) + 30
+        left = self.left(what)
+        try:
+            return self.badge.verify(items, self.store, timeout=timeout if left is None else min(timeout, left), warm=warm)
+        except BadgeError as e:
+            capped = left is not None and e.kind == "timeout" and left < timeout
+            raise Fail(f"{what}: {e}" + (f" ({self.deadline[1]})" if capped else ""))
+
     def check(self, items, what, tv=True):
         """Run `acc` on items (vk, stmt, store-relative path, label); every one must be accepted, and
         within the `T_V` cap if `tv`. `T_V` is enforced with the cap's own statistic (RB-M1): the cap
         is the best of `checker_runs` chain-checker runs over `R`, so a check above the cap is
         measured again, up to `checker_runs` times in all, and only its best time is compared."""
-        try:
-            res = self.badge.verify([(vk, c, rel) for vk, c, rel, _ in items], self.store, warm=tv)
-        except BadgeError as e:
-            raise Fail(f"{what}: {e}")
+        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], what, warm=tv)
         for (_, _, _, label), (ok, _) in zip(items, res):
             if not ok:
                 raise Fail(f"{what}: {label} rejected by acc")
@@ -165,10 +172,7 @@ class Bench:
             over = [k for k, ns in enumerate(best) if enforce and ns > self.tv_cap_ns]
             if not over:
                 break
-            try:
-                again = self.badge.verify([items[k][:3] for k in over], self.store, warm=True)
-            except BadgeError as e:
-                raise Fail(f"{what}: {e}")
+            again = self.verify([items[k][:3] for k in over], what, warm=True)
             for k, (ok, ns) in zip(over, again):
                 if not ok:
                     raise Fail(f"{what}: {items[k][3]} rejected by acc when measured again")
@@ -181,26 +185,20 @@ class Bench:
                            f"above T_V = {self.tv_cap_ns / 1e6:.3f} ms")
         return [(ok, ns) for (ok, _), ns in zip(res, best)]
 
-    def canary_check(self, vk, targets, prefix):
-        """Every canary of every target (store path, stmt, sibling stmt) must be rejected."""
-        items = []
-        for rel, stmt, sib in targets:
-            data = open(os.path.join(self.store, rel), "rb").read()
-            for name, c, b in canaries(data, stmt, sib):
-                items.append((vk, c, self.keep(f"{prefix}/canary/{rel.replace('/', '_')}.{name}", b), f"{rel} {name}"))
-        try:
-            res = self.badge.verify([(vk, c, r) for vk, c, r, _ in items], self.store)
-        except BadgeError as e:
-            raise Fail(f"canaries: {e}")
+    def canary_check(self, vk, targets, what):
+        """The statement canaries (C15) of every target (store path, stmt, sibling stmt): the accepted
+        file, checked against another statement, must be rejected."""
+        items = [(vk, c, rel, f"{rel} {name}") for rel, stmt, sib in targets for name, c in canaries(stmt, sib)]
+        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries")
         bad = [label for (_, _, _, label), (ok, _) in zip(items, res) if ok]
         if bad:
-            raise Fail(f"canaries accepted: {bad[:5]}")
+            raise Fail(f"{what}: canaries accepted (a proof accepted for another statement): {bad[:5]}")
         return len(items)
 
     # -- calibration -------------------------------------------------------------------------------
     def calibrate(self, inst_dir, starts, n, root):
         """`T_triv,best` (V4-12) from the chain checker on the tree's chains, pinned to one core, and the
-        service's calls/s and compressions/s (V4-A5, C-m8)."""
+        service's calls/s and compressions/s (V4-A5, C-m8; published, not enforced)."""
         runs = [self.badge.chaincheck(os.path.join(inst_dir, "leaves.json"), root) for _ in range(self.p.checker_runs)]
         best = min(runs)
         self.tv_cap_ns = best / self.p.R
@@ -213,7 +211,7 @@ class Bench:
             for threads in sorted({1, len(os.sched_getaffinity(0))}):
                 out = subprocess.run([self.bench_bin, "oracle.sock", "throughput", str(threads), "1024", "64",
                                       str(self.p.calib_s)], cwd=svc.sock_dir, capture_output=True, text=True,
-                                     timeout=600).stdout
+                                     timeout=60).stdout
                 kv = dict(x.split("=") for x in out.split())
                 # RB-m6: the probe is QUERY batches of 1,024 queries of 64 bytes; a keyed query of q
                 # bytes is max(1, ceil(q / 64)) compressions after the cached key block
@@ -232,52 +230,36 @@ class Bench:
         return cal
 
     # -- the T run ---------------------------------------------------------------------------------
-    def tree_repeat(self, k, starts, n, levels, r, name=None, liveness_log=None):
-        name = name or f"tree{k}"
-        svc = self.service(name, log=liveness_log)
-        rec = {"repeat": k, "vk": svc.vk.hex(), "service": svc.info}
+    def tree_run(self, starts, n, root):
+        """The T run: `prover tree` with a fresh service, timed. Only `root.bin` is read; it must be
+        accepted within `T_V`, and its statement canary rejected. Inner proofs, if the prover writes
+        them, are never read (V4-A9: the root's certificate covers its children, and the stream
+        prices recursion)."""
+        name = "tree"
+        svc = self.service(name)
+        rec = {"vk": svc.vk.hex(), "service": svc.info}
         try:
             work = fresh_dir(os.path.join(self.work, name, "work"))
             with open(os.path.join(work, "leaves.json"), "wb") as f:
                 f.write(leaves_json(starts, n))
             with open(os.path.join(work, "vk.hex"), "w") as f:
                 f.write(svc.vk.hex() + "\n")
-            self.log(f"[{name}] prover tree: r={r} n={n}")
+            self.log(f"[{name}] prover tree: r={self.p.r} n={n}")
             status, dt, plog = self.run.tree(work, svc.sock_dir, self.p.tree_s)
             rec.update(status=status, seconds=dt, prover_log=plog[-4000:])
             self.log(f"[{name}] {status} in {dt:.3f} s")
             self.alive(svc)
             if status != "ok":
                 raise Fail(f"{name}: prover tree {status}" + self.diag(svc, plog))
-            stored = {}
-            for rel, lvl, j in tree_files(r):
-                try:
-                    stored[(lvl, j)] = self.keep(f"{name}/{rel}", read_output(work, rel, self.p.file_cap))
-                except OutputError as e:
-                    raise Fail(f"{name}: {e}")
-            stmt = lambda lvl, j: levels[lvl][j]  # noqa: E731
-            vk = svc.vk
-            items = [(vk, stmt(r, 0), stored[(r, 0)], f"{name} root")]
-            inner = [key for key in stored if key[0] < r]
-            rnd = random.Random(os.urandom(16))
-            for key in rnd.sample(inner, min(self.p.samples, len(inner))):
-                items.append((vk, stmt(*key), stored[key], f"{name} sample {key}"))
-            res = self.check(items, f"{name} root and samples")
+            try:
+                rel = self.keep(f"{name}/root.bin", read_output(work, "root.bin", self.p.file_cap))
+            except OutputError as e:
+                raise Fail(f"{name}: {e}")
+            res = self.check([(svc.vk, root, rel, f"{name} root")], name)
             rec["root_check_ns"] = res[0][1]
-            rec["sample_check_ns"] = [ns for _, ns in res[1:]]
-            sib = lambda lvl, j: stmt(lvl, j ^ 1) if lvl < r else None  # noqa: E731
-            kinds = [[key for key in sorted(stored) if key[0] == 0], [key for key in sorted(stored) if key[0] > 0]]
-            targets = [(stored[key], stmt(*key), sib(*key)) for kind in kinds for key in kind[:self.p.canaries_per_kind]]
-            rec["canaries"] = self.canary_check(vk, targets, name)
-            rec["root_file"] = stored[(r, 0)]
-            rec["root_bytes"] = os.path.getsize(os.path.join(self.store, stored[(r, 0)]))
-            if liveness_log is not None:
-                ok, msg = self.badge.liveness(liveness_log, vk, stmt(r, 0), os.path.join(self.store, stored[(r, 0)]))
-                # RB-m10: an extractor whose declared fuel or memory is above the liveness caps is
-                # not run; the result says so (the security claim is the proved `Computes`)
-                rec["liveness"] = {"ok": ok, "ran": not msg.startswith("ok not run"), "output": msg}
-                if not ok:
-                    raise Fail(f"liveness: the extractor did not produce an accepted witness: {msg[-300:]}")
+            rec["canaries"] = self.canary_check(svc.vk, [(rel, root, None)], name)
+            rec["root_file"] = rel
+            rec["root_bytes"] = os.path.getsize(os.path.join(self.store, rel))
             self.alive(svc)
         except Fail as e:
             e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
@@ -287,33 +269,38 @@ class Bench:
         return rec
 
     # -- the stream ----------------------------------------------------------------------------------
-    def stream_repeat(self, k):
-        p, name = self.p, f"stream{k}"
+    def stream_run(self):
+        """The stream (cost model §3.3): `M + 1` leaves and `M` merges, a fresh process each, with a
+        fresh service; every output checked with `acc` within `T_V`, and the statement canaries of
+        the first `canaries.per_kind` leaves and nodes. From the first request on, everything, the
+        checks included, runs within `stream_s`."""
+        p, name = self.p, "stream"
         starts = [os.urandom(32) for _ in range(p.M + 1)]
         self.log(f"[{name}] computing {p.M + 1} leaf digests at n_f = {p.n_f}")
         ds = digest.leaf_digests(starts, p.n_f)
         svc = self.service(name)
-        rec = {"repeat": k, "vk": svc.vk.hex(), "service": svc.info, "leaf_s": [], "merge_s": []}
-        pending, t_begin = [], time.monotonic()
+        rec = {"vk": svc.vk.hex(), "service": svc.info, "leaf_digests": [d.hex() for d in ds],
+               "leaf_s": [], "merge_s": []}
+        pending, targets = [], []
 
         def flush():
             if pending:
                 self.check(pending, f"{name} outputs")
                 pending.clear()
+        self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
             prev = None                        # (statement, store path) of the running proof
             for i in range(p.M + 1):
-                if time.monotonic() - t_begin > p.stream_s:
-                    raise Fail(f"{name}: stream_s exceeded at link {i}")
                 ins = {"leaf.json": json.dumps({"n": p.n_f, "start": starts[i].hex()}).encode()}
                 leaf = self.one(svc, name, f"leaf{i}", "leaf", ins)
                 rec["leaf_s"].append(leaf[1])
                 lrel = self.keep(f"{name}/leaf{i}.bin", leaf[0])
                 pending.append((svc.vk, ds[i], lrel, f"{name} leaf {i}"))
+                if i < p.canaries_per_kind:    # its sibling: the other child of the merge that takes it
+                    targets.append((lrel, ds[i], prev[0] if prev else (ds[1] if p.M else None)))
                 if i == 0:
                     prev = (ds[0], lrel)
                     flush()
-                    rec["canaries"] = self.canary_check(svc.vk, [(lrel, ds[0], None)], name)
                     continue
                 ins = {"child1.stmt": (prev[0].hex() + "\n").encode(),
                        "child1.bin": open(os.path.join(self.store, prev[1]), "rb").read(),
@@ -323,18 +310,19 @@ class Bench:
                 c = digest.node_stmt(prev[0], ds[i])
                 nrel = self.keep(f"{name}/node{i}.bin", node[0])
                 pending.append((svc.vk, c, nrel, f"{name} node {i}"))
+                if i <= p.canaries_per_kind:   # its sibling: the next leaf, which the next merge takes
+                    targets.append((nrel, c, ds[i + 1] if i < p.M else None))
                 prev = (c, nrel)
-                if i == 1:
-                    flush()
-                    rec["canaries"] += self.canary_check(svc.vk, [(nrel, c, None)], name)
-                if len(pending) >= p.check_every:
+                if i == 1 or len(pending) >= p.check_every:
                     flush()
             flush()
+            rec["canaries"] = self.canary_check(svc.vk, targets, name)
             self.alive(svc)
         except Fail as e:
             e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
             raise
         finally:
+            self.deadline = None
             self.stop(svc, rec)
         rec["t_leaf"] = sum(rec["leaf_s"]) / p.M
         rec["t_merge"] = sum(rec["merge_s"]) / p.M
@@ -346,24 +334,29 @@ class Bench:
         return rec
 
     def one(self, svc, name, tag, kind, inputs):
+        """One timed request, within `step_s` and the stream's cap."""
         work = fresh_dir(os.path.join(self.work, name, tag))
         with open(os.path.join(work, "vk.hex"), "w") as f:
             f.write(svc.vk.hex() + "\n")
-        status, dt, proof, err = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap)
+        self.left(f"{name} {tag}")
+        status, dt, proof, err = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap,
+                                         deadline=self.deadline[0] if self.deadline else None)
         self.alive(svc)
         if status != "ok":
-            raise Fail(f"{name} {tag}: {status}" + self.diag(svc, err))
+            capped = self.deadline is not None and time.monotonic() >= self.deadline[0]
+            raise Fail(f"{name} {tag}: {status}" + (f" ({self.deadline[1]})" if capped else "") + self.diag(svc, err))
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(work + ".stage", ignore_errors=True)
         return proof, dt
 
     # -- the DoS column -------------------------------------------------------------------------------
     def dos(self, vk, root, root_rel):
-        """The DoS column (RF-M1 (2), RF-m6): 1,000 random and mutated proofs of the root's
-        statement must all be rejected, each within the per-item cap (`dos.item_factor · T_V` where
-        `T_V` is enforced, else `verify_s`) and all within `dos.total_s`. A breach is the entry's
-        failure (a verifier slow on crafted input fails the run), and the slow input is kept in the
-        store and named."""
+        """The DoS column (RF-M1 (2), RF-m6, V4-A9): `dos.proofs` random and mutated proofs of the
+        root's statement, each checked within the per-item cap (`dos.item_factor · T_V` where `T_V`
+        is enforced, else `verify_s`) and all within `dos.total_s`. A breach of either cap, or a
+        crash of the checker, is the entry's failure, and the slow input is kept in the store and
+        named. An accepted input is recorded, not failed: it mutates a true statement's proof, and
+        accepting it is malleability, which no rule forbids (V4-A9)."""
         data = open(os.path.join(self.store, root_rel), "rb").read()
         files = dos_inputs(data, self.p.dos_proofs, random.Random(os.urandom(16)))
         items = [(vk, root, self.keep(f"dos/{k}.bin", b)) for k, b in enumerate(files)]
@@ -372,36 +365,36 @@ class Bench:
         try:
             res = self.badge.verify(items, self.store, timeout=self.p.dos_total_s)
         except BadgeError as e:
-            k = len(getattr(e, "partial", []))
+            k = len(e.partial)
             where = f"; input {k} (store/{items[k][2]}) was being checked" if k < len(items) else ""
-            raise Fail(f"DoS column: not finished within {self.p.dos_total_s} s{where} ({e})")
-        acc = [k for k, (ok, _) in enumerate(res) if ok]
-        if acc:
-            raise Fail(f"DoS column: {len(acc)} random proofs accepted (e.g. store/{items[acc[0]][2]})")
+            if e.kind == "timeout":
+                raise Fail(f"DoS column: not finished within {self.p.dos_total_s} s{where}")
+            if e.kind != "slow":
+                raise Fail(f"DoS column: the checker crashed{where} ({e})")
+            res = e.partial                    # every answer is in; the per-item cap names the slow one
         slow = [(ns, k) for k, (_, ns) in enumerate(res) if ns > item_cap]
         if slow:
             ns, k = max(slow)
             raise Fail(f"DoS column: input {k} took {ns / 1e6:.1f} ms, above the per-item cap of "
                        f"{item_cap / 1e6:.1f} ms ({len(slow)} inputs over; kept as store/{items[k][2]})")
+        acc = [k for k, (ok, _) in enumerate(res) if ok]
         worst = max(range(len(res)), key=lambda k: res[k][1])
-        return {"proofs": len(items), "max_ns": res[worst][1], "max_input": items[worst][2],
-                "median_ns": statistics.median(ns for _, ns in res), "item_cap_ns": item_cap,
+        return {"proofs": len(items), "accepted": len(acc), "accepted_inputs": [items[k][2] for k in acc[:5]],
+                "max_ns": res[worst][1], "max_input": items[worst][2], "item_cap_ns": item_cap,
                 "total_s": self.p.dos_total_s,
                 "over_T_V": sum(1 for _, ns in res if self.tv_cap_ns and ns > self.tv_cap_ns)}
 
 
-def score(p: Params, tree_recs, stream_recs):
-    """`S = T_tree + K · t_link` (V4-10) and the published components (cost model §3.6)."""
+def score(p: Params, tree, stream):
+    """`S = T_tree + K · t_link` (V4-10) from the one tree run and the one stream run (V4-A9), and the
+    published components (cost model §3.6)."""
     out = {"K": p.K}
-    if tree_recs:
-        out["T_tree"] = statistics.median(r["seconds"] for r in tree_recs)
-        out["T_tree_repeats"] = [r["seconds"] for r in tree_recs]
-    if stream_recs:
-        for k in ("t_leaf", "t_merge", "t_link"):
-            out[k] = statistics.median(r[k] for r in stream_recs)
-            out[f"{k}_repeats"] = [r[k] for r in stream_recs]
-        out["slowest_merge"] = max(r["slowest_merge"] for r in stream_recs)
-    if tree_recs and stream_recs:
+    if tree:
+        out["T_tree"] = tree["seconds"]
+    if stream:
+        for k in ("t_leaf", "t_merge", "t_link", "slowest_merge"):
+            out[k] = stream[k]
+    if tree and stream:
         out["S"] = out["T_tree"] + p.K * out["t_link"]
         out["o_est"] = out["t_link"] - out["T_tree"] * p.n_f / ((1 << p.r) * p.n)
     return out

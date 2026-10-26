@@ -7,7 +7,8 @@
  * It computes the public BLAKE2s chains and statements itself, to name the children of a node.
  *
  *   prover setup DIR      nothing to set up
- *   prover tree DIR       DIR/leaves.json, DIR/vk.hex -> DIR/proofs/L<i>.bin, N<l>_<j>.bin, DIR/root.bin
+ *   prover tree DIR       DIR/leaves.json, DIR/vk.hex -> DIR/root.bin (and DIR/proofs/L<i>.bin, N<l>_<j>.bin,
+ *                         which the runner ignores since V4-A9)
  *   prover leaf DIR       ready/go handshake; DIR/leaf.json -> DIR/proof.bin
  *   prover node DIR       ready/go handshake; DIR/child{1,2}.{stmt,bin} -> DIR/proof.bin
  *

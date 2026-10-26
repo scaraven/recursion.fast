@@ -26,8 +26,9 @@ class StubBadge:
 
 def bench(script, runs=3, enforce=True):
     b = Bench.__new__(Bench)
-    b.p = SimpleNamespace(tv_enforce=enforce, checker_runs=runs)
+    b.p = SimpleNamespace(tv_enforce=enforce, checker_runs=runs, verify_s=10)
     b.badge, b.store, b.tv_cap_ns, b.tv_seen, b.tv_remeasured = StubBadge(script), "/nonexistent", 100, [], 0
+    b.deadline = None
     return b
 
 
