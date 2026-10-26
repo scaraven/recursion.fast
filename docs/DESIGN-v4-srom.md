@@ -647,10 +647,10 @@ root and stream checks, the statement canaries, the DoS column, the score. It al
 restores the environment the entry runs in, which is not a check: the package tree, with its
 olean-manifest check per evaluation (it guards what the entry builds against), the comparator, the
 service, `T_triv,best` (the cap needs it) and the service's throughput (informational, a few
-seconds). Every check whose subject is organiser code, the contract's `acc` before the entry's `V`
-(the file parser, the trace digest, the signature), the service, the sandbox, the badge template,
-the compiled extractor interpreter and the harness itself, runs in the core repository's `ci.yml`,
-once per harness commit, and never in an evaluation.
+seconds). Every check whose subject is organiser code (the contract's `acc` before the entry's `V`:
+the file parser, the trace digest, the signature; the service, the sandbox, the badge template, the
+compiled extractor interpreter, the harness itself) runs in the core repository's `ci.yml`, once per
+harness commit, and never in an evaluation.
 
 **Measured** (CI runs 39935079265, 39940607844, 39952420263): the core's Lean job, which builds
 the contract, library and controls, takes 8 min 53 s cold, 4 min 12 s and 7 min 21 s with the

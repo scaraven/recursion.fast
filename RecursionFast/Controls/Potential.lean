@@ -370,10 +370,7 @@ theorem collision_no_bool_kstate : ¬ ks.Bounded errorCap := fun hb =>
   collision_no_bound hR ks (2 ^ 136) (fun L q => by
     have h := hb L q
     rw [card_digest, errorCap] at h
-    have h' : (Nat.card {a // ks.bad L q a} : ℝ≥0) ≤ ((2 ^ 136 : ℕ) : ℝ≥0) := by
-      refine h.trans (le_of_eq ?_)
-      apply NNReal.coe_injective; push_cast; norm_num
-    exact_mod_cast h') (by norm_num)
+    exact_mod_cast h.trans_eq (c := ((2 ^ 136 : ℕ) : ℝ≥0)) (by norm_num)) (by norm_num)
 
 end
 
@@ -616,12 +613,9 @@ answers for the next query. (Under `logCap = 2^64` and v3's cap it had one: the 
 theorem v24_no_bool_kstate : ¬ ks.BoundedBelow errorCap := by
   intro hb
   refine v24_no_bound hR ks (2 ^ 72) (2 ^ 136) (fun L q hL => ?_) (by norm_num) (by norm_num)
-  have h := hb L q (lt_of_le_of_lt hL (by simp [logCap]))
+  have h := hb L q (hL.trans_lt (by simp [logCap]))
   rw [card_digest, errorCap] at h
-  have h' : (Nat.card {a // ks.bad L q a} : ℝ≥0) ≤ ((2 ^ 136 : ℕ) : ℝ≥0) := by
-    refine h.trans (le_of_eq ?_)
-    apply NNReal.coe_injective; push_cast; norm_num
-  exact_mod_cast h'
+  exact_mod_cast h.trans_eq (c := ((2 ^ 136 : ℕ) : ℝ≥0)) (by norm_num)
 
 end
 

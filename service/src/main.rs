@@ -10,9 +10,9 @@
 //! `SIGN` (a batch of byte strings → their answers, computed here, and a signature on the trace
 //! digest with the next one-time key; refused after `2^16`), `VK`. It exits when its stdin reaches
 //! end of file (the runner closes it): it then takes the key lock, overwrites the keys, prints
-//! `stats …`, removes the socket and exits 0. The keys
-//! are never written anywhere; the process is made non-dumpable, so a process of the same uid
-//! cannot ptrace it or read its memory through /proc.
+//! `stats …`, removes the socket and exits 0. The keys are never written anywhere; the process is
+//! made non-dumpable, so a process of the same uid cannot ptrace it or read its memory through
+//! /proc.
 //!
 //! `--insecure-test-keys PRFKEY_HEX SEED_HEX` replaces the random keys by given ones and prints
 //! `INSECURE` on stdout. It exists for the known-answer tests only (`tests/service/`) and is

@@ -141,8 +141,9 @@ jobs:
 
   smoke:
     # the end-to-end smoke with the real badge: the library's witness-sending entry, certified by the
-    # certificate job, benchmarked by the toy assembly prover
-    needs: [lean, harness]
+    # certificate job, benchmarked by the toy assembly prover. It builds the organiser itself, so it
+    # runs beside `lean` rather than after it (the critical path: `harness` then `smoke`)
+    needs: [harness]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

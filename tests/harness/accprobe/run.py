@@ -80,7 +80,7 @@ def main():
         w = line.split()
         ok = len(w) == 2 and w[0] == want and w[1].isdigit()
         fails += not ok
-        got = f"{w[0]:7} {int(w[1]) / 1e6:9.2f} ms" if ok or (len(w) == 2 and w[1].isdigit()) else repr(line)
+        got = f"{w[0]:7} {int(w[1]) / 1e6:9.2f} ms" if len(w) == 2 and w[1].isdigit() else repr(line)
         print(f"{'ok  ' if ok else 'FAIL'} {name:14} {got} (must {want})")
     print(f"{fails} failure(s)")
     return 1 if fails else 0

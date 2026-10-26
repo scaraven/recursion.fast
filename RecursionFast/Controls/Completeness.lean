@@ -136,11 +136,10 @@ theorem grind40_complete (R : Digest → Wit → Prop) :
 
 /-- **39 nonces are not**, for any relation with a witness. -/
 theorem grind39_not_complete (R : Digest → Wit → Prop) {c : Digest} {w : Wit} (h : R c w) :
-    ¬ CompleteWithError R (fun _ _ => grindP 39 0) Vg completenessCap := fun hc => by
-  have := hc c w h
-  rw [grind_exact c (by decide), completenessCap] at this
-  exact absurd this (not_le.mpr (pow_lt_pow_right_of_lt_one₀ (by norm_num) (by norm_num)
-    (by norm_num)))
+    ¬ CompleteWithError R (fun _ _ => grindP 39 0) Vg completenessCap := fun hc =>
+  (hc c w h).not_gt <| by
+    rw [grind_exact c (by decide), completenessCap]
+    exact pow_lt_pow_right_of_lt_one₀ (by norm_num) (by norm_num) (by norm_num)
 
 /-! ## A fixed query: no prover gets below `1/2` -/
 

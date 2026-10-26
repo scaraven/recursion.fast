@@ -23,11 +23,10 @@ PLAN = json.loads(subprocess.run([sys.executable, "-I", AGG, "--print-matrix", "
 
 
 def part(parts, benchmark="pass", commit="a" * 40):
-    r = {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
-         "harness": {"commit": commit}, "machine": {"cpu_model": "cpu"}, "tree": [], "stream": []}
-    r["tree"] = {"seconds": 1.0} if "tree" in parts else None
-    r["stream"] = {"t_leaf": 0.1, "t_merge": 0.1, "t_link": 0.2, "slowest_merge": 0.2} if "stream" in parts else None
-    return r
+    return {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
+            "harness": {"commit": commit}, "machine": {"cpu_model": "cpu"},
+            "tree": {"seconds": 1.0} if "tree" in parts else None,
+            "stream": {"t_leaf": 0.1, "t_merge": 0.1, "t_link": 0.2, "slowest_merge": 0.2} if "stream" in parts else None}
 
 
 def run(tmp, parts, cert_status="ok", plan="split"):
