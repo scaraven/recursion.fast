@@ -122,8 +122,9 @@ def canaries(stmt: bytes, sibling: bytes = None):
 
 
 def dos_inputs(root_file: bytes, count: int, rnd: random.Random):
-    """`count` random and mutated signed proofs for the DoS column: random bytes, random `π` with
-    the root's trace and signature, and bit flips, truncations and extensions of the root's file."""
+    """`count` random and mutated signed proofs for the DoS column, in turn: random bytes; random
+    `π` with the root's trace and signature; the root's `π` with 1–8 bits flipped; the root's file
+    with 1–8 bits flipped, cut to a random prefix in 30% of cases (no input extends the file)."""
     s = signed.parse(root_file)
     out = []
     for k in range(count):

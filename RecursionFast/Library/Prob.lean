@@ -50,15 +50,21 @@ noncomputable def expect (F : α → Log → ℝ≥0) : OProg α → Log → ℝ
     | some e => expect F (k e.2) L
     | none => N⁻¹ * ∑ a : Digest, expect F (k a) (L ++ [(q, a)])
 
+open Classical in
 /-- The indicator of `B`. -/
-noncomputable def ind (B : α → Log → Prop) (x : α) (L : Log) : ℝ≥0 := by
-  classical exact if B x L then 1 else 0
+noncomputable def ind (B : α → Log → Prop) (x : α) (L : Log) : ℝ≥0 := if B x L then 1 else 0
 
 theorem ind_of {B : α → Log → Prop} {x : α} {L : Log} (h : B x L) : ind B x L = 1 := by
   classical simp [ind, h]
 
 theorem ind_of_not {B : α → Log → Prop} {x : α} {L : Log} (h : ¬ B x L) : ind B x L = 0 := by
   classical simp [ind, h]
+
+theorem ind_congr {B : α → Log → Prop} {B' : β → Log → Prop} {x : α} {y : β} {L L' : Log}
+    (h : B x L ↔ B' y L') : ind B x L = ind B' y L' := by
+  by_cases hb : B x L
+  · rw [ind_of hb, ind_of (h.mp hb)]
+  · rw [ind_of_not hb, ind_of_not (mt h.mpr hb)]
 
 /-- The indicator is at most every value that is at least `1` where the event holds. -/
 theorem ind_le {B : α → Log → Prop} {x : α} {L : Log} {y : ℝ≥0} (h : B x L → 1 ≤ y) :
@@ -142,6 +148,25 @@ theorem expect_bind_of_runLog (F : β → Log → ℝ≥0) (f : α → OProg β)
     obtain ⟨e, hf, h⟩ := Option.bind_eq_some_iff.mp h
     simp only [OProg.bind, expect, hf]
     exact expect_bind_of_runLog F f (k e.2) h
+
+/-- **A run's final tables answer it**: two functions that agree on every final table that extends
+`L` and answers `p` with the output have the same expectation over the run of `p` from `L`. -/
+theorem expect_congr_runLog {F G : α → Log → ℝ≥0} :
+    ∀ (p : OProg α) (L : Log), (∀ x L', L <+: L' → p.runLog L' = some x → F x L' = G x L') →
+      expect F p L = expect G p L
+  | .ret x, L, h => h x L (List.prefix_refl L) rfl
+  | .query q k, L, h => by
+    simp only [expect]
+    split
+    · rename_i e he
+      refine expect_congr_runLog _ L fun x L' hL' hx => h x L' hL' ?_
+      obtain ⟨M, rfl⟩ := hL'
+      simp [OProg.runLog, List.find?_append, he, hx]
+    · rename_i hf
+      refine congrArg _ (Finset.sum_congr rfl fun a _ => expect_congr_runLog _ _
+        fun x L' hL' hx => h x L' ((List.prefix_append L _).trans hL') ?_)
+      obtain ⟨M, rfl⟩ := hL'
+      simpa [OProg.runLog, List.find?_append, hf] using hx
 
 /-! ## Probability -/
 

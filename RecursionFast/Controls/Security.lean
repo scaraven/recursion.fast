@@ -42,7 +42,22 @@ controls (it against the Stage S1 boolean form, its length guard) are in
 
 **What `KS` does not say** (`acceptAll_ks_above_logCap`): with `qV > logCap` no adversary is in
 range, so the accept-all verifier is knowledge-sound for the empty relation at every error. The
-certificate's cap `qV ≤ 2^16` excludes it (`Contract/Certificate.lean`).
+certificate's cap `qV ≤ 2^16` excludes it (`Contract/Certificate.lean`; review E-ks m-1: no
+conjunct added).
+
+**What `KS` does not exclude: an extractor that reads the verifier's own answer** (review E-ks
+M-1; the user's option B, V4-A10). `KS`'s extractor reads the final log, which holds the
+verifier's answers too; the textbook extractor reads the adversary's log only
+(`Library/KS.lean`, `KSTextbook`). The review's probe: `Vlucky` asks the proof as its query and
+accepts when the masked answer (144 bits zeroed) is the statement's leaf start; `Elucky` reads that
+answer from the log. `lucky_ks`: `KS` at error `0` with one query, for the relation of every
+`acc`. `lucky_not_textbook`: the same pair is textbook-sound at no `ε < 2^-112` (the adversary that
+asks nothing wins on `2^144` of the `2^256` answers, and the extractor sees an empty log); that
+every efficient extractor fails too is paper (two BLAKE2s inverted on 112 bits). Harmless in the
+deployment: every prover there is normalised (the verifier reads only the signed trace, whose every
+answer the prover obtained), and in the composition an extracted member's verifier asks nothing
+fresh (`KS.select`). Positive: `ws_textbook` (the witness-sending extractor ignores the log, so it
+is textbook-sound at `0`, and `KSTextbook.ks` gives back its `KS`).
 
 **The library's potential (`KState`)**, v3's controls kept as facts about the library tool:
 `queryThenAccept_ge_one` and `ks1` (the `step` law charges the verifier's query; the error is
@@ -156,6 +171,80 @@ theorem queryThenAccept_ks_ge_one (E : Digest → Proof → Log → Option Wit) 
 theorem queryThenAccept_ks_one (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) queryThenAccept E 1 1 :=
   ⟨fun _ _ _ => le_rfl, fun _ _ _ _ => (prob_le_one _ _ _).trans (by simp)⟩
+
+/-! ## What `KS` does not exclude: an extractor that reads the verifier's own answer (M-1) -/
+
+/-- Zero the first 18 bytes (144 bits) of a digest. -/
+def mask (a : Digest) : Digest := Vector.ofFn fun i => if i.val < 18 then 0 else a[i]
+
+/-- **The lucky verifier**: ask the proof as the query, and accept iff the statement is the leaf
+statement of the length-0 chain from the masked answer. -/
+def Vlucky (c : Digest) (π : Proof) : OProg Bool :=
+  .query π fun a => .ret (decide (c = leafStmt (chainEnd (mask a) 0) 0))
+
+/-- Its extractor reads the answer to the proof from the log, and returns the leaf it denotes. -/
+def Elucky (_ : Digest) (π : Proof) (L : Log) : Option Wit :=
+  (L.find? fun e => e.1 = π).map fun e => .leaf (mask e.2) 0
+
+/-- **`KS` at error `0`** with one verifier query, for the relation of every `acc`: on the final
+log the extractor reads the verifier's own answer, which is the witness (the review's probe). -/
+theorem lucky_ks (acc : Digest → Signed → Bool) : KS (Rel acc) Vlucky Elucky 0 1 := by
+  refine KS.of_extracts (fun _ _ _ => le_rfl) ?_ 0
+  intro L c π h
+  obtain ⟨e, hf, h⟩ := Option.bind_eq_some_iff.mp h
+  simp only [OProg.runLog, Option.some.injEq, decide_eq_true_eq] at h
+  exact ⟨.leaf (mask e.2) 0, by simp [Elucky, hf], Nat.zero_le _, h⟩
+
+/-- The digest whose first 18 bytes are `f` and whose others are zero. -/
+def fill (f : Fin 18 → Fin 256) : Digest :=
+  Vector.ofFn fun i => if h : i.val < 18 then UInt8.ofFin (f ⟨i, h⟩) else 0
+
+theorem mask_fill (f : Fin 18 → Fin 256) : mask (fill f) = Vector.replicate 32 0 :=
+  Vector.ext fun i hi => by
+    by_cases h : i < 18 <;> simp [mask, fill, h]
+
+theorem fill_injective : Function.Injective fill := fun f f' h => funext fun i => by
+  have := congrArg (fun d : Digest => (d[i.val]'(by omega)).toFin) h
+  simpa [fill, i.isLt] using this
+
+/-- **The textbook notion fails for the same pair below `2^-112`**: the adversary that asks nothing
+and outputs the leaf statement of the zero digest wins whenever the verifier's fresh answer masks
+to zero (`2^144` of the `2^256` answers), and the extractor, reading only the adversary's empty
+log, returns nothing. (Every extractor that reads only `(c, π)` and that log must invert two
+BLAKE2s evaluations on 112 bits: paper.) -/
+theorem lucky_not_textbook (acc : Digest → Signed → Bool) {ε : ℝ≥0} {N : ℕ} (hN : 1 ≤ N)
+    (h : KSTextbook (Rel acc) Vlucky Elucky ε 1 N) : (2 : ℝ≥0)⁻¹ ^ 112 ≤ ε := by
+  set c₀ : Digest := leafStmt (chainEnd (Vector.replicate 32 0) 0) 0
+  have hb := h.2 (.ret (c₀, ByteArray.empty)) 0 (fun _ => le_rfl) (by omega)
+  refine le_trans ?_ (hb.trans_eq (by simp))
+  show _ ≤ prob _ (.query ByteArray.empty fun _ => .ret ((c₀, ByteArray.empty), [])) []
+  rw [prob.eq_2]
+  dsimp only [List.find?_nil]
+  have hwin : ∀ f, prob (fun y L => (Vlucky y.1.1 y.1.2).runLog L = some true ∧
+      ¬ ∃ w, Elucky y.1.1 y.1.2 y.2 = some w ∧ Rel acc y.1.1 w)
+      (.ret ((c₀, ByteArray.empty), [])) ([] ++ [(ByteArray.empty, fill f)]) = 1 :=
+    fun f => (prob_ret _ _ _).trans
+      (ind_of ⟨by simp [Vlucky, OProg.runLog, mask_fill, c₀], by simp [Elucky]⟩)
+  calc (2 : ℝ≥0)⁻¹ ^ 112 = ((2 : ℝ≥0) ^ 256)⁻¹ * ∑ _f : Fin 18 → Fin 256, (1 : ℝ≥0) := by
+        rw [Finset.sum_const, Finset.card_univ, Fintype.card_fun, Fintype.card_fin,
+          Fintype.card_fin, nsmul_eq_mul, mul_one]
+        apply NNReal.coe_injective; push_cast; norm_num
+    _ ≤ _ := by
+        gcongr
+        exact Finset.sum_le_sum_of_injOn fill fill_injective.injOn (Finset.subset_univ _)
+          (fun f _ => (hwin f).ge) fun _ _ _ => zero_le
+
+/-- **The textbook notion holds where the extractor ignores the log**: the witness-sending entry
+is textbook-sound at error `0`, and `KSTextbook.ks` gives back its `KS`. -/
+theorem ws_textbook (vk : Digest) (N : ℕ) :
+    KSTextbook (Rel (WitnessSending.submission.acc vk)) (WitnessSending.V vk) WitnessSending.E 0
+      0 N :=
+  KSTextbook.of_extracts (V := WitnessSending.V vk) (E := WitnessSending.E) (fun _ _ _ => le_rfl)
+    (fun _ _ _ _ h => WitnessSending.check_sound (Option.some.inj h)) 0 N
+
+example (vk : Digest) :
+    KS (Rel (WitnessSending.submission.acc vk)) (WitnessSending.V vk) WitnessSending.E (2 * 0) 0 :=
+  (ws_textbook vk _).ks
 
 /-! ## The query bound -/
 

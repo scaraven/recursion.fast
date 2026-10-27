@@ -35,7 +35,9 @@ kernel's, Q12):
      in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
      import closure lies inside the verified one); the organiser's `chaincheck` copied beside it.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
-  incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`.
+  incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
+  result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
+  each kernel run's memory peak (`kernel_runs`, sampled while it runs: review E-ks).
 The benchmark job (`bench`; the GitHub-hosted runner): `harness/run-benchmark.py` with the badge.
 Verdict: ACCEPT (certificate ok, benchmark pass), PROVISIONAL (certificate provisional, benchmark
 pass; never ranked, V4-15, its numbers marked uncomparable), REJECT (anything else).
@@ -53,7 +55,7 @@ import tomllib
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from rfh.sandbox import Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
+from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
 PART_S = 1680           # a benchmark part (28 min): the outer bound of its capped steps (V4-A9)
@@ -261,13 +263,17 @@ def cert_job(a):
                 e["RF_LANDRUN_RO"] += ":" + os.path.dirname(os.path.abspath(os.environ["COMPARATOR_NANODA"]))
             unit, log = f"rf-cmp-{kernel}-{os.getpid()}", os.path.join(work, f"comparator-{kernel}.log")
             t0 = time.monotonic()
+            watch = PeakWatch(unit)     # the peak of a run that ends normally (its scope is then collected)
             try:
                 rc = sh(memcap(mem, unit) + ["lake", "env", cmp_bin, f"config-{kernel}.json"], cwd=tree, env=e, log=log,
                         timeout=caps["kernel_s"])
             except subprocess.TimeoutExpired:
                 rc = "timeout"
                 kill_unit(unit)
+            finally:
+                seen = watch.stop()
             oom, peak = scope_oom(unit)
+            peak = max(filter(None, (peak, seen)), default=None)
             out = open(log, errors="replace").read()
             outcome = "ok" if rc == 0 else "over budget" if oom else "timeout" if rc == "timeout" else "rejected"
             return {"outcome": outcome, "exit": rc, "seconds": round(time.monotonic() - t0, 1), "cap": mem,
@@ -323,11 +329,13 @@ def cert_job(a):
         lp = subprocess.run([lake, "env", "printenv", "LEAN_PATH"], cwd=tree, capture_output=True, text=True,
                             timeout=TIMEOUT).stdout.strip()
         gate = os.path.join(org.tools, "gate")
+        t0 = time.monotonic()
         rc = sandboxed(org, [gate, SOLUTION_MODULE, "RecursionFast.Challenge.certified", "--manifest", org.manifest,
                              "--computable", "RecursionFast.Challenge.submission", "--allowed-imports", org.allowlist,
                              "--badge-root", "RecursionFast.Challenge.submission"],
                        tree, logs["gate"], env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)),
                        timeout=caps["gate_s"])
+        res["gate_s"] = round(time.monotonic() - t0, 1)
         if rc == "timeout":
             raise Reject(f"the gate did not finish within gate_s = {caps['gate_s']} s (V4-A9)")
         rejects = [l for l in open(logs["gate"], errors="replace").read().splitlines() if l.startswith("gate: REJECT")]
@@ -339,7 +347,7 @@ def cert_job(a):
         if rejects:
             res["provisional_reasons"].append("gate rule 1: the certificate's closure uses sorryAx")
         # 6. the badge
-        badge = build_badge(org, tree, logs["badge"], caps["badge_s"])
+        badge = build_badge(org, tree, logs["badge"], caps["badge_s"], res)
         # Q7: the badge's import closure lies inside the verified one: its build adds no entry
         # module and changes no verified artifact
         after = {k: v for k, v in artifacts(tree).items() if "/RFBadge" not in "/" + k.split("/", 2)[-1]}
@@ -365,10 +373,10 @@ def cert_job(a):
     return res
 
 
-def build_badge(org, tree, log, timeout):
+def build_badge(org, tree, log, timeout, res):
     """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
-    solution module) and build it in the sandbox within `timeout`; returns the directory holding
-    `verify` and the organiser's `chaincheck`."""
+    solution module) and build it in the sandbox within `timeout`, recording its duration as
+    `res["badge_s"]`; returns the directory holding `verify` and the organiser's `chaincheck`."""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
     for name in ("Common", "Verify"):
@@ -385,8 +393,10 @@ def build_badge(org, tree, log, timeout):
     rw = [os.path.join(tree, ".lake"), os.path.join(org.dir, ".lake", "build")]
     rw += [os.path.join(org.packages, p, ".lake") for p in sorted(os.listdir(org.packages))
            if os.path.isdir(os.path.join(org.packages, p, ".lake"))]
+    t0 = time.monotonic()
     rc = sandboxed(org, [os.path.join(org.prefix, "bin", "lake"), "build", "verify"], tree, log,
                    rw=tuple(rw), timeout=timeout)
+    res["badge_s"] = round(time.monotonic() - t0, 1)
     if rc == "timeout":
         raise Reject(f"the badge did not build within badge_s = {timeout} s (V4-A9)")
     if rc != 0:

@@ -14,7 +14,19 @@
   * **The union bound** (`KS.union`): over a finite family of such selections, at most
     `|I| · (Q + qV) · ε`. The tree's composition (`Library/Compose.lean`) rests on it.
   * `KS.of_extracts` (positive, the twin of `KState.zero`): when every proof the verifier accepts
-    on every log is extracted, `KS` holds at every error. `KS.mono`: a larger error and bound.
+    on every log is extracted, `KS` holds at every error.
+  * `prob_accept_eq_verdict` (review E-ks m-3): the event's acceptance, read from the final log by
+    `runLog`, is the verifier's verdict in the game's run (`expect_congr_runLog`).
+  * **The textbook notion, and how `KS` relates to it** (review E-ks M-1; the user's choice of
+    2026-10-27, V4-A10). `KSTextbook`: the extractor reads only the **adversary's** log
+    (`withLog`), the verifier runs afterwards on the same oracle (Chiesa–Yogev; CGSY24). `KS`'s
+    extractor reads the final log, which also holds the verifier's own answers: `KS` is the
+    textbook notion for adversaries that ask the verifier's queries themselves (normalised).
+    **`KSTextbook.ks`**: textbook ⇒ `KS`, same extractor, error doubled (`KS`'s game is a textbook
+    adversary of `Q + qV` queries whose log is `KS`'s final log), for queries up to
+    `logCap + qV`. The converse fails: `Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`.
+    `KSTextbook.of_extracts`: an extractor that opens every accepted proof from any log is
+    textbook-sound at error `0`.
   * `not_ks_of_accept` (negative): a verifier that accepts some proof with no oracle answer, which
     the extractor does not open on the empty log, is not knowledge-sound at any `ε` and
     `qV ≤ logCap` with `qV · ε < 1`: the adversary that outputs that pair and asks nothing wins
@@ -76,12 +88,6 @@ theorem KS.of_extracts (hq : ∀ H c π, ((V c π).queries H).length ≤ qV)
   ⟨hq, fun _ _ _ _ => (prob_eq_zero (fun x L hx => hx.2 (h L x.1 x.2 hx.1)) _ _).trans_le
     bot_le⟩
 
-/-- A larger error and a larger query bound. -/
-theorem KS.mono (h : KS R V E ε qV) {ε' : ℝ≥0} {qV' : ℕ} (hε : ε ≤ ε') (hq : qV ≤ qV') :
-    KS R V E ε' qV' :=
-  ⟨fun H c π => (h.1 H c π).trans hq, fun A Q hA hQ =>
-    (h.2 A Q hA (by omega)).trans (by gcongr)⟩
-
 /-- **The adversary that outputs `(c, π)` and asks nothing wins with probability `1`** when the
 verifier accepts it with no answer and the extractor does not open it on the empty log. -/
 theorem accept_wins {c : Digest} {π : Proof} (hV : (V c π).runLog [] = some true)
@@ -113,5 +119,60 @@ theorem acceptAll_ks_iff (R : Digest → Wit → Prop) (ε : ℝ≥0) :
         (Nat.zero_le _) (by simp) h,
     fun h => ⟨fun c _ _ => some (h c).choose,
       KS.of_extracts (fun _ _ _ => le_rfl) (fun _ c _ _ => ⟨_, rfl, (h c).choose_spec⟩) ε⟩⟩
+
+/-! ## The verdict, and the textbook notion -/
+
+/-- **The event reads the verifier's verdict**: in `KS`'s game, accepting on the final log is the
+verifier's result in the run. -/
+theorem prob_accept_eq_verdict (A : OProg (Digest × Proof)) (P : Digest × Proof → Log → Prop) :
+    prob (fun x L => (V x.1 x.2).runLog L = some true ∧ P x L)
+        (A.bind fun x => (V x.1 x.2).bind fun _ => .ret x) [] =
+      prob (fun y L => y.2 = true ∧ P y.1 L)
+        (A.bind fun x => (V x.1 x.2).bind fun b => .ret (x, b)) [] := by
+  rw [prob_bind, prob_bind]
+  refine congrArg (expect · A []) (funext fun x => funext fun L => ?_)
+  rw [prob_bind, prob_bind]
+  refine expect_congr_runLog _ L fun b L' _ hb => ?_
+  rw [prob_ret, prob_ret]
+  refine ind_congr ?_
+  show _ ∧ _ ↔ _ ∧ _
+  rw [hb, Option.some.injEq]
+
+/-- **Textbook single-output knowledge soundness** (Chiesa–Yogev; CGSY24), for at most `N`
+queries in all: as `KS`, but the extractor reads only the adversary's log; the verifier then runs
+on the same oracle. -/
+def KSTextbook (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
+    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) (qV N : ℕ) : Prop :=
+  (∀ H c π, ((V c π).queries H).length ≤ qV) ∧
+  ∀ (A : OProg (Digest × Proof)) (Q : ℕ), (∀ H, (A.queries H).length ≤ Q) → Q + qV ≤ N →
+    prob (fun y L => (V y.1.1 y.1.2).runLog L = some true ∧
+        ¬ ∃ w, E y.1.1 y.1.2 y.2 = some w ∧ R y.1.1 w)
+      ((withLog A []).bind fun y => (V y.1.1 y.1.2).bind fun _ => .ret y) [] ≤ (Q + qV) * ε
+
+/-- **Textbook ⇒ `KS`**, with the same extractor and the error doubled: `KS`'s game, the adversary
+followed by the verifier, is a textbook adversary of `Q + qV` queries whose own log is `KS`'s
+final log. -/
+theorem KSTextbook.ks (h : KSTextbook R V E ε qV (logCap + qV)) : KS R V E (2 * ε) qV := by
+  refine ⟨h.1, fun A Q hA hQ => ?_⟩
+  have hG : ∀ H, ((A.bind fun x => (V x.1 x.2).bind fun _ => .ret x).queries H).length ≤
+      Q + qV := fun H => by
+    rw [OProg.queries_bind, OProg.queries_bind, List.length_append, List.length_append]
+    exact Nat.add_le_add (hA H) (h.1 H _ _)
+  refine le_trans ?_ ((h.2 _ (Q + qV) hG (by omega)).trans ?_)
+  · rw [prob_bind _ (withLog _ []), expect_withLog, prob_eq_expect]
+    refine expect_mono (fun x L => ind_le fun hw => ?_) _ []
+    dsimp only [OProg.bind]
+    rw [prob_bind_of_runLog _ _ hw.1, prob_ret, ind_of ⟨hw.1, hw.2⟩]
+  · push_cast
+    calc ((Q : ℝ≥0) + qV + qV) * ε ≤ (Q + qV + (Q + qV)) * ε := by gcongr; exact le_add_self
+      _ = (Q + qV) * (2 * ε) := by ring
+
+/-- **No escape from any log, no textbook error**: an extractor that opens every proof the
+verifier accepts on some log, whatever log it reads, is textbook-sound at every error. -/
+theorem KSTextbook.of_extracts (hq : ∀ H c π, ((V c π).queries H).length ≤ qV)
+    (h : ∀ L L' c π, (V c π).runLog L = some true → ∃ w, E c π L' = some w ∧ R c w)
+    (ε : ℝ≥0) (N : ℕ) : KSTextbook R V E ε qV N :=
+  ⟨hq, fun _ _ _ _ => (prob_eq_zero (fun y L hy => hy.2 (h L y.2 y.1.1 y.1.2 hy.1)) _ _).trans_le
+    bot_le⟩
 
 end RecursionFast

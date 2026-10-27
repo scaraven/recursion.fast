@@ -11,8 +11,8 @@
     under `H` makes `runLog` return the program's result under `H`: the verifier's decision read
     from the query log, as `KS` reads it, is the verifier actually run against the oracle.
   * `runLog_queries`: the log of a program's own run is such a log.
-  * `run_bind`, `queries_bind`, `bind_assoc`: a composed program's result and queries under `H`
-    (completeness, V3-S2R-A2; the knowledge-soundness game, V4-A10).
+  * `run_bind`, `OProg.queries_bind`, `OProg.bind_assoc` (both `protected`): a composed program's
+    result and queries under `H` (completeness, V3-S2R-A2; the knowledge-soundness game, V4-A10).
   * `Consistent H L`: the oracle function `H` agrees with the table `L` (moved from
     `Library/Completeness.lean`); `exists_consistent`, `consistent_append`,
     `consistent_append_self`: a lazily sampled run, extended by a fresh answer, stays consistent
@@ -57,14 +57,15 @@ theorem run_bind {β : Type} (H : ByteArray → Digest) (p : OProg α) (f : α �
   | query q k ih => exact ih (H q)
 
 /-- Binding is associative. -/
-theorem bind_assoc {β γ : Type} (p : OProg α) (f : α → OProg β) (g : β → OProg γ) :
+protected theorem bind_assoc {β γ : Type} (p : OProg α) (f : α → OProg β) (g : β → OProg γ) :
     (p.bind f).bind g = p.bind fun x => (f x).bind g := by
   induction p with
   | ret a => rfl
   | query q k ih => exact congrArg (query q) (funext ih)
 
 /-- Under `H`, `p.bind f` asks `p`'s queries, then those of `f` on `p`'s result. -/
-theorem queries_bind {β : Type} (H : ByteArray → Digest) (p : OProg α) (f : α → OProg β) :
+protected theorem queries_bind {β : Type} (H : ByteArray → Digest) (p : OProg α)
+    (f : α → OProg β) :
     (p.bind f).queries H = p.queries H ++ (f (p.run H)).queries H := by
   induction p with
   | ret a => rfl

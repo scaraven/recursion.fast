@@ -257,7 +257,6 @@ private def nodeCollision {a b c₁ c₂ : Digest} (hne : ¬ (c₁ = a ∧ c₂ 
     exact ⟨(Vector.toList_inj.mp (List.cons.inj h1).2).symm, (Vector.toList_inj.mp h2).symm⟩),
     heq⟩
 
-
 /-- Membership of the relation is decidable: digests, chain lengths and acceptance are. -/
 instance decRel (acc : Digest → Signed → Bool) (c : Digest) : (w : Wit) → Decidable (Rel acc c w)
   | .leaf s n => inferInstanceAs (Decidable (n ≤ chainCap ∧ c = leafStmt (chainEnd s n) n))

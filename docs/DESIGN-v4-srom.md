@@ -66,12 +66,16 @@ member's extraction fails with probability at most `(Q + qV)·ε` by the certifi
 union bound over the `N` members of the extraction tree gives `N·(Q + qV)·ε`: the walk and the
 union bound are kernel (`Compose.walk`, `Compose.compose_prob`); the PRF hybrid and the
 forgery/collision split are paper (§2.4). Error `N·(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`,
-the first term about `2^-81` (`N = 513`, the stream's final output; `2^-83` for the tree's 127).
+the first term about `2^-81` for the stream's final output (`N = 513`), `2^-83` for the tree's
+root (127), and about `2^-74` for every stream output at once (`257²` members).
 
 **Textbook knowledge soundness (V4-A10, the user's decision of 2026-10-27).** The certificate
-states the standard single-output notion a cryptographer reads: every adversary asking `Q` queries
-and outputting a statement and a proof makes the verifier accept while the extractor, reading the
-query log, returns no witness with probability at most `(Q + qV)·ε` (§1.4). v3's potential
+states the standard single-output notion a cryptographer reads, for adversaries that ask the
+verifier's queries themselves: every adversary asking `Q` queries and outputting a statement and a
+proof makes the verifier accept while the extractor, reading the final query log (the verifier's
+answers included), returns no witness with probability at most `(Q + qV)·ε` (§1.4). Textbook
+soundness implies it with the error at most doubled (**kernel**, `KSTextbook.ks`); every prover of
+the deployment is of that kind, since the verifier reads only the signed trace. v3's potential
 (`KState`) is an untrusted library tool, one route to a proof (`KState.ks`), and any correct proof
 technique is accepted. Its cost: the tree composes by a union bound over the extracted proofs,
 about `2^-81` where the potential's one event gave `2^-90`.
@@ -80,8 +84,8 @@ about `2^-81` where the potential's one event gave `2^-90`.
 workflow). One idealised assumption, keyed BLAKE2s is a PRF, beside collision resistance and
 one-wayness, from which the signature's EUF-CMA follows (§2.5). Every oracle call goes to the
 service on the prover's own cores. Per child, a node circuit checks one signature and hashes the
-child's trace (§4.2). Trusted code: 350 Lean lines (v3: 292; budget 500) and 3,670 runtime lines
-(§5; 3,800 before V4-A9). Two walls of v3 stand: node extraction is decoding (#7), and no honest
+child's trace (§4.2). Trusted code: 350 Lean lines (v3: 292; budget 500) and 3,700 runtime lines
+(§5; 3,800 before V4-A9, 3,670 after it). Two walls of v3 stand: node extraction is decoding (#7), and no honest
 recursive entry is sized against the caps (C5); the certified baseline's measured frontier (§3.6)
 shows how far the season shape is.
 
@@ -289,7 +293,27 @@ def KS (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
   depend on the adversary (**paper**). It chooses the statement after its queries. The verifier's
   queries are charged because an adversary may leave its luck to them (**kernel**,
   `Controls/Security.lean`, `queryThenAccept_ks_ge_one`); `logCap` because a linear bound cannot
-  hold for every `Q` against a birthday-type event (the header of `Security.lean`).
+  hold for every `Q` against a birthday-type event (the header of `Security.lean`); and `KS` is
+  vacuous above it, which the certificate's `qV ≤ 2^16` excludes (no conjunct, by decision, review
+  E-ks m-1). Acceptance read from the final log is the verifier's verdict in the game (**kernel**,
+  `Library/KS.lean`, `prob_accept_eq_verdict`).
+- **The extractor reads the final log, the verifier's own answers included** (review E-ks M-1;
+  option B, the user's choice of 2026-10-27). The textbook definition (Chiesa–Yogev; CGSY24) gives
+  it the adversary's log only. So `KS` is the textbook notion for *normalised* adversaries, those
+  that ask the verifier's queries themselves, and the two coincide on them. **Textbook ⇒ `KS`**,
+  with the same extractor and the error at most doubled: the adversary followed by `V` is a
+  textbook adversary of `Q + qV` queries, bound `(Q + 2qV)·ε ≤ 2(Q + qV)·ε` (**kernel**,
+  `Library/KS.lean`, `KSTextbook.ks`, for the textbook notion up to `logCap + qV` queries). **`KS` ⇏
+  textbook**: a verifier that accepts when its own fresh answer, masked, is the statement's witness
+  is certified at error 0 with an extractor that reads that answer (**kernel**,
+  `Controls/Security.lean`, `lucky_ks`), while the textbook error of the same pair is at least
+  `2^-112` (**kernel**, `lucky_not_textbook`) and so is every efficient extractor's (**paper**,
+  preimage hardness). **Why the deployment needs no more**: every prover in it is normalised, since
+  the verifier reads only the signed trace and the prover asked the service for every answer in
+  it; and in the composition an extracted member's verifier asks nothing fresh (`KS.select`, §2.4).
+  Option A, an extractor that reads only the adversary's log, was rejected: it breaks the
+  potential's bridge and every potential-based proof, and is stronger than the deployment needs
+  (BRIEF §5c).
 - **The potential is a library route** (V4-A10). v3's knowledge state (`Library/Security.lean`,
   `KState`: a potential `μ` on query logs that starts at 0, rises by at most `ε` on average per
   fresh answer within `logCap`, and below 1 makes every proof `V` accepts on the log extractable
@@ -323,8 +347,9 @@ therefore not certifiable, which is the right outcome (C-m11).
 
 ### 2.1 One level: what a certificate says
 
-For every public key `vk`, the submitter proves the textbook single-output knowledge soundness
-of `V vk` for `Rel (S.acc vk)` with the named extractor (§1.4, V4-A10) and completeness of `P vk`,
+For every public key `vk`, the submitter proves the textbook single-output knowledge soundness,
+for adversaries that ask the verifier's queries themselves (§1.4, V4-A10), of `V vk` for
+`Rel (S.acc vk)` with the named extractor and completeness of `P vk`,
 both over a random oracle. A node extractor recovers
 the node's witness, the two children's signed proofs, from the node proof and the log (for a
 succinct node, by decoding a word committed in the log, v3 #7; for the witness-sending entry, by
@@ -488,7 +513,7 @@ the certificate now makes pays the factor `N`.
 | the stream: its final output's extraction tree (513 members, depth 256) | the union bound **kernel** for any finite set of paths (`escape_prob_le`, with the comb's 513 paths); the walk over the stream's shape **paper** (the kernel walk is the tree's, as before V4-A10) |
 | `runSeq → runLog` | **kernel**: `Library/Trace.lean`, `OProg.runLog_of_runSeq` (on a functional log, a verdict on a trace whose entries are all in the log is the verdict on the log) |
 | equal trace digests are equal traces or an explicit collision | **kernel**: `Library/Trace.lean`, `traceDigest_eq` (for queries under `2^64` bytes, which `queryCap` implies) |
-| one member's bound `(Q + qV)·ε` | the certificate itself (`KS`), for a lazily sampled oracle and a deterministic adversary; randomisation and the random function **paper** |
+| one member's bound `(Q + qV)·ε` | the certificate itself (`KS`), for a lazily sampled oracle and a deterministic adversary; the member's adversary is normalised (the verifier run after it on an accepted member asks nothing fresh, `KS.select`), so `KS`'s final-log extractor reads the adversary's log, as the textbook's does (§1.4); randomisation and the random function **paper** |
 | the split of "a signed trace not in the log" into an **EUF-CMA forgery** (no signed trace has that digest) or a **trace-digest collision** (the service signed another trace with the same digest; the two encodings differ and are injective by `queryCap`) | **paper** (V4-A8, C §2 item 4). A kernel form would carry the service's signed set as a Library parameter (C, unsettled 5); not done |
 | the PRF hybrid | **paper** (§2.3) |
 
@@ -499,9 +524,14 @@ season's tree (`r = 6`) and `N = 513` for the stream's final output (`M = 256` l
 (**estimate**, [RD] §4.9 fine print; the walk runs `E` per node within `B t`). At the season shape
 `Q ≈ 2^28–2^30` (**estimate**, C §2 item 1), inside `logCap = 2^96` and the efficient-extraction
 domain of about `2^61` entries, so at `ε = errorCap = 2^-120` the first term is at most about
-`513 · 2^30 · 2^-120 ≈ 2^-81` for the stream's output and `127 · 2^30 · 2^-120 ≈ 2^-83` for the
-tree's root (`qV ≤ 2^16` is negligible beside `Q`), where the potential's lossless composition
-gave `2^30 · 2^-120 = 2^-90` (**estimate**). At the caps one member's bound is
+`513 · 2^30 · 2^-120 ≈ 2^-81` for the event that the stream's final output escapes (its
+extraction tree's 513 members) and `127 · 2^30 · 2^-120 ≈ 2^-83` for the tree's root
+(`qV ≤ 2^16` is negligible beside `Q`), where the potential's lossless composition gave
+`2^30 · 2^-120 = 2^-90` (**estimate**). The harness checks every stream output, not only the last:
+a union over the 257 outputs' extraction trees (`Σ_{i ≤ 256} (2i + 1) = 257²` members) gives about
+`2^16 · 2^30 · 2^-120 ≈ 2^-74` for "some checked stream output escapes" (**estimate**). The kernel
+theorem is per root and for the season's balanced tree; the stream's comb needs the paper walk
+(table above). At the caps one member's bound is
 `2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64`; collision-type events are
 chargeable at the cap from `216` bits up (`logCap · 2^-t ≤ 2^-120`; a full digest costs `2^-160`
 and an honest Merkle verifier comparing `2^15` digests per query `2^-145`, both below it).
@@ -611,7 +641,9 @@ fails the same way.
 >    `(2^(r+1) − 1)·(Q + qV)·ε`) are kernel for the harness's tree; the paper steps are the passage
 >    from the lazily sampled oracle to a random function and to randomised adversaries, the PRF
 >    hybrid (§2.3), the reading of the walk's forgery outcome as a forgery or a trace-digest
->    collision, and the walk over the stream's shape (its union bound is kernel). *v3's item 4
+>    collision, and the walk over the stream's shape (its union bound is kernel). `KS`'s extractor
+>    reads the final log (§1.4): every member's adversary in the composition is normalised, so this
+>    is the textbook notion where the bound is used. *v3's item 4
 >    (O-25 open, no composition theorem) is gone.* Completeness is over a random oracle; that honest
 >    proofs pass `acc` under the deployment is the harness's concrete checks.
 > 5. **The badge code**: what Lean's compiler emitted for `acc` (through the word-level BLAKE2s twin
@@ -666,6 +698,10 @@ together. Running nanoda on a larger machine restores the check (§6.2).
   require. The **walk over the stream's shape** is paper (its union bound is kernel).
 - Anything for `qV > logCap`: `KS` is vacuous there (`acceptAll_ks_above_logCap`); the
   certificate's `qV ≤ 2^16` excludes it.
+- That `KS` is the textbook notion for adversaries that leave queries to the verifier: its
+  extractor reads the verifier's answers too, so a verifier that decides on its own fresh answer
+  can be certified (`lucky_ks`, §1.4). No such adversary exists in the deployment, where the
+  verifier reads only the signed trace.
 - That **honest proofs pass `acc`** under the deployment: measured by the harness, not proved.
 - The **native prover's** correctness; only the signed proofs it writes are checked.
 - **Efficient extraction** beyond `B t` and the domain of about `2^61` log entries; anything for
@@ -865,7 +901,7 @@ namespaces for the job.
 | 5 | root check | compiled `acc` on (`treeRoot`, root signed proof) under that run's `vk`, within `T_V` (§3.5) | none: offline |
 | 6 | **stream** (one run) | `M + 1` leaves and `M` merges, a fresh process each, ready handshake, **timed**: `t_link`; every output checked with `acc` within `T_V` | a fresh lifetime, shared by its requests |
 | 7 | statement canaries | the root against its statement with one bit flipped; the first 2 leaf and 2 node outputs of the stream against that and against their sibling's statement: each must be rejected (C15) | none |
-| 8 | DoS | `acc` on 100 random and mutated signed proofs of the root's statement (random bytes; random `π` with the root's trace and signature; bit flips and truncations). Each input may take at most 10 × `T_V`, the column at most 180 s in all; a breach or a crash of the checker fails the run (REJECT), and the slow input is kept and named; an accepted input is recorded, not failed (V4-A9) | none |
+| 8 | DoS | `acc` on 100 random and mutated signed proofs of the root's statement (in turn: random bytes; random `π` with the root's trace and signature; the root's `π` with 1–8 bits flipped; the root's file with 1–8 bits flipped, cut to a random prefix in 30% of cases; none extends the file). Each input may take at most 10 × `T_V`, the column at most 180 s in all; a breach or a crash of the checker fails the run (REJECT), and the slow input is kept and named; an accepted input is recorded, not failed (V4-A9) | none |
 | 9 | result | JSON with every number of §3.5, attested | — |
 
 Steps 2–5, 7 and 8 are the tree job, steps 2, 3, 6 and 7 the stream job; they run in parallel.
@@ -1215,8 +1251,8 @@ before, 1,264, `logs/D-final-build.log`, `logs/trim/lake-build-final.log`; a col
 1 min 56 s to 2 min 55 s on the development VM, `logs/A-fix-build-cold.log`), and the axiom audit
 passes on every module (`propext`, `Classical.choice`, `Quot.sound`; `logs/A-fix-axiom-audit.log`,
 `logs/trim/axiom-audit.log`, `logs/ks/axiom-audit.log`). The contract imports Lean core and Mathlib
-only. By `loc.py`, the Library has 2,281 code lines and 285 theorems, the Controls 2,165 lines and
-322 theorems (1,856 and 233, 2,082 and 309 before V4-A10).
+only. By `loc.py`, the Library has 2,275 code lines and 291 theorems, the Controls 2,191 lines and
+327 theorems after the stage E-ks fix pass (1,856 and 233, 2,082 and 309 before V4-A10).
 
 **Controls**: every trusted definition has a positive and a negative control (the full table is
 stage A RESULT §3). The ones that carry the v4 changes:
@@ -1229,7 +1265,7 @@ stage A RESULT §3). The ones that carry the v4 changes:
 | `traceDigest`, WOTS, `SigOk` | `traceDigest_kat` (hashlib), `sigOk_sign` (every `sk`), `wotsDigits_dominates` (the checksum) | `traceDigest_changed_answer`, `sigOk_other_key`, `sigOk_key_unique`, `sigOk_ots_length`, `sigOk_path_length` |
 | `decodeWit` | `decodeWit_node_kat`, `decodeWit_leaf_kat` | `decodeWit_long_trace`, `decodeWit_short_sig`, `decodeWit_long_proof` |
 | `Certificate` with `∀ vk` | `ws_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` | `sigTrust_no_certificate`, `sigTrust_certificate_opens` (the adversary holding `sk` wins with probability 1), v3's negatives (`acceptAll_no_certificate` re-proved against the textbook `KS`) |
-| `KS`, textbook single-output (V4-A10) | `ws_ks`, `twoLucky_ks_exact` (through its potential, at `2^-192`), `queryThenAccept_ks_one` (direct, at `ε = 1`), `Backdoor.certified` | `acceptAll_wins`, `acceptAll_not_ks` (the adversary that asks nothing wins with probability 1), `queryThenAccept_ks_ge_one` (the verifier's own query is charged), `oneQuery_not_KS` (the query bound); what it does not say: `acceptAll_ks_above_logCap` |
+| `KS`, textbook single-output for normalised adversaries (V4-A10) | `ws_ks`, `twoLucky_ks_exact` (through its potential, at `2^-192`), `queryThenAccept_ks_one` (direct, at `ε = 1`), `Backdoor.certified`; `ws_textbook` (the textbook notion at 0, giving `KS` back through `KSTextbook.ks`) | `acceptAll_wins`, `acceptAll_not_ks` (the adversary that asks nothing wins with probability 1), `queryThenAccept_ks_ge_one` (the verifier's own query is charged), `oneQuery_not_KS` (the query bound); what it does not say: `acceptAll_ks_above_logCap`; what it does not exclude: `lucky_ks` (certified at 0) with `lucky_not_textbook` (textbook error at least `2^-112`) |
 | `prob` (V4-A10) | `prob_askGood` (a fresh answer is uniform: exactly `1/2`) | `prob_askTwice` (a repeated query is the table's: probability `0`, not `1 − 2^-256`) |
 | `errorCap = 2^-120`, `completenessCap = 2^-40` (V4-A9) | `twoLucky_ks`, `collision_ks` (potentials at the cap), `grind40_complete` (40 nonces: exactly `2^-40`) | `twoLucky_no_bool_kstate`, `collision_no_bool_kstate` (a log of `2^136 + 1` answers), `v24_no_bool_kstate` (`2^72 + 1` answers within the guard), `grind39_not_complete` |
 | composition (Library) | `walk_one_leaf`, `walk_two_leaves`, `ws_compose_prob` (the walk escapes with probability 0) | `forgery_trivial`, `compose_exists_free`; `noExt_walk_escaped`, `noExt_escape_prob` (an extractor that returns nothing: the walk escapes, `compose_prob`'s event is certain) |
@@ -1238,12 +1274,14 @@ The Library theorems the badge and the decoder rest on, `Fast.accF_eq` (the badg
 and `Words.decodeWit_witWords` (every fitting witness can be denoted), are theorems, not controls.
 
 **The trusted runtime** (the groups and rule of stage B RESULT §1.1; recounted by
-`logs/trim-fix/loc_runtime.py`, `logs/trim-fix/loc-runtime-after.log`): **3,670 code lines** after
-V4-A9, its golf and its fix pass: the service 948 Rust lines (std only), the runner 1,023, the
-sandbox 233, the badge main 88, the proof-side order 456, v3's ported tools 697, the calibration
-generator 161, CI scripts 64. Before V4-A9 the same count gave 3,800
-(`logs/trim/loc-runtime-before.log`; stage B counted 3,559 before its final fix pass). The measurement client `rf-bench` is trusted for nothing a record's soundness
-rests on (the calibration column is published, not enforced).
+`logs/ks-fix/loc_runtime.py`, `logs/ks-fix/loc-runtime-after.log`): **3,700 code lines** after the
+stage E-ks fix pass (the certificate job records the gate's and the badge's durations and the
+kernel's memory peak, +30): the service 948 Rust lines (std only), the runner 1,023, the sandbox
+255, the badge main 88, the proof-side order 464, v3's ported tools 697, the calibration generator
+161, CI scripts 64. After V4-A9 it was 3,670 (`logs/trim-fix/loc-runtime-after.log`), before V4-A9
+3,800 (`logs/trim/loc-runtime-before.log`; stage B counted 3,559 before its final fix pass). The
+measurement client `rf-bench` is trusted for nothing a record's soundness rests on (the
+calibration column is published, not enforced).
 
 | Component | Trusted for |
 |---|---|
@@ -1289,7 +1327,7 @@ V4-16 where they differ. V4-A9 (2026-10-26) and V4-A10 (2026-10-27) are the user
 | V4-A7 | controls: the impossibility, the node clause with the Lean signer, the negatives, the word-level twin | C-m1, C-m3, C-m11, C-m12 |
 | V4-A8 | this document states the impossibility, the `vk` caveat, `E` without `vk`, the unrankable season shape, the paper split, the trace-hash cost | C-m6, C-m9, C-m10 |
 | V4-A9 | the trim (the user's): every job within 30 min with nested caps and a cached organiser setup; one tree run and one stream run, no medians, two parallel jobs; `M = 256`; no per-entry liveness; per entry only the statement canaries, 2 per kind; the organiser's checks in the core CI only; DoS 100 inputs, failing on time and crashes only; only the root read; one Lean build; `errorCap = 2^-120`, `completenessCap = 2^-40` | keep only what serves valid verifiers or honest, fast, recursion-priced proving (§4.4) |
-| V4-A10 | the contract states textbook single-output knowledge soundness in the random-oracle model (`prob`, `KS`); v3's potential (`KState`) is an untrusted library tool, an intermediate artifact of a proof (`KState.ks`); the tree composes by a union bound over the extracted proofs (`Compose.compose_prob`) (the user's, 2026-10-27) | the certificate states the standard notion a cryptographer reads and accepts any correct proof technique; cost: about `2^-81` against `2^-90` for the whole run (§2.4) |
+| V4-A10 | the contract states textbook single-output knowledge soundness in the random-oracle model (`prob`, `KS`); v3's potential (`KState`) is an untrusted library tool, an intermediate artifact of a proof (`KState.ks`); the tree composes by a union bound over the extracted proofs (`Compose.compose_prob`) (the user's, 2026-10-27); the extractor reads the final log, the verifier's answers included: textbook for adversaries that ask the verifier's queries themselves (option B, the user's choice after review E-ks M-1; option A, the adversary's log only, rejected: it breaks the potential's bridge and exceeds the deployment's need); no conjunct `qV ≤ logCap` (the cap `qV ≤ 2^16` excludes the vacuous case, m-1) | the certificate states the standard notion a cryptographer reads and accepts any correct proof technique; cost: about `2^-81` against `2^-90` per composed output (§2.4) |
 | RA-M2 | `acc` checks `\|tr\| ≤ qV` (one trusted line) | `KS`'s query bound ranges over oracle functions and does not bound a non-functional trace |
 | Q5 | CI checks certificates with the Lean kernel only | nanoda needs more than 16 GB (§2.7) |
 | B dev. 1 | the prover isolated by namespaces, not a separate uid; two memory cgroups (11 GB + 2 GB) | no system user needed; the prover cannot make the OOM killer pick the service |
@@ -1332,8 +1370,9 @@ V4-16 where they differ. V4-A9 (2026-10-26) and V4-A10 (2026-10-27) are the user
 - **Gate rule 4 still requires `P` and `ext` compiled** (V4-A9): no badge runs them any more, so
   the rule could be relaxed to `V`; relaxing it changes what entries may submit and is the user's.
 - **The deployment's whole-run bound at `errorCap = 2^-120`**: about `2^-81` at `2^30` queries for
-  the stream's final output, `2^-83` for the tree's root (§2.4, V4-A10's union bound; `2^-90`
-  before); a season whose runs ask far more queries, or a longer stream, moves it.
+  the stream's final output, `2^-83` for the tree's root, about `2^-74` for every stream output
+  at once (§2.4, V4-A10's union bound; `2^-90` before); a season whose runs ask far more queries,
+  or a longer stream, moves it.
 - **Keyed BLAKE2s as a named assumption** (C unsettled 1): the alternative wording calls it the
   design's one heuristic, since its only analysis is in an ideal-cipher model.
 - **Runner facts** (C unsettled 2, 3): the CPU models, and whether `pclmulqdq` and AVX2 are on every

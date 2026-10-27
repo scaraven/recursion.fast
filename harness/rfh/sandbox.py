@@ -26,6 +26,7 @@ bubblewrap (Ubuntu 24.04 restricts them through AppArmor; CI relaxes that, `.git
 import os
 import struct
 import subprocess
+import threading
 import time
 import uuid
 
@@ -108,6 +109,40 @@ def scope_oom(unit: str, wait: float = 2.0):
         subprocess.run(["systemctl", "--user", "reset-failed", f"{unit}.scope"], capture_output=True, timeout=30)
     peak = kv.get("MemoryPeak", "")
     return oom, int(peak) if peak.isdigit() else None
+
+
+def scope_peak(unit: str):
+    """The memory high-water mark of the live scope `unit` in bytes, else None (no systemd, or no
+    such scope yet or any more)."""
+    if memcap_method() != "systemd":
+        return None
+    out = subprocess.run(["systemctl", "--user", "show", f"{unit}.scope", "-p", "MemoryPeak"],
+                         capture_output=True, text=True, timeout=30).stdout.strip()
+    v = out.partition("=")[2]
+    return int(v) if v.isdigit() else None
+
+
+class PeakWatch:
+    """Samples `scope_peak(unit)` once a second in a thread while a command runs; `stop()` returns
+    the largest value seen. Systemd collects a scope that ends normally, so this is how the peak of
+    a successful run is known; `MemoryPeak` is a high-water mark, so only the last second can be
+    missed."""
+
+    def __init__(self, unit: str, every: float = 1.0):
+        self.unit, self.peak, self.done = unit, None, threading.Event()
+        self.thread = threading.Thread(target=self._run, args=(every,), daemon=True)
+        self.thread.start()
+
+    def _run(self, every: float):
+        while not self.done.wait(every):
+            p = scope_peak(self.unit)
+            if p is not None:
+                self.peak = max(p, self.peak or 0)
+
+    def stop(self):
+        self.done.set()
+        self.thread.join()
+        return self.peak
 
 
 def kill_unit(unit: str):

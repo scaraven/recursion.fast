@@ -36,9 +36,12 @@ use it as feedback on the rules.
 
 ## 2. The design in one page
 
+*As of 2026-10-22; where §5a–§5c amend it, they win (review E-ks m-5).*
+
 **Model (unchanged from v3 but for V4-A10, §5c).** The submitter proves, in the random-oracle
 model, one-level knowledge soundness of their verifier `V` for the relation below (since V4-A10 the
-textbook single-output statement; v3's potential `KState` is a library route to it), and
+textbook single-output statement for adversaries that ask the verifier's queries themselves; v3's
+potential `KState` is a library route to it), and
 completeness with error of their Lean prover `P`, **for every public key `vk`**; the extractor is a
 step-counted program (`XProg`, `Computes`, budget `B t`). The signer is not in the model.
 
@@ -68,9 +71,9 @@ published `vk`.
 computes about the instantiation; with a secret key fixed after the verifier is frozen no such value
 exists (PRF security). Composition across the tree is the straight-line argument of CGSY24 Thm 5.1:
 on the run's one query log, the root's signed trace is genuine (unforgeability), so `V` accepts on
-the log, `final` extracts children whose signed traces are genuine again, down to the leaves. The
-paper bound: `Q·ε + Adv_PRF + Adv_EUF-CMA + BLAKE2s collisions` (since V4-A10, `N·(Q + qV)·ε` by a
-union bound over the `N` extracted proofs, §5c).
+the log, and the extractor returns children whose signed traces are genuine again, down to the
+leaves. The bound: `N·(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + BLAKE2s collisions`, a union bound over
+the `N` extracted proofs (V4-A10, §5c; v3's potential gave `Q·ε` for the whole tree).
 
 ## 3. Decisions (V4-n)
 
@@ -212,7 +215,7 @@ what each remaining rule is for. Implemented in stage D-trim (`docs/v4/stages/D-
 | 7 | **Only the tree's root is read and checked**; inner proofs, if written, are ignored; the statement canaries run on the root and on stream outputs | the root's certificate covers its children; the stream prices recursion |
 | 8 | **`completenessCap = 2^-128 → 2^-40`** | a completeness failure only costs its entrant a run: about 640 proofs per evaluation at `2^-40` each fail a run with probability about `2^-30.7` |
 | 9 | **One Lean build** instead of the byte-identical rebuild: the comparator, the gate and the badge use the build the kernel's exports were made from | the binding (the badge runs code compiled from exactly the checked modules) holds without a second build; it saved 173 s on the baseline |
-| 10 | **`errorCap = 2^-128 → 2^-120`** per fresh query; `logCap = 2^96` unchanged | admits GF(2^128) designs such as Flock (a degree-2 sumcheck round costs `2^-127`, the univariate-skip round `126/2^128 ≈ 2^-121`; FB-9), and keeps the whole-run bound negligible (about `2^-90` at `2^30` queries) |
+| 10 | **`errorCap = 2^-128 → 2^-120`** per fresh query; `logCap = 2^96` unchanged | admits GF(2^128) designs such as Flock (a degree-2 sumcheck round costs `2^-127`, the univariate-skip round `126/2^128 ≈ 2^-121`; FB-9), and keeps the whole-run bound negligible (about `2^-90` at `2^30` queries with the potential; since V4-A10 about `2^-81` per composed output, §5c) |
 | 11 | **The submission pipeline and the organiser's CI are separate**: every check whose subject is organiser code (`acc` before `V`, the file parser, the service, the sandbox, the badge template, the compiled extractor interpreter, the harness) runs only in the core repository's `ci.yml`; an evaluation runs only what is about the entry, plus the environment it runs in (the package tree and its manifest check, the comparator, the service, `T_triv,best`) | each check runs once per harness commit where its subject changes, not once per entry |
 
 ## 5c. Amendment V4-A10: textbook knowledge soundness (the user's decision of 2026-10-27)
@@ -222,7 +225,27 @@ It overrides V4-1 and §2 where they differ. Implemented in stage E-ks
 
 | Id | Amendment | Reason | Cost |
 |---|---|---|---|
-| V4-A10 | **The contract states textbook single-output knowledge soundness** in the random-oracle model: for every adversary, a query program asking at most `Q` queries on every oracle function and outputting a statement and a proof, run and then followed by the verifier against one lazily sampled random oracle (`prob`), the probability that the verifier accepts on the final query log and the extractor, given the statement, the proof and that log, returns no witness is at most `(Q + qV)·ε`, for `Q + qV ≤ logCap`; and the verifier asks at most `qV` queries. **The potential (`KState`) is an untrusted library tool**, an intermediate artifact of a proof: `KState.ks` turns one into `KS`. `failProb` leaves the contract too (`CompleteWithError` is stated through `prob`, the same statement). The rest of `Certificate` is unchanged | the certificate should state the standard notion a cryptographer reads, and accept any correct proof technique | the tree's composition takes a union bound over the extracted proofs: `N·(Q + qV)·ε` with `N` = 127 (the tree's root) or 513 (the stream's final output), about `2^-81` at `2^30` queries where the potential's one event gave `2^-90` (kernel for the harness tree, `Compose.compose_prob`) |
+| V4-A10 | **The contract states textbook single-output knowledge soundness** in the random-oracle model, for adversaries that ask the verifier's queries themselves: for every adversary, a query program asking at most `Q` queries on every oracle function and outputting a statement and a proof, run and then followed by the verifier against one lazily sampled random oracle (`prob`), the probability that the verifier accepts on the final query log and the extractor, given the statement, the proof and that log (the verifier's answers included), returns no witness is at most `(Q + qV)·ε`, for `Q + qV ≤ logCap`; and the verifier asks at most `qV` queries. **The potential (`KState`) is an untrusted library tool**, an intermediate artifact of a proof: `KState.ks` turns one into `KS`. `failProb` leaves the contract too (`CompleteWithError` is stated through `prob`, the same statement). The rest of `Certificate` is unchanged | the certificate should state the standard notion a cryptographer reads, and accept any correct proof technique | the tree's composition takes a union bound over the extracted proofs: `N·(Q + qV)·ε` with `N` = 127 (the tree's root) or 513 (the stream's final output), about `2^-81` at `2^30` queries where the potential's one event gave `2^-90` (kernel for the harness tree, `Compose.compose_prob`); about `2^-74` for every stream output at once (`257²` members) |
+
+**The extractor reads the final log: option B, the user's choice of 2026-10-27** (review E-ks M-1).
+The textbook definition (Chiesa–Yogev; CGSY24) gives the extractor the adversary's log only; `KS`
+gives it the final log, the verifier's own answers included. So `KS` is the textbook notion for
+*normalised* adversaries, those that ask the verifier's queries themselves, and the two coincide on
+them. Textbook ⇒ `KS` with the same extractor and the error at most doubled: the adversary followed
+by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV)·ε ≤ 2(Q + qV)·ε` (kernel,
+`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: the review's lucky verifier is certified at
+error 0 against about `2^-112` textbook with an efficient extractor (kernel: `Controls/Security.lean`,
+`lucky_ks`, and `lucky_not_textbook` for its own extractor; paper for every efficient one). The
+deployment needs no more: every prover in it is normalised, since the verifier reads only the
+signed trace and the prover asked the service for every answer in it; and the composition is
+unaffected, since an extracted member's verifier asks nothing fresh (`KS.select`). **Option A**, an
+extractor that reads only the adversary's log (about six trusted lines), was **rejected**: it breaks
+the potential's bridge `KState.ks` and every potential-based proof (`final` extracts on the log the
+verifier accepts on, the final one), and it is stronger than the deployment needs.
+
+**No conjunct `qV ≤ logCap`** (review E-ks m-1, a decision): `KS` is vacuous for `qV > logCap`
+(`Controls/Security.lean`, `acceptAll_ks_above_logCap`), and the certificate's cap
+`qV ≤ 2^16 < logCap` excludes that case.
 
 ## 6. Conventions for every agent
 

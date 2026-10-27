@@ -2,8 +2,10 @@
 # Contract: knowledge soundness and completeness in the random-oracle model        (TRUSTED)
 
 DESIGN-v3 §4, V3-3, V3-4, as amended by V3-KS-A1 … A7, V4-A9 (the caps' values) and **V4-A10**
-(the user's decision of 2026-10-27): knowledge soundness is the textbook single-output notion, and
-v3's potential (`KState`) is an untrusted library route to it (`Library/Security.lean`).
+(the user's decision of 2026-10-27): knowledge soundness is the textbook single-output notion for
+adversaries that ask the verifier's queries themselves (its extractor reads the final log, the
+verifier's answers included), and v3's potential (`KState`) is an untrusted library route to it
+(`Library/Security.lean`).
 `Certificate.lean` requires both definitions for the verifier and prover under **every** public
 key. Mathlib only; no probability monad and no adversary type: an adversary is a query program,
 and the uniform average over the `2^256` digests (a sum over `Digest`) is the only measure.
@@ -20,7 +22,23 @@ proof `π`. The game runs `A`, then the verifier on its output, against one rand
 adversary wins when `V` accepts `(c, π)` with its answers read from the final query log
 (`runLog`) and the extractor `E`, given `c`, `π` and that log, returns no witness of `R`. `KS`
 says: `V` asks at most `qV` queries on every input and oracle function, and every adversary with
-`Q + qV ≤ logCap` wins with probability at most `(Q + qV) · ε`.
+`Q + qV ≤ logCap` wins with probability at most `(Q + qV) · ε`. Acceptance read from the final
+log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_verdict`).
+* **The extractor reads the final log, the verifier's own answers included** (review E-ks M-1;
+  the user's choice of 2026-10-27, option B). The textbook definition (Chiesa–Yogev; CGSY24) gives
+  it the adversary's log only. So `KS` is textbook knowledge soundness for *normalised*
+  adversaries, those that ask the verifier's queries themselves, and the two coincide on them.
+  Textbook ⇒ `KS`, with the same extractor and the error at most doubled: the adversary followed
+  by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV) · ε ≤ 2 (Q + qV) · ε`
+  (`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: a verifier that accepts when its own
+  fresh answer, masked, is the statement's witness is certified at error `0` with an extractor
+  that reads that answer, against about `2^-112` textbook for every efficient extractor
+  (`Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`; the efficient bound on paper). The
+  deployment needs no more: every prover in it is normalised, since the verifier reads only the
+  signed trace and the prover asked the service for every answer in it; and in the tree's
+  composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`).
+  Option A, an extractor that reads only the adversary's log, was rejected: it breaks the
+  potential's bridge and every potential-based proof, and is stronger than the deployment needs.
 * *The adversary* is computationally unbounded, bounded only in queries, and deterministic. A
   randomised adversary is an average of deterministic ones, and the bound carries over because
   `E` does not depend on the adversary (paper). It chooses the statement after its queries. Its
@@ -38,8 +56,9 @@ says: `V` asks at most `qV` queries on every input and oracle function, and ever
   at `errorCap` (birthday cost `2^108`), a full digest costs `2^-160`, and an honest Merkle
   verifier comparing at most `2^15` digests per query about `2^-145`. At the caps the bound is
   `2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64` (V3-KS-A6). Nothing is claimed
-  for `Q + qV > logCap`, and a `qV` above `logCap` makes `KS` vacuous, which `Certificate`'s
-  `qV ≤ 2^16` excludes (`Controls/Security.lean`, `acceptAll_ks_above_logCap`).
+  for `Q + qV > logCap`, and a `qV` above `logCap` makes `KS` vacuous (`Controls/Security.lean`,
+  `acceptAll_ks_above_logCap`). No conjunct excludes it here, by decision (review E-ks m-1):
+  `Certificate`'s cap `qV ≤ 2^16 < logCap` does.
 * **The extractor is efficient (`Computes`, `Extractor.lean`) only for tapes of at most `2^64`
   words, about `2^61` log entries** (V3-S2R-m2): on longer logs `E` is unconstrained and may be a
   non-constructive choice (`Controls/Certificate.lean`, `choice_certificate`), so between about
@@ -110,21 +129,24 @@ noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 120
 soundness is claimed: `2^96`. -/
 def logCap : ℕ := 2 ^ 96
 
+open Classical in
 /-- **The probability that the program `p`, started with the table `L`, ends with an output `x`
 and a final table `L'` such that `B x L'`**, when each query not in the table is answered
 uniformly at random and recorded, and a repeated query is answered from the table (first match):
 a lazily sampled random oracle. -/
 noncomputable def prob {α : Type} (B : α → Log → Prop) : OProg α → Log → ℝ≥0
-  | .ret x, L => by classical exact if B x L then 1 else 0
+  | .ret x, L => if B x L then 1 else 0
   | .query q k, L => match L.find? fun e => e.1 = q with
     | some e => prob B (k e.2) L
     | none => (2 ^ 256)⁻¹ * ∑ a : Digest, prob B (k a) (L ++ [(q, a)])
 
-/-- **Knowledge soundness** with per-query error `ε` and at most `qV` verifier queries: `V` asks
-at most `qV` queries on every input and oracle; and for every adversary asking at most `Q` queries
-and outputting a statement and a proof, `Q + qV ≤ logCap`, the probability over one random oracle
-that `V` accepts the output on the final query log while `E`, given the statement, the proof and
-that log, returns no witness of `R`, is at most `(Q + qV) · ε`. -/
+/-- **Knowledge soundness** with per-query error `ε` and at most `qV` verifier queries, the
+textbook single-output notion for adversaries that ask the verifier's queries themselves: `V`
+asks at most `qV` queries on every input and oracle; and for every adversary asking at most `Q`
+queries and outputting a statement and a proof, `Q + qV ≤ logCap`, the probability over one random
+oracle that `V` accepts the output on the final query log while `E`, given the statement, the
+proof and that log (the verifier's answers included), returns no witness of `R`, is at most
+`(Q + qV) · ε`. -/
 def KS (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
     (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) (qV : ℕ) : Prop :=
   (∀ H c π, ((V c π).queries H).length ≤ qV) ∧

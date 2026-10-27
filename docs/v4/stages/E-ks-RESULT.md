@@ -7,7 +7,9 @@ Everything below ran on the development VM; nothing ran on GitHub. Logs are unde
 (gitignored).
 
 **In one paragraph.** The contract now states **textbook single-output knowledge soundness** in
-the random-oracle model: every adversary, a query program asking at most `Q` queries and outputting
+the random-oracle model, for adversaries that ask the verifier's queries themselves (the extractor
+reads the final log, the verifier's answers included; review E-ks M-1, settled by the user as
+option B, §9): every adversary, a query program asking at most `Q` queries and outputting
 a statement and a proof, run and then followed by the verifier against one lazily sampled random
 oracle, makes the verifier accept on the final query log while the extractor, given the statement,
 the proof and that log, returns no witness, with probability at most `(Q + qV)·ε`, for
@@ -67,7 +69,9 @@ def CompleteWithError (R : Digest → Wit → Prop) (P : Digest → Wit → OPro
   ∀ c w, R c w → prob (fun b _ => b = false) ((P c w).bind (V c)) [] ≤ δ
 ```
 
-It is the starting design of the brief, unchanged. `(Q + qV) * ε` elaborates as
+It is the starting design of the brief, unchanged; it is the textbook notion for adversaries
+that ask the verifier's queries themselves, since its extractor reads the final log (review E-ks
+M-1 and §9). `(Q + qV) * ε` elaborates as
 `(↑Q + ↑qV) * ε` in `ℝ≥0`. The adversary's budget is functional, like `qV`: workable, since a
 lazily sampled run agrees with some oracle function (`Library/PaperTheorem.lean`, `bound_found`,
 `bound_fresh`; `Library/Prob.lean`, `queries_withLog_le`), so `DepthLE` was not needed.
@@ -302,3 +306,63 @@ pass's re-run of the smoke.
 4. **The baseline's migration** (§3 lists the API changes): the `KS` conjuncts swap order; an entry
    that destructures `KS` must follow.
 5. Unchanged and still open: everything in `D-trim-RESULT.md` §8 and design §6.2.
+
+## 9. Fix pass (review `docs/v4/reviews/E-ks-review.md`, golf `docs/v4/stages/E-ks-GOLF.md`)
+
+On top of `8645c39` (the stage `a283ff8` and its golf), uncommitted. Logs are under `logs/ks-fix/`.
+
+| Finding | Disposition |
+|---|---|
+| **M-1** `KS`'s extractor reads the final log, the verifier's fresh answers included | **The user chose option B**: `KS` is unchanged and every text now says what it is. It is textbook single-output knowledge soundness for adversaries that ask the verifier's queries themselves (normalised adversaries). The relations are stated: textbook ⇒ `KS` with the same extractor and the error at most doubled; `KS` ⇏ textbook (the lucky verifier); the two coincide for normalised adversaries. Why the deployment needs no more: every prover in it is normalised (the verifier reads only the signed trace, and the prover asked the service for every answer in it), and an extracted member's verifier asks nothing fresh (`KS.select`). Where: `Contract/Security.lean`'s header and `KS`'s docstring; design §0, §1.4, §2.1, §2.4 (the member's-bound row and "The error"), §2.7 item 4, §2.8, §5, §6.1; BRIEF §5c (option B as the user's choice of 2026-10-27, option A rejected and why: it breaks the potential's bridge and every potential-based proof, and is stronger than the deployment needs); `CHECKS.md` C3 and C12; `README.md`; `CLAUDE.md`; §2 and the summary above. **The review's probe is a control** (`Controls/Security.lean`): `lucky_ks`, `KS (Rel acc) Vlucky Elucky 0 1`. Added beside it: `lucky_not_textbook`, a kernel lower bound: the same pair is textbook-sound at no `ε < 2^-112` (the adversary that asks nothing wins on `2^144` of the `2^256` answers, and the extractor sees an empty log); that every *efficient* extractor fails too is paper (preimage hardness). **The textbook ⇒ `KS` theorem landed** (`Library/KS.lean`): `KSTextbook` (the library's textbook notion: the extractor reads the adversary's log, `withLog`) and `KSTextbook.ks : KSTextbook R V E ε qV (logCap + qV) → KS R V E (2 * ε) qV`. The textbook hypothesis covers up to `logCap + qV` queries in all, because `KS`'s game, used as a textbook adversary, has `Q + qV` queries of its own. Also `KSTextbook.of_extracts` and the positive control `ws_textbook` (the witness-sending entry is textbook-sound at 0, and `KSTextbook.ks` gives its `KS` back) |
+| **m-1** `KS` vacuous for `qV > logCap` | **Kept, by decision**: no conjunct; the certificate's cap `qV ≤ 2^16 < logCap` excludes the case. Recorded in `Security.lean`'s header, design §1.4 and BRIEF V4-A10; `acceptAll_ks_above_logCap` stays the control |
+| **m-2** tactic block in the trusted `prob` | **Fixed**: `open Classical in` and a plain `if`. Under `pp.all`, `#print` of `prob`, `prob._f`, `prob.match_1`, `match_2`, `match_3`, `KS` and `CompleteWithError` is byte-identical before and after (`print-prob-before.log`, `print-prob-after.log`; the before state rebuilt from `HEAD`'s file). The library's `ind` takes the same form. The `open … in` line is one more trusted code line |
+| **m-3** no kernel fact that the event's acceptance is the verdict | **Fixed** (library, no trusted change): `Library/KS.lean`, `prob_accept_eq_verdict`, the event's `runLog`-read acceptance on the final log has the probability of the verifier's verdict `true` in the game, through `Library/Prob.lean`'s `expect_congr_runLog` (a run's final tables answer it). Cited in `Security.lean`'s header |
+| **m-4** dead `KS.mono`; double blank line | **Fixed**: `KS.mono` deleted (no user); the blank line in `Library/Compose.lean` removed |
+| **m-5** BRIEF's stale `2^-90`; §2 states the rule and its negation | **Fixed**: item 10 gives both figures (`2^-90` with the potential, `2^-81` per composed output since V4-A10); §2 is marked "as of 2026-10-22; §5a–§5c win", and its O-25 paragraph no longer cites `final` or `Q·ε` as the rule |
+| **m-6** which event `2^-81` bounds | **Fixed**: design §2.4 "The error" says `2^-81` bounds the stream's final output (513 members), gives about `2^-74` for every checked stream output at once (`257²` members, a union over the 257 outputs' trees), and says the kernel theorem is per root and for the balanced tree; §0 and §6.2 quote the same |
+
+**The coordinator's further items.**
+- **`protected`**: `OProg.bind_assoc` and `OProg.queries_bind` (`Library/Oracle.lean`). Every use in
+  the repository was already qualified, so nothing broke; `KState.ks` is unchanged.
+- **`cert.json`** (`harness/evaluate.py`, `harness/rfh/sandbox.py`): `gate_s` and `badge_s` record
+  the gate's and the badge build's seconds (the capped commands, beside `build_s` and
+  `comparator_s`). A kernel run's `peak_bytes` is now also recorded when it succeeds: `PeakWatch`
+  samples the scope's `MemoryPeak` once a second while the run lives. It is a high-water mark, so
+  only the last second can be missed; systemd collects a scope that ends normally, which is why
+  `scope_oom` alone saw it only for a killed run. One smoke check was added (17 checks).
+- **Line counts**: the contract is **350** code lines (the golf's 349, plus the `open Classical
+  in` line of m-2; `Security.lean` 28), which is what design §0, §2.7 item 2 and §5 already state.
+  Library 2,218 → 2,275 code lines, 287 → 291 theorems; Controls 2,143 → 2,191, 322 → 327 (design
+  §5). The trusted runtime is 3,670 → 3,700 code lines (`loc-runtime-before.log`,
+  `loc-runtime-after.log`; design §0 and §5).
+- **The DoS column's wording** (the submissions review): `harness/rfh/checks.py`'s `dos_inputs`
+  said "extensions", which it never makes. Its docstring now lists what it makes, in turn: random
+  bytes; random `π` with the root's trace and signature; the root's `π` with 1–8 bits flipped; the
+  root's file with 1–8 bits flipped, cut to a random prefix in 30% of cases. Design §3.4's row says
+  the same; `PROVER.md` ("a mutated or random input") was already accurate. No code changed.
+
+**Checks** (all on the final tree; `logs/ks-fix/final-summary.log`, each step's log
+`logs/ks-fix/final-<step>.log`; the script, outside the repository, is
+`/tmp/claude-1000/-home-devops-Verified-zkEVM-recursion-fast/deb0fda2-5afe-4ae8-816d-bf1a4a32e03f/scratchpad/ks-fix/run/run.sh`):
+
+| Step | Outcome | Duration |
+|---|---|---|
+| `timeout 1800 lake build` | green, 1,266 jobs, no warning | 52.2 s after the Lean edits (`lake-build-dev.log`); 2.3 s in the pass (up to date) |
+| line budget (`loc.py`, as `ci.yml`) | **350** ≤ 500 (`Security.lean` 28) | 0.1 s |
+| axiom audit | PASS (every declaration within `propext`, `Classical.choice`, `Quot.sound`) | 5.8 s |
+| hygiene, source-rule fixtures | OK | 5.2 s |
+| `py_compile` (`evaluate.py`, `rfh/sandbox.py`, `rfh/checks.py`, `smoke.py`) | OK | 0.1 s |
+| `org-setup.sh` (`RF_BADGE_OBJECTS=`) | OK | 68.2 s |
+| token sweep | 411 tokens, 0 unreviewed | 15.8 s |
+| gate fixtures | OK | 59.0 s |
+| Lean signer against the service; `extract`; `acc` probe and canaries; chain checker | 0 failures each; 3 runs `ok` | 56.6 s; 1.2 s; 44.2 s; 9.0 s |
+| service build, `cargo test`; `test_service.py` | OK; 0 failures | 0.4 s (cached); 16.7 s |
+| `test_sandbox.py` (exercises `rfh/sandbox.py`), `test_tv.py`, `test_aggregate.py`, `test_dos.py` | 0 failures each | 21.3, 0.2, 1.6, 0.2 s |
+| `smoke.py --mock` | 10 checks, 0 failures | 27.8 s |
+| `smoke.py --org` | **17 checks, 0 failures**: the witness-sending entry certified (Lean kernel) and ACCEPTed; the new check reads `build_s` 28.6, `comparator_s` 39.1, `gate_s` 6.3, `badge_s` 12.0 s and the Lean kernel's peak 721,350,656 B (0.67 GiB) from `cert.json` | 296.9 s |
+| after restoring the link: `lake build`, axiom audit against the shared `pkgs-local` | green, PASS; 0 files written there since the run started | 2.5 s, 5.2 s |
+
+As before, the steps from `org-setup.sh` on ran with `.lake/packages` on the private copy
+`.lake/pkgs-ks` and the comparator built from its pin into the scratchpad (`logs/ks/kernels.env`);
+the link is restored to `/home/devops/Verified-zkEVM/recursion.fast-v4/.lake/pkgs-local`.
+`.lake/pkgs-ks` (9.2 GB, gitignored) is still there; delete it once no further smoke is needed.

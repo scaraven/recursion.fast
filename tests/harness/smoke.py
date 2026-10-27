@@ -205,6 +205,11 @@ def main():
                                         f"kernels {cj.get('kernels')}")
         check("Solution" in (cj.get("built_modules") or []) and "RfSmokeUnused" not in (cj.get("built_modules") or []),
               f"an entry module Solution does not import is never built (Q7): built {cj.get('built_modules')}")
+        steps_s = {k: cj.get(k) for k in ("build_s", "comparator_s", "gate_s", "badge_s")}
+        lean_peak = ((cj.get("kernel_runs") or {}).get("lean") or {}).get("peak_bytes")
+        check(all(isinstance(v, (int, float)) for v in steps_s.values())
+              and (memcap_method() != "systemd" or cj.get("status") != "ok" or bool(lean_peak)),
+              f"cert.json records each capped step's seconds {steps_s} and the Lean kernel's peak {lean_peak} B")
         if cj.get("status") in ("ok", "provisional"):
             out = os.path.join(tmp, "result-honest.json")
             step("honest benchmark", lambda: evaluate("bench", "--entry", entry, "--cert", cert, "--work",

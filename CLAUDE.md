@@ -11,7 +11,8 @@ instantiated the oracle. **Version 4 (the signed random oracle, SROM)** is the c
 implemented on the branch `v4/srom-rules` and not yet adopted by the user.
 
 v4 keeps v3's certificate (knowledge soundness and completeness in the random-oracle model, the
-step-counted extractor), states knowledge soundness in its textbook single-output form (V4-A10;
+step-counted extractor), states knowledge soundness in its textbook single-output form for
+adversaries that ask the verifier's queries themselves (V4-A10: the extractor reads the final log;
 v3's potential `KState` is an untrusted library route to it, `KState.ks`), and changes the
 oracle's deployment: a service holds a secret BLAKE2s key and signs the answers each proof used,
 every proof is a signed proof `(π, tr, σ)`, and the one trusted predicate `acc` (the node clause,
