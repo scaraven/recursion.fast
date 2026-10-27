@@ -149,16 +149,13 @@ theorem queryThenAccept_wins (E : Digest → Proof → Log → Option Wit) :
 and accepts is knowledge-sound with `qV = 1` only at `ε ≥ 1`. -/
 theorem queryThenAccept_ks_ge_one (E : Digest → Proof → Log → Option Wit) {ε : ℝ≥0}
     (h : KS (fun _ _ => False) queryThenAccept E ε 1) : 1 ≤ ε := by
-  have hb := h.bound (.ret (Vector.replicate 32 0, ByteArray.empty)) (Q := 0) (fun _ => le_rfl)
-    (by simp [logCap])
-  rw [queryThenAccept_wins] at hb
-  simpa using hb
+  simpa using (queryThenAccept_wins E).symm.trans_le
+    (h.bound _ (Q := 0) (fun _ => le_rfl) (by decide))
 
 /-- It is knowledge-sound at error `1`, so the error is what fails, not the definition. -/
 theorem queryThenAccept_ks_one (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) queryThenAccept E 1 1 :=
-  ⟨fun _ _ _ => by simp [queryThenAccept, OProg.queries], fun _ _ _ _ =>
-    (prob_le_one _ _ _).trans (by simp)⟩
+  ⟨fun _ _ _ => le_rfl, fun _ _ _ _ => (prob_le_one _ _ _).trans (by simp)⟩
 
 /-! ## The query bound -/
 

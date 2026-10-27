@@ -93,13 +93,12 @@ theorem consistent_append_self {H : ByteArray → Digest} {L : Log} {q : ByteArr
     (h : Consistent H L) :
     Consistent H (L ++ [(q, H q)]) := by
   intro q' e he
-  rw [List.find?_append] at he
-  cases hL : L.find? (fun e => decide (e.1 = q')) with
-  | some e' => rw [hL] at he; exact (Option.some.inj he) ▸ h q' e' hL
-  | none =>
-    rw [hL, Option.none_or] at he
-    by_cases hq : q = q'
-    · subst hq; simp at he; rw [← he]
-    · simp [hq] at he
+  rw [List.find?_append, Option.or_eq_some_iff] at he
+  rcases he with he | ⟨-, he⟩
+  · exact h q' e he
+  · simp only [List.find?_singleton, Option.ite_none_right_eq_some, decide_eq_true_eq,
+      Option.some.injEq] at he
+    obtain ⟨rfl, rfl⟩ := he
+    rfl
 
 end RecursionFast

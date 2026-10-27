@@ -36,10 +36,9 @@ use it as feedback on the rules.
 
 ## 2. The design in one page
 
-**Model (unchanged from v3; knowledge soundness textbook since V4-A10, §5c).** The submitter
-proves, in the random-oracle model with v3's potential `KState` (since V4-A10: the textbook
-single-output statement, the potential a library route), one-level knowledge soundness of their
-verifier `V` for the relation below, and
+**Model (unchanged from v3 but for V4-A10, §5c).** The submitter proves, in the random-oracle
+model, one-level knowledge soundness of their verifier `V` for the relation below (since V4-A10 the
+textbook single-output statement; v3's potential `KState` is a library route to it), and
 completeness with error of their Lean prover `P`, **for every public key `vk`**; the extractor is a
 step-counted program (`XProg`, `Computes`, budget `B t`). The signer is not in the model.
 

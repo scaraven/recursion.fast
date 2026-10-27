@@ -116,8 +116,7 @@ uniformly at random and recorded, and a repeated query is answered from the tabl
 a lazily sampled random oracle. -/
 noncomputable def prob {α : Type} (B : α → Log → Prop) : OProg α → Log → ℝ≥0
   | .ret x, L => by classical exact if B x L then 1 else 0
-  | .query q k, L =>
-    match L.find? fun e => e.1 = q with
+  | .query q k, L => match L.find? fun e => e.1 = q with
     | some e => prob B (k e.2) L
     | none => (2 ^ 256)⁻¹ * ∑ a : Digest, prob B (k a) (L ++ [(q, a)])
 

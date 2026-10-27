@@ -229,12 +229,11 @@ theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s
   rfl
 
 theorem big_complete (vk : Digest) :
-    CompleteWithError (Rel (Sbig.acc vk)) (Sbig.P vk) (Sbig.V vk) Sbig.δ := fun c w hR => by
-  cases w with
-  | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
-  | leaf s n =>
-    exact (failProb_eq_prob _ []).symm.trans_le
-      (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
+    CompleteWithError (Rel (Sbig.acc vk)) (Sbig.P vk) (Sbig.V vk) Sbig.δ :=
+  completeWithError_iff.mpr fun c w hR => by
+    cases w with
+    | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
+    | leaf s n => exact (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
 
 /-- **A certified submission whose `acc` accepts nothing** (V3-S2R-m1). -/
 theorem acc_rejects_all_certified : Certificate Sbig ∧ ∀ vk c p, Sbig.acc vk c p = false :=

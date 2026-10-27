@@ -94,8 +94,8 @@ theorem InTree.follow_eq {S : Submission} {L : Log} {c₀ : Digest} {p₀ : Sign
     follow S L (c₀, p₀) bs = some (c, p) := by
   induction h with
   | root => rfl
-  | left _ hE ih => simp [follow, ih, hE]
-  | right _ hE ih => simp [follow, ih, hE]
+  | left _ hE ih => simp only [follow, ih, Option.bind_some, hE, Bool.false_eq_true, ite_false]
+  | right _ hE ih => simp only [follow, ih, Option.bind_some, hE, ite_true]
 
 /-- **A forgery against the log `L`**: a signed proof whose trace's queries are within
 `queryCap` and whose signature on the trace's digest is valid under `vk`, while its trace is not
@@ -434,7 +434,7 @@ def memberAt (S : Submission) (c₀ : Digest) (bs : List Bool) (p₀ : Signed) (
 /-- A fresh answer keeps a log functional. -/
 theorem functional_append {L : Log} {q : ByteArray} {a : Digest} (hL : L.Functional)
     (hf : L.find? (fun e => e.1 = q) = none) : (L ++ [(q, a)]).Functional := by
-  have hq : ∀ e ∈ L, e.1 ≠ q := fun e he h => by simpa [h] using List.find?_eq_none.mp hf e he
+  have hq : ∀ e ∈ L, e.1 ≠ q := fun e he h => List.find?_eq_none.mp hf e he (decide_eq_true h)
   intro e he e' he' h
   simp only [List.mem_append, List.mem_singleton] at he he'
   rcases he with he | rfl <;> rcases he' with he' | rfl
@@ -452,7 +452,7 @@ theorem escape_prob_le (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (c₀ : Di
     (P : Finset (List Bool)) :
     prob (fun p L => ∃ bs ∈ P, ∃ c q, InTree S L c₀ p bs c q ∧ Escape S vk L c q) A [] ≤
       P.card * ((Q + qV) * ε) := by
-  refine (prob_mono_of_inv Log.Functional (fun _ _ _ hL hf => functional_append hL hf)
+  refine (prob_mono_of_inv Log.Functional (fun _ _ _ => functional_append)
     (B' := fun p L => ∃ bs ∈ P, Wins (Rel (S.acc vk)) (S.V vk) S.E (memberAt S c₀ bs p L) L)
     (fun p L hL ⟨bs, hbs, c, q, hmem, he⟩ => ⟨bs, hbs, ?_⟩) A
     (fun _ h => absurd h List.not_mem_nil)).trans
@@ -470,10 +470,9 @@ theorem compose_prob (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ) (h
     (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap) :
     prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
       (walk L n hn r hs hr p hacc).Escaped) A [] ≤ (2 ^ (r + 1) - 1 : ℕ) * ((Q + qV) * ε) := by
-  have hcard : (paths r).card = 2 ^ (r + 1) - 1 := by have := card_paths r; omega
-  have hb := escape_prob_le hks (treeRoot (hs.map fun h => leafStmt h n)) A hA hQ (paths r)
-  rw [hcard] at hb
-  refine (prob_mono (fun p L ⟨_, he⟩ => ?_) A []).trans hb
+  rw [show 2 ^ (r + 1) - 1 = (paths r).card by have := card_paths r; omega]
+  refine (prob_mono (fun p L ⟨_, he⟩ => ?_) A []).trans
+    (escape_prob_le hks (treeRoot (hs.map fun h => leafStmt h n)) A hA hQ (paths r))
   obtain ⟨c, q, bs, hd, hmem, h⟩ := he.exists
   exact ⟨bs, mem_paths.mpr hd, c, q, hmem, h⟩
 
@@ -511,18 +510,7 @@ theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ chainCap) {c₀ : Digest} 
   subst hh ho
   have hR : Rel (S.acc vk) (treeRoot ([h].map fun h => leafStmt h n)) (.leaf s n) :=
     ⟨hn, show leafStmt h n = leafStmt (chainEnd s n) n by rw [hend]⟩
-  have hx := extract_of_E hacc hin hE hR
   unfold walkFrom
-  split
-  · rename_i heq; rw [hx] at heq; cases heq
-  · rename_i heq; rw [hx] at heq; cases heq
-  · rename_i s' m _ _ heq
-    rw [hx] at heq
-    obtain ⟨rfl, rfl⟩ : s = s' ∧ n = m := by
-      have := congrArg (fun x => (Sum.getLeft? x).map Subtype.val) heq
-      simpa using this
-    rw [dite_eq_left_of_eq_true (eq_true ⟨hend, rfl⟩)]
-    rfl
-  · rename_i heq; rw [hx] at heq; cases heq
+  simp only [extract_of_E hacc hin hE hR, hend, and_self, dite_true, Outcome.starts?]
 
 end RecursionFast.Compose

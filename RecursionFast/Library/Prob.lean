@@ -31,20 +31,14 @@ local notation "N" => ((2 : ℝ≥0) ^ 256)
 
 theorem N_pos : 0 < N := by positivity
 
-/-- The average over the answers of a function bounded by `b` is at most `b`. -/
-theorem avg_le {f : Digest → ℝ≥0} {b : ℝ≥0} (h : ∀ a, f a ≤ b) : N⁻¹ * ∑ a, f a ≤ b := by
-  have : ∑ a, f a ≤ N * b := by
-    calc ∑ a, f a ≤ ∑ _a : Digest, b := Finset.sum_le_sum fun a _ => h a
-      _ = N * b := by
-        rw [Finset.sum_const, Finset.card_univ, nsmul_eq_mul, fintype_card_digest, Nat.cast_pow,
-          Nat.cast_ofNat]
-  calc N⁻¹ * ∑ a, f a ≤ N⁻¹ * (N * b) := by gcongr
-    _ = b := by rw [← mul_assoc, inv_mul_cancel₀ N_pos.ne', one_mul]
-
 /-- The average of a constant over the `2^256` answers. -/
 theorem avg_const (x : ℝ≥0) : N⁻¹ * ∑ _a : Digest, x = x := by
   rw [Finset.sum_const, Finset.card_univ, fintype_card_digest, nsmul_eq_mul, Nat.cast_pow,
-    Nat.cast_ofNat, ← mul_assoc, inv_mul_cancel₀ (by positivity), one_mul]
+    Nat.cast_ofNat, ← mul_assoc, inv_mul_cancel₀ N_pos.ne', one_mul]
+
+/-- The average over the answers of a function bounded by `b` is at most `b`. -/
+theorem avg_le {f : Digest → ℝ≥0} {b : ℝ≥0} (h : ∀ a, f a ≤ b) : N⁻¹ * ∑ a, f a ≤ b :=
+  (mul_le_mul_of_nonneg_left (Finset.sum_le_sum fun a _ => h a) bot_le).trans (avg_const b).le
 
 /-! ## Expectation -/
 
@@ -52,8 +46,7 @@ theorem avg_const (x : ℝ≥0) : N⁻¹ * ∑ _a : Digest, x = x := by
 sampled as in `prob`. -/
 noncomputable def expect (F : α → Log → ℝ≥0) : OProg α → Log → ℝ≥0
   | .ret x, L => F x L
-  | .query q k, L =>
-    match L.find? fun e => e.1 = q with
+  | .query q k, L => match L.find? fun e => e.1 = q with
     | some e => expect F (k e.2) L
     | none => N⁻¹ * ∑ a : Digest, expect F (k a) (L ++ [(q, a)])
 
@@ -67,16 +60,18 @@ theorem ind_of {B : α → Log → Prop} {x : α} {L : Log} (h : B x L) : ind B 
 theorem ind_of_not {B : α → Log → Prop} {x : α} {L : Log} (h : ¬ B x L) : ind B x L = 0 := by
   classical simp [ind, h]
 
-theorem ind_le_ind {B B' : α → Log → Prop} {x : α} {L : Log} (h : B x L → B' x L) :
-    ind B x L ≤ ind B' x L := by
+/-- The indicator is at most every value that is at least `1` where the event holds. -/
+theorem ind_le {B : α → Log → Prop} {x : α} {L : Log} {y : ℝ≥0} (h : B x L → 1 ≤ y) :
+    ind B x L ≤ y := by
   by_cases hb : B x L
-  · rw [ind_of hb, ind_of (h hb)]
-  · rw [ind_of_not hb]; exact bot_le
+  · exact (ind_of hb).trans_le (h hb)
+  · exact (ind_of_not hb).trans_le bot_le
 
-theorem ind_le_one (B : α → Log → Prop) (x : α) (L : Log) : ind B x L ≤ 1 := by
-  by_cases hb : B x L
-  · rw [ind_of hb]
-  · rw [ind_of_not hb]; exact zero_le_one
+theorem ind_le_ind {B B' : α → Log → Prop} {x : α} {L : Log} (h : B x L → B' x L) :
+    ind B x L ≤ ind B' x L :=
+  ind_le fun hb => (ind_of (h hb)).ge
+
+theorem ind_le_one (B : α → Log → Prop) (x : α) (L : Log) : ind B x L ≤ 1 := ind_le fun _ => le_rfl
 
 /-- **`prob` is the expectation of the indicator.** -/
 theorem prob_eq_expect (B : α → Log → Prop) :
@@ -144,13 +139,9 @@ theorem expect_bind_of_runLog (F : β → Log → ℝ≥0) (f : α → OProg β)
     ∀ (p : OProg α) {b : α}, p.runLog L = some b → expect F (p.bind f) L = expect F (f b) L
   | .ret _, _, h => by cases h; rfl
   | .query q k, b, h => by
-    simp only [OProg.runLog] at h
-    cases hf : L.find? (fun e => decide (e.1 = q)) with
-    | none => simp [hf] at h
-    | some e =>
-      simp only [hf, Option.bind_some] at h
-      simp only [OProg.bind, expect, hf]
-      exact expect_bind_of_runLog F f (k e.2) h
+    obtain ⟨e, hf, h⟩ := Option.bind_eq_some_iff.mp h
+    simp only [OProg.bind, expect, hf]
+    exact expect_bind_of_runLog F f (k e.2) h
 
 /-! ## Probability -/
 
@@ -181,12 +172,9 @@ theorem prob_exists_le {ι : Type} (s : Finset ι) (B : ι → α → Log → Pr
     (L : Log) : prob (fun x L => ∃ i ∈ s, B i x L) p L ≤ ∑ i ∈ s, prob (B i) p L := by
   simp only [prob_eq_expect]
   rw [← expect_sum s (fun i => ind (B i))]
-  refine expect_mono (fun x L => ?_) p L
-  by_cases h : ∃ i ∈ s, B i x L
-  · obtain ⟨i, hi, hb⟩ := h
-    rw [ind_of ⟨i, hi, hb⟩, ← ind_of (B := B i) hb]
-    exact Finset.single_le_sum (f := fun j => ind (B j) x L) (fun _ _ => bot_le) hi
-  · rw [ind_of_not h]; exact bot_le
+  refine expect_mono (fun x L => ind_le fun ⟨i, hi, hb⟩ => ?_) p L
+  rw [← ind_of (B := B i) hb]
+  exact Finset.single_le_sum (f := fun j => ind (B j) x L) (fun _ _ => bot_le) hi
 
 theorem prob_bind (B : β → Log → Prop) (p : OProg α) (f : α → OProg β) (L : Log) :
     prob B (p.bind f) L = expect (fun x L' => prob B (f x) L') p L := by
@@ -202,8 +190,7 @@ theorem prob_bind_of_runLog (B : β → Log → Prop) (f : α → OProg β) {L :
 recorded; `p`'s output is returned with the final record. -/
 def withLog : OProg α → Log → OProg (α × Log)
   | .ret x, L => .ret (x, L)
-  | .query q k, L =>
-    match L.find? fun e => e.1 = q with
+  | .query q k, L => match L.find? fun e => e.1 = q with
     | some e => withLog (k e.2) L
     | none => .query q fun a => withLog (k a) (L ++ [(q, a)])
 

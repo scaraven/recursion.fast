@@ -209,12 +209,12 @@ theorem le_errorCap_192 : (2 : ℝ≥0)⁻¹ ^ 192 ≤ errorCap :=
 potential. -/
 theorem twoLucky_ks_exact (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) twoLucky E ((2 : ℝ≥0)⁻¹ ^ 192) 2 :=
-  (twoLucky_kstate E).ks fun _ _ _ => by simp [twoLucky, OProg.queries]
+  (twoLucky_kstate E).ks fun _ _ _ => le_rfl
 
 /-- **`twoLucky` is knowledge-sound at the cap** with two verifier queries. -/
 theorem twoLucky_ks (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) twoLucky E errorCap 2 :=
-  ((twoLucky_kstate E).mono le_errorCap_192).ks fun _ _ _ => by simp [twoLucky, OProg.queries]
+  ((twoLucky_kstate E).mono le_errorCap_192).ks fun _ _ _ => le_rfl
 
 /-- A boolean state with fewer bad answers than lucky ones leaves a lucky answer that is not
 bad. -/
@@ -451,7 +451,7 @@ noncomputable def colState : KState (fun _ _ => False) Vcol (fun _ _ _ => none) 
 
 /-- **The collision verifier is knowledge-sound at the cap** with two verifier queries. -/
 theorem collision_ks : KS (fun _ _ => False) Vcol (fun _ _ _ => none) errorCap 2 :=
-  colState.ks fun _ _ _ => by simp [Vcol, OProg.queries]
+  colState.ks fun _ _ _ => le_rfl
 
 /-! ## `V24`: a 24-byte comparison, and the value of `logCap` (V3-S2-KS review M1) -/
 
@@ -531,7 +531,7 @@ theorem bool24_below : bool24.BoundedBelow ((2 : ℝ≥0)⁻¹ ^ 96) := by
 
 /-- `V24` is knowledge-sound at `2^-96`, its generic security. -/
 theorem v24_ks : KS (fun _ _ => False) V24 (fun _ _ _ => none) ((2 : ℝ≥0)⁻¹ ^ 96) 2 :=
-  (KState.ofBool bool24 bool24_below).ks fun _ _ _ => by simp [V24, OProg.queries]
+  (KState.ofBool bool24 bool24_below).ks fun _ _ _ => le_rfl
 
 section
 variable {R : Digest → Wit → Prop} {c₀ : Digest} (hR : ∀ w, ¬ R c₀ w)

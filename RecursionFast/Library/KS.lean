@@ -52,26 +52,21 @@ theorem KS.select (h : KS R V E ε qV) (A : OProg α) {Q : ℕ} (hA : ∀ H, (A.
     prob (fun x L => Wins R V E (sel x L) L) A [] ≤ (Q + qV) * ε := by
   let A' : OProg (Digest × Proof) := (withLog A []).bind fun y => .ret (sel y.1 y.2)
   have hA' : ∀ H, (A'.queries H).length ≤ Q := fun H => by
-    simp only [A', OProg.queries_bind, List.length_append, OProg.queries, List.length_nil,
-      Nat.add_zero]
+    rw [OProg.queries_bind, List.length_append]
     exact (queries_withLog_le H A [] fun _ _ h => nomatch h).trans (hA H)
   refine le_trans ?_ (h.bound A' hA' hQ)
   rw [OProg.bind_assoc, prob_bind, expect_withLog, prob_eq_expect]
-  refine expect_mono (fun x L => ?_) A []
-  by_cases hw : Wins R V E (sel x L) L
-  · rw [ind_of (B := fun x L => Wins R V E (sel x L) L) hw]
-    show 1 ≤ prob _ ((V (sel x L).1 (sel x L).2).bind fun _ => .ret (sel x L)) L
-    rw [prob_bind_of_runLog _ _ hw.1, prob_ret, ind_of hw]
-  · rw [ind_of_not (B := fun x L => Wins R V E (sel x L) L) hw]; exact bot_le
+  refine expect_mono (fun x L => ind_le fun hw => ?_) A []
+  dsimp only [OProg.bind]
+  rw [prob_bind_of_runLog _ _ hw.1, prob_ret, ind_of hw]
 
 /-- **The union bound over selections**: the probability that one of the pairs `sel i x L`,
 `i ∈ I`, wins on the final log of a run of `A` is at most `|I| · (Q + qV) · ε`. -/
 theorem KS.union (h : KS R V E ε qV) (A : OProg α) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q)
     (hQ : Q + qV ≤ logCap) {ι : Type} (I : Finset ι) (sel : ι → α → Log → Digest × Proof) :
-    prob (fun x L => ∃ i ∈ I, Wins R V E (sel i x L) L) A [] ≤ I.card * ((Q + qV) * ε) := by
-  refine (prob_exists_le I _ A []).trans ?_
-  rw [← nsmul_eq_mul]
-  exact Finset.sum_le_card_nsmul _ _ _ fun i _ => h.select A hA hQ (sel i)
+    prob (fun x L => ∃ i ∈ I, Wins R V E (sel i x L) L) A [] ≤ I.card * ((Q + qV) * ε) :=
+  (prob_exists_le I _ A []).trans ((Finset.sum_le_card_nsmul _ _ _ fun i _ =>
+    h.select A hA hQ (sel i)).trans_eq (nsmul_eq_mul _ _))
 
 /-- **No escape, no error**: when every proof the verifier accepts on every log is extracted to a
 witness, `KS` holds at every error. -/
@@ -99,20 +94,15 @@ theorem accept_wins {c : Digest} {π : Proof} (hV : (V c π).runLog [] = some tr
 extractor does not open on the empty log, at every `ε` and `qV ≤ logCap` with `qV · ε < 1`. -/
 theorem not_ks_of_accept {c : Digest} {π : Proof} (hV : (V c π).runLog [] = some true)
     (hE : ¬ ∃ w, E c π [] = some w ∧ R c w) (hq : qV ≤ logCap) (hε : (qV : ℝ≥0) * ε < 1) :
-    ¬ KS R V E ε qV := fun h => by
-  have hb := h.bound (.ret (c, π)) (Q := 0) (fun _ => le_rfl) (by simpa using hq)
-  rw [accept_wins hV hE] at hb
-  exact absurd hb (not_le.mpr (by simpa using hε))
+    ¬ KS R V E ε qV := fun h =>
+  ((accept_wins hV hE).symm.trans_le (h.bound _ (Q := 0) (fun _ => le_rfl)
+    ((Nat.zero_add qV).trans_le hq))).not_gt (by simpa using hε)
 
 /-- The certificate's caps (`qV ≤ 2^16`, `ε ≤ errorCap`) give `qV ≤ logCap` and `qV · ε < 1`. -/
 theorem small_of_caps (hq : qV ≤ 2 ^ 16) (hε : ε ≤ errorCap) :
-    qV ≤ logCap ∧ (qV : ℝ≥0) * ε < 1 := by
-  refine ⟨hq.trans (by simp [logCap]), ?_⟩
-  calc (qV : ℝ≥0) * ε ≤ 2 ^ 16 * errorCap := mul_le_mul' (by exact_mod_cast hq) hε
-    _ < 1 := by
-      rw [errorCap, ← NNReal.coe_lt_coe]
-      push_cast
-      norm_num
+    qV ≤ logCap ∧ (qV : ℝ≥0) * ε < 1 :=
+  ⟨hq.trans (by decide),
+    (mul_le_mul' (by exact_mod_cast hq : (qV : ℝ≥0) ≤ 2 ^ 16) hε).trans_lt (by norm_num [errorCap])⟩
 
 /-- **The accept-all verifier is knowledge-sound with no query, for some extractor, exactly when
 every statement has a witness**, at every error (V3-S1-A13). -/

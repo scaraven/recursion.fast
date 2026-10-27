@@ -27,8 +27,7 @@ uniformly at random and recorded, and a repeated query is answered from the tabl
 a lazily sampled random oracle. -/
 noncomputable def failProb : OProg Bool → Log → ℝ≥0
   | .ret b, _ => if b then 0 else 1
-  | .query q k, L =>
-    match L.find? fun e => e.1 = q with
+  | .query q k, L => match L.find? fun e => e.1 = q with
     | some e => failProb (k e.2) L
     | none => (2 ^ 256)⁻¹ * ∑ a : Digest, failProb (k a) (L ++ [(q, a)])
 
@@ -88,12 +87,8 @@ theorem failProb_le_one (p : OProg Bool) (L : Log) : failProb p L ≤ 1 :=
 
 /-- **Rejecting fails with probability `1`**, whatever the program run before. -/
 theorem failProb_bind_false {α : Type} : ∀ (p : OProg α) (L : Log),
-    failProb (p.bind fun _ => .ret false) L = 1
-  | .ret _, _ => by simp [OProg.bind, failProb]
-  | .query q k, L => by
-    simp only [OProg.bind, failProb]
-    split
-    · exact failProb_bind_false _ _
-    · simp only [failProb_bind_false, avg_const]
+    failProb (p.bind fun _ => .ret false) L = 1 := fun p L => by
+  rw [failProb_eq_prob, prob_bind, ← expect_const 1 p L]
+  exact congrArg (expect · p L) (funext₂ fun _ _ => (prob_ret _ _ _).trans (ind_of rfl))
 
 end RecursionFast
