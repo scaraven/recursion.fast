@@ -7,8 +7,8 @@
   * **The bridge to the log** (`runLog_of_runSeq`): if a program accepts on a trace, every entry
     of the trace is in the log `L`, and `L` is functional (no query with two answers), then the
     program returns the same on `L`. This is the step of the composition argument (V4-8,
-    `Library/Compose.lean`) from "the signed trace is genuine" to the knowledge state's `final`
-    law, which reads the verifier from the log.
+    `Library/Compose.lean`, `Escape.wins`) from "the signed trace is genuine" to the verifier
+    accepting on the log, which is where knowledge soundness reads it.
   * `runSeq_queries`: the trace of a program's own run under an oracle `H` (its queries with `H`'s
     answers) answers the run: the honest trace the service signs.
   * `runSeq_ret`, `runSeq_ret_cons`: exact consumption, a returned program accepts only the empty

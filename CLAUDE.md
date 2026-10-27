@@ -11,11 +11,13 @@ instantiated the oracle. **Version 4 (the signed random oracle, SROM)** is the c
 implemented on the branch `v4/srom-rules` and not yet adopted by the user.
 
 v4 keeps v3's certificate (knowledge soundness and completeness in the random-oracle model, the
-step-counted extractor) and changes the oracle's deployment: a service holds a secret BLAKE2s key
-and signs the answers each proof used, every proof is a signed proof `(π, tr, σ)`, and the one
-trusted predicate `acc` (the node clause, the harness's check and third parties' check) runs the
-verifier on the signed trace and checks the signature. Provers are x86-64 assembly, timed on
-GitHub-hosted runners with attested results, and scored `S = T_tree + K·t_link`.
+step-counted extractor), states knowledge soundness in its textbook single-output form (V4-A10;
+v3's potential `KState` is an untrusted library route to it, `KState.ks`), and changes the
+oracle's deployment: a service holds a secret BLAKE2s key and signs the answers each proof used,
+every proof is a signed proof `(π, tr, σ)`, and the one trusted predicate `acc` (the node clause,
+the harness's check and third parties' check) runs the verifier on the signed trace and checks the
+signature. Provers are x86-64 assembly, timed on GitHub-hosted runners with attested results, and
+scored `S = T_tree + K·t_link`.
 
 **Start at `docs/DESIGN-v4-srom.md`** (the normative design; §0 is the summary, §6 the decisions
 taken in the user's absence), then `docs/README.md` for the record it inherits. Where the design
@@ -25,13 +27,14 @@ and the Lean text differ, the Lean text is the rule and the design has a bug.
 
 - **v4 contract** (trusted): `RecursionFast/Contract/` (`Contract.lean` lists it in reading order).
   Budget 500 code lines, counted by `scripts/loc.py`.
-- **v4 library and controls** (untrusted, kernel-checked): `RecursionFast/Library/` (paper theorem,
-  `runSeq → runLog`, the Lean reference signer, the composition walk, the word-level BLAKE2s
-  twin, the witness-sending entry) and `RecursionFast/Controls/`.
+- **v4 library and controls** (untrusted, kernel-checked): `RecursionFast/Library/` (the potential
+  `KState` and its bridge `KState.ks`, the calculus of `prob` and the union bound, `runSeq →
+  runLog`, the Lean reference signer, the composition walk and its probability, the word-level
+  BLAKE2s twin, the witness-sending entry) and `RecursionFast/Controls/`.
 - **v4 runtime** (trusted, tested not proved): the oracle and signing service `service/` (Rust;
   its wire protocol `service/PROTOCOL.md` is normative for provers), the runner `harness/`
   (Python), `tests/`, the CI workflows `.github/workflows/`.
-- **v4 build record:** `docs/v4/BRIEF.md` (the brief and the amendments V4-A1 … A9),
+- **v4 build record:** `docs/v4/BRIEF.md` (the brief and the amendments V4-A1 … A10),
   `docs/v4/reviews/` (the design attack), `docs/v4/stages/` (the stage RESULTs).
 - **v3 code:** the contract, the organiser library, the controls and the harness tools are on the
   branch `v3/contract-archive`, together with the original v3 design, its amendment ledger and the

@@ -1,6 +1,12 @@
 /-
 # Controls: the potential against the boolean form, and the length guard (V3-KS-A1, A2, A4, A6)
 
+**About the library's potential (`KState`, `Library/Security.lean`), which since V4-A10 is a route
+to the contract's `KS`, not part of it.** Each `KS` statement below is proved through the bridge
+`KState.ks` (`Library/PaperTheorem.lean`), so these are also positive controls of `KS` for
+verifiers certified through a potential. The negatives are about the boolean form and the guard
+of the potential's `step` law; the contract's `logCap` is the same number.
+
 Two toy verifiers whose random-oracle error is far below `errorCap`, for the empty relation (so
 the extractor must never be needed: every accepted proof must be priced into the potential).
 
@@ -10,7 +16,8 @@ digests). Its error is `2^-96 · 2^-96 = 2^-192`.
 * `twoLucky_kstate` (positive): a potential at `ε = 2^-192`: the probability that `V` accepts
   given the answers so far (`2^-96` per unanswered query, `1` or `0` per answered one), except `0`
   while neither is answered. The first answer raises the average by `2^-192`, the second not at
-  all (a martingale). So `KS` holds at the cap with `qV = 2` (`twoLucky_ks`).
+  all (a martingale). So `KS` holds at its error `2^-192` with `qV = 2` (`twoLucky_ks_exact`), and
+  at the cap (`twoLucky_ks`).
 * `twoLucky_bool_ge`, `twoLucky_no_bool_kstate` (negative): every boolean state (the Stage S1
   form) has at least `2^160` bad answers to one of the two queries, so `ε ≥ 2^-96`, and none is
   bounded at `errorCap`, **even on short logs** (`BoundedBelow`): the length guard does not help;
@@ -50,7 +57,7 @@ exactly v3's cap `2^-128` (F1 §4.1, third row; the review's estimate, not redon
 The candidate control is a 31-byte comparison (F1 §4.1 with `Δ ≥ 2`, the review's `V31`), a paper
 argument, not built.
 -/
-import RecursionFast.Library.Security
+import RecursionFast.Library.PaperTheorem
 import Mathlib.Logic.Equiv.Fin.Basic
 import Mathlib.Logic.Equiv.Nat
 import Mathlib.Basic.Finite.Sum
@@ -198,10 +205,16 @@ noncomputable def twoLucky_kstate (E : Digest → Proof → Log → Option Wit) 
 theorem le_errorCap_192 : (2 : ℝ≥0)⁻¹ ^ 192 ≤ errorCap :=
   pow_le_pow_of_le_one (by positivity) (by norm_num) (by norm_num)
 
+/-- **`twoLucky` is knowledge-sound at its error `2^-192`** with two verifier queries, through its
+potential. -/
+theorem twoLucky_ks_exact (E : Digest → Proof → Log → Option Wit) :
+    KS (fun _ _ => False) twoLucky E ((2 : ℝ≥0)⁻¹ ^ 192) 2 :=
+  (twoLucky_kstate E).ks fun _ _ _ => by simp [twoLucky, OProg.queries]
+
 /-- **`twoLucky` is knowledge-sound at the cap** with two verifier queries. -/
 theorem twoLucky_ks (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) twoLucky E errorCap 2 :=
-  ⟨⟨(twoLucky_kstate E).mono le_errorCap_192⟩, fun _ _ _ => by simp [twoLucky, OProg.queries]⟩
+  ((twoLucky_kstate E).mono le_errorCap_192).ks fun _ _ _ => by simp [twoLucky, OProg.queries]
 
 /-- A boolean state with fewer bad answers than lucky ones leaves a lucky answer that is not
 bad. -/
@@ -438,7 +451,7 @@ noncomputable def colState : KState (fun _ _ => False) Vcol (fun _ _ _ => none) 
 
 /-- **The collision verifier is knowledge-sound at the cap** with two verifier queries. -/
 theorem collision_ks : KS (fun _ _ => False) Vcol (fun _ _ _ => none) errorCap 2 :=
-  ⟨⟨colState⟩, fun _ _ _ => by simp [Vcol, OProg.queries]⟩
+  colState.ks fun _ _ _ => by simp [Vcol, OProg.queries]
 
 /-! ## `V24`: a 24-byte comparison, and the value of `logCap` (V3-S2-KS review M1) -/
 
@@ -518,7 +531,7 @@ theorem bool24_below : bool24.BoundedBelow ((2 : ℝ≥0)⁻¹ ^ 96) := by
 
 /-- `V24` is knowledge-sound at `2^-96`, its generic security. -/
 theorem v24_ks : KS (fun _ _ => False) V24 (fun _ _ _ => none) ((2 : ℝ≥0)⁻¹ ^ 96) 2 :=
-  ⟨⟨KState.ofBool bool24 bool24_below⟩, fun _ _ _ => by simp [V24, OProg.queries]⟩
+  (KState.ofBool bool24 bool24_below).ks fun _ _ _ => by simp [V24, OProg.queries]
 
 section
 variable {R : Digest → Wit → Prop} {c₀ : Digest} (hR : ∀ w, ¬ R c₀ w)

@@ -36,8 +36,10 @@ use it as feedback on the rules.
 
 ## 2. The design in one page
 
-**Model (unchanged from v3).** The submitter proves, in the random-oracle model with v3's potential
-`KState`, one-level knowledge soundness of their verifier `V` for the relation below, and
+**Model (unchanged from v3; knowledge soundness textbook since V4-A10, §5c).** The submitter
+proves, in the random-oracle model with v3's potential `KState` (since V4-A10: the textbook
+single-output statement, the potential a library route), one-level knowledge soundness of their
+verifier `V` for the relation below, and
 completeness with error of their Lean prover `P`, **for every public key `vk`**; the extractor is a
 step-counted program (`XProg`, `Computes`, budget `B t`). The signer is not in the model.
 
@@ -68,13 +70,14 @@ computes about the instantiation; with a secret key fixed after the verifier is 
 exists (PRF security). Composition across the tree is the straight-line argument of CGSY24 Thm 5.1:
 on the run's one query log, the root's signed trace is genuine (unforgeability), so `V` accepts on
 the log, `final` extracts children whose signed traces are genuine again, down to the leaves. The
-paper bound: `Q·ε + Adv_PRF + Adv_EUF-CMA + BLAKE2s collisions`.
+paper bound: `Q·ε + Adv_PRF + Adv_EUF-CMA + BLAKE2s collisions` (since V4-A10, `N·(Q + qV)·ε` by a
+union bound over the `N` extracted proofs, §5c).
 
 ## 3. Decisions (V4-n)
 
 | Id | Decision | Reason |
 |---|---|---|
-| V4-1 | v3's knowledge-soundness definition (potential `KState`, `logCap`, `errorCap`), completeness (`failProb`, `CompleteWithError`, `completenessCap`), extractor machine and budget are kept **verbatim**; `KS` and completeness are required `∀ vk`. | Minimal change; every v3 control carries over. `∀ vk` makes a verifier that trusts signatures uncertifiable (the theorem's adversary may hold `sk`). |
+| V4-1 | v3's knowledge-soundness definition (potential `KState`, `logCap`, `errorCap`), completeness (`failProb`, `CompleteWithError`, `completenessCap`), extractor machine and budget are kept **verbatim**; `KS` and completeness are required `∀ vk`. (Since V4-A10: `KS` is the textbook single-output statement over `prob`, `KState` and `failProb` are library definitions.) | Minimal change; every v3 control carries over. `∀ vk` makes a verifier that trusts signatures uncertifiable (the theorem's adversary may hold `sk`). |
 | V4-2 | The oracle is deployed as keyed BLAKE2s-256 (`PRF_k`, RFC 7693 keyed mode, 32-byte key, no tag on queries), behind a service; `k` fresh per service lifetime. `blake2sOracle`, `tagRO` and `Submission.Vb` are deleted. | CGH needs a public seed; the keyed mode differs from public BLAKE2s on every input. |
 | V4-3 | SROM (D3), not D4: answers are certified by a contract-fixed **stateful hash-based signature** (WOTS `w = 4`, `ℓ = 133` chains, Merkle height `h = 16`, `vk` the Merkle root), fresh `(sk, vk)` per lifetime; the service signs the digest of a whole trace (hash-then-sign). | P1. Hash-based keeps V3-5 (no groups); BLAKE2s-based keeps one gadget for agents. `w = 4` minimises in-circuit cost (≈ 200 average chain hashes + 67 leaf compressions + 32 path compressions). |
 | V4-4 | Sequential trace semantics (`runSeq`), not first-match lookup. | Linear for the harness; a node circuit walks the trace in order with no lookup argument. |
@@ -212,6 +215,15 @@ what each remaining rule is for. Implemented in stage D-trim (`docs/v4/stages/D-
 | 9 | **One Lean build** instead of the byte-identical rebuild: the comparator, the gate and the badge use the build the kernel's exports were made from | the binding (the badge runs code compiled from exactly the checked modules) holds without a second build; it saved 173 s on the baseline |
 | 10 | **`errorCap = 2^-128 → 2^-120`** per fresh query; `logCap = 2^96` unchanged | admits GF(2^128) designs such as Flock (a degree-2 sumcheck round costs `2^-127`, the univariate-skip round `126/2^128 ≈ 2^-121`; FB-9), and keeps the whole-run bound negligible (about `2^-90` at `2^30` queries) |
 | 11 | **The submission pipeline and the organiser's CI are separate**: every check whose subject is organiser code (`acc` before `V`, the file parser, the service, the sandbox, the badge template, the compiled extractor interpreter, the harness) runs only in the core repository's `ci.yml`; an evaluation runs only what is about the entry, plus the environment it runs in (the package tree and its manifest check, the comparator, the service, `T_triv,best`) | each check runs once per harness commit where its subject changes, not once per entry |
+
+## 5c. Amendment V4-A10: textbook knowledge soundness (the user's decision of 2026-10-27)
+
+It overrides V4-1 and §2 where they differ. Implemented in stage E-ks
+(`docs/v4/stages/E-ks-RESULT.md`); the design's §1.4 and §2.4 state it.
+
+| Id | Amendment | Reason | Cost |
+|---|---|---|---|
+| V4-A10 | **The contract states textbook single-output knowledge soundness** in the random-oracle model: for every adversary, a query program asking at most `Q` queries on every oracle function and outputting a statement and a proof, run and then followed by the verifier against one lazily sampled random oracle (`prob`), the probability that the verifier accepts on the final query log and the extractor, given the statement, the proof and that log, returns no witness is at most `(Q + qV)·ε`, for `Q + qV ≤ logCap`; and the verifier asks at most `qV` queries. **The potential (`KState`) is an untrusted library tool**, an intermediate artifact of a proof: `KState.ks` turns one into `KS`. `failProb` leaves the contract too (`CompleteWithError` is stated through `prob`, the same statement). The rest of `Certificate` is unchanged | the certificate should state the standard notion a cryptographer reads, and accept any correct proof technique | the tree's composition takes a union bound over the extracted proofs: `N·(Q + qV)·ε` with `N` = 127 (the tree's root) or 513 (the stream's final output), about `2^-81` at `2^30` queries where the potential's one event gave `2^-90` (kernel for the harness tree, `Compose.compose_prob`) |
 
 ## 6. Conventions for every agent
 

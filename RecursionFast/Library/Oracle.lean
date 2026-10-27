@@ -8,11 +8,15 @@
     on a trace (`runSeq`) and on a log (`runLog`), and `run` serves the library: perfect
     completeness (`Library/Completeness.lean`) and the facts below.
   * `runLog_eq_run`: a log that agrees with the oracle `H` and contains every query a program asks
-    under `H` makes `runLog` return the program's result under `H`. This is the step of the paper
-    theorem (DESIGN-v3 §4.5) from the knowledge state's `final` law, which reads the verifier's
-    decision from the query log alone, to the verifier actually run against the random oracle.
+    under `H` makes `runLog` return the program's result under `H`: the verifier's decision read
+    from the query log, as `KS` reads it, is the verifier actually run against the oracle.
   * `runLog_queries`: the log of a program's own run is such a log.
-  * `run_bind`: a composed program's result under `H` (completeness, V3-S2R-A2).
+  * `run_bind`, `queries_bind`, `bind_assoc`: a composed program's result and queries under `H`
+    (completeness, V3-S2R-A2; the knowledge-soundness game, V4-A10).
+  * `Consistent H L`: the oracle function `H` agrees with the table `L` (moved from
+    `Library/Completeness.lean`); `exists_consistent`, `consistent_append`,
+    `consistent_append_self`: a lazily sampled run, extended by a fresh answer, stays consistent
+    with some function. The functional query bounds of `KS` apply to a lazy run through them.
 -/
 import RecursionFast.Contract.Oracle
 
@@ -52,4 +56,50 @@ theorem run_bind {β : Type} (H : ByteArray → Digest) (p : OProg α) (f : α �
   | ret a => rfl
   | query q k ih => exact ih (H q)
 
+/-- Binding is associative. -/
+theorem bind_assoc {β γ : Type} (p : OProg α) (f : α → OProg β) (g : β → OProg γ) :
+    (p.bind f).bind g = p.bind fun x => (f x).bind g := by
+  induction p with
+  | ret a => rfl
+  | query q k ih => exact congrArg (query q) (funext ih)
+
+/-- Under `H`, `p.bind f` asks `p`'s queries, then those of `f` on `p`'s result. -/
+theorem queries_bind {β : Type} (H : ByteArray → Digest) (p : OProg α) (f : α → OProg β) :
+    (p.bind f).queries H = p.queries H ++ (f (p.run H)).queries H := by
+  induction p with
+  | ret a => rfl
+  | query q k ih => exact congrArg (q :: ·) (ih (H q))
+
 end RecursionFast.OProg
+
+namespace RecursionFast
+
+/-- The oracle function `H` agrees with the table `L` (read by first match). -/
+def Consistent (H : ByteArray → Digest) (L : Log) : Prop :=
+  ∀ q e, L.find? (fun e => e.1 = q) = some e → H q = e.2
+
+theorem exists_consistent (L : Log) : ∃ H, Consistent H L :=
+  ⟨fun q => ((L.find? fun e => e.1 = q).map Prod.snd).getD (Vector.replicate 32 0),
+    fun _ _ h => by simp [h]⟩
+
+theorem consistent_append {H : ByteArray → Digest} {L : Log} {q : ByteArray} {a : Digest}
+    (hf : L.find? (fun e => e.1 = q) = none) (h : Consistent H (L ++ [(q, a)])) :
+    Consistent H L ∧ H q = a :=
+  ⟨fun q' e he => h q' e (by simp [List.find?_append, he]),
+    h q (q, a) (by simp [List.find?_append, hf])⟩
+
+/-- A function consistent with `L` is consistent with `L` followed by its own answer to `q`. -/
+theorem consistent_append_self {H : ByteArray → Digest} {L : Log} {q : ByteArray}
+    (h : Consistent H L) :
+    Consistent H (L ++ [(q, H q)]) := by
+  intro q' e he
+  rw [List.find?_append] at he
+  cases hL : L.find? (fun e => decide (e.1 = q')) with
+  | some e' => rw [hL] at he; exact (Option.some.inj he) ▸ h q' e' hL
+  | none =>
+    rw [hL, Option.none_or] at he
+    by_cases hq : q = q'
+    · subst hq; simp at he; rw [← he]
+    · simp [hq] at he
+
+end RecursionFast

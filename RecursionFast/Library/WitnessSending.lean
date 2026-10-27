@@ -28,15 +28,17 @@
   * **Extractor.** `E c π L := decode π` (no key, V4-6), and the program `ext` (5 memory words,
     21 statements, v3's unchanged) copies the proof's packed words from the input tape to the
     output, 8 steps per word (`computes`).
-  * **Security.** `KS` with the potential `μ := 0`, `ε = 0`, `qV = 0` (`ks`, `KState.zero`): an
-    accepted proof decodes to a witness of the relation by the definition of `check`
-    (`check_sound`), on every log and under every key.
+  * **Security.** `KS` at `ε = 0`, `qV = 0` (`ks`), through the potential `μ := 0` (`kstate`,
+    `KState.zero`) and the bridge `KState.ks` (`Library/PaperTheorem.lean`): an accepted proof
+    decodes to a witness of the relation by the definition of `check` (`check_sound`), on every
+    log and under every key.
 -/
 import RecursionFast.Contract.Certificate
 import RecursionFast.Library.Words
 import RecursionFast.Library.Machine
 import RecursionFast.Library.Security
 import RecursionFast.Library.Completeness
+import RecursionFast.Library.PaperTheorem
 import RecursionFast.Library.Fast
 import RecursionFast.Library.Trace
 
@@ -238,7 +240,7 @@ def kstate (vk : Digest) : KState (Rel (submission.acc vk)) (V vk) E 0 :=
 /-- **Knowledge soundness** at error `0` with no verifier query, under every key. -/
 theorem ks (vk : Digest) :
     KS (Rel (submission.acc vk)) (submission.V vk) submission.E submission.ε submission.qV :=
-  ⟨⟨kstate vk⟩, fun _ _ _ => le_rfl⟩
+  (kstate vk).ks fun _ _ _ => le_rfl
 
 /-- **Perfect completeness**, for every oracle function and key. -/
 theorem complete_perfect (vk : Digest) :

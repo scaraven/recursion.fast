@@ -1,12 +1,12 @@
 # recursion.fast v4: the signed-random-oracle (SROM) rules
 
 **Status.** The normative design of v4 (2026-10-22, updated 2026-10-23 after stages A and B, their
-reviews RA, RB, GA, GB and the contract fix pass, and 2026-10-26 by the trim V4-A9), implemented on
-the branch `v4/srom-rules`: the Lean contract under `RecursionFast/Contract/` (stage A) and the
-oracle service, runner and CI workflows (stage B). It is a proposal: the user was away while it was
-built, and every decision taken without them is listed in §6, each reversible; V4-A9 is the user's
-own. It supersedes the working brief
-[`v4/BRIEF.md`](v4/BRIEF.md) (decisions V4-1 … V4-16, amendments V4-A1 … A9) where the two differ,
+reviews RA, RB, GA, GB and the contract fix pass, 2026-10-26 by the trim V4-A9, and 2026-10-27 by
+V4-A10, textbook knowledge soundness), implemented on the branch `v4/srom-rules`: the Lean contract
+under `RecursionFast/Contract/` (stage A) and the oracle service, runner and CI workflows (stage B).
+It is a proposal: the user was away while it was built, and every decision taken without them is
+listed in §6, each reversible; V4-A9 and V4-A10 are the user's own. It supersedes the working brief
+[`v4/BRIEF.md`](v4/BRIEF.md) (decisions V4-1 … V4-16, amendments V4-A1 … A10) where the two differ,
 and answers the adversarial review [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md)
 (findings C-M1 … M4, C-m1 … m13). Where this document and the Lean text differ, the Lean text is the
 rule and the difference is a bug here.
@@ -31,7 +31,8 @@ the record (C1–C15, the O-25 criteria, the earlier proposals' decisions) in
 **The competition.** As in v3, agents submit a hash-based non-interactive argument for one relation
 over 32-byte digests (a leaf commits to a BLAKE2s chain from a secret start, a node to two accepted
 children): Lean query programs `V` and `P`, an extractor program, and a kernel-checked certificate
-of knowledge soundness and completeness in the random-oracle model. An x86-64 assembly prover is
+of knowledge soundness (the textbook single-output notion, V4-A10) and completeness in the
+random-oracle model. An x86-64 assembly prover is
 timed on GitHub-hosted runners, proving a tree of chains and extending a running proof chain by
 chain: `S = T_tree + K·t_link`.
 
@@ -54,20 +55,32 @@ never fires.
 
 **No certified verifier can trust a signature.** The certificate holds for every `vk` against an
 unbounded adversary, who can sign anything, so a `V` that accepts a false statement because of a
-signature has no knowledge state below `errorCap` (**paper**, §2.2; **kernel** control
-`sigTrust_kstate_iff`). Only the contract's `acc` trusts signatures, and unforgeability is used
+signature is not knowledge-sound below `errorCap`: the adversary holding `sk` wins with
+probability `1` (**paper**, §2.2; **kernel** controls `sigTrust_ks_extracts`,
+`sigTrust_no_certificate`). Only the contract's `acc` trusts signatures, and unforgeability is used
 once, outside every certificate, to compose the tree. Nothing is left for a reviewer to forbid.
 
 **The tree.** On the run's one query log, signed traces are genuine unless a signature was forged,
-so the one-level extractor applies node after node down to the leaves (CGSY24 Thm 5.1, no factor
-per node). The walk is kernel (`Compose.walk`); the PRF hybrid and the forgery/collision split are
-paper (§2.4). Error `(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`, the first term about `2^-90`.
+so the one-level extractor applies member after member down to the leaves (CGSY24 Thm 5.1). Each
+member's extraction fails with probability at most `(Q + qV)·ε` by the certificate itself, and a
+union bound over the `N` members of the extraction tree gives `N·(Q + qV)·ε`: the walk and the
+union bound are kernel (`Compose.walk`, `Compose.compose_prob`); the PRF hybrid and the
+forgery/collision split are paper (§2.4). Error `N·(Q + qV)·ε + Adv_PRF + Adv_EUF-CMA + Adv_coll`,
+the first term about `2^-81` (`N = 513`, the stream's final output; `2^-83` for the tree's 127).
+
+**Textbook knowledge soundness (V4-A10, the user's decision of 2026-10-27).** The certificate
+states the standard single-output notion a cryptographer reads: every adversary asking `Q` queries
+and outputting a statement and a proof makes the verifier accept while the extractor, reading the
+query log, returns no witness with probability at most `(Q + qV)·ε` (§1.4). v3's potential
+(`KState`) is an untrusted library tool, one route to a proof (`KState.ks`), and any correct proof
+technique is accepted. Its cost: the tree composes by a union bound over the extracted proofs,
+about `2^-81` where the potential's one event gave `2^-90`.
 
 **What it costs.** A trusted runtime (the service, whose bug can be accept-all; the attested CI
 workflow). One idealised assumption, keyed BLAKE2s is a PRF, beside collision resistance and
 one-wayness, from which the signature's EUF-CMA follows (§2.5). Every oracle call goes to the
 service on the prover's own cores. Per child, a node circuit checks one signature and hashes the
-child's trace (§4.2). Trusted code: 355 Lean lines (v3: 292; budget 500) and 3,670 runtime lines
+child's trace (§4.2). Trusted code: 350 Lean lines (v3: 292; budget 500) and 3,670 runtime lines
 (§5; 3,800 before V4-A9). Two walls of v3 stand: node extraction is decoding (#7), and no honest
 recursive entry is sized against the caps (C5); the certified baseline's measured frontier (§3.6)
 shows how far the season shape is.
@@ -84,15 +97,16 @@ GF(2^128) designs, FB-9) and `completenessCap = 2^-40`.
 
 | Status | |
 |---|---|
-| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape. After V4-A9: the build, the audit, every test of `ci.yml` and the end-to-end smoke, 16 checks in 4 min 21 s after the fix pass (`docs/v4/stages/D-trim-RESULT.md`, `logs/trim-fix/smoke-e2e.log`) |
+| ran on the development VM | build and axiom audit; service, sandbox and harness tests; the witness-sending entry and the certified baseline `spartan-srom` ACCEPTed end to end at the smoke shape. After V4-A9: the build, the audit, every test of `ci.yml` and the end-to-end smoke, 16 checks in 4 min 21 s after the fix pass (`docs/v4/stages/D-trim-RESULT.md`, `logs/trim-fix/smoke-e2e.log`). After V4-A10: the same, the smoke 16 checks in 4 min 26 s, the witness-sending entry certified under the textbook `KS` (`docs/v4/stages/E-ks-RESULT.md`, `logs/ks/final-smoke-e2e.log`) |
 | ran on a GitHub runner | before V4-A9: CI run 39966237935, all green (AMD EPYC 9V45 and 9V74, image ubuntu24 20261012.334.1): Lean job 7 min 29 s; service and sandbox tests; the end-to-end smoke in 9 min 18 s, 16 checks: the witness-sending entry certified with the Lean kernel and ACCEPTed with the compiled `accF` badge and a toy assembly prover, PROVISIONAL and REJECT paths, the job plan's missing part ⇒ ERROR, liveness, canaries, the DoS column, and five broken provers rejected for their stated reasons. Earlier runs: chain checker 1.78 s (`T_V` ≈ 178 ms); signatures equal to the Lean signer's |
-| never ran | the evaluation workflow and its attestations; the trimmed harness (V4-A9) on a runner; any entry at the season-1 shape (C-m10), so nothing is ranked |
+| never ran | the evaluation workflow and its attestations; the trimmed harness (V4-A9) and the V4-A10 contract on a runner; any entry at the season-1 shape (C-m10), so nothing is ranked |
 
 | | v3 | v4 |
 |---|---|---|
 | deployed oracle | public `BLAKE2s(0x52 ‖ q)` | `PRF_k(q)`, secret key fresh per run, behind a service |
 | node clause | `Vb c₁ π₁`: `V` on public BLAKE2s | `acc vk c₁ (π₁, tr₁, σ₁)`: `V` on a signed trace |
 | certificate | `KS`, `CompleteWithError`, `Computes`, caps | the same, **for every `vk`** |
+| knowledge soundness | a knowledge state (a potential on logs) in the contract | the textbook single-output statement (V4-A10); the potential is a library route (`KState.ks`) |
 | machine | a reference machine that never existed | GitHub-hosted runners, attested results |
 | score | whole-tree wall time | `S = T_tree + K·t_link` |
 
@@ -243,30 +257,45 @@ bitmasks, so its security is argued directly (§2.5). A per-run public seed in e
 it a WOTS-TW instance at one trusted line and one field of `Sig`, with no in-circuit cost; it is
 not adopted (V4-A4), and is the fallback if a reviewer insists on a published scheme.
 
-### 1.4 What v3 contributes verbatim
+### 1.4 What v3 contributes, and the textbook knowledge soundness (V4-A10)
 
-`Contract/Security.lean`, `Machine.lean` and `Tree.lean` are v3's, word for word (V4-1, V4-16),
-except the values of the two error caps (V4-A9: `errorCap = 2^-120`, `completenessCap = 2^-40`); v3
-§6 and §7.1 explain them. In `final` below, `runLog L` answers each query from the first matching
-entry of the log `L` (`none` on a miss), where `runSeq tr` answers from the next entry of the trace.
-In brief:
+`Machine.lean` and `Tree.lean` are v3's, word for word (V4-1, V4-16). `Contract/Security.lean`
+keeps v3's completeness and its caps' roles, with their values changed by V4-A9
+(`errorCap = 2^-120`, `completenessCap = 2^-40`; v3 §6 and §7.1 explain them), and since V4-A10
+(the user's decision of 2026-10-27) states knowledge soundness in its textbook single-output form,
+where v3 required a knowledge state. In `KS` below, `runLog L` answers each query from the first
+matching entry of the log `L` (`none` on a miss), where `runSeq tr` answers from the next entry of
+the trace, and `prob B p L` is the probability that the program `p`, started with the table `L`,
+ends with an output `x` and a final table `L'` with `B x L'` against a lazily sampled random oracle
+(a fresh query answered uniformly over the `2^256` digests and recorded, a repeated one from the
+table):
 
 ```lean
-structure KState (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
-    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) where
-  μ : Log → ℝ≥0
-  empty : μ [] = 0
-  step : ∀ L q, L.length < logCap → μ L < 1 → q ∉ L.map Prod.fst →
-    ∑ a : Digest, μ (L ++ [(q, a)]) ≤ (μ L + ε) * 2 ^ 256
-  final : ∀ L c π, L.length ≤ logCap → μ L < 1 → (V c π).runLog L = some true →
-    ∃ w, E c π L = some w ∧ R c w
+def KS (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
+    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) (qV : ℕ) : Prop :=
+  (∀ H c π, ((V c π).queries H).length ≤ qV) ∧
+  ∀ (A : OProg (Digest × Proof)) (Q : ℕ), (∀ H, (A.queries H).length ≤ Q) → Q + qV ≤ logCap →
+    prob (fun x L => (V x.1 x.2).runLog L = some true ∧ ¬ ∃ w, E x.1 x.2 L = some w ∧ R x.1 w)
+      (A.bind fun x => (V x.1 x.2).bind fun _ => .ret x) [] ≤ (Q + qV) * ε
 ```
 
-- **Knowledge soundness** (`KS`): the submitter exhibits a potential `μ` on query logs that starts
-  at 0, rises by at most `ε ≤ errorCap = 2^-120` (V4-A9) on average per fresh answer, and below 1
-  makes every proof `V` accepts on the log extractable by `E`. The paper theorem, kernel-checked in
-  v3 (`Library/PaperTheorem.lean`, `paper`, ported unchanged), turns it into `(Q + qV)·ε` by
-  Markov's inequality on the stopped potential, for `Q + qV ≤ logCap = 2^96`.
+- **Knowledge soundness** (`KS`): `V` asks at most `qV` queries on every input and oracle function;
+  and every adversary, a query program asking at most `Q` queries on every oracle function and
+  outputting a statement and a proof, run and then followed by `V` on its output against one
+  random oracle, makes `V` accept on the final query log while `E`, given the statement, the proof
+  and that log, returns no witness, with probability at most `(Q + qV)·ε`, `ε ≤ errorCap`, for
+  `Q + qV ≤ logCap = 2^96`. The adversary is computationally unbounded, query-bounded and
+  deterministic; randomised adversaries follow by averaging over their coins, since `E` does not
+  depend on the adversary (**paper**). It chooses the statement after its queries. The verifier's
+  queries are charged because an adversary may leave its luck to them (**kernel**,
+  `Controls/Security.lean`, `queryThenAccept_ks_ge_one`); `logCap` because a linear bound cannot
+  hold for every `Q` against a birthday-type event (the header of `Security.lean`).
+- **The potential is a library route** (V4-A10). v3's knowledge state (`Library/Security.lean`,
+  `KState`: a potential `μ` on query logs that starts at 0, rises by at most `ε` on average per
+  fresh answer within `logCap`, and below 1 makes every proof `V` accepts on the log extractable
+  by `E`) is untrusted; the bridge **`KState.ks`** (`Library/PaperTheorem.lean`, **kernel**) turns
+  it into `KS` by Markov's inequality on the stopped potential, generalised from v3's syntactic
+  depth to the functional query bounds. Any other correct proof of `KS` is accepted.
 - **Completeness** (`CompleteWithError`): on every statement and witness of the relation, the honest
   prover's proof, produced and verified against one lazily sampled random oracle, is rejected with
   probability at most `δ ≤ 2^-40` (V4-A9: a failure costs only its entrant a run; grinding to
@@ -294,8 +323,9 @@ therefore not certifiable, which is the right outcome (C-m11).
 
 ### 2.1 One level: what a certificate says
 
-For every public key `vk`, the submitter proves v3's knowledge soundness of `V vk` for
-`Rel (S.acc vk)` and completeness of `P vk`, both over a random oracle. A node extractor recovers
+For every public key `vk`, the submitter proves the textbook single-output knowledge soundness
+of `V vk` for `Rel (S.acc vk)` with the named extractor (§1.4, V4-A10) and completeness of `P vk`,
+both over a random oracle. A node extractor recovers
 the node's witness, the two children's signed proofs, from the node proof and the log (for a
 succinct node, by decoding a word committed in the log, v3 #7; for the witness-sending entry, by
 reading the proof) and outputs it; it does not check them, and the certificate does not ask
@@ -325,30 +355,37 @@ witness-sending child carrying a trace (`child_trace_nonempty`), `|ots| ≠ 133`
 **Statement** (**paper**, C-m1). Let `B` be a branch of `V` that accepts some `(c, π)` with `c`
 outside the language because of a predicate `Φ(vk, π, answers)` that an unbounded adversary with
 oracle access can make true for every oracle: a valid signature under `vk` in `π`, `sk` in `π`, a
-signed answer in `π` that agrees with the oracle's. Then for that `vk` no knowledge state exists
-with `ε < 1/q`, where `q` is the number of oracle queries on the branch; in particular none at
-`errorCap = 2^-120`, since `q ≤ qV ≤ 2^16`.
+signed answer in `π` that agrees with the oracle's. Then for that `vk`, `V vk` is not
+knowledge-sound at any `ε` with `(q + qV)·ε < 1`, where `q ≤ qV` is the number of oracle queries
+on the branch; in particular not at `errorCap = 2^-120`, since `q + qV ≤ 2^17`.
 
-**Proof.** The adversary asks the branch's queries itself, then makes `Φ` true (it is unbounded, so
-it can sign anything under `vk`). On every resulting log `L`, `(V vk c π).runLog L = some true`, so
-`final` needs a witness for `c`, which does not exist; hence `μ L ≥ 1` on every such log. But
-`empty` and `step` make the potential, stopped at 1, a supermartingale from 0 that rises by at most
-`ε` per fresh query, so it reaches 1 on every path of `q` queries only if `q·ε ≥ 1`. ∎ If `Φ` needs
-no query, no knowledge state exists at all unless every digest has a witness, the shape of v3's
-`acceptAll_kstate_iff`, and then `Computes` with the budget excludes the extractor (v3 §6.2).
+**Proof.** The adversary asks the branch's queries itself, makes `Φ` true (it is unbounded, so it
+can sign anything under `vk`) and outputs `(c, π)`. The verifier run after it asks only queries
+already in the log, so on the game's final log `L`, `(V vk c π).runLog L = some true`, and `E`
+returns no witness for `c`, which has none. The adversary wins with probability `1`, so `KS` needs
+`1 ≤ (q + qV)·ε`. ∎ If `Φ` needs no query, the adversary asks nothing, and `KS` at `qV·ε < 1`
+forces `E` to open every such proof to a witness on the empty log, which needs every digest to
+have one, the shape of `acceptAll_ks_iff` (`Library/KS.lean`); then `Computes` with the budget
+excludes the extractor (v3 §6.2).
 
 The general statement is paper; the kernel controls are its `q = 0` case.
 
 **Controls** (**kernel**, `Library/SigTrust.lean`). `Vsig vk c π` accepts, with no oracle query,
 a proof carrying a signature of `c` valid under `vk`. Under every key whose signer is known
-(`Signer.pk sk`, keys the certificate quantifies over): `sigTrust_kstate_iff`, it has a knowledge
-state for some extractor exactly when every statement has a witness, so a signature is no
-knowledge; `sigTrust_no_kstate_none`, with an extractor that returns nothing it has none at any
-error. The twin `sigTrust_ks_of_unsignable`: under a key for which no signature verifies, the same
-verifier is knowledge-sound at error 0 for every relation and extractor. So it is exactly the
-quantification over keys, some of whose secrets the adversary holds, that excludes it; a
-certificate for one fixed key would not. `Controls/Certificate.lean` states the same about
-`Certificate` (`sigTrust_no_certificate`, `sigTrust_certificate_opens`, `sigTrust_ks_unsignable`).
+(`Signer.pk sk`, keys the certificate quantifies over), the adversary that holds `sk`
+(`adversary sk c`: it asks nothing and outputs `c` with `sk`'s signature of `c`) wins with
+probability `1` unless the extractor opens that signature to a witness on the empty log
+(`adversary_wins`). So `sigTrust_ks_extracts`: knowledge soundness at `qV ≤ logCap`,
+`qV·ε < 1` (the certificate's caps give both) makes the named extractor find witnesses from
+signatures alone; `sigTrust_not_ks_none`: with an extractor that returns nothing, it fails;
+`sigTrust_ks_iff`: it is knowledge-sound for some extractor exactly when every statement has a
+witness, so a signature is no knowledge. The twin `sigTrust_ks_of_unsignable`: under a key for
+which no signature verifies, the same verifier is knowledge-sound at error 0 for every relation
+and extractor. So it is exactly the quantification over keys, some of whose secrets the adversary
+holds, that excludes it; a certificate for one fixed key would not. `Controls/Certificate.lean`
+states the same about `Certificate` (`sigTrust_no_certificate`, `sigTrust_certificate_opens`,
+`sigTrust_ks_unsignable`). The same facts about the library's potential (`sigTrust_kstate_iff`,
+`sigTrust_no_kstate_none`) are kept.
 
 **What it means.** A node circuit does check signatures, but as part of proving the relation's own
 `acc` conjunct for its children; the extractor must still return those children. What `V` cannot
@@ -407,45 +444,67 @@ instantiation; records certify the signed deployment (RU-5).
 
 ### 2.4 Composition across the tree
 
-**The argument** (**paper** in outline, CGSY24 Thm 5.1 and §6.2; C §2). Treat the deployed prover
-together with the signer and the harness's checks as one query algorithm against the oracle; for
-each fixed signing seed it is deterministic, and the paper theorem covers every deterministic
-query algorithm however much it computes, so holding `sk` costs nothing. Its log `L` contains
-every query anyone asked, including the signer's re-evaluation of every trace it signs, and `Q`
-counts them all. If the potential of `L` is below 1, which fails with probability at most
-`(Q + qV)·ε` by the paper theorem, then walking down from the root:
+**The argument** (CGSY24 Thm 5.1 and §6.2; C §2; since V4-A10 by a union bound over the extracted
+proofs). Treat the deployed prover together with the signer and the harness's checks as one query
+algorithm `A` against the oracle; for each fixed signing seed it is deterministic, and knowledge
+soundness covers every deterministic query algorithm however much it computes, so holding `sk`
+costs nothing. Its log `L` contains every query anyone asked, including the signer's re-evaluation
+of every trace it signs, and `Q` counts them all. Walking down from the root:
 
 1. The root's signed proof `(π, tr, σ)` is accepted, so `SigOk vk (traceDigest tr) σ`.
 2. Either every entry of `tr` is the log's answer to its query (the trace is **genuine**: the
    service computed each answer by a query, and the oracle has one answer per query), or the walk
    has found a valid signature on a trace not contained in the log: outcome **forgery**.
 3. If genuine, `runSeq tr` accepting implies `runLog L` accepting (the `runSeq → runLog` lemma),
-   so `final` gives `w = E c π L` with `Rel (acc vk) c w`.
+   so `V` accepts the member on the run's log; then `E` returns `w = E c π L` with
+   `Rel (acc vk) c w`, or the member **escapes**. An escape is a win of the knowledge-soundness game
+   for the adversary that runs `A`, keeps its log and outputs this member: it asks at most `Q`
+   queries (the extractor is a Lean function and the adversary is unbounded, so it computes the
+   member), and `V` run after it asks nothing fresh. By the certificate each member escapes with
+   probability at most `(Q + qV)·ε`.
 4. A node witness gives children `(c₁, p₁)`, `(c₂, p₂)` accepted by `acc`. Either `c₁, c₂` are the
    harness's children, or the walk has a `nodeStmt` collision: outcome **collision**. Recurse on each
-   child with **the same `L` and the same event** `μ L < 1`: no factor per node.
+   child with the same `L`.
 5. At a leaf, the extracted `(s, n)` hashes to the harness's leaf digest: a witness (not necessarily
    the harness's start), or a `leafStmt`/`chainStep` collision.
+
+So the walk returns the leaf starts, a collision or a forgery unless one of the `N` members of the
+extraction tree escapes, and a union bound over them gives `N·(Q + qV)·ε` for that case. No member
+costs more than one adversary's queries and the verifier's: the member's adversary runs no inner
+verifier, since `E` reads the log. A knowledge state (the library's potential) composes losslessly
+instead: below potential 1 on the run's log, `final` extracts every accepted member
+(`compose_of_kstate`), and the one event, the potential reaching 1, has probability at most
+`(Q + qV)·ε` (`PaperTheorem.prob_potential_ge_one`), for the whole tree; the textbook statement
+the certificate now makes pays the factor `N`.
 
 **What is kernel and what is paper.**
 
 | Piece | Status |
 |---|---|
-| `walk : KState (Rel (S.acc vk)) (S.V vk) S.E ε → L.Functional → L.length ≤ logCap → μ L < 1 → … → S.acc vk root p = true → Outcome S vk L n hs root p`: from a knowledge state, a functional log within `logCap` of potential below 1, `2^r` leaves and an accepted root signed proof, it computes the leaf starts, an explicit BLAKE2s collision, or an explicit signed trace with queries within `queryCap`, not contained in the log, **in the root's extraction tree** (`InTree`) | **kernel**, Library (untrusted, kernel-checked): `Library/Compose.lean`, `walk`, and `compose`, its propositional form (V4-8); `compose_exists`, without `InTree`, is trivially true for a known signer's key (`Controls/Compose.lean`, RA-M1) |
+| `walk L n hn r hs hr p hacc : Outcome S vk L n hs root p r`: from a log, `2^r` leaves and an accepted root signed proof, it computes the leaf starts, an explicit BLAKE2s collision, an explicit signed trace with queries within `queryCap` not contained in the log **in the root's extraction tree** (`InTree`, with the member's path), or an **escape**: a member within depth `r`, accepted, its trace in the log, that `E` does not open to a witness | **kernel**, Library (untrusted, kernel-checked): `Library/Compose.lean`, `walk`, and `compose`, its propositional form (V4-8; its first disjunct, that starts exist, is free when the harness drew them, so the content is that `walk` computes them, RA-M1); `compose_exists`, without the forgery's `InTree`, is trivially true for a known signer's key (`Controls/Compose.lean`, RA-M1) |
+| an escape on a functional log is a win of `KS`'s game at that member (`Escape.wins`); an adversary that runs `A` keeping its log and outputs any function of `A`'s output and log is bounded like every other (`KS.select`), and a finite family of them by the sum (`KS.union`) | **kernel**: `Library/Compose.lean`, `Library/KS.lean` |
+| **the composition bound**: for `A` asking at most `Q` queries with `Q + qV ≤ logCap`, the probability that `acc` accepts the root and `walk` on `A`'s final log ends in an escape is at most `(2^(r+1) − 1)·(Q + qV)·ε` | **kernel**: `Library/Compose.lean`, `compose_prob` (through `escape_prob_le`, the union bound over any finite set of paths of the extraction tree, and `card_paths`) |
+| the meter's lossless form: with a knowledge state and one functional log within `logCap` below potential 1, no member escapes and the walk returns the first three outcomes; the potential reaches 1 with probability at most `n·ε` for a game of `n` queries | **kernel**: `compose_of_kstate`, `PaperTheorem.prob_potential_ge_one` (that a lazily sampled log is functional and within `logCap` joins them on paper) |
+| the stream: its final output's extraction tree (513 members, depth 256) | the union bound **kernel** for any finite set of paths (`escape_prob_le`, with the comb's 513 paths); the walk over the stream's shape **paper** (the kernel walk is the tree's, as before V4-A10) |
 | `runSeq → runLog` | **kernel**: `Library/Trace.lean`, `OProg.runLog_of_runSeq` (on a functional log, a verdict on a trace whose entries are all in the log is the verdict on the log) |
 | equal trace digests are equal traces or an explicit collision | **kernel**: `Library/Trace.lean`, `traceDigest_eq` (for queries under `2^64` bytes, which `queryCap` implies) |
-| the paper theorem `(Q + qV)·ε` | **kernel** (`Library/PaperTheorem.lean`, `paper`, v3's) for a lazily sampled oracle and a deterministic adversary; randomisation and the random function **paper** |
+| one member's bound `(Q + qV)·ε` | the certificate itself (`KS`), for a lazily sampled oracle and a deterministic adversary; randomisation and the random function **paper** |
 | the split of "a signed trace not in the log" into an **EUF-CMA forgery** (no signed trace has that digest) or a **trace-digest collision** (the service signed another trace with the same digest; the two encodings differ and are injective by `queryCap`) | **paper** (V4-A8, C §2 item 4). A kernel form would carry the service's signed set as a Library parameter (C, unsettled 5); not done |
 | the PRF hybrid | **paper** (§2.3) |
 
-**The error.** `Pr[bad] ≤ (Q + qV)·ε + Adv^PRF(D) + Adv^EUF-CMA(B) + Adv^coll`, where `B` and `D`
-run the evaluation and the walk: about `2^58` steps (**estimate**, [RD] §4.9 fine print; the walk
-runs `E` per node within `B t`). At the season shape `Q ≈ 2^28–2^30` (**estimate**, C §2 item 1),
-inside `logCap = 2^96` and the efficient-extraction domain of about `2^61` entries, so the first term
-is at most about `2^30 · 2^-120 = 2^-90` at `ε = errorCap = 2^-120` (`2^-98` at v3's `2^-128`). At
-the caps the bound is `2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64`; collision-type
-events are chargeable at the cap from `216` bits up (`logCap · 2^-t ≤ 2^-120`; a full digest costs
-`2^-160` and an honest Merkle verifier comparing `2^15` digests per query `2^-145`, both below it).
+**The error.** `Pr[bad] ≤ N·(Q + qV)·ε + Adv^PRF(D) + Adv^EUF-CMA(B) + Adv^coll`, where `N` is
+the number of members of the composed output's extraction tree, `N = 2^(r+1) − 1 = 127` for the
+season's tree (`r = 6`) and `N = 513` for the stream's final output (`M = 256` links: 257 leaves and
+256 nodes, depth 256), and `B` and `D` run the evaluation and the walk: about `2^58` steps
+(**estimate**, [RD] §4.9 fine print; the walk runs `E` per node within `B t`). At the season shape
+`Q ≈ 2^28–2^30` (**estimate**, C §2 item 1), inside `logCap = 2^96` and the efficient-extraction
+domain of about `2^61` entries, so at `ε = errorCap = 2^-120` the first term is at most about
+`513 · 2^30 · 2^-120 ≈ 2^-81` for the stream's output and `127 · 2^30 · 2^-120 ≈ 2^-83` for the
+tree's root (`qV ≤ 2^16` is negligible beside `Q`), where the potential's lossless composition
+gave `2^30 · 2^-120 = 2^-90` (**estimate**). At the caps one member's bound is
+`2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64`; collision-type events are
+chargeable at the cap from `216` bits up (`logCap · 2^-t ≤ 2^-120`; a full digest costs `2^-160`
+and an honest Merkle verifier comparing `2^15` digests per query `2^-145`, both below it).
 
 **Fiore–Nitulescu** (ePrint 2016/112) show that SNARK extraction can fail against adversaries with
 an exogenous signing oracle. It does not bite here (**paper**, C §2 item 5): the extractor is
@@ -536,20 +595,25 @@ fails the same way.
 > 1. **One kernel**: Lean v4.34.1's, the comparator that replays the proofs in it, and Lean core,
 >    Mathlib and the pinned packages as hashed in the olean manifest. *v3 also had nanoda as a
 >    second kernel; CI drops it (Q5).*
-> 2. **The contract**: 10 files, 355 code lines, no theorem, three standard axioms. It now includes
->    the signature check `SigOk`, the trace digest and `runSeq`, beside v3's security definitions
->    and extractor machine.
+> 2. **The contract**: 10 files, 350 code lines, no theorem, three standard axioms. It now includes
+>    the signature check `SigOk`, the trace digest and `runSeq`, and states knowledge soundness in
+>    its textbook single-output form over a lazily sampled oracle (`prob`, `KS`, V4-A10), beside
+>    v3's completeness and extractor machine. The potential (`KState`) is not trusted: it is one
+>    library route to `KS` (`KState.ks`).
 > 3. **BLAKE2s** = RFC 7693, and three properties: collision resistance on the seven tagged domains
 >    (constructive: a failure is a pair someone can exhibit), multi-target one-wayness of the chain
 >    step, and **keyed BLAKE2s-256 is a PRF** (LMN16's ideal-cipher analysis), for the oracle and for
 >    the signer's key derivation. EUF-CMA of the contract's scheme follows from these (§2.5).
 >    *Replaces v3's "BLAKE2s instantiates the random oracle".*
-> 4. **Knowledge soundness of the whole tree from one log** (§2.4): the one-level certificate and
->    the composition walk are kernel; the paper steps are the passage from the lazily sampled oracle
->    to a random function and to randomised adversaries, the PRF hybrid (§2.3), and the reading of
->    the walk's third outcome as a forgery or a trace-digest collision. *v3's item 4 (O-25 open, no
->    composition theorem) is gone.* Completeness is over a random oracle; that honest proofs pass
->    `acc` under the deployment is the harness's concrete checks.
+> 4. **Knowledge soundness of the whole tree from one log, by a union bound over its members**
+>    (§2.4, V4-A10): the one-level certificate, the composition walk and the union bound
+>    (`compose_prob`: the walk on the run's log escapes with probability at most
+>    `(2^(r+1) − 1)·(Q + qV)·ε`) are kernel for the harness's tree; the paper steps are the passage
+>    from the lazily sampled oracle to a random function and to randomised adversaries, the PRF
+>    hybrid (§2.3), the reading of the walk's forgery outcome as a forgery or a trace-digest
+>    collision, and the walk over the stream's shape (its union bound is kernel). *v3's item 4
+>    (O-25 open, no composition theorem) is gone.* Completeness is over a random oracle; that honest
+>    proofs pass `acc` under the deployment is the harness's concrete checks.
 > 5. **The badge code**: what Lean's compiler emitted for `acc` (through the word-level BLAKE2s twin
 >    proved equal to the contract's, V4-A7), compiled from the one build whose exports the kernel
 >    checked (V4-A9), guarded by the source rule and gate rules 3 and 6–8 (v3's rule 9 went with
@@ -596,6 +660,12 @@ together. Running nanoda on a larger machine restores the check (§6.2).
 
 - That a **public-hash deployment** of a winning design is sound (CGH; §2.3).
 - **EUF-CMA** as a theorem, or the forgery/collision split, in the kernel (§2.4, §2.5).
+- A **lossless** composition from the certificate: the textbook `KS` composes by a union bound,
+  `N·(Q + qV)·ε` with `N` the extracted proofs (V4-A10, §2.4); one event for the whole tree holds
+  only for an entry that exhibits a knowledge state (`compose_of_kstate`), which the rules do not
+  require. The **walk over the stream's shape** is paper (its union bound is kernel).
+- Anything for `qV > logCap`: `KS` is vacuous there (`acceptAll_ks_above_logCap`); the
+  certificate's `qV ≤ 2^16` excludes it.
 - That **honest proofs pass `acc`** under the deployment: measured by the harness, not proved.
 - The **native prover's** correctness; only the signed proofs it writes are checked.
 - **Efficient extraction** beyond `B t` and the domain of about `2^61` log entries; anything for
@@ -609,7 +679,8 @@ together. Running nanoda on a larger machine restores the check (§6.2).
   workflow.
 
 **What has been exercised** (as in §0): the development VM ran the build, the tests and two
-entries end to end at the smoke shape, and the trimmed harness of V4-A9; a GitHub runner (CI run
+entries end to end at the smoke shape, the trimmed harness of V4-A9, and the V4-A10 contract with
+the witness-sending entry end to end; a GitHub runner (CI run
 39966237935) ran the core CI with the end-to-end smoke before V4-A9; the evaluation workflow and
 its attestations have never run. Until they do, every end-to-end claim here is from
 the development VM, and no record of the kind the trust statement describes exists.
@@ -1069,8 +1140,8 @@ decisions of 2026-10-26.
 | Rule | What breaks without it |
 |---|---|
 | the relation and `acc`: exact in-order replay of the trace, `\|tr\| ≤ qV`, the 1 MiB caps | witnesses are unbounded, so no recursive design is complete (C-M3), and the trace digest is ambiguous |
-| knowledge soundness at `errorCap = 2^-120` per fresh query, `logCap = 2^96` | no soundness; the run's bound `(Q + qV)·ε` is about `2^-90` (§2.4) |
-| the efficient straight-line extractor: `Computes` within the budget `B t` | an accept-all verifier holds a knowledge state when every statement has a witness (`acceptAll_kstate_iff`), and the tree does not compose from one log (§2.4) |
+| textbook single-output knowledge soundness at `errorCap = 2^-120` per query, `logCap = 2^96` (V4-A10); the potential is a library route | no soundness; the run's bound `N·(Q + qV)·ε` is about `2^-81` (§2.4) |
+| the efficient straight-line extractor: `Computes` within the budget `B t` | an accept-all verifier is knowledge-sound when every statement has a witness (`acceptAll_ks_iff`), and the tree's members are not extracted from the run's log (§2.4) |
 | completeness for every witness, `δ ≤ 2^-40` | reject-all verifiers, and verifiers that accept only the benchmark's shapes, are certified |
 | the certificate for every `vk` | it is proved before the key exists, so no verifier can lean on a signature (§2.2) |
 | proof hygiene: the kernel check, the axiom audit, the gate's rules, the source rule | the certificate is not a proof (`sorry`, an axiom, elaboration-time code, a code-changing attribute) |
@@ -1093,7 +1164,8 @@ decisions of 2026-10-26.
 
 **Changed parameters.** `errorCap` from `2^-128` to `2^-120`: it admits GF(2^128) designs such as
 Flock's (a degree-2 sumcheck round costs `2^-127`, a univariate-skip round `126 / 2^128 ≈ 2^-121`;
-FB-9), and the run's bound stays about `2^-90`. `completenessCap` from `2^-128` to `2^-40`: a
+FB-9), and the run's bound stays negligible (about `2^-90` with the potential's lossless
+composition, `2^-81` by the union bound since V4-A10). `completenessCap` from `2^-128` to `2^-40`: a
 failure costs only its entrant, and about 640 proofs per evaluation fail a run with probability
 about `2^-30.7`. `M` from 512 to 256: the stream fits its 15-minute cap; the tail's share grows to
 about 9.4% (§3.6). The time limits (§3.4).
@@ -1128,21 +1200,23 @@ disadvantages binary fields (Q11, §6.2), and the verifier's time on crafted inp
 | `Relation.lean` | 38 | digests, tags, caps, chain, statements, `Trace`, `Sig`, `Signed`, `Wit`, `Rel` | signed children; tags `T W K M` added, `R` removed; `queryCap` |
 | `Signature.lean` | 31 | `traceDigest`, WOTS digits, chain, leaf, Merkle path, `SigOk` | new |
 | `Oracle.lean` | 24 | `OProg`, `runLog`, `runSeq`, `queries`, `bind` | `runSeq` added, `run` moved to Library |
-| `Security.lean` | 33 | `KState`, `KS`, `failProb`, `CompleteWithError`, caps | the caps' values (V4-A9: `2^-120`, `2^-40`) |
+| `Security.lean` | 28 | `prob` (lazy sampling), `KS` (textbook single-output), `CompleteWithError` (through `prob`), caps | `KS` textbook and `KState`, `failProb` to the Library (V4-A10; 33 lines before); the caps' values (V4-A9: `2^-120`, `2^-40`) |
 | `Machine.lean` | 62 | the step-counting word machine | unchanged |
 | `Extractor.lean` | 50 | tape, `decodeWit` for signed children, budget, `Computes` | output format |
 | `Tree.lean` | 8 | `treeRoot` | unchanged |
 | `Certificate.lean` | 32 | `Submission` with `vk`, `acc` (with `\|tr\| ≤ qV`, RA-M2), `Certificate`, `Declared`, `CertificateR` | `Vb`, `blake2sOracle`, `tagRO` deleted |
-| **total** | **355** | budget ≤ 500 | v3: 292 |
+| **total** | **350** | budget ≤ 500 | v3: 292; 355 before V4-A10 |
 
 What a human must trust it for: that `Rel` and `acc` say what §1.1 says; that `SigOk` and
 `traceDigest` hash exactly the bytes of §1.3 (the service and runner are tested against them); that
-v3's definitions are unchanged but for the two caps' values (V4-A9). `lake build` is green (1,264
-jobs, `logs/D-final-build.log`, after V4-A9 `logs/trim/lake-build-final.log`; a cold build takes
+`KS` and `prob` say what §1.4 says (V4-A10); that v3's other definitions are unchanged but for the
+two caps' values (V4-A9). `lake build` is green (1,266 jobs since V4-A10, `logs/ks/lake-build.log`;
+before, 1,264, `logs/D-final-build.log`, `logs/trim/lake-build-final.log`; a cold build takes
 1 min 56 s to 2 min 55 s on the development VM, `logs/A-fix-build-cold.log`), and the axiom audit
 passes on every module (`propext`, `Classical.choice`, `Quot.sound`; `logs/A-fix-axiom-audit.log`,
-`logs/trim/axiom-audit.log`). The contract imports Lean core and Mathlib only. By `loc.py`, the
-Library has 1,856 code lines and 233 theorems, the Controls 2,082 lines and 309 theorems.
+`logs/trim/axiom-audit.log`, `logs/ks/axiom-audit.log`). The contract imports Lean core and Mathlib
+only. By `loc.py`, the Library has 2,281 code lines and 285 theorems, the Controls 2,165 lines and
+322 theorems (1,856 and 233, 2,082 and 309 before V4-A10).
 
 **Controls**: every trusted definition has a positive and a negative control (the full table is
 stage A RESULT §3). The ones that carry the v4 changes:
@@ -1154,9 +1228,11 @@ stage A RESULT §3). The ones that carry the v4 changes:
 | `acc` | `acc_leafSigned`, `acc_query_at_cap` | `acc_trace_over_qV`, `acc_two_entries_rejected`, `acc_query_over_cap`, `acc_over_cap`, `acc_changed_answer` |
 | `traceDigest`, WOTS, `SigOk` | `traceDigest_kat` (hashlib), `sigOk_sign` (every `sk`), `wotsDigits_dominates` (the checksum) | `traceDigest_changed_answer`, `sigOk_other_key`, `sigOk_key_unique`, `sigOk_ots_length`, `sigOk_path_length` |
 | `decodeWit` | `decodeWit_node_kat`, `decodeWit_leaf_kat` | `decodeWit_long_trace`, `decodeWit_short_sig`, `decodeWit_long_proof` |
-| `Certificate` with `∀ vk` | `ws_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` | `sigTrust_no_certificate`, `sigTrust_certificate_opens`, v3's negatives |
+| `Certificate` with `∀ vk` | `ws_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` | `sigTrust_no_certificate`, `sigTrust_certificate_opens` (the adversary holding `sk` wins with probability 1), v3's negatives (`acceptAll_no_certificate` re-proved against the textbook `KS`) |
+| `KS`, textbook single-output (V4-A10) | `ws_ks`, `twoLucky_ks_exact` (through its potential, at `2^-192`), `queryThenAccept_ks_one` (direct, at `ε = 1`), `Backdoor.certified` | `acceptAll_wins`, `acceptAll_not_ks` (the adversary that asks nothing wins with probability 1), `queryThenAccept_ks_ge_one` (the verifier's own query is charged), `oneQuery_not_KS` (the query bound); what it does not say: `acceptAll_ks_above_logCap` |
+| `prob` (V4-A10) | `prob_askGood` (a fresh answer is uniform: exactly `1/2`) | `prob_askTwice` (a repeated query is the table's: probability `0`, not `1 − 2^-256`) |
 | `errorCap = 2^-120`, `completenessCap = 2^-40` (V4-A9) | `twoLucky_ks`, `collision_ks` (potentials at the cap), `grind40_complete` (40 nonces: exactly `2^-40`) | `twoLucky_no_bool_kstate`, `collision_no_bool_kstate` (a log of `2^136 + 1` answers), `v24_no_bool_kstate` (`2^72 + 1` answers within the guard), `grind39_not_complete` |
-| composition (Library) | `walk_one_leaf`, `walk_two_leaves` | `forgery_trivial`, `compose_exists_free` |
+| composition (Library) | `walk_one_leaf`, `walk_two_leaves`, `ws_compose_prob` (the walk escapes with probability 0) | `forgery_trivial`, `compose_exists_free`; `noExt_walk_escaped`, `noExt_escape_prob` (an extractor that returns nothing: the walk escapes, `compose_prob`'s event is certain) |
 
 The Library theorems the badge and the decoder rest on, `Fast.accF_eq` (the badge's `accF` is `acc`)
 and `Words.decodeWit_witWords` (every fitting witness can be denoted), are theorems, not controls.
@@ -1182,13 +1258,13 @@ rests on (the calibration column is published, not enforced).
 
 ### 6.1 The decisions
 
-Each is reversible; the reason is one line. Overrides: the amendments V4-A1 … A9 win over V4-1 …
-V4-16 where they differ. V4-A9 is the user's own (2026-10-26).
+Each is reversible; the reason is one line. Overrides: the amendments V4-A1 … A10 win over V4-1 …
+V4-16 where they differ. V4-A9 (2026-10-26) and V4-A10 (2026-10-27) are the user's own.
 
 | Id | Decision | Reason |
 |---|---|---|
 | P1 | D3, the SROM, not D4 | offline, stateless checks by the harness and by third parties; no key release, no designated-verifier window; cost one signature check per child |
-| V4-1 | v3's KS, completeness, extractor machine and budget verbatim; KS and completeness for every `vk` | minimal change; `∀ vk` makes a signature-trusting verifier uncertifiable |
+| V4-1 | v3's KS, completeness, extractor machine and budget verbatim; KS and completeness for every `vk` (KS textbook single-output since V4-A10) | minimal change; `∀ vk` makes a signature-trusting verifier uncertifiable |
 | V4-2 | the oracle is keyed BLAKE2s-256 behind a service, fresh key per lifetime; `blake2sOracle`, `tagRO`, `Vb` deleted | CGH needs a public seed |
 | V4-3 | a contract-fixed stateful hash-based signature (WOTS `w = 4`, 133 chains, height 16), fresh keys per lifetime, hash-then-sign of the trace | no group; one hash gadget; near-minimal in-circuit cost |
 | V4-4 | sequential trace semantics | linear for the harness and in-circuit |
@@ -1213,6 +1289,7 @@ V4-16 where they differ. V4-A9 is the user's own (2026-10-26).
 | V4-A7 | controls: the impossibility, the node clause with the Lean signer, the negatives, the word-level twin | C-m1, C-m3, C-m11, C-m12 |
 | V4-A8 | this document states the impossibility, the `vk` caveat, `E` without `vk`, the unrankable season shape, the paper split, the trace-hash cost | C-m6, C-m9, C-m10 |
 | V4-A9 | the trim (the user's): every job within 30 min with nested caps and a cached organiser setup; one tree run and one stream run, no medians, two parallel jobs; `M = 256`; no per-entry liveness; per entry only the statement canaries, 2 per kind; the organiser's checks in the core CI only; DoS 100 inputs, failing on time and crashes only; only the root read; one Lean build; `errorCap = 2^-120`, `completenessCap = 2^-40` | keep only what serves valid verifiers or honest, fast, recursion-priced proving (§4.4) |
+| V4-A10 | the contract states textbook single-output knowledge soundness in the random-oracle model (`prob`, `KS`); v3's potential (`KState`) is an untrusted library tool, an intermediate artifact of a proof (`KState.ks`); the tree composes by a union bound over the extracted proofs (`Compose.compose_prob`) (the user's, 2026-10-27) | the certificate states the standard notion a cryptographer reads and accepts any correct proof technique; cost: about `2^-81` against `2^-90` for the whole run (§2.4) |
 | RA-M2 | `acc` checks `\|tr\| ≤ qV` (one trusted line) | `KS`'s query bound ranges over oracle functions and does not bound a non-functional trace |
 | Q5 | CI checks certificates with the Lean kernel only | nanoda needs more than 16 GB (§2.7) |
 | B dev. 1 | the prover isolated by namespaces, not a separate uid; two memory cgroups (11 GB + 2 GB) | no system user needed; the prover cannot make the OOM killer pick the service |
@@ -1254,8 +1331,9 @@ V4-16 where they differ. V4-A9 is the user's own (2026-10-26).
   first step (§3.4); a crafted-input column is the follow-up.
 - **Gate rule 4 still requires `P` and `ext` compiled** (V4-A9): no badge runs them any more, so
   the rule could be relaxed to `V`; relaxing it changes what entries may submit and is the user's.
-- **The deployment's whole-run bound at `errorCap = 2^-120`**: about `2^-90` at `2^30` queries
-  (§2.4); a season whose runs ask far more queries moves it.
+- **The deployment's whole-run bound at `errorCap = 2^-120`**: about `2^-81` at `2^30` queries for
+  the stream's final output, `2^-83` for the tree's root (§2.4, V4-A10's union bound; `2^-90`
+  before); a season whose runs ask far more queries, or a longer stream, moves it.
 - **Keyed BLAKE2s as a named assumption** (C unsettled 1): the alternative wording calls it the
   design's one heuristic, since its only analysis is in an ideal-cipher model.
 - **Runner facts** (C unsettled 2, 3): the CPU models, and whether `pclmulqdq` and AVX2 are on every
@@ -1295,12 +1373,14 @@ of `scaraven/recursion.fast-submissions`, and its dispositions here:
 ## 7. Where things are
 
 - **This design's implementation**: branch `v4/srom-rules`. Contract `RecursionFast/Contract/`;
-  Library `RecursionFast/Library/` (paper theorem, witness-sending entry, reference signer,
-  composition, word-level BLAKE2s); Controls `RecursionFast/Controls/`; `scripts/` (line count,
-  gate, source rule, axiom audit); the service `service/` (`PROTOCOL.md` normative for provers); the
-  runner `harness/` (`FORMAT.md` the signed-proof file, `PROVER.md` the prover interface,
-  `season.toml`); `tests/`; `.github/workflows/` (`ci.yml`, `evaluate.yml`); stage records
-  `docs/v4/stages/A-contract-RESULT.md`, `B-harness-RESULT.md` and `D-trim-RESULT.md` (V4-A9).
+  Library `RecursionFast/Library/` (the potential and its bridge to `KS`, the calculus of `prob`,
+  the union bound, witness-sending entry, reference signer, composition, word-level BLAKE2s);
+  Controls `RecursionFast/Controls/`; `scripts/` (line count, gate, source rule, axiom audit); the
+  service `service/` (`PROTOCOL.md` normative for provers); the runner `harness/` (`FORMAT.md` the
+  signed-proof file, `PROVER.md` the prover interface, `season.toml`); `tests/`;
+  `.github/workflows/` (`ci.yml`, `evaluate.yml`); stage records
+  `docs/v4/stages/A-contract-RESULT.md`, `B-harness-RESULT.md`, `D-trim-RESULT.md` (V4-A9) and
+  `E-ks-RESULT.md` (V4-A10).
 - **The brief, the reviews and the fix queue**: [`v4/BRIEF.md`](v4/BRIEF.md); the design attack
   [`v4/reviews/C-design-attack.md`](v4/reviews/C-design-attack.md), the stage reviews and golf
   passes (`RA`, `GA`, `RB`, `GB`) and the whole-branch review `R-final-review.md` in

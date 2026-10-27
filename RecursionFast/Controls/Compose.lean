@@ -1,5 +1,5 @@
 /-
-# Controls: the composition walk (`Library/Compose.lean`, V4-8; RA-M1)
+# Controls: the composition walk and its probability (`Library/Compose.lean`, V4-8, V4-A10; RA-M1)
 
 Negative (what the bare disjunction does not say). `forgery_trivial` is RA's probe P1, adapted
 to the capped `Forgery`: under the key of any known signer and for every log within `logCap`, a
@@ -9,11 +9,20 @@ query is not in the log, which exists since the log has fewer than `2^256` entri
 hypotheses used. The content is `walk`'s (and `compose`'s) membership of the forgery in the
 extraction tree of the root signed proof.
 
+Negative (an escape is the knowledge-soundness failure, and `compose_prob`'s event is reachable).
+`noExt` is the witness-sending submission with an extractor that returns nothing; its `acc` is the
+witness-sending one. It is not knowledge-sound at any error (`noExt_not_ks`). On an honest
+one-leaf tree its walk escapes at the root (`noExt_walk_escaped`), so the adversary that outputs
+that root makes the event `compose_prob` bounds certain (`noExt_escape_prob`): only the hypothesis
+`KS` bounds it.
+
 Positive. On the witness-sending submission under the reference signer's key, with the empty
-log (functional, potential `0`), `walk` returns the leaf starts:
+log, `walk` returns the leaf starts:
 * `walk_one_leaf`: a one-leaf tree whose root is the signed leaf proof of `(s, n)` gives `[s]`;
 * `walk_two_leaves`: a two-leaf tree whose root is the signed node proof over the two signed leaf
   proofs gives `[s₁, s₂]`.
+And `ws_compose_prob`: under every key and against every adversary, its walk escapes with
+probability `0` (`compose_prob` at `ε = 0`, `qV = 0`).
 Symbolic (`decode_encode`, `sigOk_sign`, `extract_of_E`, `walkFrom_leaf`); no hash is evaluated.
 -/
 import RecursionFast.Library.Compose
@@ -54,32 +63,65 @@ theorem forgery_trivial (sk : ℕ → ℕ → Digest) (L : Log) (hlen : L.length
 
 /-- Hence `compose_exists`'s conclusion, for such a key, uses none of its hypotheses but the
 log's length. -/
-theorem compose_exists_free (sk : ℕ → ℕ → Digest) (L : Log) (hlen : L.length ≤ logCap) (n : ℕ)
-    (hs : List Digest) :
+theorem compose_exists_free (S : Submission) (sk : ℕ → ℕ → Digest) (L : Log)
+    (hlen : L.length ≤ logCap) (n r : ℕ) (hs : List Digest) (p : Signed) :
     (∃ ss, List.Forall₂ (fun s h => chainEnd s n = h) ss hs) ∨ Nonempty Collision ∨
-      Nonempty (Forgery (Signer.pk sk) L) :=
-  Or.inr (Or.inr (forgery_trivial sk L hlen))
+      Nonempty (Forgery (Signer.pk sk) L) ∨
+      ∃ (c : Digest) (q : Signed) (bs : List Bool), bs.length ≤ r ∧
+        InTree S L (treeRoot (hs.map fun h => leafStmt h n)) p bs c q ∧
+        Escape S (Signer.pk sk) L c q :=
+  Or.inr (Or.inr (Or.inl (forgery_trivial sk L hlen)))
+
+/-! ## Negative: an escape is the knowledge-soundness failure -/
+
+/-- The witness-sending submission with an extractor that returns nothing. -/
+def noExt : Submission := { submission with E := fun _ _ _ => none }
+
+/-- **Not knowledge-sound** at any error: the honest leaf proof is accepted with no answer and
+not opened. -/
+theorem noExt_not_ks (vk s : Digest) {n : ℕ} (hn : n ≤ chainCap) (ε : ℝ≥0) :
+    ¬ KS (Rel (noExt.acc vk)) (noExt.V vk) noExt.E ε noExt.qV :=
+  not_ks_of_accept (c := leafStmt (chainEnd s n) n) (π := encode (.leaf s n))
+    (congrArg some (check_encode (vk := vk) (w := .leaf s n) ⟨hn, rfl⟩)) (by simp [noExt])
+    (Nat.zero_le _) (by simp [noExt, submission])
+
+/-- Its `acc` is the witness-sending one: the honest leaf proof is accepted. -/
+theorem noExt_acc_leaf (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
+    noExt.acc (Signer.pk sk) (treeRoot ([chainEnd s n].map fun h => leafStmt h n))
+      (leafSigned sk 0 s n) = true :=
+  acc_leafSigned (j := 0) sk (Nat.two_pow_pos _) s hn
+
+/-- **The walk escapes**: on an honest one-leaf tree, `noExt`'s walk ends in an escape at the
+root. -/
+theorem noExt_walk_escaped (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
+    (walk [] n hn 0 [chainEnd s n] rfl (leafSigned sk 0 s n)
+      (noExt_acc_leaf sk s hn)).Escaped := by
+  have hx := extract_escape (L := []) (noExt_acc_leaf sk s hn) (by simp [leafSigned])
+    (by simp [noExt])
+  unfold walk
+  rw [walkFrom.eq_def]
+  dsimp only
+  split
+  · rename_i heq; rw [hx] at heq; cases heq
+  · trivial
+  · rename_i heq; rw [hx] at heq; cases heq
+  · rename_i heq; rw [hx] at heq; cases heq
+
+/-- **`compose_prob`'s event is certain** for `noExt` and the adversary that outputs the honest
+leaf proof. -/
+theorem noExt_escape_prob (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
+    prob (fun p L => ∃ hacc : noExt.acc (Signer.pk sk)
+        (treeRoot ([chainEnd s n].map fun h => leafStmt h n)) p = true,
+      (walk L n hn 0 [chainEnd s n] rfl p hacc).Escaped) (.ret (leafSigned sk 0 s n)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, noExt_walk_escaped sk s hn⟩)
 
 /-! ## Positive: the walk on honest witness-sending trees -/
 
-/-- The empty log is functional. -/
-theorem nil_functional : Log.Functional ([] : Log) := fun _ h => absurd h List.not_mem_nil
-
-/-- The witness-sending knowledge state (potential `0`), at the submission's own `V` and `E`. -/
-def ks (vk : Digest) : KState (Rel (submission.acc vk)) (submission.V vk) submission.E 0 :=
-  WitnessSending.kstate vk
-
-/-- It has potential `0` on the empty log. -/
-theorem kstate_nil (vk : Digest) : (ks vk).μ [] < 1 := by
-  show (0 : ℝ≥0) < 1
-  exact one_pos
-
 /-- **The walk on a one-leaf tree** returns the leaf's start. -/
 theorem walk_one_leaf (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
-    (walk (ks (Signer.pk sk)) nil_functional
-      (Nat.zero_le _) (kstate_nil _) n hn 0 [chainEnd s n] rfl (leafSigned sk 0 s n)
+    (walk [] n hn 0 [chainEnd s n] rfl (leafSigned sk 0 s n)
       (acc_leafSigned sk (by decide) s hn)).starts? = some [s] :=
-  walkFrom_leaf _ _ _ _ hn rfl rfl (by simp [leafSigned])
+  walkFrom_leaf hn rfl rfl (by simp [leafSigned])
     (decode_encode (.leaf s n) (hn.trans_lt (by decide))) rfl
 
 /-- The signature words of a reference signature: 597 words. -/
@@ -119,20 +161,19 @@ theorem acc_nodeSigned_root (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {
 
 /-- **The walk on a two-leaf tree** returns the two leaves' starts. -/
 theorem walk_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ} (hn : n ≤ chainCap) :
-    (walk (ks (Signer.pk sk)) nil_functional
-      (Nat.zero_le _) (kstate_nil _) n hn 1 [chainEnd s₁ n, chainEnd s₂ n] rfl
-      (nodeSigned sk s₁ s₂ n) (acc_nodeSigned_root sk s₁ s₂ hn)).starts? = some [s₁, s₂] := by
+    (walk [] n hn 1 [chainEnd s₁ n, chainEnd s₂ n] rfl (nodeSigned sk s₁ s₂ n)
+      (acc_nodeSigned_root sk s₁ s₂ hn)).starts? = some [s₁, s₂] := by
   have hn64 : n < 2 ^ 64 := hn.trans_lt (by decide)
+  have hR := Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn
   have hE : submission.E (treeRoot ([chainEnd s₁ n, chainEnd s₂ n].map fun h => leafStmt h n))
       (nodeSigned sk s₁ s₂ n).π [] = some (nodeWit sk s₁ s₂ n) :=
-    decode_encode _ (fits_of_rel (Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn))
-  obtain ⟨hw, hx⟩ := extract_of_E (ks (Signer.pk sk))
-    nil_functional (Nat.zero_le _) (kstate_nil _) (acc_nodeSigned_root sk s₁ s₂ hn)
-    (by simp [nodeSigned]) hE
+    decode_encode _ (fits_of_rel hR)
+  have hx := extract_of_E (acc_nodeSigned_root sk s₁ s₂ hn) (by simp [nodeSigned]) hE hR
   unfold walk
   rw [walkFrom.eq_def]
   dsimp only
   split
+  · rename_i heq; rw [hx] at heq; cases heq
   · rename_i heq; rw [hx] at heq; cases heq
   · rename_i heq; rw [hx] at heq; cases heq
   · rename_i heq
@@ -141,20 +182,27 @@ theorem walk_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : 
     rw [dite_eq_left_of_eq_true (eq_true ⟨rfl, rfl⟩)]
     split
     · rename_i e₁ e₂
-      have a₁ := walkFrom_leaf _ _ _ _ hn (h := chainEnd s₁ n) rfl e₁ (by simp [leafSigned])
+      have a₁ := walkFrom_leaf hn (h := chainEnd s₁ n) rfl e₁ (by simp [leafSigned])
         (decode_encode (.leaf s₁ n) hn64) rfl
-      have a₂ := walkFrom_leaf _ _ _ _ hn (h := chainEnd s₂ n) rfl e₂ (by simp [leafSigned])
+      have a₂ := walkFrom_leaf hn (h := chainEnd s₂ n) rfl e₂ (by simp [leafSigned])
         (decode_encode (.leaf s₂ n) hn64) rfl
       simp only [Outcome.starts?, Option.some.injEq] at a₁ a₂ ⊢
       rw [a₁, a₂]; rfl
     all_goals rename_i e
-    · exact absurd (walkFrom_leaf _ _ _ _ hn (h := chainEnd s₁ n) rfl e (by simp [leafSigned])
-        (decode_encode (.leaf s₁ n) hn64) rfl) (by simp [Outcome.starts?])
-    · exact absurd (walkFrom_leaf _ _ _ _ hn (h := chainEnd s₁ n) rfl e (by simp [leafSigned])
-        (decode_encode (.leaf s₁ n) hn64) rfl) (by simp [Outcome.starts?])
-    · exact absurd (walkFrom_leaf _ _ _ _ hn (h := chainEnd s₂ n) rfl e (by simp [leafSigned])
-        (decode_encode (.leaf s₂ n) hn64) rfl) (by simp [Outcome.starts?])
-    · exact absurd (walkFrom_leaf _ _ _ _ hn (h := chainEnd s₂ n) rfl e (by simp [leafSigned])
-        (decode_encode (.leaf s₂ n) hn64) rfl) (by simp [Outcome.starts?])
+    all_goals first
+      | exact absurd (walkFrom_leaf hn (h := chainEnd s₁ n) rfl e (by simp [leafSigned])
+          (decode_encode (.leaf s₁ n) hn64) rfl) (by simp [Outcome.starts?])
+      | exact absurd (walkFrom_leaf hn (h := chainEnd s₂ n) rfl e (by simp [leafSigned])
+          (decode_encode (.leaf s₂ n) hn64) rfl) (by simp [Outcome.starts?])
+
+/-- **The witness-sending walk escapes with probability `0`**, under every key and against every
+adversary asking at most `Q ≤ logCap` queries. -/
+theorem ws_compose_prob (vk : Digest) {n : ℕ} (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
+    (hr : hs.length = 2 ^ r) (A : OProg Signed) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q)
+    (hQ : Q ≤ logCap) :
+    prob (fun p L => ∃ hacc : submission.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+      (walk L n hn r hs hr p hacc).Escaped) A [] = 0 :=
+  le_antisymm ((compose_prob (ks vk) n hn r hs hr A hA (by simpa [submission] using hQ)).trans
+    (by simp [submission])) bot_le
 
 end RecursionFast.Controls.Compose

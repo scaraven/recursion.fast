@@ -8,9 +8,10 @@ v4 contract: the verifier asks the oracle the empty query and, if the answer equ
 proof** of every statement, its own 32 bytes; otherwise it is the witness-sending decision (whose
 children may also be magic proofs, since they are accepted by this submission's `acc`). Among all
 oracle functions that match is a `2^-256` event, so:
-* `KS` holds at error `errorCap` with one query, under every key: the potential is `1` on the
-  logs that answer the empty query with the trigger and `0` elsewhere (`KState.ofBool` of a
-  boolean state whose one bad answer is the trigger);
+* `KS` holds at error `errorCap` with one query, under every key, through the library's
+  potential and the bridge `KState.ks`: the potential is `1` on the logs that answer the empty
+  query with the trigger and `0` elsewhere (`KState.ofBool` of a boolean state whose one bad
+  answer is the trigger);
 * completeness holds at error `0` under every key: the honest branch accepts the honest proof
   under every oracle (`Complete`, embedded by `complete_withError_zero`);
 * the extractor program, its fuel and the caps are the witness-sending ones.
@@ -171,7 +172,7 @@ theorem complete_perfect (vk : Digest) : Complete (Rel (S.acc vk)) (S.P vk) (V v
     simp only [S, WitnessSending.P, OProg.run, V, encodeF_eq, check_encode hR, Bool.or_true]
 
 theorem certified : Certificate S where
-  secure vk := ⟨⟨kstate vk⟩, fun _ _ _ => le_rfl⟩
+  secure vk := (kstate vk).ks fun _ _ _ => le_rfl
   complete vk := complete_withError_zero (complete_perfect vk)
   computes := WitnessSending.computes
   cap := ⟨le_rfl, zero_le, by decide, WitnessSending.certificate.cap.2.2.2⟩

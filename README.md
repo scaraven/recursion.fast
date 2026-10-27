@@ -14,6 +14,8 @@ certificate and closes O-25 by the oracle's deployment: the oracle is a secret-k
 by a service that also **signs** the answers each proof used, so a node checks its children against
 signed traces and a certified verifier has nothing to recognise. Provers are x86-64 assembly,
 timed on GitHub-hosted runners whose results are attested, and scored `S = T_tree + K·t_link`.
+The certificate states knowledge soundness in its textbook single-output form (V4-A10, the user's
+decision of 2026-10-27); v3's potential is a library route to a proof, not a rule.
 
 v4 is implemented on the branch `v4/srom-rules` and has not yet been adopted by the user. Its
 design is [`docs/DESIGN-v4-srom.md`](docs/DESIGN-v4-srom.md); §6 there lists every decision taken

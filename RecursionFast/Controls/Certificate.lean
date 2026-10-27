@@ -15,11 +15,14 @@ Negative:
   the budget, are not certified (v3).
 * `rejectAll_no_certificate`, `acceptAll_no_certificate`, `error_one_no_certificate`,
   `delta_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_program_no_certificate`:
-  v3's, with the verifier now a function of the key.
+  v3's, with the verifier now a function of the key; `acceptAll_no_certificate` re-proved against
+  the textbook `KS` (V4-A10): the adversary that asks nothing and outputs `(0, ∅)` wins with
+  probability `1`, above `qV · ε < 1`, which the caps give (`small_of_caps`).
 * **The `∀ vk` (V4-1, C-m1)**: `sigTrust_no_certificate`: a submission whose verifier accepts any
   proof carrying a signature of the statement valid under `vk` (`Library/SigTrust.lean`'s `Vsig`),
   with an extractor that returns nothing, is **not certified**: the certificate's key quantifier
-  reaches `Signer.pk sk`, under which anyone signs every statement. With any extractor,
+  reaches `Signer.pk sk`, and the adversary that holds `sk` (`SigTrust.adversary`) asks nothing,
+  outputs a statement with its signature, and wins with probability `1`. With any extractor,
   `sigTrust_certificate_opens`: a certificate would make the extractor open the signature of every
   statement, on the empty log, to a witness of the relation. **Why the quantifier is what does
   it**: `sigTrust_ks_unsignable` (the same verifier is knowledge-sound at error `0` under any key
@@ -78,7 +81,8 @@ theorem rejectAll_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = Securit
 
 theorem acceptAll_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = acceptAll)
     (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
-  (Security.acceptAll_no_kstate_none (S.acc 0) S.ε).false (hV 0 ▸ hE ▸ (h.secure 0).1.some)
+  have hs := small_of_caps h.cap.2.2.1 h.cap.1
+  Security.acceptAll_not_ks_none (S.acc 0) hs.1 hs.2 (hV 0 ▸ hE ▸ h.secure 0)
 
 theorem error_one_no_certificate (S : Submission) (hε : S.ε = 1) : ¬ Certificate S := fun h =>
   (hε ▸ h.cap.1).not_gt errorCap_lt_one
@@ -108,7 +112,8 @@ theorem big_program_no_certificate (S : Submission) (hp : S.ext.body = rep (2 ^ 
 returns nothing: the certificate's `∀ vk` reaches the key of a known signer. -/
 theorem sigTrust_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = SigTrust.Vsig vk)
     (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
-  (SigTrust.sigTrust_no_kstate_none (fun _ _ => 0) _ _).false (hV _ ▸ hE ▸ (h.secure _).1.some)
+  have hs := small_of_caps h.cap.2.2.1 h.cap.1
+  SigTrust.sigTrust_not_ks_none (fun _ _ => 0) _ hs.1 hs.2 (hV _ ▸ hE ▸ h.secure _)
 
 /-- With any extractor, a certificate would open every statement's signature, on the empty log,
 to a witness of the relation. -/
@@ -116,7 +121,8 @@ theorem sigTrust_certificate_opens (S : Submission) (hV : ∀ vk, S.V vk = SigTr
     (h : Certificate S) (sk : ℕ → ℕ → Digest) (c : Digest) :
     ∃ w, S.E c (SigTrust.sigProof (Signer.sign sk 0 c)) [] = some w ∧
       Rel (S.acc (Signer.pk sk)) c w :=
-  SigTrust.sigTrust_extracts sk (hV _ ▸ (h.secure (Signer.pk sk)).1.some) c
+  have hs := small_of_caps h.cap.2.2.1 h.cap.1
+  SigTrust.sigTrust_ks_extracts sk (hV _ ▸ h.secure (Signer.pk sk)) hs.1 hs.2 c
 
 /-- **The twin**: under a key for which no signature verifies, the signature-trusting verifier
 is knowledge-sound for the relation of every `acc` and every extractor. -/
@@ -196,7 +202,7 @@ theorem rel_leaf_iff (acc acc' : Digest → Signed → Bool) (c s : Digest) (n :
     Rel acc c (.leaf s n) ↔ Rel acc' c (.leaf s n) := Iff.rfl
 
 theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbig.ε Sbig.qV :=
-  ⟨⟨KState.zero 0 fun L c π h => by
+  KState.ks (KState.zero 0 fun L c π h => by
       simp only [Sbig, Vbig, OProg.runLog, Option.some.injEq, Bool.and_eq_true,
         decide_eq_true_eq] at h
       obtain ⟨⟨-, hl⟩, hc⟩ := h
@@ -204,8 +210,8 @@ theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbi
       rw [hd] at hl
       cases w with
       | leaf s n => exact ⟨_, hd, (rel_leaf_iff _ _ c s n).mp hR⟩
-      | node => cases hl⟩,
-    fun _ _ _ => le_rfl⟩
+      | node => cases hl)
+    fun _ _ _ => le_rfl
 
 theorem big_computes : Computes Sbig.ext Sbig.E Sbig.fuel := fun c π L hπ _ _ =>
   ⟨[], Controls.Extractor.halt_run _ 0, by decide, (congrArg decode (strip_small hπ)).symm⟩
@@ -226,7 +232,9 @@ theorem big_complete (vk : Digest) :
     CompleteWithError (Rel (Sbig.acc vk)) (Sbig.P vk) (Sbig.V vk) Sbig.δ := fun c w hR => by
   cases w with
   | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
-  | leaf s n => exact (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
+  | leaf s n =>
+    exact (failProb_eq_prob _ []).symm.trans_le
+      (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
 
 /-- **A certified submission whose `acc` accepts nothing** (V3-S2R-m1). -/
 theorem acc_rejects_all_certified : Certificate Sbig ∧ ∀ vk c p, Sbig.acc vk c p = false :=

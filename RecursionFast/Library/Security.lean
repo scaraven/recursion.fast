@@ -1,8 +1,26 @@
 /-
-  RecursionFast.Library.Security  (UNTRUSTED, kernel-checked; unchanged from v3)
+  RecursionFast.Library.Security  (UNTRUSTED, kernel-checked)
 
-  Facts about the security definitions (`Contract/Security.lean`).
+  **The knowledge state (`KState`), v3's contract form of knowledge soundness, now a library
+  route to the contract's `KS`** (V4-A10, the user's decision of 2026-10-27), and facts about it.
+  A submitter may exhibit one as an intermediate step of a proof of `KS`: `KState.ks`
+  (`Library/PaperTheorem.lean`) turns it into `KS` by Markov's inequality on the stopped
+  potential. The definition and its laws are v3's, unchanged.
 
+  * **`KState`** with error `ε`: a potential `μ` on logs, a non-negative real measuring how close
+    the log is to letting an accepted proof escape the extractor, with three laws:
+    `empty` (the empty log has potential `0`); `step` (on a log of fewer than `logCap` entries with
+    potential below `1`, a fresh query raises the potential by at most `ε` **on average over its
+    `2^256` answers**); `final` (on a log of at most `logCap` entries with potential below `1`,
+    every proof the verifier accepts reading its answers from the log is extracted by `E` to a
+    witness). The statement is quantified only in `final`, so an adversary choosing it after
+    seeing answers is covered. **Why a potential**: a challenge that spans several answers (the
+    query phase of a hash-based IOP) has error the product of its answers' conditionals; a
+    potential carries the partial product from answer to answer, where a set of bad answers per
+    query would charge the largest conditional (`Controls/Potential.lean`, `twoLucky`). **Why the
+    length guard**: a Merkle commitment is binding only up to collisions, and over logs of
+    unbounded length that charge exceeds every useful `ε` (V3-KS-A2;
+    `Controls/Potential.lean`, `collision_no_bool_kstate`).
   * `card_digest`, `fintype_card_digest`: there are `2^256` digests, so the constant `2^256` in
     the `step` law is the number of answers, and `step` bounds their average.
   * **Two guards are redundant** (V3-S2-KS review m3, its probe `Redundant.lean`, kernel-checked):
@@ -23,7 +41,8 @@
     empty log) and the extractor returns no witness of the relation for it on the empty log,
     there is no knowledge state at any error (the laws `empty` and `final`).
   * `acceptAll_kstate_iff`: the verifier that accepts everything has a knowledge state, for some
-    extractor, exactly when every statement has a witness (DESIGN-v3 §4.2, V3-S1-A13).
+    extractor, exactly when every statement has a witness (DESIGN-v3 §4.2, V3-S1-A13); its `KS`
+    twin is `Library/KS.lean`'s `acceptAll_ks_iff`.
 -/
 import RecursionFast.Contract.Security
 import Mathlib.Data.Fintype.Card
@@ -54,6 +73,25 @@ theorem card_digest : Nat.card Digest = 2 ^ 256 := by
 
 /-- The contract's error cap is below `1`. -/
 theorem errorCap_lt_one : errorCap < 1 := pow_lt_one₀ (by positivity) (by norm_num) (by norm_num)
+
+/-! ## The knowledge state -/
+
+/-- **A knowledge state** with per-query error `ε` for the relation `R`, the verifier `V` and the
+extractor `E`: a potential `μ` on query logs with the laws `empty`, `step` and `final`. -/
+structure KState (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
+    (E : Digest → Proof → Log → Option Wit) (ε : ℝ≥0) where
+  /-- The potential of a log; below `1`, no accepted proof escapes the extractor. -/
+  μ : Log → ℝ≥0
+  /-- The empty log has potential `0`. -/
+  empty : μ [] = 0
+  /-- Within `logCap` and below `1`, a fresh query raises the potential by at most `ε` on average
+  over its `2^256` answers. (`μ L < 1` is redundant: `KState.step_unstopped`.) -/
+  step : ∀ L q, L.length < logCap → μ L < 1 → q ∉ L.map Prod.fst →
+    ∑ a : Digest, μ (L ++ [(q, a)]) ≤ (μ L + ε) * 2 ^ 256
+  /-- Within `logCap` and below `1`, every proof the verifier accepts on the log's answers is
+  extracted to a witness. (The length bound is redundant: `KState.final_unguarded`.) -/
+  final : ∀ L c π, L.length ≤ logCap → μ L < 1 → (V c π).runLog L = some true →
+    ∃ w, E c π L = some w ∧ R c w
 
 variable {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
   {E : Digest → Proof → Log → Option Wit}

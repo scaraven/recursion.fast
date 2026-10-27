@@ -1,9 +1,10 @@
 /-
 # Controls: completeness with error (`Contract/Security.lean`, V3-S2R-A2), positive and negative
 
-`failProb` over a lazily sampled oracle, `CompleteWithError` and `completenessCap = 2^-40`. The
-answers are split by the top bit of their first byte (`good`); flipping that bit is a bijection
-of the digests, so exactly half are good (`sum_bad`).
+`CompleteWithError` (stated through the contract's `prob`) and `completenessCap = 2^-40`, computed
+with the library's `failProb` (`completeWithError_iff`: the same statement). The answers are
+split by the top bit of their first byte (`good`); flipping that bit is a bijection of the
+digests, so exactly half are good (`sum_bad`).
 
 Positive:
 * `grind_exact`: a verifier that accepts the proof `z i` iff the answer to the query `z i` is good,
@@ -24,6 +25,14 @@ Negative:
   prover does**: a prover can ask the query too, and cannot change its answer.
 * Rejecting everything is complete at no `δ < 1` (`Controls/Security.lean`,
   `rejectAll_not_complete`).
+
+**The measure itself (`prob`, V4-A10).** Positive, `prob_askGood`: a fresh answer is uniform, so
+a program that asks one query and returns whether its answer is good returns `false` with
+probability exactly `1/2`. Negative, `prob_askTwice`: a repeated query is answered from the table,
+so a program that asks one query twice and returns whether the two answers differ returns `true`
+with probability `0`: the oracle is one function. A measure that sampled every query afresh would
+give `1 - 2^-256` there, and the knowledge-soundness game would not run the verifier against the
+answers the adversary saw.
 -/
 import RecursionFast.Library.Completeness
 import RecursionFast.Controls.Potential
@@ -84,6 +93,23 @@ theorem avg_bad (x : ℝ≥0) :
   rw [sum_bad, pow_succ, mul_inv, mul_comm ((2 : ℝ≥0) ^ 255)⁻¹, mul_assoc,
     ← mul_assoc ((2 : ℝ≥0) ^ 255)⁻¹, inv_mul_cancel₀ (by positivity), one_mul]
 
+/-! ## The measure: a fresh answer is uniform, a repeated one is the table's -/
+
+/-- Ask the query `z 0` and return whether its answer is good. -/
+def askGood : OProg Bool := .query (z 0) fun a => .ret (good a)
+
+/-- **A fresh answer is uniform**: `askGood` returns `false` with probability exactly `1/2`. -/
+theorem prob_askGood : prob (fun b _ => b = false) askGood [] = 2⁻¹ := by
+  rw [← failProb_eq_prob]
+  simpa [askGood, failProb] using avg_bad 1
+
+/-- Ask `z 0` twice and return whether the two answers differ. -/
+def askTwice : OProg Bool := .query (z 0) fun a => .query (z 0) fun b => .ret (decide (a ≠ b))
+
+/-- **One function**: the repeated query is answered from the table, so the answers never differ. -/
+theorem prob_askTwice : prob (fun b _ => b = true) askTwice [] = 0 := by
+  simp [askTwice, prob, List.find?]
+
 /-! ## Grinding: exactly `2^-k` with `k` nonces -/
 
 /-- Accept the proof `z i` iff the answer to the query `z i` is good. -/
@@ -132,12 +158,12 @@ theorem grind_exact (c : Digest) {k : ℕ} (hk : 0 < k) :
 /-- **40 nonces are complete at the cap**, for every relation. -/
 theorem grind40_complete (R : Digest → Wit → Prop) :
     CompleteWithError R (fun _ _ => grindP 40 0) Vg completenessCap :=
-  fun c _ _ => (grind_exact c (by decide)).le
+  completeWithError_iff.mpr fun c _ _ => (grind_exact c (by decide)).le
 
 /-- **39 nonces are not**, for any relation with a witness. -/
 theorem grind39_not_complete (R : Digest → Wit → Prop) {c : Digest} {w : Wit} (h : R c w) :
     ¬ CompleteWithError R (fun _ _ => grindP 39 0) Vg completenessCap := fun hc =>
-  (hc c w h).not_gt <| by
+  (completeWithError_iff.mp hc c w h).not_gt <| by
     rw [grind_exact c (by decide), completenessCap]
     exact pow_lt_pow_right_of_lt_one₀ (by norm_num) (by norm_num) (by norm_num)
 
@@ -178,12 +204,14 @@ theorem fixed_fresh (c : Digest) : ∀ (p : OProg Proof) (L : Log),
 
 /-- **The fixed-query verifier is complete at `1/2`**, with every prover. -/
 theorem fixed_complete_half (R : Digest → Wit → Prop) (P : Digest → Wit → OProg Proof) :
-    CompleteWithError R P Vh 2⁻¹ := fun c w _ => (fixed_fresh c (P c w) [] rfl).le
+    CompleteWithError R P Vh 2⁻¹ :=
+  completeWithError_iff.mpr fun c w _ => (fixed_fresh c (P c w) [] rfl).le
 
 /-- **No prover makes it complete at `δ < 1/2`.** -/
 theorem fixed_not_complete (R : Digest → Wit → Prop) (P : Digest → Wit → OProg Proof)
     {c : Digest} {w : Wit} (h : R c w) {δ : ℝ≥0} (hδ : δ < 2⁻¹) :
     ¬ CompleteWithError R P Vh δ := fun hc =>
-  absurd ((fixed_fresh c (P c w) [] rfl).symm.trans_le (hc c w h)) (not_le.mpr hδ)
+  absurd ((fixed_fresh c (P c w) [] rfl).symm.trans_le (completeWithError_iff.mp hc c w h))
+    (not_le.mpr hδ)
 
 end RecursionFast.Controls.Completeness
