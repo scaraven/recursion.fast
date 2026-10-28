@@ -273,37 +273,29 @@ private theorem readBytes_len {n : ℕ} {o o' : List Word} {b : List UInt8}
     (h : (readBytes n).run o = some (b, o')) : b.length ≤ 8 * o.length ∧ o'.length ≤ o.length := by
   simp only [readBytes, StateT.run] at h
   split at h
-  · rename_i hw
-    simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl⟩ := h
-    have := List.length_take_le' ((n + 7) / 8) o
-    refine ⟨(List.length_take_le' _ _).trans ?_, by simp⟩
-    rw [show List.flatMap wordBytes _ = wordsBytes _ from rfl, wordsBytes_length]
-    omega
-  · simp at h
+  · cases h
+    exact ⟨(List.length_take_le' _ _).trans ((wordsBytes_length _).trans_le
+      (Nat.mul_le_mul_left 8 (List.length_take_le' _ _))), by simp⟩
+  · cases h
 
 private theorem readNat_len {o o' : List Word} {x : ℕ} (h : readNat.run o = some (x, o')) :
     o'.length ≤ o.length := by
-  cases o with
-  | nil => simp [readNat, StateT.run] at h
-  | cons w o => simp only [readNat, StateT.run, Option.some.injEq, Prod.mk.injEq] at h; simp [← h.2]
+  match o, h with
+  | _ :: _, rfl => exact Nat.le_succ _
 
 private theorem readString_len {o o' : List Word} {b : ByteArray} (h : readString.run o = some (b, o')) :
     b.size ≤ 8 * o.length ∧ o'.length ≤ o.length := by
   simp only [readString, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
-  obtain ⟨⟨n, o₁⟩, h₁, ⟨bs, o₂⟩, h₂, h₃⟩ := h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₃
-  obtain ⟨rfl, rfl⟩ := h₃
+  obtain ⟨⟨n, o₁⟩, h₁, ⟨bs, o₂⟩, h₂, ⟨⟩⟩ := h
   have l1 := readNat_len h₁
-  have l2 := readBytes_len (o := o₁) h₂
-  exact ⟨by simp only [ByteArray.size, List.size_toArray]; omega, by omega⟩
+  exact ⟨(readBytes_len h₂).1.trans (Nat.mul_le_mul_left 8 l1), (readBytes_len h₂).2.trans l1⟩
 
 private theorem readDigest_len {o o' : List Word} {d : Digest} (h : readDigest.run o = some (d, o')) :
     o'.length ≤ o.length := by
-  simp only [readDigest, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
-  obtain ⟨⟨bs, o₁⟩, h₁, h₂⟩ := h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₂
-  exact h₂.2 ▸ (readBytes_len h₁).2
+  simp only [readDigest, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff,
+    StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨⟨bs, o₁⟩, h₁, -, rfl⟩ := h
+  exact (readBytes_len h₁).2
 
 /-- A reader that never lengthens what is left. -/
 private def Shrinks {α : Type} (r : Reader α) : Prop := ∀ o o' x, r.run o = some (x, o') → o'.length ≤ o.length
@@ -316,9 +308,8 @@ private theorem shrinks_bind {α β : Type} {r : Reader α} {f : α → Reader �
   exact (hf a _ _ _ h₂).trans (hr _ _ _ h₁)
 
 private theorem shrinks_pure {α : Type} (a : α) : Shrinks (pure a : Reader α) := by
-  intro o o' x h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
-  exact h.2 ▸ le_rfl
+  rintro _ _ _ ⟨⟩
+  exact le_rfl
 
 private theorem shrinks_readList {α : Type} {r : Reader α} (hr : Shrinks r) : ∀ n, Shrinks (readList r n)
   | 0 => shrinks_pure _
@@ -337,9 +328,7 @@ private theorem shrinks_readSigned : Shrinks readSigned := by
 private theorem readSigned_pi {o o' : List Word} {s : Signed} (h : readSigned.run o = some (s, o')) :
     s.π.size ≤ 8 * o.length := by
   simp only [readSigned, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
-  obtain ⟨⟨π, o₆⟩, h₆, ⟨tr, o₇⟩, -, ⟨σ, o₈⟩, -, h₉⟩ := h
-  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₉
-  obtain ⟨rfl, -⟩ := h₉
+  obtain ⟨⟨π, o₆⟩, h₆, ⟨tr, o₇⟩, -, ⟨σ, o₈⟩, -, ⟨⟩⟩ := h
   exact (readString_len h₆).1
 
 /-- **The domain is closed under extraction** (V4-A11): both children of a node witness that an
@@ -348,33 +337,23 @@ within `outCap` words is within `Computes`'s domain of `8 · outCap` bytes (`chi
 theorem decodeWit_children_size {o : List Word} {c₁ c₂ : Digest} {p₁ p₂ : Signed}
     (h : decodeWit o = some (.node c₁ c₂ p₁ p₂)) :
     p₁.π.size ≤ 8 * o.length ∧ p₂.π.size ≤ 8 * o.length := by
-  have h' : (readWit.run o).map Prod.fst = some (.node c₁ c₂ p₁ p₂) := h
-  rcases hr : readWit.run o with _ | ⟨w, o'⟩ <;> rw [hr] at h'
-  · cases h'
-  simp only [Option.map_some, Option.some.injEq] at h'
-  subst h'
+  obtain ⟨⟨_, o'⟩, hr, rfl⟩ : ∃ a, readWit.run o = some a ∧ a.1 = .node c₁ c₂ p₁ p₂ :=
+    Option.map_eq_some_iff.mp h
   simp only [readWit, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at hr
-  obtain ⟨⟨k, o₁⟩, hk, hr⟩ := hr
-  have l1 := readNat_len hk
-  rcases k with _ | _ | k
-  · simp [StateT.run_bind, Option.bind_eq_some_iff] at hr
-  · simp only [StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff, StateT.run_pure,
-      Option.pure_def, Option.some.injEq, Prod.mk.injEq, Wit.node.injEq] at hr
-    obtain ⟨⟨d₁, o₂⟩, h₂, ⟨d₂, o₃⟩, h₃, ⟨s₁, o₄⟩, h₄, ⟨s₂, o₅⟩, h₅, ⟨⟨-, -, rfl, rfl⟩, -⟩⟩ := hr
-    have := readDigest_len h₂
-    have := readDigest_len (o := o₂) h₃
-    have := shrinks_readSigned _ _ _ h₄
-    have := readSigned_pi h₄
-    have := readSigned_pi h₅
-    simp only at *
-    omega
-  · exact absurd hr (by simp [StateT.run, failure, StateT.failure])
+  obtain ⟨⟨_ | _ | _, o₁⟩, hk, hr⟩ := hr
+  · simp [Option.bind_eq_some_iff] at hr
+  · simp only [StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at hr
+    obtain ⟨⟨d₁, o₂⟩, h₂, ⟨d₂, o₃⟩, h₃, ⟨s₁, o₄⟩, h₄, ⟨s₂, o₅⟩, h₅, ⟨⟩⟩ := hr
+    have l₃ := ((readDigest_len h₃).trans (readDigest_len h₂)).trans (readNat_len hk)
+    exact ⟨(readSigned_pi h₄).trans (Nat.mul_le_mul_left 8 l₃),
+      (readSigned_pi h₅).trans (Nat.mul_le_mul_left 8 ((shrinks_readSigned _ _ _ h₄).trans l₃))⟩
+  · cases hr
 
 /-- An extracted child within the output cap is within the extractor's domain. -/
 theorem child_in_domain {o : List Word} {c₁ c₂ : Digest} {p₁ p₂ : Signed}
     (h : decodeWit o = some (.node c₁ c₂ p₁ p₂)) (hl : o.length ≤ outCap) :
     p₁.π.size ≤ 8 * outCap ∧ p₂.π.size ≤ 8 * outCap :=
-  have hs := decodeWit_children_size h
-  ⟨hs.1.trans (by omega), hs.2.trans (by omega)⟩
+  have h8 := Nat.mul_le_mul_left 8 hl
+  (decodeWit_children_size h).imp (·.trans h8) (·.trans h8)
 
 end RecursionFast.Controls.Extractor

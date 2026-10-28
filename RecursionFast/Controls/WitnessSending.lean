@@ -131,9 +131,7 @@ theorem node_children_word {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ : S
     p₁.π.size < 2 ^ 64 ∧ p₂.π.size < 2 ^ 64 := by
   obtain ⟨w, hd', hR⟩ := check_sound h
   cases hd ▸ hd'
-  obtain ⟨-, h₁, h₂⟩ := hR
-  simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq] at h₁ h₂
-  exact ⟨h₁.1.1.1.1, h₂.1.1.1.1⟩
+  exact ⟨(fits_of_acc hR.2.1).1, (fits_of_acc hR.2.2).1⟩
 
 /-- An accepted node proof's children carry empty traces (this verifier asks no query). -/
 theorem node_children_untraced {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ : Signed}

@@ -187,13 +187,13 @@ def Sbig : Submission where
   fuel _ := 1
 
 theorem acc_false (vk c : Digest) (p : Signed) : Sbig.acc vk c p = false := by
-  unfold Submission.acc
   by_cases h : p.π.size < 2 ^ 64
-  · rw [decide_eq_true h]
-    cases p.tr
-    · simp [Sbig, Vbig, OProg.runSeq]; omega
-    · simp [Sbig, Vbig, OProg.runSeq]
-  · rw [decide_eq_false h]; simp
+  · have hv : (Sbig.V vk c p.π).runSeq p.tr ≠ some true := by
+      show (OProg.ret (decide (2 ^ 64 ≤ p.π.size) && _ && _)).runSeq _ ≠ _
+      rw [decide_eq_false (Nat.not_le.mpr h)]
+      cases p.tr <;> nofun
+    rw [Submission.acc, decide_eq_false hv, Bool.and_false]
+  · simp only [Submission.acc, decide_eq_false h, Bool.false_and]
 
 theorem strip_small {π : Proof} (h : π.size ≤ 2 ^ 64) : strip π = ⟨#[]⟩ := by
   rw [strip, List.drop_eq_nil_of_le (Array.length_toList.trans_le h)]
@@ -221,7 +221,7 @@ theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbi
 
 theorem big_computes : Computes Sbig.ext Sbig.E Sbig.fuel := fun c π L hπ _ _ =>
   ⟨[], Controls.Extractor.halt_run _ 0, by decide,
-    (congrArg decode (strip_small (hπ.trans (by unfold outCap; norm_num)))).symm⟩
+    (congrArg decode (strip_small (hπ.trans (by decide)))).symm⟩
 
 theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s n)) :
     Vbig vk c ⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ = .ret true := by

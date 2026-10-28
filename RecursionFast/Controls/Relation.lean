@@ -267,8 +267,7 @@ theorem acc_changed_answer (S : Submission) (vk c : Digest) (π : Proof) (σ : S
 /-- **Over the word**: every submission's `acc` rejects a proof of `2^64` bytes or more. -/
 theorem acc_over_word (S : Submission) (vk c : Digest) (p : Signed) (h : 2 ^ 64 ≤ p.π.size) :
     S.acc vk c p = false := by
-  rw [Submission.acc, decide_eq_false (show ¬ p.π.size < 2 ^ 64 by omega)]
-  simp
+  simp only [Submission.acc, decide_eq_false h.not_gt, Bool.false_and]
 
 /-- **Over the query cap**: every submission's `acc` rejects a trace with a query longer than
 `queryCap`. -/
@@ -403,7 +402,7 @@ theorem deep_accepted_but_unwritable (sk : ℕ → ℕ → Digest) :
       2 ^ 64 ≤ (deepProof sk 51).size ∧
       submission.acc (Signer.pk sk) (deepStmt 51) (deepSigned sk 51) = false := by
   have hs := deepProof_size sk 51
-  have hw : 2 ^ 64 ≤ (deepProof sk 51).size := by norm_num at hs; omega
+  have hw : 2 ^ 64 ≤ (deepProof sk 51).size := by omega
   exact ⟨deepProof_check sk 51 le_rfl, hw, acc_over_word _ _ _ _ hw⟩
 
 end RecursionFast.Controls.Relation

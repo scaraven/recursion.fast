@@ -359,10 +359,9 @@ theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size < 2 ^ 60) :
 /-- **The program computes the extractor** within `8 · t` steps on every input. -/
 theorem computes : Computes submission.ext submission.E submission.fuel := by
   intro c π L hπ _ _
-  unfold outCap at hπ
+  unfold outCap at *
   refine ⟨packBytes π.data.toList, ext_run c π L (by omega), ?_, rfl⟩
   rw [packBytes_length, ← size_eq_length]
-  unfold outCap
   omega
 
 /-- **The witness-sending submission is certified**, for every public key. -/
