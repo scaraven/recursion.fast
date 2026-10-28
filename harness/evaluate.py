@@ -419,8 +419,23 @@ def bench_job(a, cert):
         cmd += ["--parts", a.parts]
     # every step the entry controls is capped inside (season file); this bounds the organiser's own
     # steps, so that a part ends inside its 30-minute job (V4-A9)
-    subprocess.run(cmd, timeout=PART_S)
-    res = json.load(open(a.out))
+    try:
+        subprocess.run(cmd, timeout=PART_S)
+        res = json.load(open(a.out))
+    except subprocess.TimeoutExpired:
+        # review M-3: the part ran past its bound; once the prover's build has started, the entry's
+        # steps are what can take that long (every organiser step is bounded far below it), so it is
+        # the entry's failure, never a missing part
+        try:
+            res = json.load(open(a.out))
+        except (OSError, ValueError):
+            res = {"stage": "organiser setup", "reasons": []}
+        stage = res.get("stage") or "organiser setup"
+        entry_stage = stage not in ("organiser setup",)
+        res["benchmark"] = "fail" if entry_stage else "error"
+        res.setdefault("reasons", []).append(
+            f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
+            + (": the entry's failure (review M-3)" if entry_stage else ": a harness error"))
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
                                                    "built_modules", "environment")}

@@ -334,7 +334,9 @@ jobs:
         env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
         run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
       - name: benchmark (every step capped by the season; the part within 28 min, harness/evaluate.py PART_S)
-        env: { PART: "${{ matrix.part }}", RF_HARNESS_COMMIT: "${{ needs.plan.outputs.core_sha }}", SVC_HIT: "${{ steps.svc.outputs.cache-hit }}" }
+        # RF_ENTRY_NAME: the entry's identity for the provisional ranking (aggregate.py --rank, review M-4)
+        env: { PART: "${{ matrix.part }}", RF_HARNESS_COMMIT: "${{ needs.plan.outputs.core_sha }}", SVC_HIT: "${{ steps.svc.outputs.cache-hit }}",
+               RF_ENTRY_NAME: "${{ inputs.entry_repo }}:${{ inputs.entry_path }}" }
         run: |
           out="result-${{ strategy.job-index }}.json"
           if [[ "$SVC_HIT" != true ]]; then

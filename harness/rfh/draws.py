@@ -10,6 +10,9 @@ realised values. Only the distributions are public:
   per octave), by inverse CDF `n = 1 / (1/n_lo − u·(1/n_lo − 1/n_hi))`, rounded (no stratification,
   §11 simplification 2);
 * chain starts: 32 bytes each.
+
+A length goes through a float on its way to an integer (review m-10); the realised integers, which
+the result publishes (`stream.lengths`), are what the evaluation used.
 """
 import secrets
 

@@ -21,13 +21,26 @@ from dataclasses import dataclass
 
 from . import digest, draws
 from .checks import Badge, BadgeError, canaries, dos_inputs
-from .prover import fresh_dir, request
+from .prover import fresh_dir, remove_tree, request
 from .sandbox import memcap, memcap_method
 from .service import Service, ServiceError
 
 
 class Fail(Exception):
-    """The entry fails the benchmark (the message says why)."""
+    """The entry fails the benchmark (the message says why). `kind`: the badge's failure kind when a
+    check failed (`timeout`, `crash`, `slow`), else None."""
+
+    def __init__(self, msg, kind=None):
+        super().__init__(msg)
+        self.kind = kind
+
+
+def printable(text, limit=1200):
+    """Untrusted text (a prover's output) as printable ASCII for a result and a public comment
+    (review m-6): every other character becomes `?`, backticks become `'`, and it is put in a code
+    span."""
+    t = "".join(c if 32 <= ord(c) < 127 else "?" for c in text.replace("`", "'"))
+    return "`" + t[-limit:] + "`"
 
 
 class _Cap(Exception):
@@ -58,6 +71,8 @@ class Params:
     calib_rounds: int
     calib_ref_ns: float
     calib_clamp: tuple
+    calib_runs: int
+    calib_ref_provisional: bool
     triv_chains: int
     triv_n: int
     v_ref_ms: float
@@ -70,6 +85,7 @@ class Params:
     verify_s: float
     setup_s: float
     setup_cap: int
+    work_cap: int
     build_s: float
     mem_prover: str
     mem_service: str
@@ -88,13 +104,14 @@ class Params:
             retime_factor=float(g("stream", "retime_factor")), retime_frac=float(g("stream", "retime_frac")),
             calib_every=g("calibration", "every"), calib_idle_s=float(g("calibration", "idle_s")),
             calib_rounds=g("calibration", "rounds"), calib_ref_ns=float(g("calibration", "ref_ns")),
-            calib_clamp=tuple(g("calibration", "clamp")), triv_chains=g("calibration", "triv_chains"),
+            calib_clamp=tuple(g("calibration", "clamp")), calib_runs=g("calibration", "runs_per_sample"),
+            calib_ref_provisional=bool(g("calibration", "ref_provisional")), triv_chains=g("calibration", "triv_chains"),
             triv_n=g("calibration", "triv_n"), v_ref_ms=float(t["calibration"].get("v_ref_ms", 0.0)),
             service_calib_s=g("calibration", "service_s"),
             dos_proofs=g("dos", "proofs"), dos_item_factor=float(g("dos", "item_factor")),
             dos_total_s=g("dos", "total_s"), dos_item_cap=g("dos", "item_cap"),
             file_cap=g("caps", "file_cap"), verify_s=g("caps", "verify_s"), setup_s=g("caps", "setup_s"),
-            setup_cap=g("caps", "setup_cap"), build_s=g("caps", "build_s"),
+            setup_cap=g("caps", "setup_cap"), work_cap=g("caps", "work_cap"), build_s=g("caps", "build_s"),
             mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"))
 
 
@@ -159,9 +176,9 @@ class Bench:
     @staticmethod
     def diag(svc, output):
         """What a failed run said (Q13): the prover's output tail and the service's refusals."""
-        out = f"; prover output (tail): {output.strip()[-1200:]!r}" if output.strip() else ""
+        out = f"; prover output (tail): {printable(output.strip())}" if output.strip() else ""
         ref = svc.refusals(5)
-        return out + (f"; service refusals: {ref}" if ref else "")
+        return out + (f"; service refusals: {printable('; '.join(ref), 600)}" if ref else "")
 
     def stop(self, svc, rec):
         rec["service_refusals"] = svc.refusals()
@@ -193,27 +210,38 @@ class Bench:
         try:
             return self.badge.verify(items, self.store, timeout=t, warm=warm)
         except BadgeError as e:
-            raise Fail(f"{what}: {e}")
+            raise Fail(f"{what}: {e}", kind=e.kind)
 
-    def check(self, items, what, timeout=None):
+    def capped(self, n):
+        """The timeout of one badge run of `n` checks: `verify_s` per check and 30 s, and while the
+        stream's cap runs at most 30 s past it (review M-3: work begun before the cap ends within
+        30 s of it)."""
+        t = self.p.verify_s * (n + 1) + 30
+        return t if self.deadline is None else min(t, max(0.0, self.left()) + 30)
+
+    def check(self, items, what, timeout=None, runs_wanted=2):
         """`acc` on items (vk, stmt, store-relative path, label): every one must be accepted, and its
         time `V_i` is the best of two measurements (§11 m-8), each batch warmed with an untimed first
-        check (RF-m3). Returns [(best ns, [both ns])]."""
+        check (RF-m3). While the stream's cap runs, each badge run ends within 30 s of it and the
+        second is skipped once the cap is reached (its first measurement then stands). Returns
+        [(best ns, [the measurements])]."""
         bare = [(vk, c, rel) for vk, c, rel, _ in items]
         runs = []
-        for k in range(2):
-            res = self.verify(bare, what, warm=True, timeout=timeout)
+        for k in range(runs_wanted):
+            if k and self.deadline is not None and self.left() <= 0:
+                break
+            res = self.verify(bare, what, warm=True, timeout=timeout if timeout is not None else self.capped(len(bare)))
             for (_, _, _, label), (ok, _) in zip(items, res):
                 if not ok:
                     raise Fail(f"{what}: {label} rejected by acc" + (" when measured again" if k else ""))
             runs.append([ns for _, ns in res])
-        return [(min(a, b), [a, b]) for a, b in zip(*runs)]
+        return [(min(ms), list(ms)) for ms in zip(*runs)]
 
     def canary_check(self, vk, targets, what):
         """The statement canaries (C15) of every target (store path, stmt, others): the accepted file,
         checked against another statement, must be rejected."""
         items = [(vk, c, rel, f"{rel} {name}") for rel, stmt, others in targets for name, c in canaries(stmt, others)]
-        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries")
+        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries", timeout=self.capped(len(items)))
         bad = [label for (_, _, _, label), (ok, _) in zip(items, res) if ok]
         if bad:
             raise Fail(f"{what}: canaries accepted (a proof accepted for another statement): {bad[:5]}")
@@ -258,50 +286,73 @@ class Bench:
         return cal
 
     def sample(self, before_step):
-        """One calibration sample (§5.4, §11 m-2), with no entry process alive: an idle gap, then the
-        prover-shaped workload `calib` on the job's CPUs and the chain checker on one pinned core."""
+        """One calibration sample (§5.4, §11 m-2; review m-2), with no entry process alive: an idle
+        gap (`idle_s`), then `runs_per_sample` short runs of the prover-shaped workload `calib` on the
+        job's CPUs (their median is the sample, every run is published) and one run of the chain
+        checker on one pinned core."""
         time.sleep(self.p.calib_idle_s)
         s = {"before_step": before_step}
         if self.calib_bin:
-            out = subprocess.run([self.calib_bin, str(len(os.sched_getaffinity(0))), str(self.p.calib_rounds)],
-                                 capture_output=True, text=True, timeout=120).stdout
-            kv = dict(x.split("=", 1) for x in out.split()[1:] if "=" in x)
-            s["calib_ns"], s["clmul"] = int(kv["ns"]), kv.get("clmul")
+            runs = []
+            for _ in range(self.p.calib_runs):
+                out = subprocess.run([self.calib_bin, str(len(os.sched_getaffinity(0))), str(self.p.calib_rounds)],
+                                     capture_output=True, text=True, timeout=120).stdout
+                kv = dict(x.split("=", 1) for x in out.split()[1:] if "=" in x)
+                runs.append(int(kv["ns"]))
+                s["clmul"] = kv.get("clmul")
+            s["calib_runs_ns"], s["calib_ns"] = runs, statistics.median(runs)
         s["triv_ns"] = self.badge.chaincheck(self.triv[0], self.triv[1])
         self.samples.append(s)
         return s
 
     def calibration(self):
         """`c_P` (median of the samples over the reference time, clamped) and `T_triv` (median of the
-        chain checker's samples); `v_ref = T_triv / R`, or the season's fixed `v_ref_ms` (the smoke)."""
+        chain checker's samples); `v_ref = T_triv / R`, or the season's fixed `v_ref_ms` (the smoke).
+        The samples' relative spread is published (review m-2), and `c_P_provisional` says whether the
+        reference time is still a placeholder (review m-3)."""
         cs = [s["calib_ns"] for s in self.samples if "calib_ns" in s]
+        ts = [s["triv_ns"] for s in self.samples]
         lo, hi = self.p.calib_clamp
         raw = statistics.median(cs) / self.p.calib_ref_ns if cs else 1.0
-        triv = statistics.median(s["triv_ns"] for s in self.samples)
+        triv = statistics.median(ts)
         v_ref = self.p.v_ref_ms * 1e6 if self.p.v_ref_ms else triv / self.p.R
+        cv = lambda xs: statistics.stdev(xs) / statistics.fmean(xs) if len(xs) > 1 else 0.0  # noqa: E731
         return {"c_P": min(hi, max(lo, raw)), "c_P_raw": raw, "calib_ref_ns": self.p.calib_ref_ns,
-                "T_triv_ns": triv, "R": self.p.R, "v_ref_ns": v_ref,
+                "c_P_provisional": self.p.calib_ref_provisional, "T_triv_ns": triv, "R": self.p.R, "v_ref_ns": v_ref,
                 "v_ref_source": "fixed by the season file" if self.p.v_ref_ms else "measured: T_triv / R",
+                "calib_cv": cv(cs), "triv_cv": cv(ts),
+                "calib_within_sample_cv": [cv(s["calib_runs_ns"]) for s in self.samples if "calib_runs_ns" in s],
                 "samples": self.samples, "software_clmul": any(s.get("clmul") == "soft" for s in self.samples)}
 
     # -- the stream ----------------------------------------------------------------------------------
     def one(self, svc, tag, kind, inputs):
         """One timed request, within `ready_s`, `step_s` and the stream's cap: its `Step` record, or
-        None when the stream's cap stopped it; any other failure is the entry's."""
+        None when the stream's cap stopped it. Every other failure is the entry's (R-M1, review M-1):
+        the request's own errors (`request`), a directory the runner cannot prepare or remove, and a
+        filesystem left fuller than before the request (bytes or inodes of the request
+        directories' filesystem, after cleanup)."""
         root = self.req_root or os.path.join(self.work, "requests")
-        work = fresh_dir(os.path.join(root, tag))
-        with open(os.path.join(work, "vk.hex"), "w") as f:
-            f.write(svc.vk.hex() + "\n")
+        os.makedirs(root, exist_ok=True)
+        before = fs_free(root)
+        work = os.path.join(root, tag)
+        try:
+            fresh_dir(work)
+            with open(os.path.join(work, "vk.hex"), "w") as f:
+                f.write(svc.vk.hex() + "\n")
+        except OSError as e:          # only a previous request can have left the filesystem so
+            raise Fail(f"step {tag}: the request directory cannot be prepared ({e.strerror or e}); "
+                       "the filesystem is in the state the prover's requests left it")
         dl = self.deadline[0] if self.deadline else None
         r = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
-                    ready_s=self.p.ready_s)
+                    ready_s=self.p.ready_s, work_cap=self.p.work_cap)
         self.alive(svc)
-        try:
-            os.chmod(work, 0o700)                            # a prover may have made it unreadable
-        except OSError:
-            pass
-        shutil.rmtree(work, ignore_errors=True)              # R-M1: cleanup errors are ignored
-        shutil.rmtree(work + ".stage", ignore_errors=True)
+        gone = remove_tree(work) & remove_tree(work + ".stage")
+        after = fs_free(root)
+        if r.status == "ok" and not gone:
+            r.status = "the prover left files in /work that the runner cannot remove"
+        elif r.status == "ok" and before and after and (before[0] - after[0] > FS_SLACK or before[1] - after[1] > 64):
+            r.status = (f"the prover left the filesystem fuller ({before[0] - after[0]} bytes, "
+                        f"{before[1] - after[1]} inodes after cleanup)")
         if r.status != "ok":
             if dl is not None and time.monotonic() >= dl - 1e-3 and r.status in ("timeout", "no ready line"):
                 return None
@@ -331,16 +382,18 @@ class Bench:
                "request_dir": "tmpfs (/dev/shm)" if self.req_root else "the work directory"}
         steps, pending = rec["steps"], []
 
-        def flush(timeout=None):
+        def flush(after_cap=False):
+            """Check the pending outputs: best of two, each badge run within 30 s of the cap; after
+            truncation one run of at most 30 s (review M-3). A batch the cap stops (a timeout past
+            it; a crash is the entry's failure, review m-5) leaves its steps unscored and truncates
+            the stream."""
             if pending:
-                if timeout is None and self.deadline is not None:
-                    # a batch never runs far past the stream's cap (each of its two badge runs
-                    # within the time left plus 30 s); a batch the cap stops ends the stream
-                    timeout = min(p.verify_s * (len(pending) + 1) + 30, max(30.0, self.left() + 30))
+                items = [it for _, it in pending]
                 try:
-                    res = self.check([it for _, it in pending], f"{name} outputs", timeout=timeout)
+                    res = (self.check(items, f"{name} outputs", timeout=30, runs_wanted=1) if after_cap
+                           else self.check(items, f"{name} outputs"))
                 except Fail as e:
-                    if "rejected" in str(e) or self.deadline is None or self.left() > 0:
+                    if e.kind != "timeout" or self.deadline is None or self.left() > 0:
                         raise
                     del steps[len(steps) - len(pending):]       # the cap stopped it: unchecked, unscored
                     pending.clear()
@@ -375,9 +428,9 @@ class Bench:
                 self.log(f"[{name}] step {i}: n={steps[-1]['n']} P={r.seconds:.4f} s file={len(r.proof)} B")
                 if len(pending) >= p.check_every:
                     flush()
-            # the completed steps' checks; after the cap, 2 × 30 s at most (a batch the cap stops
-            # leaves its steps unscored)
-            flush(timeout=30 if rec["truncated"] else None)
+            # the completed steps' checks; after the cap, one badge run of at most 30 s (a batch the
+            # cap stops leaves its steps unscored)
+            flush(after_cap=rec["truncated"])
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
             try:
@@ -388,14 +441,23 @@ class Bench:
                 self.log(f"[{name}] truncated after {len(steps)} checked steps")
             if not steps:
                 raise Fail(f"{name}: no step completed within stream_s = {p.stream_s} s")
-            if self.samples[-1]["before_step"] <= len(steps) + 1 - max(1, p.calib_every // 2):
-                self.sample(len(steps) + 1)                   # a closing sample when the last is old
+            # a closing sample when the last is old, only with 30 s of the cap to spare; none after
+            # truncation (review M-3)
+            if (not rec["truncated"] and self.left() > 30
+                    and self.samples[-1]["before_step"] <= len(steps) + 1 - max(1, p.calib_every // 2)):
+                self.sample(len(steps) + 1)
             last = len(steps)
 
             def target(k):
                 return (steps[k - 1]["file"], stmts[k - 1],
                         [("next-leaf", ld[k + 1] if k < M else None), ("first-child", ld[0] if k == 1 else stmts[k - 2])])
-            rec["canaries"] = self.canary_check(svc.vk, [target(k) for k in sorted({1, min(2, last), last})], name)
+            if not rec["truncated"]:      # no canaries after truncation (review M-3); a cap reached
+                try:                      # during them truncates the stream
+                    rec["canaries"] = self.canary_check(svc.vk, [target(k) for k in sorted({1, min(2, last), last})], name)
+                except Fail as e:
+                    if e.kind != "timeout" or self.left() > 0:
+                        raise
+                    rec["truncated"], rec["canaries"] = True, None
             if not rec["truncated"]:
                 rec["retime"] = self.retime(svc, steps, stmts, inputs)
             self.alive(svc)
@@ -438,7 +500,13 @@ class Bench:
                 out["stopped_by_cap"] = True
                 break
             rel = self.keep(f"stream/step{i}.retime.bin", r.proof)
-            (best, both), = self.check([(svc.vk, stmts[i - 1], rel, f"stream step {i} (re-timed)")], "stream re-timing")
+            try:
+                (best, both), = self.check([(svc.vk, stmts[i - 1], rel, f"stream step {i} (re-timed)")], "stream re-timing")
+            except Fail as e:
+                if e.kind != "timeout" or self.left() > 0:
+                    raise
+                out["stopped_by_cap"] = True              # the first times stand
+                break
             again = step_record(i, s["n"], r, rel)
             again.update(V_ns=best, V_runs_ns=both)
             first = {key: s[key] for key in keys}
@@ -484,11 +552,23 @@ class Bench:
                 "total_s": self.p.dos_total_s, "over_v_ref": sum(1 for _, ns in res if ns > v_ref_ns)}
 
 
+FS_SLACK = 1 << 20        # bytes the request directories' filesystem may lose to other processes
+
+
+def fs_free(path):
+    """(free bytes, free inodes) of the filesystem of `path`, or None."""
+    try:
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize, st.f_favail
+    except OSError:
+        return None
+
+
 def step_record(i, n_i, r, rel):
     """The per-step record of §8 (the score adds its derived fields)."""
     return {"index": i, "n": n_i, "P_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": pi_size(r.proof),
-            "ended_by": r.ended}
+            "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns}
 
 
 def pi_size(file_bytes):
@@ -555,7 +635,8 @@ def score(p: Params, stream):
     S = P + V
     out = {"S": S, "P_bar": P, "V_bar": V, "share_P": P / S, "share_V": V / S, "K": p.K, "kappa": p.kappa,
            "n_ref": p.n_ref, "s_ref": p.s_ref, "c_P": c_P, "T_triv_ns": cal["T_triv_ns"], "v_ref_ns": v_ref,
-           "M": len(steps), "sum_n": sum(s["n"] for s in steps), "truncated": bool(stream.get("truncated"))}
+           "M": len(steps), "sum_n": sum(s["n"] for s in steps), "truncated": bool(stream.get("truncated")),
+           "c_P_provisional": bool(cal.get("c_P_provisional"))}
     tot_p3 = sum(s["n"] * (s["P_s"] / s["n"]) ** 3 for s in steps)
     for s in steps:
         xv, xp = s["V_ns"] / v_ref, s["pi_bytes"] / p.s_ref

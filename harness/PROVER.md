@@ -63,7 +63,8 @@ characters plus an optional newline; `vk.hex` is the service's public key. A cha
 
 Runs once per evaluation, before any instance or service exists, with `/setup` writable and no
 socket. It may write tables, keys or code there, within `setup_s` (4 min in season 1) and
-`setup_cap` (the directory holds at most 4 GiB afterwards; above it the setup fails, V4-A11 R-M1).
+`setup_cap` (the directory holds at most 4 GiB in at most 2^20 entries afterwards, sparse files at
+their size, and must be hashable within that and 60 s; otherwise the setup fails, V4-A11 R-M1).
 A prover with nothing to set up exits 0.
 
 ### The stream: `prover first /work`, then `prover step /work` (timed per request)
@@ -89,7 +90,9 @@ length i.i.d. with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work pe
 two chains too); the starts. A step learns its own length only when its inputs arrive; `M` is
 never told. Two cross-step side channels exist and are harmless given the re-timing rule below
 (§11 m-6): the signature index the service returns (how many signatures this lifetime made) and
-`CLOCK_REALTIME`.
+`CLOCK_REALTIME`. The index tells a step `i < 64` that it is not the last (`M ≥ 64`); that is
+harmless: the score is a work-weighted cubic mean over every step, so knowing that more steps
+follow changes nothing a step can gain (about 0.1–0.3 % of `P̄` at most, estimate; review m-9).
 
 **The handshake** (per request):
 
@@ -106,8 +109,11 @@ never told. Two cross-step side channels exist and are harmless given the re-tim
    process exits. The cap is `step_s` (60 s) from the inputs to the death of the last process.
 
 `/work` is on a tmpfs where the machine has one: what the prover writes there counts against its
-memory cgroup. If the prover makes `/work` unusable for the runner (an input's name taken, the
-directory made unreadable), the step fails as the entry's failure (R-M1).
+memory cgroup. When the prover is dead, `/work` may hold at most `work_cap` (4 GiB, a sparse file at
+its size) in at most 65,536 entries. **Any failure the runner meets while the prover's sandbox
+exists, or because of what a prover left behind, is the entry's failure** (R-M1): an input's name
+taken, the directory made unreadable, the filesystem filled so that the runner's own writes fail,
+files the runner cannot remove, the filesystem left fuller after cleanup.
 
 **Between steps** the runner checks outputs (in batches of `check_every` = 8, each `V_i` the best of
 two measurements, pinned to one core) and takes calibration samples, **never while an entry

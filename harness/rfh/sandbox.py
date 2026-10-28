@@ -278,7 +278,8 @@ class Sandbox:
     def kill_tree(self, timeout=30):
         """Kill every process of a tracked sandbox at once (`cgroup.kill`, else SIGKILL to the
         namespace's init, which takes the namespace with it) and wait until all are dead: (dead?,
-        the monotonic time it was seen). Nothing in the sandbox runs after that time."""
+        the monotonic time it was seen in seconds, the same in ns of `CLOCK_MONOTONIC`). Nothing in
+        the sandbox runs after that time."""
         import select
         import signal
         try:
@@ -294,7 +295,8 @@ class Sandbox:
         except OSError:
             pass
         dead = bool(select.select([self.pidfd], [], [], timeout)[0])
-        return dead, time.monotonic()
+        ns = time.monotonic_ns()
+        return dead, ns / 1e9, ns
 
     def dead(self):
         """Whether every process of a tracked sandbox has exited (its init's pidfd is readable)."""

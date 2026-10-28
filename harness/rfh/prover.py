@@ -19,6 +19,7 @@ import hashlib
 import os
 import select
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -172,7 +173,8 @@ class Run:
         if code == 0 and size_cap is not None:
             used = tree_bytes(self.setup_dir)
             if used > size_cap:
-                return False, time.monotonic() - t0, log + f"\nthe setup directory holds {used} bytes, above setup_cap = {size_cap}"
+                return False, time.monotonic() - t0, log + (f"\nthe setup directory holds {used} bytes (unreadable "
+                                                            f"or more than 2^20 entries counts as inf), above setup_cap = {size_cap}")
         return code == 0, time.monotonic() - t0, log
 
     def oneshot(self, mode, work, sock_dir, timeout):
@@ -198,20 +200,20 @@ class Run:
 
 class Step:
     """What one request did: `status` (`ok` or the entry's failure), `seconds` (the timed part, from
-    the inputs' arrival to the death of the request's last process), `startup_s` (process start to
-    `ready`, untimed), `kill_s` (from `done` or the exit seen to every process dead), `mem_peak`
-    (bytes, systemd only), `proof` (the bytes of `proof.bin`) and `log` (stderr, head and tail)."""
+    the inputs' arrival to the death of the request's last process), `t_stop_ns` (the monotonic time
+    the clock stopped, `CLOCK_MONOTONIC` in ns), `startup_s` (process start to `ready`, untimed),
+    `kill_s` (from `done` or the exit seen to every process dead), `mem_peak` (bytes, systemd only),
+    `work_bytes` (what the prover left in /work), `proof` (the bytes of `proof.bin`) and `log`
+    (stderr, head and tail)."""
 
     def __init__(self):
         self.status, self.seconds, self.startup_s, self.kill_s = "ok", None, None, None
         self.mem_peak, self.proof, self.log, self.ended = None, None, "", None
+        self.t_stop_ns, self.work_bytes = None, None
 
 
-class Unusable(Exception):
-    """The prover made its directory unusable for the runner (R-M1): the entry's failure."""
-
-
-def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None):
+def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
+            work_cap=None):
     """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3; V4-A11 §5.1). `inputs`:
     name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. `ready_s`
     (default `step_s`) bounds the start-up to `ready`, `step_s` the proving; `deadline` (a monotonic
@@ -220,8 +222,13 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     sandbox at once (`Sandbox.kill_tree`) and stops the clock when the pid namespace's init has
     exited, which the kernel allows only after every other process in it is dead; only then is
     `proof.bin` read. So nothing the prover does after `done` is untimed, and no byte written after
-    the clock stopped exists. Every filesystem error in the request's directory is the entry's
-    failure (R-M1). Returns a `Step`."""
+    the clock stopped exists.
+
+    **Failures are the entry's by default** (R-M1, review M-1): once the sandbox is started, any
+    exception (a staging write that fails because the prover filled the filesystem, a pid that
+    vanished, a sandbox that does not die, an exit status that is not reported, an unreadable
+    output) is the entry's failure with its reason, never a harness error. `/work` may hold at most
+    `work_cap` bytes when the prover is dead (sparse files counted at their size). Returns a `Step`."""
     import select
     cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
     r = Step()
@@ -233,7 +240,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     buf = b""
     try:
         if not sb.track():
-            raise RuntimeError("the sandbox reported no process (bubblewrap failed to start)")
+            raise EntryFailure("the prover's sandbox ended before the runner could track it")
 
         def wait_line(word, until):
             """Read stdout until a line equal to `word` ("line"), its end ("eof"), the death of the
@@ -275,7 +282,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
             for name in inputs:
                 os.rename(os.path.join(stage, name), os.path.join(work, name))
         except OSError as e:
-            raise Unusable(f"renaming the inputs into /work: {e.strerror or e}")
+            raise EntryFailure(f"the prover made /work unusable (renaming the inputs into /work: {e.strerror or e})")
         try:
             sb.proc.stdin.write(b"go\n")
             sb.proc.stdin.flush()
@@ -287,52 +294,99 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
             w = "dead" if left > 0 and select.select([sb.pidfd], [], [], left)[0] else "timeout"
         t_seen = time.monotonic()
         r.mem_peak = sb.memory_peak()
-        dead, t1 = sb.kill_tree()
+        dead, t1, t1_ns = sb.kill_tree()
         if not dead:
-            raise RuntimeError("the sandbox did not die within 30 s of SIGKILL")
-        r.seconds, r.kill_s, r.ended = t1 - t0, t1 - t_seen, w
+            raise EntryFailure("the prover's sandbox did not die within 30 s of SIGKILL")
+        r.seconds, r.kill_s, r.ended, r.t_stop_ns = t1 - t0, t1 - t_seen, w, t1_ns
         if w == "timeout":
             r.status = "timeout"
         elif w == "dead":
             code = sb.exit_code()
-            if code not in (None, 0):
+            if code is None:
+                r.status = "the prover exited without `done` and its exit status was not reported"
+            elif code != 0:
                 r.status = f"exit {code}"
-    except Unusable as e:
-        r.status = f"the prover made /work unusable ({e})"
+    except EntryFailure as e:
+        r.status = str(e)
+    except Exception as e:  # noqa: BLE001 (R-M1: the default is the entry's failure)
+        r.status = f"the request failed while the prover's sandbox existed ({type(e).__name__}: {e})"
     finally:
-        if r.status != "ok":
-            r.status = oom_status(sb, run.mem) or r.status
-        sb.kill()                                   # kill_unit and the outer process, after the clock
-        err.join(5)
-        r.log = err.kept.decode(errors="replace")
+        try:
+            if r.status != "ok":
+                r.status = oom_status(sb, run.mem) or r.status
+        finally:
+            sb.kill()                               # kill_unit and the outer process, after the clock
+            err.join(5)
+            r.log = err.kept.decode(errors="replace")
     if r.status == "ok":
         try:
             r.proof = read_output(work, "proof.bin", file_cap)
+            if work_cap is not None:
+                r.work_bytes = tree_bytes(work, max_entries=1 << 16)
+                if r.work_bytes > work_cap:
+                    r.status = (f"the prover left {r.work_bytes} bytes in /work (or more than 65,536 entries), "
+                                f"above work_cap = {work_cap}")
         except OutputError as e:
             r.status = oom_status(sb, run.mem) or str(e)
-        except OSError as e:                        # R-M1: an unusable directory is the entry's failure
-            r.status = f"the prover made /work unusable (reading proof.bin: {e.strerror or e})"
+        except Exception as e:  # noqa: BLE001 (R-M1: an unusable directory is the entry's failure)
+            r.status = f"the prover made /work unusable (reading its outputs: {type(e).__name__}: {e})"
     return r
 
 
-def tree_bytes(path):
-    """Bytes allocated under `path` (no link followed); a tree the runner cannot walk counts as
-    unbounded."""
-    total = 0
+class EntryFailure(Exception):
+    """A failure the prover caused (its reason is the step's status)."""
+
+
+def make_accessible(path):
+    """Give the runner read, write and search permission on every directory and file under `path`
+    (no link followed), top down, so that a tree the prover locked can be measured and removed."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        return
+    os.chmod(path, (st.st_mode & 0o7777) | (0o700 if stat.S_ISDIR(st.st_mode) else 0o600))
+    if stat.S_ISDIR(st.st_mode):
+        for n in os.listdir(path):
+            make_accessible(os.path.join(path, n))
+
+
+def tree_bytes(path, max_entries=1 << 20):
+    """Bytes under `path`, each file counted at `max(size, allocated)` (a sparse file at its size;
+    review M-2), no link followed, after making the tree accessible; a tree the runner cannot walk,
+    or one of more than `max_entries` entries (which bounds the walk's time), counts as unbounded
+    (the entry's failure where a cap applies)."""
+    def fail(e):
+        raise e
+    total = entries = 0
     try:
-        for root, dirs, files in os.walk(path, followlinks=False):
+        make_accessible(path)
+        for root, dirs, files in os.walk(path, followlinks=False, onerror=fail):
             for n in dirs + files:
+                entries += 1
+                if entries > max_entries:
+                    return float("inf")
                 st = os.lstat(os.path.join(root, n))
-                total += st.st_blocks * 512
+                total += max(st.st_size, st.st_blocks * 512)
     except OSError:
         return float("inf")
     return total
 
 
-def tree_sha256(path):
+def remove_tree(path):
+    """Remove `path` and everything under it, after making it accessible; whether it is gone."""
+    try:
+        if os.path.lexists(path):
+            make_accessible(path)
+    except OSError:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+    return not os.path.lexists(path)
+
+
+def tree_sha256(path, max_bytes, timeout):
     """A hash of a directory tree (relative paths, kinds and contents; links by their target, none
-    followed): the setup's hash in the result (§8)."""
-    h = hashlib.sha256()
+    followed): the setup's hash in the result (§8). It reads at most `max_bytes` bytes and runs at
+    most `timeout` seconds (review M-2); past either it returns None."""
+    h, read, t_end = hashlib.sha256(), 0, time.monotonic() + timeout
     for root, dirs, files in sorted(os.walk(path, followlinks=False)):
         dirs.sort()
         for n in sorted(files):
@@ -345,13 +399,17 @@ def tree_sha256(path):
                     with open(f, "rb") as fh:
                         while c := fh.read(1 << 20):
                             h.update(c)
+                            read += len(c)
+                            if read > max_bytes or time.monotonic() > t_end:
+                                return None
                 except OSError:
                     h.update(b"unreadable\0")
     return h.hexdigest()
 
 
 def fresh_dir(path):
-    if os.path.exists(path):
-        shutil.rmtree(path)
+    """An empty directory at `path` (whatever a prover left there is removed first)."""
+    if os.path.lexists(path) and not remove_tree(path):
+        raise OSError(f"cannot remove {path}")
     os.makedirs(path)
     return path

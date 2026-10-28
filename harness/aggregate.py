@@ -20,11 +20,13 @@ if the certificate was rejected or the part failed; ERROR if it had a harness er
 not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate (V4-15). A **truncated**
 stream (its cap reached, §6) is ACCEPTed with its score but never comparable (`comparable: false`).
 
-**The provisional ranking** (V4-A11 §11 R-M1, until the paired record of §7 exists): `--rank` groups
-results by the prover binary's hash and ranks each by the median score of its last three
-evaluations (by `finished`), an entry-caused failure (REJECT of a benchmark) counting as its worst
-score (infinite) and a truncated or not comparable run as not scored; it publishes each entry's
-count of evaluations and failures. ERROR results (the organiser's) are not counted.
+**The provisional ranking** (V4-A11 §11 R-M1, review M-4; until the paired record of §7 exists):
+`--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
+binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
+three evaluations, by the median score of its last three (by `finished`), each REJECT,
+PROVISIONAL, truncated or otherwise not comparable run counting as infinite; it publishes each
+entry's counts of evaluations, failures and unscored runs. ERROR results (the organiser's) are not
+counted.
 """
 import argparse
 import collections
@@ -112,6 +114,7 @@ def main():
     res["truncated"] = truncated
     res["comparable"] = verdict == "ACCEPT" and not res["mixed_cpu"] and not plan_errors and not truncated
     res["prover_sha256"] = next(((r.get("prover") or {}).get("binary_sha256") for r in parts if r.get("prover")), None)
+    res["entry"] = next((r.get("entry") for r in parts if r.get("entry")), None)
     if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
         res["score"] = score(p, res["stream"])
     json.dump(res, open(a.out, "w"), indent=1)
@@ -119,33 +122,42 @@ def main():
     return 0
 
 
+def entry_key(r):
+    """The entry a result belongs to: its name in the submissions repository (`entry.name`, which the
+    evaluation workflow sets from the entry's root), else the hash of its prover sources. Not the
+    binary's hash: a no-op edit gives a fresh binary, and a fresh group would reset the window."""
+    e = r.get("entry") or {}
+    return e.get("name") or e.get("prover_sources_sha256")
+
+
 def rank(results):
-    """The provisional ranking (R-M1): per prover binary, the median of its last three evaluations'
-    scores, an entry-caused failure counting as infinite; truncated or not comparable runs are not
-    scored but counted; ERROR results are not counted."""
+    """The provisional ranking (R-M1, review M-4): per entry, the median of its last three
+    evaluations' scores, each REJECT, PROVISIONAL, truncated or otherwise not comparable run counting
+    as infinite (none of them can help); an entry is ranked only once it has at least three counted
+    evaluations. ERROR results (the organiser's) are not counted."""
     by = collections.defaultdict(list)
     for r in results:
-        if r.get("verdict") == "ERROR":
+        if r.get("verdict") == "ERROR" or not entry_key(r):
             continue
-        h = r.get("prover_sha256") or ((r.get("prover") or {}).get("binary_sha256"))
-        if h:
-            by[h].append(r)
+        by[entry_key(r)].append(r)
     rows = []
-    for h, rs in by.items():
+    inf = float("inf")
+    for key, rs in by.items():
         rs.sort(key=lambda r: r.get("finished") or "")
-        vals = []
-        for r in rs[-3:]:
-            if r.get("verdict") == "REJECT":
-                vals.append(float("inf"))
-            elif r.get("verdict") == "ACCEPT" and r.get("comparable") and (r.get("score") or {}).get("S") is not None:
-                vals.append(r["score"]["S"])
-        med = statistics.median(vals) if vals else None
-        rows.append({"prover_sha256": h, "evaluations": len(rs), "failures": sum(r.get("verdict") == "REJECT" for r in rs),
-                     "last_three": [v if v != float("inf") else "failed" for v in vals],
-                     "median_S": med if med != float("inf") else "failed"})
-    rows.sort(key=lambda x: (x["median_S"] in (None, "failed"), x["median_S"] if isinstance(x["median_S"], float) else 0))
-    return {"schema": "recursion.fast/v4/ranking-1", "rule": "median of the last three evaluations (R-M1); "
-            "provisional until the paired record (§7)", "entries": rows}
+        vals = [r["score"]["S"] if r.get("verdict") == "ACCEPT" and r.get("comparable")
+                and (r.get("score") or {}).get("S") is not None else inf for r in rs[-3:]]
+        med = statistics.median(vals) if len(rs) >= 3 else None
+        rows.append({"entry": key, "evaluations": len(rs),
+                     "failures": sum(r.get("verdict") == "REJECT" for r in rs),
+                     "not_scored": sum(r.get("verdict") == "ACCEPT" and not r.get("comparable") for r in rs),
+                     "last_three": [v if v != inf else "failed or not scored" for v in vals],
+                     "median_S": "unranked (fewer than 3 evaluations)" if med is None
+                     else (med if med != inf else "failed")})
+    rows.sort(key=lambda x: (not isinstance(x["median_S"], float), x["median_S"] if isinstance(x["median_S"], float) else 0))
+    return {"schema": "recursion.fast/v4/ranking-2",
+            "rule": "per entry (its name in the submissions repository), the median of its last three evaluations, "
+                    "a REJECT, PROVISIONAL, truncated or not comparable run counting as infinite; ranked from three "
+                    "evaluations (R-M1, review M-4); provisional until the paired record (§7)", "entries": rows}
 
 
 if __name__ == "__main__":

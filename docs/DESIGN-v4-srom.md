@@ -990,7 +990,7 @@ cap leaves the certificate unchecked, Q12, as before). The worst case of each jo
 | setup (no entry code) | — | on a cold miss: an earlier commit's cache restore (about 45 s, **estimate**), `lake exe cache get` ≤ 240 s, `org-setup.sh` steps 1–4 ≤ 1,080 s (their timeouts), the save and its check (about 2 min, **estimate**): 22 min of timeouts and about 3 min of transfers. **Measured**: `cache get` 39 s warm and 139 s cold, `org-setup.sh` 237 s warm and 270 s cold (CI runs 39966237935, 39935079265, before CompPoly and `Mathlib.Tactic` joined), the `Mathlib.Tactic` objects 221 s on 4 cores of the development VM. On a hit: nothing | about 25 of 30 min |
 | setup-tools (no entry code) | — | on a miss: the comparator ≤ 240 s (14 s **measured**; 540 s with nanoda), the service ≤ 120 s (12–17 s **measured**), two small saves | 6 of 30 min |
 | certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 1,500 s (25 min) | checkout and runner setup 10 s (8 s **measured**); elan 1 s (**measured**); the two cache restores about 45 s (**estimate**: the 2.7 GB package-tree cache restores in 35 s, **measured**, and the organiser build and objects add some hundreds of MB); the Lean toolchain 29 s (**measured**, CI run 39966237935); fetch, render, source rule about 5 s; two olean-manifest checks over 7.58 GB, 15.5 s each on 4 cores with a warm page cache (**measured**, `logs/trim-fix/manifest-check-time.log`), allowed 40 s each cold; `lake env`, the upload about 10 s: about 3 min | 28 of 30 min; even at twice the restore estimate the job ends inside 30 |
-| benchmark (one job since V4-A11) | prover build 120 s + setup 240 s + the stream 960 s (a wall deadline from its first calibration sample over every request, check, canary, sample and re-run, §3.6) + DoS 180 s = 1,500 s (25 min) | `calib`'s build (seconds; a 120 s timeout); the calibration instance's digests (2.2 s **measured** by the D-trim review for the tree's `2^24` compressions under v4 before V4-A11, the same instance size); the service calibration (two 2 s throughput runs and key generation, about 5 s); the stream's leaf digests before the deadline (about `2^24.6` compressions at the mean `M`, so a few seconds, **estimate** from the same rate); two service lifetimes; the score | about 26 min, inside the part's 28 min (`evaluate.py` `PART_S` = 1,680 s), the job's fixed steps and upload inside 30; but see the overrun of §3.6 |
+| benchmark (one job since V4-A11) | prover build 120 s + setup 240 s + measuring and hashing the setup directory (a walk of at most 2^20 entries, a hash of at most `setup_cap` bytes within 60 s) + the stream 960 s (a wall deadline from its first calibration sample over every request, check, canary, sample and re-run, §3.6) + at most 30 s of work begun before the cap and ending after it (§3.6, review M-3) + DoS 180 s = 1,590 s (26.5 min) at the worst case | `calib`'s build (seconds); the calibration instance's digests (2.2 s **measured** by the D-trim review for the tree's `2^24` compressions under v4 before V4-A11, the same instance size); the service calibration (two 2 s throughput runs and key generation, about 5 s); the stream's leaf digests before the deadline (about `2^24.6` compressions at the mean `M`, so a few seconds, **estimate** from the same rate); two service lifetimes; the score: under 60 s (**estimate**) | inside the part's 28 min (`evaluate.py` `PART_S` = 1,680 s), the job's fixed steps and upload inside 30. **A part that still runs past `PART_S` after the prover's build has started is the entry's REJECT** (`evaluate.py`, from the stage the runner's checkpoint names; review M-3), never a missing part |
 | plan, attest | — | data only | 10 min each |
 
 The benchmark job's caps were cut for this nesting (V4-A11): `build_s` from 300 to 120 s and
@@ -1049,8 +1049,12 @@ V4-A9).
 - **`|π_i|`**: the bytes of `π` alone (the signed file's first word, `harness/FORMAT.md`), not the
   trace or the signature; the file's bytes are recorded beside it.
 - **`c_P` and `T_triv`** (V4-A11 §5.4, m-2). Calibration samples are taken before step 1, every 8
-  steps and once at the end (when the last is at least 4 steps old), each after a 1 s idle gap and
-  with no entry process alive. Each runs the organiser's prover-shaped workload `calib`
+  steps and once at the end (when the last is at least 4 steps old and the cap is at least 30 s
+  away; never after truncation), each after a 2 s idle gap and with no entry process alive (review
+  m-2: a 1 s gap left residual load from the prover's last step, which a slower sample turns into a
+  gain for the entry). Each runs three short runs of the organiser's prover-shaped workload `calib`
+  (the sample is their median; every run, the within-sample and the across-sample spread are
+  published)
   (`harness/tools/calib.c`: threads on every CPU of the job, each doing rounds of a chain of
   GF(2^128) carry-less multiplications, 8-way AVX2 BLAKE2s compressions and a read-modify-write
   sweep over its share of a 256 MiB buffer; built with the runner's `gcc` before any entry code
@@ -1059,7 +1063,8 @@ V4-A9).
   8 chains, on the `2^24`-compression instance on one pinned core. `c_P = median(calib) / ref_ns`,
   clamped to `[0.5, 2]`; `T_triv` is the median of the chain checker's samples and `v_ref = T_triv /
   R`, `R = 10`. `ref_ns`, `calib`'s time on the season's reference runner, is **provisional**: a
-  400 ms placeholder until it is measured there (D10). **Measured** under v4 before V4-A11, the
+  200 ms placeholder (32 rounds) until it is measured there (D10), and every result says so
+  (`c_P_provisional`, review m-3). **Measured** under v4 before V4-A11, the
   chain checker took 1.776–1.785 s on a GitHub runner (about 106 ns per compression, so
   `v_ref` ≈ 178 ms; orchestrator's run) and 3.10 s on the development VM
   (`logs/harness/chaincheck-season.log`). A prover-shaped calibration matters: with the chain
@@ -1111,8 +1116,8 @@ recomputed by `harness/aggregate.py`. *Under v4 before V4-A11 it was `S = T_tree
 | chain lengths | i.i.d., density `∝ 1/n²` on `[2^17, 2^20]` | on `[16, 128]` | V4-A11 |
 | `n_ref`; `K`; `κ`; `s_ref`; the power | `2^18`; 1.5; 0.2667 s; 2 MiB; 3 | same | V4-A11 |
 | `v_ref` | `T_triv / R`, `R = 10`, `T_triv` the median of the interleaved chain-checker samples on `2^24` compressions | fixed, 177.8 ms (`v_ref_ms`: the trivial check at `n = 16` takes microseconds) | V4-12, V4-A11 |
-| `c_P` | `median(calib) / ref_ns`, clamped to `[0.5, 2]`; `ref_ns` 400 ms **provisional** (D10); 64 rounds | `ref_ns` 50 ms; 2 rounds | V4-A11 |
-| calibration samples | before step 1, every 8 steps and a closing one; 1 s idle before each | every 4 steps; 0.2 s | V4-A11, m-2 |
+| `c_P` | `median(calib) / ref_ns`, clamped to `[0.5, 2]`; `ref_ns` 200 ms **provisional** (D10, `c_P_provisional`); 32 rounds | `ref_ns` 50 ms; 2 rounds | V4-A11, review m-3 |
+| calibration samples | before step 1, every 8 steps and a closing one; 2 s idle before each; a sample is the median of 3 short `calib` runs | every 4 steps; 0.2 s; 3 runs | V4-A11, m-2, review m-2 |
 | checks of the outputs | batches of 8 between steps; `V_i` the best of 2; each batch warmed | batches of 2 | V4-A11, m-8 |
 | re-timing | above 1.3 × the fit, at most 10% of the steps | 1.3, at most 25% | V4-A11, R-M2 |
 | statement canaries; DoS column | `π_1`, `π_2`, `π_M`; 100 inputs on `π_M`, each within `10 × v_ref` (parse plus `acc`), 180 s | the same canaries; 64 inputs, each within `verify_s` | V4-A9, V4-A11 |
@@ -1163,23 +1168,33 @@ measured (D1).
 
 **What the stream's cap holds** (**estimate**, at `M_cap = 112` and checks at `V_i ≈ v_ref`).
 `stream_s` = 960 s is wall time from the first calibration sample and holds every request, check,
-canary, sample and re-run. The organiser's share: 15 calibration samples of about 3.2 s (the 1 s
-gap, `calib` at its 0.4 s placeholder, the chain checker at 1.8 s), about 48 s; 14 check batches of
+canary, sample and re-run. The organiser's share: 15 calibration samples of about 4.4 s (the 2 s
+gap, three `calib` runs of about 0.2 s each at the placeholder, the chain checker at 1.8 s; review
+m-2), about 66 s; 14 check batches of
 two measured passes of 9 checks at about 178 ms, about 45 s, plus the badge's start-ups, about 6 s;
 the canaries, about 2 s; the re-runs' checks, about 8 s; the requests' sandbox, staging, kill and
 read, at most 50 ms each (**measured** under v4 before V4-A11, `logs/trim-fix/stream-overhead.log`),
-about 6 s: about 115 s. That leaves about 845 s for the entry's 112 requests and up to 11 re-runs,
-**about 6.9 s per request**, its start-up included; an entry slower than that is truncated at the
-cap, scored and flagged, not ranked. The cap bounds each request, and each check batch's two badge
-runs end within 30 s of it (a batch the cap stops leaves its steps unscored and truncates the
-stream); the canaries, the closing sample and a re-run's check that start before it still finish
-after it, each check within `verify_s`: seconds at `V_i ≈ v_ref`, but with every check near
-`verify_s` enough to pass the job's `PART_S` (an open item of the harness, §6.2).
+about 6 s: about 133 s. That leaves about 827 s for the entry's 112 requests and up to 11 re-runs,
+**about 6.7 s per request**, its start-up included; an entry slower than that is truncated at the
+cap, scored and flagged, not ranked. **Work begun before the cap ends within 30 s of it** (review
+M-3, m-8): every badge run of a check batch, of the canaries or of a re-run's check has a timeout
+of at most the time left plus 30 s, and a batch's second measurement is skipped once the cap is
+reached (its first stands); a check the cap stops by a timeout truncates the stream (its steps
+unscored; a badge crash stays the entry's failure, review m-5), and one that stops a re-run's check
+keeps the first times. After truncation there are no canaries and no closing sample, and the last
+batch is one badge run of at most 30 s. A request cut by the cap ends at the cap; its directory is
+then measured (at most 65,536 entries) and removed, in about a second.
 
-**Failures and truncation** (R-M1). A step over `step_s` or `ready_s`, a crash, a non-zero exit, a
-missing or over-cap output, an output `acc` rejects, an accepted canary, a breach of the DoS column
-or the service dying is the entry's REJECT, with the reason: a run that fails while an entry
-process is alive is the entry's failure unless the harness shows otherwise. A stream that reaches
+**Failures and truncation** (R-M1, review M-1). A step over `step_s` or `ready_s`, a crash, a
+non-zero exit, a missing or over-cap output, an output `acc` rejects, an accepted canary, a breach
+of the DoS column or the service dying is the entry's REJECT, with the reason. The rule is a
+default, not a list: **any exception raised while an entry process is alive, or caused by the state
+a prover left, is the entry's failure** (a staging write on a filesystem the prover filled, a pid
+that vanished, a sandbox that does not die, an unreported exit status, a directory the runner cannot
+prepare or remove, a request directory above `work_cap` = 4 GiB or 65,536 entries with sparse files
+at their size, a filesystem left fuller after cleanup, a setup above `setup_cap` measured the same
+way or one that cannot be hashed within it and 60 s). Locked trees are made accessible before they
+are measured or removed. A stream that reaches
 `stream_s` is scored over its completed, checked steps (an unchecked step at the cap is dropped),
 flagged `truncated` and not comparable: a gradient for the entrant's loop, never a ranking.
 
@@ -1189,10 +1204,14 @@ uncomparable, and never ranked or recorded. The source rule, the gate's other ru
 stay mandatory, and a maintainer approves the run.
 
 **The provisional ranking** (R-M1; `harness/aggregate.py --rank`). Until the paired record exists,
-results are grouped by the prover binary's hash and ranked by the median `S` of the last three
-evaluations; a REJECT counts as infinite, a truncated or not comparable run is counted but not
-scored, and an ERROR (the organiser's) is not counted; each entry's counts of evaluations and
-failures are published. So a run the entry dislikes cannot be discarded for free.
+results are grouped **by entry** (its name in the submissions repository, `entry_repo:entry_path`,
+which the evaluation workflow passes as `RF_ENTRY_NAME`) and an entry is ranked, once it has at least
+three evaluations, by the median `S` of its last three; **a REJECT, a PROVISIONAL, a truncated or
+any other not comparable run counts as infinite** (review M-4), and an ERROR (the organiser's) is
+not counted; each entry's counts of evaluations, failures and unscored runs are published. The
+entry, not the binary's hash, is the group because a no-op edit gives a fresh binary and so a fresh
+window, and the source tree's hash would do the same; a new entry directory is a new submission
+that a maintainer admits. So a run the entry dislikes cannot be discarded for free.
 
 **Records** (V4-A11 §7, m-5). A record needs **two paired jobs** (ABBA per step against the
 incumbent, on the same draws, each entry with its own service lifetime) on **different CPU models**,
@@ -1566,15 +1585,16 @@ user's own.
    models, each entry with its own service lifetime, the worse ratio ≤ 0.97; not implemented, a
    season-1 condition (§3.6). Until then only the provisional ranking exists.
 5. **The calibration's reference** (D10): `ref_ns`, `calib`'s time on the reference runner, is a
-   400 ms placeholder; the run-to-run and CPU-model spread of `calib`, and every noise number of the
+   200 ms placeholder (32 rounds), and every result says `c_P_provisional` until it is measured; the run-to-run and CPU-model spread of `calib`, and every noise number of the
    loss study, are estimates until measured on GitHub runners.
 6. **Per-step service statistics** (V4-A11 §8): the service keeps only its lifetime's totals, so
    the result has no queries or bytes per step.
-7. **The stream's cap and checks in progress** (V4-A11): `stream_s` is tested before each request
-   and bounds each request, and check batches are deadline-aware (each badge run within 30 s past
-   it), but the canaries, the closing sample and a re-run's check begun before it end after it,
-   each check within `verify_s`; with every check near `verify_s` the benchmark job can pass
-   `PART_S` (§3.6). Bounding those three by the cap as well would close it.
+7. **The stream's cap and checks in progress** (V4-A11): closed in the fix pass (review M-3): work
+   begun before `stream_s` ends within 30 s of it, nothing but the last batch runs after
+   truncation, and a part past `PART_S` after the prover's build started is the entry's REJECT
+   (§3.4, §3.6). **Residual:** the prover can still fill the runner's disk *during* `prover setup`
+   (the setup directory is on disk, checked against `setup_cap` only afterwards, with a filesystem
+   delta check); a sized per-setup filesystem would close it.
 
 **Open questions of the design:**
 

@@ -17,6 +17,7 @@ the result. The first failure ends the run with `benchmark: fail` and its reason
 (its cap reached) is scored over its completed steps and flagged, never ranked.
 """
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -26,7 +27,7 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Bench, Fail, Params, build_calib, machine, score  # noqa: E402
+from rfh.bench import Bench, Fail, Params, build_calib, fs_free, machine, printable, score  # noqa: E402
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream", "dos"]
@@ -75,30 +76,59 @@ def main():
                        "bench_sha256": sha256(a.bench),
                        "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify", "chaincheck")}},
            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "pass", "reasons": []}
+    srcs = sorted(glob.glob(os.path.join(a.entry, "prover", "*.s")))
+    h = hashlib.sha256()
+    for f in srcs:
+        h.update(os.path.basename(f).encode() + b"\0" + hashlib.sha256(open(f, "rb").read()).digest())
+    # the entry's identity for the provisional ranking (aggregate.py --rank): its name in the
+    # submissions repository (the evaluation workflow sets RF_ENTRY_NAME), else its directory's name
+    res["entry"] = {"name": os.environ.get("RF_ENTRY_NAME") or os.path.basename(os.path.abspath(a.entry)),
+                    "prover_sources_sha256": h.hexdigest()}
+
+    def save(stage):
+        """A checkpoint of the result (review M-3): if the part is killed at `PART_S`, `evaluate.py`
+        reads the stage it reached."""
+        res["stage"] = stage
+        tmp = a.out + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(res, f, indent=1)
+        os.replace(tmp, a.out)
     log(f"recursion.fast v4 benchmark, season {p.name}, parts {parts}, machine {res['machine']['cpu_model']}")
     try:
+        save("organiser setup")
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
+        save("prover build")
         ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s)
         res["prover"] = info
         if not ok:
             raise Fail(f"prover build: {info.get('error')}")
         log(f"prover built: {info['binary_sha256']} ({info['binary_bytes']} bytes)")
         run = Run(os.path.join(work, "prover", "bin"), os.path.join(work, "setup"), p.mem_prover)
+        save("prover setup")
+        free0 = fs_free(work)
         ok, dt, slog = run.setup(p.setup_s, p.setup_cap)
+        free1 = fs_free(work)
+        if ok and free0 and free1 and free0[0] - free1[0] > p.setup_cap + (64 << 20):
+            ok, slog = False, slog + (f"\nthe setup left the work filesystem {free0[0] - free1[0]} bytes fuller, "
+                                      f"above setup_cap = {p.setup_cap}")
         res["setup"] = {"ok": ok, "seconds": dt, "log": slog[-2000:]}
-        if ok:
-            res["setup"]["sha256"] = tree_sha256(run.setup_dir)
         if not ok:
-            raise Fail("prover setup failed" + (": " + slog.strip().splitlines()[-1] if "setup_cap" in slog else ""))
+            raise Fail("prover setup failed" + (": " + printable(slog.strip().splitlines()[-1], 300)
+                                                if "setup_cap" in slog else ""))  # organiser text, sanitised anyway
+        res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)
+        if res["setup"]["sha256"] is None:
+            raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s")
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
                       calib_bin=calib_bin, log=log)
         if "calibrate" in parts:
+            save("calibration")
             res["calibration"] = bench.calibrate()
             log(f"calibration instance: {res['calibration']['triv_compressions']} compressions; "
                 f"service {res['calibration']['service']}")
         if "stream" in parts:
+            save("stream")
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
             log(f"c_P = {cal['c_P']:.4f}, T_triv = {cal['T_triv_ns'] / 1e6:.3f} ms, v_ref = {cal['v_ref_ns'] / 1e6:.3f} ms")
@@ -111,6 +141,7 @@ def main():
             if res["stream"]["truncated"]:
                 res["comparable"] = False
         if "dos" in parts and "stream" in res:
+            save("dos")
             st = res["stream"]
             res["dos"] = bench.dos(bytes.fromhex(st["vk"]), bytes.fromhex(st["last_stmt"]), st["last_file"],
                                    st["calibration"]["v_ref_ns"])
@@ -126,6 +157,7 @@ def main():
         res["reasons"].append(f"harness error: {e!r}")
         res["traceback"] = traceback.format_exc()[-4000:]
         log(f"HARNESS ERROR: {e!r}")
+    res["stage"] = "done"
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with open(a.out, "w") as f:
         json.dump(res, f, indent=1)

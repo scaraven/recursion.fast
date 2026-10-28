@@ -9,8 +9,10 @@
    are run again on the same inputs; the faster run's `P`, `V` and `|π|` are scored (R-M2) while the
    first output stays the next step's child; both runs are recorded.
 3. Truncation: a stream whose cap stops a step is scored over its completed, checked steps, flagged
-   `truncated`, and not re-timed; a cap reached during re-runs keeps the first times and is not
-   `truncated`.
+   `truncated`, and not re-timed; after truncation there are no canaries and no closing sample, and
+   the last batch is one badge run of at most 30 s (review M-3); a batch the cap stops by a timeout
+   truncates the stream and leaves its steps unscored, while a crash is the entry's failure (m-5);
+   a cap reached during re-runs keeps the first times and is not `truncated`.
 4. Calibration samples: before step 1 and every `calib_every` steps, plus a closing one.
 """
 import json
@@ -22,7 +24,7 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh import digest  # noqa: E402
-from rfh.bench import Bench, Params  # noqa: E402
+from rfh.bench import Bench, Fail, Params  # noqa: E402
 from rfh.prover import Step  # noqa: E402
 
 
@@ -37,7 +39,7 @@ class FakeSvc:
         return {}
 
 
-def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8):
+def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8, batch_fail=None):
     """A Bench over the smoke season with stubs: request i takes times[i] s (or the cap stops it at
     `stop_at`); re-runs take retime_times[i] s."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
@@ -50,10 +52,19 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8):
     b.service = lambda name: FakeSvc()
     b.stop = lambda svc, rec: None
     b.sample = lambda i: b.samples.append({"before_step": i, "calib_ns": p.calib_ref_ns, "triv_ns": 1000})
-    b.canary_check = lambda vk, targets, what: len(targets)
+    b.canary_calls, b.check_calls = [], []
 
-    def check(items, what, timeout=None):
-        return [(1000 + len(rel), [1000 + len(rel), 2000]) for _, _, rel, _ in items]
+    def canary_check(vk, targets, what):
+        b.canary_calls.append(len(targets))
+        return len(targets)
+    b.canary_check = canary_check
+
+    def check(items, what, timeout=None, runs_wanted=2):
+        b.check_calls.append((len(items), timeout, runs_wanted))
+        if batch_fail and len(b.check_calls) == batch_fail[0]:
+            b.left = lambda: -1.0
+            raise Fail("stream outputs: verify: ...", kind=batch_fail[1])
+        return [(1000 + len(rel), [1000 + len(rel), 2000][:runs_wanted]) for _, _, rel, _ in items]
     b.check = check
 
     def one(svc, tag, kind, ins):
@@ -70,10 +81,12 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8):
             t = times[i]
         r = Step()
         r.seconds, r.startup_s, r.kill_s, r.ended = t, 0.01, 0.001, "line"
+        if stop_at is not None and i == stop_at - 1:
+            b.left = lambda: -1.0                    # the cap is reached during this step's request
         r.proof = (len(tag) + (100 if tag.startswith("retime") else 0)).to_bytes(8, "little") + tag.encode()
         return r
     b.one = one
-    b.left = lambda: 1.0
+    b.left = lambda: 100.0
     return b
 
 
@@ -119,6 +132,17 @@ def main():
     rec = b.stream_run()
     check(rec["truncated"] and rec["M"] == 5 and "retime" not in rec and all("V_ns" in s for s in rec["steps"]),
           f"the cap stops step 6: truncated, scored over 5 checked steps, not re-timed (M = {rec['M']})")
+    check(not b.canary_calls and [x["before_step"] for x in b.samples] == [1, 5] and b.check_calls[-1] == (1, 30, 1),
+          f"after truncation: no canaries, no closing sample, the last batch one run of 30 s ({b.check_calls[-1]})")
+    b = make(times, batch_fail=(2, "timeout"))
+    rec = b.stream_run()
+    check(rec["truncated"] and rec["M"] == 2, f"a batch the cap stops by a timeout truncates the stream, its steps unscored "
+          f"(M = {rec['M']}: steps 1–2 checked, 3–4 dropped)")
+    try:
+        make(times, batch_fail=(2, "crash")).stream_run()
+        check(False, "a badge crash after the cap truncates")
+    except Fail as e:
+        check("verify" in str(e), f"a badge crash after the cap is the entry's failure, not truncation (m-5): {e}")
     b = make(times, retime_times={}, cap_in_retime=True)
     rec = b.stream_run()
     check(not rec["truncated"] and rec["retime"].get("stopped_by_cap") and rec["steps"][2]["P_s"] == 0.05,

@@ -79,3 +79,35 @@ WS certificate controls unchanged. Negative: `acc_over_word` (every `acc` reject
   up to about 4 min in the worst case (estimate).
 - The two-model paired record (§7) is not implemented (carried gap; a season-1 condition).
 - Nothing has run on GitHub or at the season shape; every season-shape number is an estimate.
+
+## Fix pass (answering `docs/v4/reviews/F-ivc-review.md`)
+
+- **M-1 fixed.** Once the sandbox exists, any exception in a request is the entry's failure (staging writes, `track()`,
+  `kill_tree`, `exit_code() is None` on an exit without `done`, output reads, the rename); `fresh_dir` and `vk.hex`
+  failures too. Instead of a per-request tmpfs (the runner reads `/work` from outside), `/work` may hold at most
+  `work_cap` = 4 GiB and 65,536 entries (sparse files at their size) when the prover is dead, and `statvfs` free
+  bytes and inodes are compared before the request and after cleanup (a filesystem left fuller than 1 MiB or 64 inodes
+  is a REJECT). Cleanup makes the tree accessible top down first; a tree the runner cannot remove is a REJECT.
+- **M-2 fixed.** `tree_bytes` counts `max(st_size, st_blocks·512)`, walks with `onerror` raising, makes the tree
+  accessible, caps entries at 2^20; `tree_sha256` reads at most `setup_cap` bytes in at most 60 s; disk growth during
+  setup beyond `setup_cap` + 64 MiB is a REJECT. Residual (design §6.2 item 7): a prover can fill the disk *during*
+  setup, checked only afterwards.
+- **M-3 fixed.** The result is checkpointed with its stage; `evaluate.py` turns a `PART_S` timeout after the
+  organiser's setup into the entry's REJECT naming the stage. Every badge run after the cap is bounded by the time
+  left plus 30 s; after truncation no canaries, no closing sample, one last 30 s batch. Worst case about 1,590 s plus
+  under 60 s of organiser steps (estimate) inside `PART_S` = 1,680 s. New `tests/harness/test_partcap.py`.
+- **M-4 fixed.** `aggregate.py --rank`: REJECT, PROVISIONAL, truncated or not-comparable runs count as infinite; an
+  entry ranks only with at least 3 evaluations; grouped by the entry's name in the submissions repository
+  (`RF_ENTRY_NAME`), since a binary or source hash changes with every no-op edit and would reopen the window.
+- **Minors.** m-1 under M-1; m-2 idle gap 2 s, samples the median of 3 short runs, spreads published (measurement
+  stays D10); m-3 `c_P_provisional` (`ref_ns` 200 ms placeholder); m-4 the late writer stamps `CLOCK_MONOTONIC` every
+  1 ms and the test asserts every stamp ≤ the exposed `t_stop_ns` (last stamp 1.75 ms before the stop); m-5 only a
+  badge timeout past the cap truncates; m-6 prover text reduced to printable ASCII in a code span (runner and PR
+  comment); m-7 the docstring at `Contract/Certificate.lean:17` (wording only, 349 lines); m-8 with M-3; m-9 in
+  PROVER.md §3; m-10 in `draws.py`.
+- **Checks re-run on the golfed tree** (`logs/f-ivc/fix-*`): cold `lake build` green, 1,266 jobs, 0 warnings (1 min
+  15 s); axiom audit PASS; contract 349 lines; hygiene and source rule OK; `test_sandbox` 57 ok, `test_tv` 14,
+  `test_stream` 13, `test_aggregate` 14, `test_dos` 6, `test_partcap` 1; `smoke.py --mock` 13 ok (42.8 s);
+  `smoke.py --org` (real badge, Lean kernel) 21 ok (5 min 5 s), against a private package copy, the shared tree then
+  restored (0 files written there). Not re-run: gate fixtures, token sweep, accprobe (no Lean they check changed
+  beyond one docstring).

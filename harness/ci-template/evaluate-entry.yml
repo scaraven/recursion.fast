@@ -115,7 +115,9 @@ jobs:
                    f"c_P = {num('c_P')}" + (" — TRUNCATED, not ranked" if s.get("truncated") else ""),
                    f"CPU: {', '.join(str(m)[:80] for m in r.get('cpu_models', []))}"]
           for reason in r.get("reasons", [])[:5]:
-              lines.append("- " + str(reason)[:300].replace("@", "@​"))
+              # review m-6: untrusted text as printable ASCII in a code span
+              t = "".join(c if 32 <= ord(c) < 127 else "?" for c in str(reason)[:300].replace("`", "'"))
+              lines.append("- `" + t + "`")
           print("\n".join(lines))
           EOF
           gh pr comment "$NUM" --repo "$REPO" --body-file body.md

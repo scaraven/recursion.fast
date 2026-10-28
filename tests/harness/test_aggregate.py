@@ -8,7 +8,8 @@ Since V4-A11 the plan is one job (`split` and `single` both): its part gives ACC
 stream's per-step records with `rfh.bench.score` (the S the runner wrote is ignored); the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
 gives REJECT; a rejected certificate gives REJECT; a truncated stream is ACCEPTed but not comparable.
-The ranking takes the median of an entry's last three evaluations, a REJECT counting as its worst.
+The ranking takes, per entry (not per binary), the median of its last three evaluations, a REJECT or a
+truncated run counting as its worst, and ranks only from three evaluations (review M-4).
 """
 import json
 import os
@@ -78,22 +79,30 @@ def main():
     check(run(tmp, full, cert_status="reject"), "REJECT", "a rejected certificate")
     check(run(tmp, [part("calibrate,stream,dos", truncated=True)]), "ACCEPT", "a truncated stream", comparable=False)
 
-    def res(S, verdict="ACCEPT", when="t", h="h"):
-        return {"verdict": verdict, "comparable": verdict == "ACCEPT", "finished": when, "prover_sha256": h,
+    def res(S, verdict="ACCEPT", when="t", e="e", comparable=None, binary=None):
+        return {"verdict": verdict, "comparable": (verdict == "ACCEPT") if comparable is None else comparable,
+                "finished": when, "entry": {"name": e}, "prover_sha256": binary or when,
                 "score": {"S": S} if S is not None else {}}
     rk = os.path.join(tmp, "rank.json")
     files = []
     for k, r in enumerate([res(3.0, when="1"), res(1.0, when="2"), res(2.0, when="3"), res(9.0, when="4"),
-                           res(None, "REJECT", when="0", h="g"), res(1.5, when="1", h="g"), res(1.0, when="2", h="g"),
-                           res(0.5, "ERROR", when="5", h="g")]):
+                           res(None, "REJECT", when="0", e="g"), res(1.5, when="1", e="g"), res(1.0, when="2", e="g"),
+                           res(0.5, "ERROR", when="5", e="g"),
+                           res(5.0, when="1", e="t"), res(0.9, when="2", e="t", comparable=False),
+                           res(0.9, when="3", e="t", comparable=False), res(1.0, when="4", e="t"),
+                           res(0.1, when="1", e="one")]):
         files.append(os.path.join(tmp, f"r{k}.json"))
         json.dump(r, open(files[-1], "w"))
     subprocess.run([sys.executable, "-I", AGG, "--rank", "--out", rk, *files], check=True, capture_output=True)
-    rows = {e["prover_sha256"]: e for e in json.load(open(rk))["entries"]}
-    holds(rows["h"]["median_S"] == 2.0 and rows["h"]["evaluations"] == 4 and rows["g"]["median_S"] == 1.5
+    rows = {x["entry"]: x for x in json.load(open(rk))["entries"]}
+    holds(rows["e"]["median_S"] == 2.0 and rows["e"]["evaluations"] == 4 and rows["g"]["median_S"] == 1.5
           and rows["g"]["failures"] == 1 and rows["g"]["evaluations"] == 3,
-          f"ranking: median of the last three (h: 1, 2, 9 → 2), a REJECT as the worst (g: fail, 1.5, 1 → 1.5), "
-          f"ERROR not counted: {rows}")
+          f"ranking per entry, though every run has its own binary: median of the last three (e: 1, 2, 9 → 2), a REJECT "
+          f"as the worst (g: fail, 1.5, 1 → 1.5), ERROR not counted: {rows['e']}, {rows['g']}")
+    holds(rows["t"]["median_S"] == "failed" and rows["t"]["not_scored"] == 2,
+          f"truncated (not comparable) runs count as infinite (review M-4: 5, trunc, trunc, 1 → failed): {rows['t']}")
+    holds(isinstance(rows["one"]["median_S"], str) and "unranked" in rows["one"]["median_S"],
+          f"an entry with fewer than three evaluations is not ranked: {rows['one']}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

@@ -36,9 +36,11 @@ retime_frac = 0.1     # ... at most 10% of the steps, largest ratio first
 
 [calibration]     # V4-A11 §5.4, §11 m-2: interleaved samples with no entry process alive, medians used
 every = 8         # one sample before step 1 and every 8 steps after
-idle_s = 1.0      # the idle gap before a sample
-rounds = 64       # the work of one `calib` run (harness/tools/calib.c)
-ref_ns = 400000000      # `calib`'s time on the season's reference runner: PROVISIONAL, to be measured (D10)
+idle_s = 2.0      # the idle gap before a sample (review m-2: 1 s left residual load)
+rounds = 32       # the work of one `calib` run (harness/tools/calib.c)
+runs_per_sample = 3     # a sample is the median of this many short runs (review m-2)
+ref_ns = 200000000      # `calib`'s time (32 rounds) on the season's reference runner: a placeholder
+ref_provisional = true  # until ref_ns is measured on a runner (D10); results say `c_P_provisional`
 clamp = [0.5, 2.0]      # c_P = median(samples) / ref_ns, clamped
 triv_chains = 64        # the chain checker's instance: 64 chains of 2^18 steps (2^24 compressions)
 triv_n = 262144
@@ -55,6 +57,7 @@ file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 verify_s = 10           # one acc check
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB (R-M1)
+work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size (review M-1)
 build_s = 120           # the prover's build
 
 [memory]          # cgroup caps (13 GB for prover and service together, V4-13)
