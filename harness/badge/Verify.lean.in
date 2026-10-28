@@ -8,7 +8,8 @@
   The check is `RFBadge.check`: the strict file parser, then `acc` of the entry's submission
   (through `accF`, proved equal). NS is the monotonic time of parsing the file's bytes and
   evaluating `acc`; the runner pins the process to one core, so NS bounds the check's CPU time
-  (`T_V`, V4-12). A malformed input line is a harness error (exit 2).
+  (`V_i` of the score, V4-A11; formerly `T_V`, V4-12). A malformed input line is a harness error
+  (exit 2).
 -/
 import RFBadgeCommon
 

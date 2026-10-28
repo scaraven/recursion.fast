@@ -10,6 +10,10 @@ Positive:
   proof it halts in exactly 26 steps (5 memory words, 21 statements).
 * `halt_computes`: the one-statement program computes the extractor that returns no witness, in
   1 step.
+* **The domain is closed under extraction** (V4-A11): `decodeWit_children_size`: both children of
+  a node witness that `o` output words denote have proofs of at most `8 · |o|` bytes;
+  `child_in_domain`: so a child extracted within `outCap` words is within `Computes`'s domain, and
+  from a deployed proof every proof of the extraction tree is.
 * Format known answers (for the runner's Python twins; the expected words are those of the
   module header's format): `extractorInput_kat` (v3's: a 3-byte proof and a log of one 9-byte
   query: padding, length words, answer), `wordBytes_layout` and `wordBytes_kat` (a word's bytes,
@@ -24,6 +28,10 @@ Negative:
 * `spin_computes_nothing`: a program that never halts computes no extractor at any fuel.
 * `toolong_not_computes`: a program that outputs `2^24 + 1` words computes no extractor (the output
   cap).
+* `ws_output_beyond_domain` (V4-A11): the domain's proof bound `8 · outCap` is tight for the
+  witness-sending program: on every proof longer than it (and below `2^60` bytes) the program
+  outputs more than `outCap` words, so without the bound the witness-sending entry, whose
+  verifier accepts proofs of every size below the word, would compute no extractor.
 * `enum_no_computes`: **a program that enumerates `2^64 − 1` candidates computes no extractor within
   the budget**, whatever its specification and declared fuel (on a 6-word tape `B` is about
   `2^48`, and the count needs `2^65` steps, `Controls/Machine.lean`, `count_short`).
@@ -51,6 +59,12 @@ theorem tape0_length : tape0.length = 6 := by decide +kernel
 theorem ws_run_exact : ext.run tape0 26 = some [] := by decide +kernel
 
 theorem ws_run_short : ext.run tape0 25 = none := by decide +kernel
+
+/-- **Beyond the domain's proof bound** the witness-sending program's output is over the cap. -/
+theorem ws_output_beyond_domain (c : Digest) (π : Proof) (L : Log) (h : 8 * outCap < π.size)
+    (h' : π.size < 2 ^ 60) : ∃ o, ext.run (extractorInput c π L) (fuel (extractorInput c π L).length)
+      = some o ∧ outCap < o.length :=
+  ⟨_, ext_run c π L h', by rw [packBytes_length, ← size_eq_length]; unfold outCap at *; omega⟩
 
 /-- **Fuel exhaustion**: 25 steps are not enough. -/
 theorem ws_fuel_short : ¬ Computes ext E fun _ => 25 := by
@@ -251,5 +265,116 @@ theorem decodeWit_short_sig : decodeWit (nodeKatWords.dropLast) = none := by dec
 /-- Words after the last field are ignored. -/
 theorem decodeWit_trailing : decodeWit (nodeKatWords ++ [7, 7]) = some nodeKat :=
   witWords_node_kat ▸ congrArg (Prod.fst <$> ·) (readWit_witWords nodeKat nodeKat_fits [7, 7])
+
+/-! ## The domain is closed under extraction (V4-A11) -/
+
+/-- A reader that consumes only from the front leaves a suffix no longer than its input. -/
+private theorem readBytes_len {n : ℕ} {o o' : List Word} {b : List UInt8}
+    (h : (readBytes n).run o = some (b, o')) : b.length ≤ 8 * o.length ∧ o'.length ≤ o.length := by
+  simp only [readBytes, StateT.run] at h
+  split at h
+  · rename_i hw
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    have := List.length_take_le' ((n + 7) / 8) o
+    refine ⟨(List.length_take_le' _ _).trans ?_, by simp⟩
+    rw [show List.flatMap wordBytes _ = wordsBytes _ from rfl, wordsBytes_length]
+    omega
+  · simp at h
+
+private theorem readNat_len {o o' : List Word} {x : ℕ} (h : readNat.run o = some (x, o')) :
+    o'.length ≤ o.length := by
+  cases o with
+  | nil => simp [readNat, StateT.run] at h
+  | cons w o => simp only [readNat, StateT.run, Option.some.injEq, Prod.mk.injEq] at h; simp [← h.2]
+
+private theorem readString_len {o o' : List Word} {b : ByteArray} (h : readString.run o = some (b, o')) :
+    b.size ≤ 8 * o.length ∧ o'.length ≤ o.length := by
+  simp only [readString, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨⟨n, o₁⟩, h₁, ⟨bs, o₂⟩, h₂, h₃⟩ := h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₃
+  obtain ⟨rfl, rfl⟩ := h₃
+  have l1 := readNat_len h₁
+  have l2 := readBytes_len (o := o₁) h₂
+  exact ⟨by simp only [ByteArray.size, List.size_toArray]; omega, by omega⟩
+
+private theorem readDigest_len {o o' : List Word} {d : Digest} (h : readDigest.run o = some (d, o')) :
+    o'.length ≤ o.length := by
+  simp only [readDigest, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨⟨bs, o₁⟩, h₁, h₂⟩ := h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₂
+  exact h₂.2 ▸ (readBytes_len h₁).2
+
+/-- A reader that never lengthens what is left. -/
+private def Shrinks {α : Type} (r : Reader α) : Prop := ∀ o o' x, r.run o = some (x, o') → o'.length ≤ o.length
+
+private theorem shrinks_bind {α β : Type} {r : Reader α} {f : α → Reader β} (hr : Shrinks r)
+    (hf : ∀ a, Shrinks (f a)) : Shrinks (r >>= f) := by
+  intro o o' x h
+  simp only [StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨⟨a, o₁⟩, h₁, h₂⟩ := h
+  exact (hf a _ _ _ h₂).trans (hr _ _ _ h₁)
+
+private theorem shrinks_pure {α : Type} (a : α) : Shrinks (pure a : Reader α) := by
+  intro o o' x h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h
+  exact h.2 ▸ le_rfl
+
+private theorem shrinks_readList {α : Type} {r : Reader α} (hr : Shrinks r) : ∀ n, Shrinks (readList r n)
+  | 0 => shrinks_pure _
+  | n + 1 => shrinks_bind hr fun _ => shrinks_bind (shrinks_readList hr n) fun _ => shrinks_pure _
+
+private theorem shrinks_readSigned : Shrinks readSigned := by
+  have hs : Shrinks readString := fun _ _ _ h => (readString_len h).2
+  have hd : Shrinks readDigest := fun _ _ _ h => readDigest_len h
+  have hn : Shrinks readNat := fun _ _ _ h => readNat_len h
+  have he : Shrinks readEntry := shrinks_bind hs fun _ => shrinks_bind hd fun _ => shrinks_pure _
+  exact shrinks_bind hs fun _ => shrinks_bind (shrinks_bind hn fun n => shrinks_readList he n) fun _ =>
+    shrinks_bind (shrinks_bind hn fun _ => shrinks_bind (shrinks_readList hd _) fun _ =>
+      shrinks_bind (shrinks_readList hd _) fun _ => shrinks_pure _) fun _ => shrinks_pure _
+
+/-- The proof of a signed proof read from `o` has at most `8 · o.length` bytes. -/
+private theorem readSigned_pi {o o' : List Word} {s : Signed} (h : readSigned.run o = some (s, o')) :
+    s.π.size ≤ 8 * o.length := by
+  simp only [readSigned, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  obtain ⟨⟨π, o₆⟩, h₆, ⟨tr, o₇⟩, -, ⟨σ, o₈⟩, -, h₉⟩ := h
+  simp only [StateT.run_pure, Option.pure_def, Option.some.injEq, Prod.mk.injEq] at h₉
+  obtain ⟨rfl, -⟩ := h₉
+  exact (readString_len h₆).1
+
+/-- **The domain is closed under extraction** (V4-A11): both children of a node witness that an
+output of `o` words denotes have proofs of at most `8 · o.length` bytes, so a child extracted
+within `outCap` words is within `Computes`'s domain of `8 · outCap` bytes (`child_in_domain`). -/
+theorem decodeWit_children_size {o : List Word} {c₁ c₂ : Digest} {p₁ p₂ : Signed}
+    (h : decodeWit o = some (.node c₁ c₂ p₁ p₂)) :
+    p₁.π.size ≤ 8 * o.length ∧ p₂.π.size ≤ 8 * o.length := by
+  have h' : (readWit.run o).map Prod.fst = some (.node c₁ c₂ p₁ p₂) := h
+  rcases hr : readWit.run o with _ | ⟨w, o'⟩ <;> rw [hr] at h'
+  · cases h'
+  simp only [Option.map_some, Option.some.injEq] at h'
+  subst h'
+  simp only [readWit, StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff] at hr
+  obtain ⟨⟨k, o₁⟩, hk, hr⟩ := hr
+  have l1 := readNat_len hk
+  rcases k with _ | _ | k
+  · simp [StateT.run_bind, Option.bind_eq_some_iff] at hr
+  · simp only [StateT.run_bind, Option.bind_eq_bind, Option.bind_eq_some_iff, StateT.run_pure,
+      Option.pure_def, Option.some.injEq, Prod.mk.injEq, Wit.node.injEq] at hr
+    obtain ⟨⟨d₁, o₂⟩, h₂, ⟨d₂, o₃⟩, h₃, ⟨s₁, o₄⟩, h₄, ⟨s₂, o₅⟩, h₅, ⟨⟨-, -, rfl, rfl⟩, -⟩⟩ := hr
+    have := readDigest_len h₂
+    have := readDigest_len (o := o₂) h₃
+    have := shrinks_readSigned _ _ _ h₄
+    have := readSigned_pi h₄
+    have := readSigned_pi h₅
+    simp only at *
+    omega
+  · exact absurd hr (by simp [StateT.run, failure, StateT.failure])
+
+/-- An extracted child within the output cap is within the extractor's domain. -/
+theorem child_in_domain {o : List Word} {c₁ c₂ : Digest} {p₁ p₂ : Signed}
+    (h : decodeWit o = some (.node c₁ c₂ p₁ p₂)) (hl : o.length ≤ outCap) :
+    p₁.π.size ≤ 8 * outCap ∧ p₂.π.size ≤ 8 * outCap :=
+  have hs := decodeWit_children_size h
+  ⟨hs.1.trans (by omega), hs.2.trans (by omega)⟩
 
 end RecursionFast.Controls.Extractor

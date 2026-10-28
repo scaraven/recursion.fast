@@ -16,8 +16,9 @@ Verifier (negative), for every key and statement:
   trailing words, the canonical-encoding check does not);
 * `bad_tag_rejected` (an unknown tag word), `leaf_over_chainCap_rejected` (a chain longer than
   `chainCap`, before any hash), `stmt_unique` (a proof is accepted under at most one statement:
-  the flipped-bit and swapped-child canaries), `node_children_capped`, `node_children_untraced`
-  (an accepted node's children carry empty traces).
+  the flipped-bit and swapped-child canaries), `node_children_word` (an accepted node's children's
+  proof lengths fit a word, V4-A11: no lower cap), `node_children_untraced` (an accepted node's
+  children carry empty traces).
 Verifier (positive): `leaf_zero_accepted`, `check_iff` (the library's characterisation).
 Linear-time code: `decodeF_eq`, `encodeF_eq` (the twins equal the specifications for every
 proof and witness), and the word-level hashes of `Library/Fast.lean`.
@@ -124,10 +125,10 @@ theorem stmt_unique {vk c c' : Digest} {π : Proof} (h : check vk c π = true)
   | leaf s n => exact hR.2.trans hR'.2.symm
   | node c₁ c₂ p₁ p₂ => exact hR.1.trans hR'.1.symm
 
-/-- An accepted node proof's children are within `proofCap`. -/
-theorem node_children_capped {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ : Signed}
+/-- An accepted node proof's children's proof lengths fit a word. -/
+theorem node_children_word {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂ : Signed}
     (h : check vk c π = true) (hd : decode π = some (.node c₁ c₂ p₁ p₂)) :
-    p₁.π.size ≤ proofCap ∧ p₂.π.size ≤ proofCap := by
+    p₁.π.size < 2 ^ 64 ∧ p₂.π.size < 2 ^ 64 := by
   obtain ⟨w, hd', hR⟩ := check_sound h
   cases hd ▸ hd'
   obtain ⟨-, h₁, h₂⟩ := hR

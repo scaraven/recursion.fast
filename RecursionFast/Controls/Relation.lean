@@ -36,10 +36,18 @@ Negative:
   trace length at `qV`, query cap, signature).
 * `acc_trace_over_qV`, `acc_two_entries_rejected` (RA-M2): every submission's `acc` rejects a
   trace longer than its `qV`; the instance at `qV + 1 = 2` entries.
-* `acc_over_cap`, `acc_query_over_cap`: every submission's `acc` rejects a proof above
-  `proofCap` and a trace with a query above `queryCap`; `deep_accepted_but_capped`: the
-  witness-sending verifier accepts a 7-level proof of 1,232,456 bytes (its children, 611,400
-  bytes each, within the cap) that `acc` then rejects, so the cap is what rejects it.
+* `acc_over_word`, `acc_query_over_cap`: every submission's `acc` rejects a proof of `2^64`
+  bytes or more (its length does not fit a word, V4-A11) and a trace with a query above
+  `queryCap`; `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
+  proof of `9704 · 2^51 − 9656` bytes (its children within the word) that `acc` then rejects, so
+  the word bound is what rejects it.
+
+What bounds a proof since V4-A11 (positive):
+* `deep_accepted`: no cap below the word: `acc` accepts the witness-sending proof of a tree of
+  `k` levels, `9704 · 2^k − 9656` bytes, for every `k ≤ 50`; `deep7_over_old_cap`: the 7-level
+  one, 1,232,456 bytes, above v4's former `2^20`-byte cap. What bounds a recursive entry's proofs
+  is its own verifier; what bounds a deployed file is the runner's 64 MiB cap
+  (`harness/season.toml`).
 -/
 import RecursionFast.Library.WitnessSending
 import RecursionFast.Library.Signer
@@ -154,7 +162,7 @@ theorem acc_leafSigned_iff (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^
     submission.acc (Signer.pk sk) c (leafSigned sk j s n) =
       (decide (n ≤ chainCap) && decide (c = leafStmt (chainEnd s n) n)) := by
   rw [acc_eq, leafSigned_sig sk hj, ← check_leaf' c s hn]
-  simp [leafSigned, size_encode_leaf, proofCap]
+  simp [leafSigned, size_encode_leaf]
 where
   check_leaf' (c s : Digest) {n : ℕ} (hn : n < 2 ^ 64) :
       check (Signer.pk sk) c (encode (.leaf s n)) =
@@ -256,10 +264,11 @@ theorem acc_changed_answer (S : Submission) (vk c : Digest) (π : Proof) (σ : S
 
 /-! ## The caps -/
 
-/-- **Over the proof cap**: every submission's `acc` rejects a proof longer than `proofCap`. -/
-theorem acc_over_cap (S : Submission) (vk c : Digest) (p : Signed) (h : proofCap < p.π.size) :
+/-- **Over the word**: every submission's `acc` rejects a proof of `2^64` bytes or more. -/
+theorem acc_over_word (S : Submission) (vk c : Digest) (p : Signed) (h : 2 ^ 64 ≤ p.π.size) :
     S.acc vk c p = false := by
-  simp [Submission.acc, show ¬ p.π.size ≤ proofCap by omega]
+  rw [Submission.acc, decide_eq_false (show ¬ p.π.size < 2 ^ 64 by omega)]
+  simp
 
 /-- **Over the query cap**: every submission's `acc` rejects a trace with a query longer than
 `queryCap`. -/
@@ -281,13 +290,14 @@ def qMax : ByteArray := ⟨Array.replicate queryCap 0⟩
 /-- **A signed trace with a query of exactly `queryCap` bytes, and exactly `qV = 1` entries, is
 accepted** (both caps are `≤`) under a verifier that asks that query: exact consumption, the
 trace-length and query caps and the reference signature on the trace's digest all pass, for
-every secret function, answer and proof within `proofCap`. -/
+every secret function, answer and proof whose length fits a word. -/
 theorem acc_query_at_cap (sk : ℕ → ℕ → Digest) (a c : Digest) {π : Proof}
-    (hπ : π.size ≤ proofCap) :
+    (hπ : π.size < 2 ^ 64) :
     (oneQuery qMax).acc (Signer.pk sk) c
       ⟨π, [(qMax, a)], Signer.sign sk 0 (traceDigest [(qMax, a)])⟩ = true := by
   have hq : qMax.size = queryCap := by simp [qMax, ByteArray.size]
-  simp [Submission.acc, oneQuery, hπ, hq, Signer.sigOk_sign sk 0 (by decide), OProg.runSeq]
+  rw [Submission.acc, decide_eq_true hπ]
+  simp [oneQuery, hq, Signer.sigOk_sign sk 0 (by decide), OProg.runSeq]
 
 /-- **Over the trace-length cap** (RA-M2): every submission's `acc` rejects a trace with more
 than `qV` entries, whatever its signature. -/
@@ -333,40 +343,67 @@ theorem deepProof_size (sk : ℕ → ℕ → Digest) (k : ℕ) :
       sigWords_sign_length, ← size_eq_length, pow_succ]
     omega
 
-/-- One more level: a node over two signed copies of an accepted proof within the cap is
-accepted. -/
+/-- The signed proof of a tree of `k` levels: the proof, the empty trace, key `0`'s signature. -/
+def deepSigned (sk : ℕ → ℕ → Digest) (k : ℕ) : Signed :=
+  ⟨deepProof sk k, [], Signer.sign sk 0 (traceDigest [])⟩
+
+/-- `acc` of a tree's signed proof is `check` of its proof, once its length fits a word. -/
+private theorem acc_deepSigned (sk : ℕ → ℕ → Digest) {k : ℕ}
+    (hw : (deepProof sk k).size < 2 ^ 64) :
+    submission.acc (Signer.pk sk) (deepStmt k) (deepSigned sk k) =
+      check (Signer.pk sk) (deepStmt k) (deepProof sk k) := by
+  simp only [deepSigned]; rw [acc_eq, Signer.sigOk_sign sk 0 (by decide), decide_eq_true hw]; simp
+
+/-- One more level: a node over two signed copies of an accepted proof whose length fits a word
+is accepted. -/
 private theorem deepProof_check_succ (sk : ℕ → ℕ → Digest) {k : ℕ}
     (h : check (Signer.pk sk) (deepStmt k) (deepProof sk k) = true)
-    (hcap : (deepProof sk k).size ≤ proofCap) :
+    (hw : (deepProof sk k).size < 2 ^ 64) :
     check (Signer.pk sk) (deepStmt (k + 1)) (deepProof sk (k + 1)) = true := by
-  have hacc : submission.acc (Signer.pk sk) (deepStmt k)
-      ⟨deepProof sk k, [], Signer.sign sk 0 (traceDigest [])⟩ = true := by
-    rw [acc_eq, Signer.sigOk_sign sk 0 (by decide)]; simp [h, hcap]
+  have hacc := (acc_deepSigned sk hw).trans h
   rw [deepProof, deepStmt]
   exact check_encode ⟨rfl, hacc, hacc⟩
 
-theorem deepProof_check (sk : ℕ → ℕ → Digest) (k : ℕ) (hk : k ≤ 6) :
+/-- The tree's proof of `k ≤ 50` levels has a length that fits a word. -/
+private theorem deepProof_word (sk : ℕ → ℕ → Digest) {k : ℕ} (hk : k ≤ 50) :
+    (deepProof sk k).size < 2 ^ 64 := by
+  have hs := deepProof_size sk k
+  have : 2 ^ k ≤ 2 ^ 50 := Nat.pow_le_pow_right (by norm_num) hk
+  omega
+
+theorem deepProof_check (sk : ℕ → ℕ → Digest) (k : ℕ) (hk : k ≤ 51) :
     check (Signer.pk sk) (deepStmt k) (deepProof sk k) = true := by
   induction k with
   | zero =>
     rw [deepProof, deepStmt]
     exact check_encode (show Rel _ _ (.leaf s0 0) from ⟨Nat.zero_le _, rfl⟩)
-  | succ k ih =>
-    have hs := deepProof_size sk k
-    have : 2 ^ k ≤ 2 ^ 5 := Nat.pow_le_pow_right (by norm_num) (by omega)
-    exact deepProof_check_succ sk (ih (by omega)) (by unfold proofCap; omega)
+  | succ k ih => exact deepProof_check_succ sk (ih (by omega)) (deepProof_word sk (by omega))
 
-/-- **The cap is what rejects**: the witness-sending verifier accepts the 7-level proof (its
-children, 611,400 bytes each, are within the cap), which has 1,232,456 bytes, and `acc` rejects
-it, signature and all. -/
-theorem deep_accepted_but_capped (sk : ℕ → ℕ → Digest) :
-    check (Signer.pk sk) (deepStmt 7) (deepProof sk 7) = true ∧
-      (deepProof sk 7).size = 1232456 ∧
-      submission.acc (Signer.pk sk) (deepStmt 7)
-        ⟨deepProof sk 7, [], Signer.sign sk 0 (traceDigest [])⟩ = false := by
+/-- **No cap below the word** (V4-A11): `acc` accepts the signed witness-sending proof of a tree
+of `k` levels, `9704 · 2^k − 9656` bytes, for every `k ≤ 50`. -/
+theorem deep_accepted (sk : ℕ → ℕ → Digest) {k : ℕ} (hk : k ≤ 50) :
+    submission.acc (Signer.pk sk) (deepStmt k) (deepSigned sk k) = true ∧
+      (deepProof sk k).size + 9656 = 9704 * 2 ^ k :=
+  ⟨(acc_deepSigned sk (deepProof_word sk hk)).trans (deepProof_check sk k (by omega)),
+    deepProof_size sk k⟩
+
+/-- **Above v4's former cap**: the 7-level proof has 1,232,456 bytes, more than `2^20`, and `acc`
+accepts it. -/
+theorem deep7_over_old_cap (sk : ℕ → ℕ → Digest) :
+    submission.acc (Signer.pk sk) (deepStmt 7) (deepSigned sk 7) = true ∧
+      (deepProof sk 7).size = 1232456 ∧ 2 ^ 20 < (deepProof sk 7).size := by
   have hs := deepProof_size sk 7
-  have hs6 := deepProof_size sk 6
-  exact ⟨deepProof_check_succ sk (deepProof_check sk 6 le_rfl) (by unfold proofCap; omega),
-    by omega, acc_over_cap _ _ _ _ (by unfold proofCap; simp only; omega)⟩
+  exact ⟨(deep_accepted sk (by norm_num)).1, by omega, by omega⟩
+
+/-- **The word is what rejects**: the witness-sending verifier accepts the 51-level proof (its
+children's lengths fit a word), which has `2^64` bytes or more, and `acc` rejects it, signature
+and all. -/
+theorem deep_accepted_but_unwritable (sk : ℕ → ℕ → Digest) :
+    check (Signer.pk sk) (deepStmt 51) (deepProof sk 51) = true ∧
+      2 ^ 64 ≤ (deepProof sk 51).size ∧
+      submission.acc (Signer.pk sk) (deepStmt 51) (deepSigned sk 51) = false := by
+  have hs := deepProof_size sk 51
+  have hw : 2 ^ 64 ≤ (deepProof sk 51).size := by norm_num at hs; omega
+  exact ⟨deepProof_check sk 51 le_rfl, hw, acc_over_word _ _ _ _ hw⟩
 
 end RecursionFast.Controls.Relation

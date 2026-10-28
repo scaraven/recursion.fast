@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""The DoS column's bounds (RF-M1 (2), RF-m6, V4-A9), with a stub badge.
+"""The DoS column's bounds (RF-M1 (2), RF-m6, V4-A9; V4-A11: on the stream's last output, the
+per-item cap `item_factor · v_ref`), with a stub badge.
 
   python3 tests/harness/test_dos.py
 
-Only time and crashes fail the entry: an input slower than the per-item cap (`item_factor · T_V`)
+Only time and crashes fail the entry: an input slower than the per-item cap (`item_factor · v_ref`)
 fails it and is named and kept, also when the badge reports a check above `verify_s`; a column that
 does not finish within `total_s` fails it and names the input being checked; a crash of the checker
 fails it. An accepted input is recorded, not failed (V4-A9: malleability is not a failure). A column
@@ -38,10 +39,10 @@ class StubBadge:
 
 def bench(badge):
     b = Bench.__new__(Bench)
-    b.p = SimpleNamespace(dos_proofs=100, dos_item_factor=10.0, dos_total_s=180, verify_s=10, tv_enforce=True)
+    b.p = SimpleNamespace(dos_proofs=100, dos_item_factor=10.0, dos_total_s=180, verify_s=10, dos_item_cap="v_ref")
     b.store = tempfile.mkdtemp(prefix="rf-dos-", dir=os.environ.get("RF_TEST_TMP"))
-    b.tv_cap_ns, b.badge = 1_000_000, badge            # T_V = 1 ms, so the per-item cap is 10 ms
-    b.keep("tree/root.bin", signed.Signed(b"pi" * 20).encode())
+    b.badge = badge
+    b.keep("stream/step5.bin", signed.Signed(b"pi" * 20).encode())
     return b
 
 
@@ -55,12 +56,12 @@ def main():
 
     def outcome(badge):
         try:
-            return bench(badge).dos(b"v" * 32, b"c" * 32, "tree/root.bin")
+            return bench(badge).dos(b"v" * 32, b"c" * 32, "stream/step5.bin", 1_000_000)   # v_ref = 1 ms: cap 10 ms
         except Fail as e:
             return str(e)
     r = outcome(StubBadge({7: 25_000_000}))
     check(isinstance(r, str) and "input 7" in r and "per-item cap of 10.0 ms" in r and "store/dos/7.bin" in r,
-          f"an input above 10 · T_V fails the entry, named and kept: {r}")
+          f"an input above 10 · v_ref fails the entry, named and kept: {r}")
     r = outcome(StubBadge({4: 11_000_000_000}, slow=True))
     check(isinstance(r, str) and "input 4" in r and "store/dos/4.bin" in r,
           f"a check the badge reports above verify_s fails the entry as a slow input, named: {r}")
@@ -74,7 +75,8 @@ def main():
           f"an accepted input is recorded, not failed (V4-A9): {r if isinstance(r, str) else r['accepted_inputs']}")
     b = StubBadge({9: 2_000_000})
     r = outcome(b)
-    check(isinstance(r, dict) and r["max_input"] == "dos/9.bin" and r["over_T_V"] == 1 and r["accepted"] == 0
+    check(isinstance(r, dict) and r["max_input"] == "dos/9.bin" and r["over_v_ref"] == 1 and r["accepted"] == 0
+          and r["target"] == "stream/step5.bin"
           and b.timeout == 180, f"within its bounds the column reports its worst input and the budget is passed to the badge: {r}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0

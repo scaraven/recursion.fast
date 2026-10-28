@@ -7,8 +7,9 @@ It recomputes `chainEnd s n` for every start of LEAVES_JSON, eight chains interl
 chain step is BLAKE2s-256 of `0x43 ‖ d`, one compression, fully unrolled over `UInt32` locals, as
 an entry's verifier may legally write it in core Lean), then the leaf statements and the tree root,
 and compares with ROOT_HEX. NS is the time of that computation (monotonic clock; the runner pins
-the process to one core, so it is the CPU time of the check). `T_triv,best` is the best NS of a few
-runs on the tree's chains; `T_V = T_triv,best / R`.
+the process to one core, so it is the CPU time of the check). `T_triv` is the median NS of the samples
+taken during the stream on the calibration instance's chains (2^24 compressions); `v_ref = T_triv
+/ R` (V4-A11, §11 m-2).
 
 The checker is calibration, not a trusted predicate: a wrong hash would fail its comparison with the
 runner's root. `python3 gen_chaincheck.py > ChainCheck.lean`.

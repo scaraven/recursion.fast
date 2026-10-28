@@ -12,8 +12,14 @@
    by the runner's reader without reading through them;
 4. no process it started survives the run, and the service still answers after its garbage;
 5. the memory cap kills a prover above it and not one below it;
-6. a request whose prover never prints `ready` times out, and one that prints `done` early is
-   stopped there.
+6. the handshake: a request whose prover never prints `ready` times out (`ready_s`), and one that
+   prints `done` is stopped there;
+7. the clock stops when the sandbox is dead (V4-A11 §5.1, the flock `seed_pipe` pattern): a prover
+   that prints `done` and keeps writing `proof.bin` from a thread, or from a forked child, has none
+   of its late bytes read; one that closes stdout without `done` and leaves a child computing is
+   charged until every process is dead; no process survives any request;
+8. R-M1: a prover that makes /work unusable (an input's name taken by a directory, or /work made
+   unreadable) is the entry's failure with that reason, never a harness error.
 """
 import os
 import subprocess
@@ -72,12 +78,12 @@ def main():
     run = Run(os.path.join(tmp, "hostile-build", "bin"), os.path.join(tmp, "setup"), "1G")
     os.makedirs(run.setup_dir)
 
-    # 2.-4. the tree run
+    # 2.-4. one run of the hostile program (no handshake)
     svc = Service(BIN, os.path.join(tmp, "svc")).start()
     work = os.path.join(tmp, "work")
     os.makedirs(work)
     os.environ["HOSTILE_ENV_LEAK"] = "1"
-    status, dt, log = run.tree(work, svc.sock_dir, 300)
+    status, dt, log = run.oneshot("tree", work, svc.sock_dir, 300)
     check(status == "ok", f"the hostile prover ran ({status}, {dt:.2f} s)")
     report = open(os.path.join(work, "report.txt")).read().splitlines()
     for line in report:
@@ -98,26 +104,60 @@ def main():
     check(len(c.query([b"still alive"])[0]) == 32, "the service answers after the prover's garbage")
     c.close()
 
-    # 6. the handshake
-    def req(prog_s, kind="leaf", step=5):
+    # 6.-8. the handshake, the clock, R-M1
+    def req(prog_s, kind="step", step=5, inputs=None):
         d = os.path.join(tmp, f"req-{kind}-{time.monotonic_ns()}")
         os.makedirs(os.path.join(d, "bin"))
         os.makedirs(os.path.join(d, "work"))
         with open(os.path.join(d, "p.c"), "w") as f:
-            f.write(prog_s)
-        subprocess.run(["gcc", "-static", "-O1", "-o", os.path.join(d, "bin", "prover"), os.path.join(d, "p.c")], check=True)
+            f.write("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n"
+                    "#include <pthread.h>\n#include <sys/stat.h>\n#include <fcntl.h>\n" + prog_s)
+        subprocess.run(["gcc", "-static", "-O1", "-pthread", "-w", "-o", os.path.join(d, "bin", "prover"), os.path.join(d, "p.c")],
+                       check=True)
         r = Run(os.path.join(d, "bin"), run.setup_dir, "256M")
-        return request(r, kind, os.path.join(d, "work"), svc.sock_dir, {"leaf.json": b"{}"}, step, 1 << 20)
-    st, dt, proof, _ = req('#include <unistd.h>\nint main(){sleep(100);}\n', step=2)
-    check(st == "no ready line", f"no ready line: {st}")
-    st, dt, proof, _ = req('#include <stdio.h>\n#include <unistd.h>\nint main(){puts("ready");fflush(stdout);'
-                           'char b[8];fgets(b,8,stdin);FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);'
-                           'puts("done");fflush(stdout);sleep(100);}\n')
-    check(st == "ok" and proof == b"P" and dt < 1, f"done line stops the clock ({st}, {dt:.4f} s, {proof!r})")
-    st, dt, proof, _ = req('#include <stdio.h>\n#include <unistd.h>\nint main(){puts("ready");fflush(stdout);'
-                           'char b[8];fgets(b,8,stdin);sleep(100);}\n', step=2)
-    check(st == "timeout", f"a request over step_s times out ({st})")
+        return request(r, kind, os.path.join(d, "work"), svc.sock_dir, inputs or {"chain.json": b"{}"}, step, 1 << 20,
+                       ready_s=2)
+    HS = 'static void hs(void){puts("ready");fflush(stdout);char b[8];if(!fgets(b,8,stdin))exit(9);}\n'
+    r = req('int main(){sleep(100);}\n')
+    check(r.status == "no ready line" and r.startup_s < 3, f"no ready line within ready_s: {r.status} ({r.startup_s:.2f} s)")
+    r = req(HS + 'int main(){hs();FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);'
+            'puts("done");fflush(stdout);sleep(100);}\n')
+    check(r.status == "ok" and r.proof == b"P" and r.seconds < 1 and r.kill_s is not None and r.kill_s < 1,
+          f"the done line stops the clock once the sandbox is dead ({r.status}, P {r.seconds:.4f} s, kill {r.kill_s:.4f} s, {r.proof!r})")
+    r = req(HS + 'int main(){hs();sleep(100);}\n', step=2)
+    check(r.status == "timeout", f"a request over step_s times out ({r.status})")
+    late = (HS + 'static void*w(void*a){int fd=*(int*)a;for(;;){write(fd,"B",1);usleep(1000);}return 0;}\n'
+            'int main(){hs();static int fd;fd=open("proof.bin",O_WRONLY|O_CREAT|O_TRUNC,0644);write(fd,"A",1);'
+            'pthread_t t;pthread_create(&t,0,w,&fd);usleep(20000);puts("done");fflush(stdout);'
+            'for(volatile long i=0;;i++);}\n')
+    r = req(late)
+    check(r.status == "ok" and r.proof is not None and set(r.proof[1:]) <= {ord("B")} and len(r.proof) < 200,
+          f"a thread writing proof.bin after done: only bytes written before the clock stopped exist "
+          f"({len(r.proof or b'')} bytes, P {r.seconds:.4f} s)")
+    n0 = len(r.proof or b"")
+    time.sleep(0.3)
+    check(not survivors("/prover/prover"), f"the late writer is dead when the request returns (proof had {n0} bytes)")
+    forked = (HS + 'int main(){hs();if(fork()==0){usleep(300000);FILE*f=fopen("proof.bin","w");fputs("LATE",f);fclose(f);'
+              'for(;;)pause();}puts("done");fflush(stdout);for(;;)pause();}\n')
+    r = req(forked)
+    check(r.status != "ok" and "missing" in r.status, f"a forked child's proof.bin after done does not count: {r.status}")
+    bg = (HS + 'int main(){hs();if(fork()==0){usleep(500000);FILE*f=fopen("proof.bin","w");fputs("C",f);fclose(f);_exit(0);}'
+          'fclose(stdout);usleep(1000000);_exit(0);}\n')
+    r = req(bg)
+    check(r.status == "ok" and r.proof == b"C" and r.seconds >= 1.0,
+          f"stdout closed without done, the work left to a child: charged until every process is dead "
+          f"({r.status}, P {r.seconds:.3f} s, {r.proof!r})")
+    r = req(bg.replace("usleep(1000000);_exit(0);", "_exit(0);"))
+    check(r.status != "ok" and r.seconds < 0.5,
+          f"the main process exits and leaves a child to finish: the child dies with the sandbox, its late bytes "
+          f"never exist ({r.status}, P {r.seconds:.3f} s)")
     check(not survivors("/prover/prover"), "no request process survives")
+    r = req(HS.replace('puts("ready")', 'mkdir("chain.json",0755);puts("ready")') + 'int main(){hs();sleep(100);}\n')
+    check("made /work unusable" in r.status, f"R-M1: an input's name taken by a directory is the entry's failure: {r.status}")
+    r = req(HS + 'int main(){hs();FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);chmod(".",0);'
+            'puts("done");fflush(stdout);sleep(100);}\n')
+    check("made /work unusable" in r.status or "cannot open" in r.status or "Permission" in r.status,
+          f"R-M1: /work made unreadable is the entry's failure: {r.status}")
     svc.stop()
 
     # 5. the memory cap

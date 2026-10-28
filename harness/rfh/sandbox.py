@@ -18,11 +18,12 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     runner kills it, the kernel kills every process it started;
   * `oom_score_adj = 1000` (`choom`), so that under memory pressure the kernel kills the sandboxed
     process before the service (V4-A5); optionally a CPU affinity (`taskset`, the pinned core of a
-    `T_V` measurement).
+    `V_i` measurement).
 
 It needs no system user and changes no system setting. It needs unprivileged user namespaces for
 bubblewrap (Ubuntu 24.04 restricts them through AppArmor; CI relaxes that, `.github/workflows/`).
 """
+import json
 import os
 import struct
 import subprocess
@@ -158,10 +159,14 @@ class Sandbox:
     `hold=True` the command is held before `exec` until `release()` (bubblewrap's `--block-fd`);
     `wait_ready()` returns once the sandbox exists and `wait_exit()` when the command exits
     (`--json-status-fd`), so that a timer between them counts the measured program, not the
-    sandbox's set-up or tear-down."""
+    sandbox's set-up or tear-down. With `status=True` (V4-A11, §5.1) bubblewrap reports the pid of
+    the sandbox's first process (`child_pid`), the init of its pid namespace: `kill_tree()` kills
+    every process of the sandbox and returns only when they are all dead (the namespace's init
+    exits after the kernel has killed and reaped every other process in it, and its pidfd becomes
+    readable then)."""
 
     def __init__(self, cmd, binds, mem, env=None, cwd="/work", stdin=subprocess.DEVNULL,
-                 stdout=None, stderr=None, hold=False, extra_ro_root=(), cpus=None):
+                 stdout=None, stderr=None, hold=False, extra_ro_root=(), cpus=None, status=False):
         self.unit = "rf-" + uuid.uuid4().hex[:16]
         sc_r, sc_w = os.pipe()
         prog = seccomp_program()
@@ -183,12 +188,16 @@ class Sandbox:
             args += ["--setenv", k, v]
         args += ["--remount-ro", "/", "--chdir", cwd, "--seccomp", str(sc_r)]
         self.block_w = self.info_r = None
+        self.pidfd = self.cgdir = None
+        self.status = b""
         if hold:
             b_r, self.block_w = os.pipe()
+            fds.append(b_r)
+            args += ["--block-fd", str(b_r)]
+        if hold or status:
             self.info_r, i_w = os.pipe()
-            fds += [b_r, i_w]
-            args += ["--block-fd", str(b_r), "--json-status-fd", str(i_w)]
-            self.status = b""
+            fds.append(i_w)
+            args += ["--json-status-fd", str(i_w)]
         prefix = memcap(mem, self.unit) + ["choom", "-n", "1000", "--"]
         if cpus is not None:
             prefix += ["taskset", "-c", str(cpus)]
@@ -206,8 +215,8 @@ class Sandbox:
                 if key in obj:
                     self.status = self.status[self.status.index(obj) + len(obj) + 1:]
                     return obj.decode(errors="replace")
-            left = deadline - time.monotonic()
-            if self.info_r is None or left <= 0 or not select.select([self.info_r], [], [], left)[0]:
+            left = max(0.0, deadline - time.monotonic())
+            if self.info_r is None or not select.select([self.info_r], [], [], left)[0]:
                 return None
             c = os.read(self.info_r, 4096)
             if not c:
@@ -233,6 +242,65 @@ class Sandbox:
         except ValueError:
             return -1, t
 
+    def track(self, timeout=30):
+        """For a `status` sandbox: open a pidfd on the namespace's init and find the scope's cgroup
+        directory (systemd only); untimed, before a measurement starts. False if no pid came."""
+        obj = self._read_status(b"child-pid", time.monotonic() + timeout)
+        if obj is None:
+            return False
+        try:
+            self.pidfd = os.pidfd_open(int(json.loads(obj + "}")["child-pid"]))
+        except (ValueError, KeyError, OSError):
+            return False
+        if memcap_method() == "systemd":
+            out = subprocess.run(["systemctl", "--user", "show", "-p", "ControlGroup", f"{self.unit}.scope"],
+                                 capture_output=True, text=True, timeout=30).stdout.strip()
+            d = "/sys/fs/cgroup" + out.partition("=")[2]
+            if out.partition("=")[2] and os.access(os.path.join(d, "cgroup.kill"), os.W_OK):
+                self.cgdir = d
+        return True
+
+    def exit_code(self, wait=1.0):
+        """The command's exit code once bubblewrap reports it (within `wait` seconds), else None."""
+        obj = self._read_status(b"exit-code", time.monotonic() + wait)
+        try:
+            return None if obj is None else int(json.loads(obj + "}")["exit-code"])
+        except (ValueError, KeyError):
+            return None
+
+    def memory_peak(self):
+        """The sandbox's memory high-water mark in bytes (its cgroup's `memory.peak`), else None."""
+        try:
+            return int(open(os.path.join(self.cgdir, "memory.peak")).read()) if self.cgdir else None
+        except (OSError, ValueError):
+            return None
+
+    def kill_tree(self, timeout=30):
+        """Kill every process of a tracked sandbox at once (`cgroup.kill`, else SIGKILL to the
+        namespace's init, which takes the namespace with it) and wait until all are dead: (dead?,
+        the monotonic time it was seen). Nothing in the sandbox runs after that time."""
+        import select
+        import signal
+        try:
+            if self.cgdir:
+                with open(os.path.join(self.cgdir, "cgroup.kill"), "w") as f:
+                    f.write("1")
+            else:
+                signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
+        except OSError:
+            pass                              # already gone: the pidfd says so below
+        try:
+            signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
+        except OSError:
+            pass
+        dead = bool(select.select([self.pidfd], [], [], timeout)[0])
+        return dead, time.monotonic()
+
+    def dead(self):
+        """Whether every process of a tracked sandbox has exited (its init's pidfd is readable)."""
+        import select
+        return self.pidfd is not None and bool(select.select([self.pidfd], [], [], 0)[0])
+
     def release(self):
         """Let a held command `exec`."""
         if self.block_w is not None:
@@ -252,6 +320,11 @@ class Sandbox:
         if self.info_r is not None:
             os.close(self.info_r)
             self.info_r = None
+        if self.pidfd is not None:
+            if not self.dead():
+                self.kill_tree()
+            os.close(self.pidfd)
+            self.pidfd = None
         if self.proc.poll() is None:
             self.proc.kill()
         kill_unit(self.unit)

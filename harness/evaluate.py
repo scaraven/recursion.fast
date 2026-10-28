@@ -58,7 +58,7 @@ sys.path.insert(0, HERE)
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
-PART_S = 1680           # a benchmark part (28 min): the outer bound of its capped steps (V4-A9)
+PART_S = 1680           # the benchmark job (28 min): the outer bound of its capped steps (V4-A9, V4-A11)
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
 
 
@@ -426,7 +426,7 @@ def bench_job(a, cert):
                                                    "built_modules", "environment")}
     ok = res["benchmark"] == "pass"
     res["verdict"] = ("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject" else "REJECT"
-    res["comparable"] = res["verdict"] == "ACCEPT"
+    res["comparable"] = res["verdict"] == "ACCEPT" and not (res.get("stream") or {}).get("truncated")
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {res['verdict']}")
     return res

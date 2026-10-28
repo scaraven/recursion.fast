@@ -26,7 +26,8 @@ The file ends exactly after `path_15`. Its size is
 
 - **Strict.** A file that is not exactly one such encoding (a length running past the end,
   bytes after `path_15`) is not a signed proof: `verify` rejects it, whatever it contains.
-- **What `acc` then checks** (contract `Submission.acc`, V4-7, V4-A3): `|π| ≤ proofCap = 2^20`;
+- **What `acc` then checks** (contract `Submission.acc`, V4-7, V4-A3, V4-A11): `|π| < 2^64` (its
+  length fits a word; V4-A11 removed v4's cap `proofCap = 2^20`);
   every `|q_i| ≤ queryCap = 2^20`; `SigOk vk (traceDigest tr) σ`; and the verifier `V vk c π`,
   run with its `i`-th oracle query answered from the `i`-th trace entry (`OProg.runSeq`), asks
   exactly `q_0, …, q_{m−1}` in order, uses every entry, and returns `true`.
@@ -39,9 +40,11 @@ The file ends exactly after `path_15`. Its size is
   values, 16 siblings; the file format fixes the two counts.
 - **The trace's length**: since the contract fix pass `ea2e8ab` (review RA-M2), `acc` also
   requires `m ≤ qV` of the entry (right after the size cap); nothing in this format changes.
-- **Size caps of the runner**: a file above `file_cap` (64 MiB, `harness/season.toml`) is not read.
-  `π` is capped at `proofCap` by `acc`; the trace is bounded by `qV ≤ 2^16` queries of at most
-  `2^20` bytes each.
+- **Size caps of the runner**: a file above `file_cap` (64 MiB, `harness/season.toml`) is not read;
+  it is the only bound on `π` the deployment has (V4-A11: `|π|` is priced by the score's `s_ref`, and
+  an entry's own verifier bounds the children it accepts). The trace is bounded by `qV ≤ 2^16`
+  queries of at most `2^20` bytes each. The extractor's efficiency is claimed for proofs of up to
+  `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
 
 ## The file and the extractor's word format
 
@@ -57,11 +60,13 @@ about 0.4 µs per byte (stage A RESULT §4).
 
 ## Statements and keys
 
-The runner gives statements and keys as 64 lowercase hex characters (`vk.hex`, `child1.stmt`, …;
+The runner gives statements and keys as 64 lowercase hex characters (`vk.hex`, `prev.stmt`, …;
 a trailing newline is allowed). They are never part of the file: the statement a file is checked
 against is always the runner's own digest.
 
 ## A worked size
 
-The toy prover's leaf proof (`π` the 48-byte witness-sending encoding of a leaf, no query) is
-`8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes.
+The toy prover's signed leaf proof (`π` the 48-byte witness-sending encoding of a leaf, no query) is
+`8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes; its first stream step (a node of two such leaves, carried
+whole) is 14,544 bytes, and every further step adds 9,704 (measured,
+`logs/f-ivc/smoke-mock-work/result-honest.json`).

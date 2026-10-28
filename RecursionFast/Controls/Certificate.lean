@@ -34,8 +34,10 @@ Negative:
 
 What the certificate does not say (v3's, kept):
 * `acc_rejects_all_certified`: a certified submission whose `acc` accepts nothing: `V` accepts
-  only proofs longer than `proofCap`, which `acc` rejects. Completeness is about `V` over a random
-  oracle, not about `acc` (V3-S2R-m1); the harness's root check rejects such an entry.
+  only proofs of `2^64` bytes or more, whose length `acc`'s word bound rejects (V4-A11; v4 used
+  proofs above its former `2^20`-byte cap). Completeness is about `V` over a random oracle, not
+  about `acc` (V3-S2R-m1); the harness's check of the first step rejects such an entry, and no
+  runner can hold such a proof anyway.
 * `choice_certificate`: the witness-sending submission stays certified when its extractor
   specification is a `Classical.choose` on tapes beyond the `Computes` domain (V3-S2R-m2).
 -/
@@ -154,20 +156,21 @@ theorem choice_certificate : Certificate Schoice := by
   rw [Schoice, show Echoice = E from funext fun c => funext fun π => funext (Echoice_eq c π)]
   exact certificate
 
-/-- `proofCap + 1` zero bytes. -/
-def pad : List UInt8 := List.replicate (proofCap + 1) 0
+/-- `2^64` zero bytes. -/
+def pad : List UInt8 := List.replicate (2 ^ 64) 0
 
 /-- The bytes after the pad. -/
-def strip (π : Proof) : Proof := ⟨(π.data.toList.drop (proofCap + 1)).toArray⟩
+def strip (π : Proof) : Proof := ⟨(π.data.toList.drop (2 ^ 64)).toArray⟩
 
 /-- Whether a decoded witness is a leaf. -/
 def isLeaf : Option Wit → Bool
   | some (.leaf _ _) => true
   | _ => false
 
-/-- Accept only proofs **longer than `proofCap`**: the pad, then a leaf's witness-sending proof. -/
+/-- Accept only proofs **of `2^64` bytes or more**: the pad, then a leaf's witness-sending
+proof. -/
 def Vbig (vk c : Digest) (π : Proof) : OProg Bool :=
-  .ret (decide (proofCap < π.size) && isLeaf (decode (strip π)) && check vk c (strip π))
+  .ret (decide (2 ^ 64 ≤ π.size) && isLeaf (decode (strip π)) && check vk c (strip π))
 
 /-- Pad the witness-sending proof. -/
 def Pbig (_ _ : Digest) (w : Wit) : OProg Proof := .ret ⟨(pad ++ (encode w).data.toList).toArray⟩
@@ -185,14 +188,17 @@ def Sbig : Submission where
 
 theorem acc_false (vk c : Digest) (p : Signed) : Sbig.acc vk c p = false := by
   unfold Submission.acc
-  by_cases h : p.π.size ≤ proofCap
-  · cases p.tr <;> simp [Sbig, Vbig, OProg.runSeq, Nat.not_lt.mpr h]
-  · simp [h]
+  by_cases h : p.π.size < 2 ^ 64
+  · rw [decide_eq_true h]
+    cases p.tr
+    · simp [Sbig, Vbig, OProg.runSeq]; omega
+    · simp [Sbig, Vbig, OProg.runSeq]
+  · rw [decide_eq_false h]; simp
 
-theorem strip_small {π : Proof} (h : π.size ≤ proofCap) : strip π = ⟨#[]⟩ := by
-  rw [strip, List.drop_eq_nil_of_le (Array.length_toList.trans_le (Nat.le_succ_of_le h))]
+theorem strip_small {π : Proof} (h : π.size ≤ 2 ^ 64) : strip π = ⟨#[]⟩ := by
+  rw [strip, List.drop_eq_nil_of_le (Array.length_toList.trans_le h)]
 
-theorem pad_length : pad.length = proofCap + 1 := List.length_replicate
+theorem pad_length : pad.length = 2 ^ 64 := List.length_replicate
 
 theorem strip_pad (b : List UInt8) : strip ⟨(pad ++ b).toArray⟩ = ⟨b.toArray⟩ := by
   rw [strip, List.drop_left' pad_length]
@@ -214,13 +220,14 @@ theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbi
     fun _ _ _ => le_rfl
 
 theorem big_computes : Computes Sbig.ext Sbig.E Sbig.fuel := fun c π L hπ _ _ =>
-  ⟨[], Controls.Extractor.halt_run _ 0, by decide, (congrArg decode (strip_small hπ)).symm⟩
+  ⟨[], Controls.Extractor.halt_run _ 0, by decide,
+    (congrArg decode (strip_small (hπ.trans (by unfold outCap; norm_num)))).symm⟩
 
 theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s n)) :
     Vbig vk c ⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ = .ret true := by
   have hn : n < 2 ^ 64 := lt_of_le_of_lt hR.1 (by decide)
-  have hsz : proofCap < (⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ : Proof).size := by
-    show proofCap < (pad ++ _).toArray.size
+  have hsz : 2 ^ 64 ≤ (⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ : Proof).size := by
+    show 2 ^ 64 ≤ (pad ++ _).toArray.size
     rw [List.size_toArray, List.length_append, pad_length]; omega
   have hck : check vk c (encode (.leaf s n)) = true := check_encode ((rel_leaf_iff _ _ c s n).mp hR)
   unfold Vbig

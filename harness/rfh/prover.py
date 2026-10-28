@@ -6,14 +6,13 @@ interface). Every step runs in `sandbox.Sandbox`.
   toolchain's versions and the binary's hash recorded.
 * `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
   read-only afterwards.
-* `run_tree`: `prover tree /work`, timed from the `exec` of the prover (the sandbox is set up,
-  reported by bubblewrap and held first) to its exit as bubblewrap reports it (before the
-  namespaces are torn down).
-* `Request`: one `prover leaf /work` or `prover node /work` in a fresh process: the process starts
-  and prints `ready`; the runner writes the inputs to a staging directory the prover cannot see;
-  the clock starts; the runner renames the inputs into /work and sends `go`; the clock stops at
-  the prover's `done` line or its exit, whichever is first; then the whole sandbox is killed and
-  `proof.bin` is read.
+* `request`: one `prover first /work` or `prover step /work` in a fresh process (V4-A11): the
+  process starts and prints `ready` (within `ready_s`, untimed); the runner writes the inputs to a
+  staging directory the prover cannot see; the clock starts; the runner renames the inputs into
+  /work and sends `go`; at the prover's `done` line, its stdout's end or its exit the runner kills
+  the whole sandbox and **stops the clock when every process of it is dead** (§5.1); then
+  `proof.bin` is read. A filesystem error in the request's directory is the entry's failure (R-M1).
+* `oneshot`: a program with no handshake, timed from exec to exit (the sandbox tests).
 """
 import glob
 import hashlib
@@ -154,8 +153,9 @@ class Run:
             e["RF_ORACLE"] = f"{SOCK_IN}/oracle.sock"
         return e
 
-    def setup(self, timeout):
-        """`prover setup /setup` (untimed, no service, no instance); (ok, seconds, log)."""
+    def setup(self, timeout, size_cap=None):
+        """`prover setup /setup` (untimed, no service, no instance); (ok, seconds, log). With
+        `size_cap`, a setup directory above it after the run fails the setup (R-M1, `setup_cap`)."""
         os.makedirs(self.setup_dir, exist_ok=True)
         sb = Sandbox([PROVER, "setup", "/setup"], self.binds(self.setup_dir, setup_rw=True)[:2],
                      self.mem, env=self.env(None), cwd="/setup", stdout=subprocess.PIPE,
@@ -168,11 +168,18 @@ class Run:
             code = "timeout"
         sb.kill()
         out.join(5)
-        return code == 0, time.monotonic() - t0, out.kept.decode(errors="replace")
+        log = out.kept.decode(errors="replace")
+        if code == 0 and size_cap is not None:
+            used = tree_bytes(self.setup_dir)
+            if used > size_cap:
+                return False, time.monotonic() - t0, log + f"\nthe setup directory holds {used} bytes, above setup_cap = {size_cap}"
+        return code == 0, time.monotonic() - t0, log
 
-    def tree(self, work, sock_dir, timeout):
-        """`prover tree /work`, timed from exec to exit; (status, seconds, log)."""
-        sb = Sandbox([PROVER, "tree", "/work"], self.binds(work, sock_dir), self.mem, env=self.env(sock_dir),
+    def oneshot(self, mode, work, sock_dir, timeout):
+        """`prover MODE /work` with no handshake, timed from exec to exit; (status, seconds, log).
+        The benchmark makes no such request since V4-A11; the sandbox tests run hostile programs
+        through it."""
+        sb = Sandbox([PROVER, mode, "/work"], self.binds(work, sock_dir), self.mem, env=self.env(sock_dir),
                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, hold=True)
         out = Drain(sb.proc.stdout)
         sb.wait_ready()
@@ -189,80 +196,158 @@ class Run:
         return status, dt, out.kept.decode(errors="replace")
 
 
-def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None):
-    """One timed `leaf` or `node` request in a fresh sandbox. `inputs`: name → bytes, written after
-    `ready`. `step_s` bounds the wait for `ready` and, again, the proving; `deadline` (a monotonic
-    time) bounds both too (the stream's cap). Returns (status, seconds, proof bytes or None, log)."""
+class Step:
+    """What one request did: `status` (`ok` or the entry's failure), `seconds` (the timed part, from
+    the inputs' arrival to the death of the request's last process), `startup_s` (process start to
+    `ready`, untimed), `kill_s` (from `done` or the exit seen to every process dead), `mem_peak`
+    (bytes, systemd only), `proof` (the bytes of `proof.bin`) and `log` (stderr, head and tail)."""
+
+    def __init__(self):
+        self.status, self.seconds, self.startup_s, self.kill_s = "ok", None, None, None
+        self.mem_peak, self.proof, self.log, self.ended = None, None, "", None
+
+
+class Unusable(Exception):
+    """The prover made its directory unusable for the runner (R-M1): the entry's failure."""
+
+
+def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None):
+    """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3; V4-A11 §5.1). `inputs`:
+    name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. `ready_s`
+    (default `step_s`) bounds the start-up to `ready`, `step_s` the proving; `deadline` (a monotonic
+    time, the stream's cap) bounds both. **The clock stops when the request's process tree is
+    dead**: at the prover's `done` line, its stdout's end or its exit, the runner kills the whole
+    sandbox at once (`Sandbox.kill_tree`) and stops the clock when the pid namespace's init has
+    exited, which the kernel allows only after every other process in it is dead; only then is
+    `proof.bin` read. So nothing the prover does after `done` is untimed, and no byte written after
+    the clock stopped exists. Every filesystem error in the request's directory is the entry's
+    failure (R-M1). Returns a `Step`."""
+    import select
     cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
+    r = Step()
+    t_spawn = time.monotonic()
     sb = Sandbox([PROVER, kind, "/work"], run.binds(work, sock_dir), run.mem, env=run.env(sock_dir),
-                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, status=True)
     err = Drain(sb.proc.stderr)
     fd = sb.proc.stdout.fileno()
     buf = b""
-
-    def wait_line(word, deadline):
-        """Read stdout until a line equal to `word`, end of file, or the deadline."""
-        nonlocal buf
-        while True:
-            lines = buf.split(b"\n")
-            if word.encode() in lines[:-1]:
-                buf = b"\n".join(lines[lines.index(word.encode()) + 1:])
-                return "line"
-            if len(buf) > LOG_CAP:
-                buf = buf[-64:]
-            left = deadline - time.monotonic()
-            if left <= 0:
-                return "timeout"
-            if select.select([fd], [], [], left)[0]:
-                c = os.read(fd, 1 << 16)
-                if not c:
-                    return "eof"
-                buf += c
-
-    status, dt, proof = "ok", None, None
     try:
-        if wait_line("ready", cap(time.monotonic() + step_s)) != "line":
-            status = "no ready line"
-        else:
-            # RB-m11: the inputs are written to a staging directory outside the sandbox before the
-            # clock starts, and only renamed into /work (constant time) once it runs
-            stage = work.rstrip("/") + ".stage"
-            os.makedirs(stage, exist_ok=True)
-            for name, data in inputs.items():
-                with open(os.path.join(stage, name), "wb") as f:
-                    f.write(data)
-            t0 = time.monotonic()
+        if not sb.track():
+            raise RuntimeError("the sandbox reported no process (bubblewrap failed to start)")
+
+        def wait_line(word, until):
+            """Read stdout until a line equal to `word` ("line"), its end ("eof"), the death of the
+            sandbox ("dead") or the time `until` ("timeout")."""
+            nonlocal buf
+            while True:
+                lines = buf.split(b"\n")
+                if word.encode() in lines[:-1]:
+                    buf = b"\n".join(lines[lines.index(word.encode()) + 1:])
+                    return "line"
+                if len(buf) > LOG_CAP:
+                    buf = buf[-64:]
+                left = until - time.monotonic()
+                if left <= 0:
+                    return "timeout"
+                ready = select.select([fd, sb.pidfd], [], [], left)[0]
+                if fd in ready:
+                    c = os.read(fd, 1 << 16)
+                    if not c:
+                        return "eof"
+                    buf += c
+                elif sb.pidfd in ready:
+                    return "dead"
+
+        w = wait_line("ready", cap(t_spawn + (ready_s or step_s)))
+        r.startup_s = time.monotonic() - t_spawn
+        if w != "line":
+            r.status = "no ready line" + ("" if w == "timeout" else f" (the prover ended: {w})")
+            return r
+        # RB-m11: the inputs are written to a staging directory outside the sandbox before the clock
+        # starts, and only renamed into /work (constant time) once it runs
+        stage = work.rstrip("/") + ".stage"
+        os.makedirs(stage, exist_ok=True)
+        for name, data in inputs.items():
+            with open(os.path.join(stage, name), "wb") as f:
+                f.write(data)
+        t0 = time.monotonic()
+        try:
             for name in inputs:
                 os.rename(os.path.join(stage, name), os.path.join(work, name))
-            try:
-                sb.proc.stdin.write(b"go\n")
-                sb.proc.stdin.flush()
-            except BrokenPipeError:
-                pass
-            r = wait_line("done", cap(t0 + step_s))
-            if r == "eof":                        # the prover closed stdout: wait for its exit
-                try:
-                    sb.proc.wait(timeout=max(0.0, cap(t0 + step_s) - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    r = "timeout"
-            dt = time.monotonic() - t0
-            if r == "timeout":
-                status = "timeout"
-    finally:
-        if status != "ok" or sb.proc.poll() not in (None, 0):
-            try:
-                sb.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            status = oom_status(sb, run.mem) or status
-        sb.kill()
-        err.join(5)
-    if status == "ok":
+        except OSError as e:
+            raise Unusable(f"renaming the inputs into /work: {e.strerror or e}")
         try:
-            proof = read_output(work, "proof.bin", file_cap)
+            sb.proc.stdin.write(b"go\n")
+            sb.proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        w = wait_line("done", cap(t0 + step_s))
+        if w == "eof":                          # stdout closed without `done`: wait for the exit, timed
+            left = cap(t0 + step_s) - time.monotonic()
+            w = "dead" if left > 0 and select.select([sb.pidfd], [], [], left)[0] else "timeout"
+        t_seen = time.monotonic()
+        r.mem_peak = sb.memory_peak()
+        dead, t1 = sb.kill_tree()
+        if not dead:
+            raise RuntimeError("the sandbox did not die within 30 s of SIGKILL")
+        r.seconds, r.kill_s, r.ended = t1 - t0, t1 - t_seen, w
+        if w == "timeout":
+            r.status = "timeout"
+        elif w == "dead":
+            code = sb.exit_code()
+            if code not in (None, 0):
+                r.status = f"exit {code}"
+    except Unusable as e:
+        r.status = f"the prover made /work unusable ({e})"
+    finally:
+        if r.status != "ok":
+            r.status = oom_status(sb, run.mem) or r.status
+        sb.kill()                                   # kill_unit and the outer process, after the clock
+        err.join(5)
+        r.log = err.kept.decode(errors="replace")
+    if r.status == "ok":
+        try:
+            r.proof = read_output(work, "proof.bin", file_cap)
         except OutputError as e:
-            status = oom_status(sb, run.mem) or str(e)
-    return status, dt, proof, err.kept.decode(errors="replace")
+            r.status = oom_status(sb, run.mem) or str(e)
+        except OSError as e:                        # R-M1: an unusable directory is the entry's failure
+            r.status = f"the prover made /work unusable (reading proof.bin: {e.strerror or e})"
+    return r
+
+
+def tree_bytes(path):
+    """Bytes allocated under `path` (no link followed); a tree the runner cannot walk counts as
+    unbounded."""
+    total = 0
+    try:
+        for root, dirs, files in os.walk(path, followlinks=False):
+            for n in dirs + files:
+                st = os.lstat(os.path.join(root, n))
+                total += st.st_blocks * 512
+    except OSError:
+        return float("inf")
+    return total
+
+
+def tree_sha256(path):
+    """A hash of a directory tree (relative paths, kinds and contents; links by their target, none
+    followed): the setup's hash in the result (§8)."""
+    h = hashlib.sha256()
+    for root, dirs, files in sorted(os.walk(path, followlinks=False)):
+        dirs.sort()
+        for n in sorted(files):
+            f = os.path.join(root, n)
+            h.update(os.path.relpath(f, path).encode() + b"\0")
+            if os.path.islink(f):
+                h.update(b"L" + os.readlink(f).encode() + b"\0")
+            elif os.path.isfile(f):
+                try:
+                    with open(f, "rb") as fh:
+                        while c := fh.read(1 << 20):
+                            h.update(c)
+                except OSError:
+                    h.update(b"unreadable\0")
+    return h.hexdigest()
 
 
 def fresh_dir(path):

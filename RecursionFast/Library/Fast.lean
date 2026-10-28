@@ -192,7 +192,7 @@ theorem nodeStmtF_eq : nodeStmtF = nodeStmt := by
 
 /-- **`acc` with the fast hashes**: what the harness runs. -/
 def Submission.accF (S : Submission) (vk c : Digest) (p : Signed) : Bool :=
-  decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ S.qV) &&
+  decide (p.π.size < 2 ^ 64) && decide (p.tr.length ≤ S.qV) &&
     decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOkF vk (traceDigestF p.tr) p.σ &&
     decide ((S.V vk c p.π).runSeq p.tr = some true)
 

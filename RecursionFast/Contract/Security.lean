@@ -60,9 +60,10 @@ log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_ve
   `acceptAll_ks_above_logCap`). No conjunct excludes it here, by decision (review E-ks m-1):
   `Certificate`'s cap `qV ≤ 2^16 < logCap` does.
 * **The extractor is efficient (`Computes`, `Extractor.lean`) only for tapes of at most `2^64`
-  words, about `2^61` log entries** (V3-S2R-m2): on longer logs `E` is unconstrained and may be a
-  non-constructive choice (`Controls/Certificate.lean`, `choice_certificate`), so between about
-  `2^61` entries and `logCap` the bound is a soundness-type statement, not knowledge.
+  words, about `2^61` log entries, and proofs of at most 128 MiB** (V3-S2R-m2, V4-A11): beyond
+  that `E` is unconstrained and may be a non-constructive choice (`Controls/Certificate.lean`,
+  `choice_certificate`), so between about `2^61` entries and `logCap`, and for longer proofs, the
+  bound is a soundness-type statement, not knowledge.
 
 **The potential is a library route, not a rule (V4-A10).** A submitter proves `KS` by any
 correct argument. One route, v3's contract form, is a knowledge state (`Library/Security.lean`,

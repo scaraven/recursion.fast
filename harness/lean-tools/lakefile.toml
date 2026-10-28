@@ -1,7 +1,7 @@
 # The organiser's Lean harness tools (TRUSTED, Lean core only, no package dependency, so that
 # building them never touches a shared package tree): the environment-level gate, the axiom audit
 # of every organiser declaration (stage A's `scripts/AxiomAudit.lean`), the source rule's token
-# sweep (a test tool) and the compiled-Lean chain checker that calibrates T_V (V4-12). They load the environments they check at run time
+# sweep (a test tool) and the compiled-Lean chain checker that measures T_triv, so v_ref = T_triv / R (V4-12, V4-A11). They load the environments they check at run time
 # (`importModules` on the `LEAN_PATH` of the tree being checked).
 name = "rftools"
 defaultTargets = ["gate", "axiomaudit", "chaincheck"]

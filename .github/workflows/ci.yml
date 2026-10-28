@@ -129,10 +129,12 @@ jobs:
       - name: service
         working-directory: service
         run: timeout 300 cargo build --release
-      - name: sandbox tests (hostile prover)
+      - name: sandbox tests (hostile prover; the clock stops when the sandbox is dead, V4-A11 §5.1; R-M1)
         run: timeout 300 python3 tests/harness/test_sandbox.py
-      - name: T_V enforcement with the cap's statistic (RB-M1)
+      - name: the verifier term, the score, the draws and the fit (V4-A11 §3, §4, §11)
         run: timeout 60 python3 tests/harness/test_tv.py
+      - name: the stream's control flow, re-timing and truncation (V4-A11 §2, §5.3, §6, R-M2)
+        run: timeout 60 python3 tests/harness/test_stream.py
       - name: the aggregation requires every planned part (two jobs, single runs), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
         run: |
           timeout 60 python3 tests/harness/test_aggregate.py

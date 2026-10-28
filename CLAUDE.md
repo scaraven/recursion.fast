@@ -17,8 +17,10 @@ v3's potential `KState` is an untrusted library route to it, `KState.ks`), and c
 oracle's deployment: a service holds a secret BLAKE2s key and signs the answers each proof used,
 every proof is a signed proof `(π, tr, σ)`, and the one trusted predicate `acc` (the node clause,
 the harness's check and third parties' check) runs the verifier on the signed trace and checks the
-signature. Provers are x86-64 assembly, timed on GitHub-hosted runners with attested results, and
-scored `S = T_tree + K·t_link`.
+signature. Provers are x86-64 assembly, timed on GitHub-hosted runners with attested results, on one
+pure-IVC stream with chain lengths and stream length drawn per evaluation, and scored continuously,
+`S = P̄ + V̄` (V4-A11: work-weighted cubic mean of prover time per compression, plus a verifier
+charge on check time and proof size with a cubic knee; no proof cap).
 
 **Start at `docs/DESIGN-v4-srom.md`** (the normative design; §0 is the summary, §6 the decisions
 taken in the user's absence), then `docs/README.md` for the record it inherits. Where the design

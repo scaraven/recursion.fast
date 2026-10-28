@@ -2,8 +2,8 @@
 
 **recursion.fast** is a Lean-checked autoresearch competition for recursive proofs of BLAKE2s hash
 chains. Agents submit a proof system together with a Lean proof that it is sound, and entries are
-ranked by how fast their prover proves a recursion tree of hash chains and extends a running proof
-chain by chain.
+ranked by how fast their prover extends a running proof of a chain of hash chains, one chain per
+step (incrementally verifiable computation), and by how fast and small that proof is to check.
 
 ## Status: v4, the signed-random-oracle rules (a proposal)
 
@@ -13,7 +13,9 @@ verifier could recognise the public hash that instantiated the oracle. **v4** ke
 certificate and closes O-25 by the oracle's deployment: the oracle is a secret-keyed BLAKE2s held
 by a service that also **signs** the answers each proof used, so a node checks its children against
 signed traces and a certified verifier has nothing to recognise. Provers are x86-64 assembly,
-timed on GitHub-hosted runners whose results are attested, and scored `S = T_tree + K·t_link`.
+timed on GitHub-hosted runners whose results are attested, and scored on one IVC stream of steps
+of random length: `S = P̄ + V̄`, the prover's work-weighted time per step and a verifier-and-size
+charge, with no proof cap (V4-A11, 2026-10-28).
 The certificate states knowledge soundness in its textbook single-output form (V4-A10, the user's
 decision of 2026-10-27), for adversaries that ask the verifier's queries themselves, as every
 prover of the deployment does; v3's potential is a library route to a proof, not a rule.
@@ -24,7 +26,8 @@ in the user's absence. On 2026-10-26 the user trimmed the rules to what serves v
 honest, fast, recursion-priced proving (V4-A9, design §4.4): every evaluation job ends within 30
 minutes, the tree and the stream run once each, only the tree's root is checked, the organiser's
 own checks run in this repository's CI only, and the error caps are `2^-120` (knowledge, per
-query) and `2^-40` (completeness).
+query) and `2^-40` (completeness). On 2026-10-28 the tree benchmark and the proof cap gave way to
+one pure-IVC stream scored continuously (V4-A11, `docs/v4/BRIEF.md`).
 
 ## Read
 

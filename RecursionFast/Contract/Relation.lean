@@ -45,11 +45,8 @@ namespace RecursionFast
 /-- A 32-byte digest: a BLAKE2s-256 output, and the statement of the relation. -/
 abbrev Digest := Vector UInt8 32
 
-/-- A proof: any byte string (`acc` rejects one longer than `proofCap`). -/
+/-- A proof: any byte string (`acc` rejects one whose length does not fit a 64-bit word). -/
 abbrev Proof := ByteArray
-
-/-- The longest proof `acc` accepts: `2^20` bytes (1 MiB). -/
-def proofCap : ℕ := 2 ^ 20
 
 /-- The longest oracle query a signed trace may hold: `2^20` bytes (the service's own cap). -/
 def queryCap : ℕ := 2 ^ 20

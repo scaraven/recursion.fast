@@ -39,21 +39,32 @@ variable-length fields (traces of queries) every declared length would need such
 bounded by the output's length, and the decoder runs in time linear in it (C9; compiled, `take`,
 `drop` and `flatMap` are linear).
 
-**Domain (V3-S1-A11, V3-S2R-H-m3, A9).** Every statement, every proof of at most `proofCap`
-bytes and every log whose queries have fewer than `2^64` bytes each and whose tape the machine can
-address: at most `2^64` words, since the input is read at a 64-bit address. A length word is the
+**Domain (V3-S1-A11, V3-S2R-H-m3, A9, V4-A11).** Every statement, every proof of at most
+`8 · outCap` bytes (128 MiB, twice the deployment's 64 MiB cap on a signed file, so every proof
+the deployment carries) and every log whose queries have fewer than `2^64` bytes each and whose
+tape the machine can address: at most `2^64` words, since the input is read at a 64-bit address.
+`acc` accepts longer proofs (V4-A11 removed v4's `2^20`-byte cap, `Certificate.lean`); for them
+knowledge soundness still holds, but its extractor is not claimed efficient. The bound is the
+longest proof whose packed words fit the output cap, so the witness-sending extractor, which
+copies the proof, is within it, and it is closed under extraction: an output of at most `outCap`
+words denotes children of at most `8 · outCap` bytes (`Controls/Extractor.lean`,
+`child_in_domain`), so from a deployed proof every proof of the extraction tree is in the domain. A length word is the
 number's low 64 bits, so a query of `2^64` bytes or more would make the tape ambiguous (two logs
 with different answers, one tape). A log entry takes at least five words, so efficient extraction
 is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The
 program has at most `progCap = 2^20` statements.
 
-**Output cap (recomputed for v4).** `outCap = 2^24` words. A leaf witness takes 6 words; a node
-witness `9 + Σ` over its two children of `(1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 + ⌈|q|/8⌉)) + 597`.
-With both proofs at `proofCap` (`2^17` words each), `2^24 − 263,351` words remain for the two
-traces: for example `2^16` queries per child of up to 960 bytes each. An accepted trace has at
-most `qV ≤ 2^16` entries (`acc`, RA-M2), so this bounds what a node extractor must output for a
-verifier whose queries are that short. A node whose children's traces do not fit cannot be
-extracted, so its verifier is not certifiable (C-m11), which is the intended outcome.
+**Output cap (recomputed for V4-A11).** `outCap = 2^24` words (128 MiB). A leaf witness takes 6
+words; a node witness `9 + Σ` over its two children of `w = (1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 +
+⌈|q|/8⌉)) + 597` words. A child's signed file (`harness/FORMAT.md`) of `f` bytes with `m` entries
+has `8 · w ≤ f + 7 · (m + 1)` (only the padding of `π` and of each query to whole words differs),
+so with `m ≤ qV ≤ 2^16` a file within the deployment's cap of `2^26` bytes takes at most
+`2^23 + 57,344` words. Under the benchmark (V4-A11) a node's first child is the previous step's
+output, delivered within that cap, and its second the proof of a leaf: whatever the leaf proof's
+size up to `2^23 − 57,353` words (about 64 MiB), the node fits. Two children both within about
+`458,800` bytes of the file cap do not fit: there `outCap` binds before the file cap. A node whose
+children do not fit cannot be extracted, so its verifier is not certifiable (C-m11), which is the
+intended outcome: the entry's `V` bounds the children it accepts.
 
 **Budget (V3-S2R-A1, A8, O-21).** `B t` charges `2^16` steps per input word and a fixed
 `2^48`. The fixed term covers a quasi-linear Reed–Solomon decoder of the word a node extractor must
@@ -170,11 +181,11 @@ def outCap : ℕ := 2 ^ 24
 def progCap : ℕ := 2 ^ 20
 
 /-- **The program computes the extractor `E` within `fuel`**: on every statement, every proof of
-at most `proofCap` bytes and every log of queries under `2^64` bytes whose tape has at most `2^64`
-words, the program halts within `fuel t` steps, `t` the tape's length, with at most `outCap`
-words, and they denote `E`'s result. -/
+at most `8 · outCap` bytes and every log of queries under `2^64` bytes whose tape has at most
+`2^64` words, the program halts within `fuel t` steps, `t` the tape's length, with at most
+`outCap` words, and they denote `E`'s result. -/
 def Computes (p : XProg) (E : Digest → Proof → Log → Option Wit) (fuel : ℕ → ℕ) : Prop :=
-  ∀ c (π : Proof) (L : Log), π.size ≤ proofCap → (∀ e ∈ L, e.1.size < 2 ^ 64) →
+  ∀ c (π : Proof) (L : Log), π.size ≤ 8 * outCap → (∀ e ∈ L, e.1.size < 2 ^ 64) →
     (extractorInput c π L).length ≤ 2 ^ 64 →
     ∃ o, p.run (extractorInput c π L) (fuel (extractorInput c π L).length) = some o ∧
       o.length ≤ outCap ∧ decodeWit o = E c π L

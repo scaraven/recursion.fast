@@ -109,22 +109,23 @@ class Badge:
 
 # ---- canaries -------------------------------------------------------------------------------------
 
-def canaries(stmt: bytes, sibling: bytes = None):
-    """The statement canaries (C15, v3 §8.3 step 7) of a proof accepted for `stmt`: the statements it
-    must be rejected for, as (name, statement): `stmt` with its first bit flipped, and the statement
-    of its sibling in the tree it belongs to, if there is one."""
+def canaries(stmt: bytes, others=()):
+    """The statement canaries (C15, v3 §8.3 step 7; V4-A11) of a proof accepted for `stmt`: the
+    statements it must be rejected for, as (name, statement): `stmt` with its first bit flipped, and
+    each (name, statement) of `others` that differs from `stmt` (in the stream: the statement of the
+    leaf the next step adds, `next-leaf`, and the step's first child, `first-child`)."""
     flip = bytearray(stmt)
     flip[0] ^= 1
     out = [("stmt-bit", bytes(flip))]
-    if sibling is not None and sibling != stmt:
-        out.append(("swapped-child", sibling))
+    out += [(name, c) for name, c in others if c is not None and c != stmt]
     return out
 
 
-def dos_inputs(root_file: bytes, count: int, rnd: random.Random):
+def dos_inputs(root_file: bytes, count: int, rnd: random.SystemRandom):
     """`count` random and mutated signed proofs for the DoS column, in turn: random bytes; random
-    `π` with the root's trace and signature; the root's `π` with 1–8 bits flipped; the root's file
-    with 1–8 bits flipped, cut to a random prefix in 30% of cases (no input extends the file)."""
+    `π` with the target's trace and signature; the target's `π` with 1–8 bits flipped; the target's
+    file with 1–8 bits flipped, cut to a random prefix in 30% of cases (no input extends the file).
+    The target is the stream's last output `π_M` (V4-A11); `rnd` draws from the OS CSPRNG."""
     s = signed.parse(root_file)
     out = []
     for k in range(count):

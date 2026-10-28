@@ -27,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       pr: { description: "pull request number", required: true }
-      split: { description: "the tree and the stream in two parallel jobs (needed for the season shape: 30 min per job)", type: boolean, default: true }
+      split: { description: "kept for compatibility; since V4-A11 the benchmark is one job either way", type: boolean, default: true }
 permissions: {}
 
 # Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
@@ -111,7 +111,8 @@ jobs:
           s = r.get("score") or {}
           num = lambda k: f"{float(s[k]):.4f}" if isinstance(s.get(k), (int, float)) else "—"
           lines = [f"**Verdict: {v}** ([run]({os.environ['RUN']}); attested result artifact `result`)", "",
-                   f"S = {num('S')} s, T_tree = {num('T_tree')} s, t_link = {num('t_link')} s, K = {num('K')}",
+                   f"S = {num('S')} s (P̄ = {num('P_bar')} s, V̄ = {num('V_bar')} s), M = {s.get('M', '—')}, "
+                   f"c_P = {num('c_P')}" + (" — TRUNCATED, not ranked" if s.get("truncated") else ""),
                    f"CPU: {', '.join(str(m)[:80] for m in r.get('cpu_models', []))}"]
           for reason in r.get("reasons", [])[:5]:
               lines.append("- " + str(reason)[:300].replace("@", "@​"))

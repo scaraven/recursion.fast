@@ -4,7 +4,8 @@
 implemented on the branch `v4/srom-rules`**, not yet adopted by the user: v3's certificate kept,
 O-25 closed by the oracle's deployment (a secret-keyed BLAKE2s service that signs the answers each
 proof used, checked by one trusted predicate `acc`), x86-64 assembly provers timed on GitHub-hosted
-runners with attested results, and the score `S = T_tree + K·t_link`. Its normative design is
+runners with attested results, and (since V4-A11, 2026-10-28) one pure-IVC stream scored
+`S = P̄ + V̄` with no proof cap (the score was `S = T_tree + K·t_link` before). Its normative design is
 [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md); its build record (the brief, the design attack, the stage
 results) is under [`v4/`](v4/). On 2026-10-26 the user trimmed it (V4-A9, design §4.4: 30-minute
 jobs, one run each of the tree and the stream, the organiser's checks in the core CI only,

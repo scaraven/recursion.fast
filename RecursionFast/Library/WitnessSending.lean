@@ -14,7 +14,7 @@
   * **Verifier (strict, #10, V3-S2R-A5).** `check vk c π`: `π` is the canonical encoding of a leaf
     witness of at most `chainCap` steps (checked before the hash) whose chain ends at the
     statement's chain end, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
-    children `acc vk` accepts: each child's proof within `proofCap`, its trace within `qV = 0`
+    children `acc vk` accepts: each child's proof length within a word, its trace within `qV = 0`
     entries (RA-M2) and its queries within `queryCap`, its signature valid on its trace's digest,
     and, since this verifier asks no query, its trace **empty** (exact consumption, V4-A3) and its
     proof accepted by `check`, recursively. Canonical encodings for leaves and nodes make it
@@ -22,12 +22,18 @@
     twins and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the
     specification functions. `V vk c π := ret (check vk c π)`: no query, `qV = 0`.
   * **Prover.** `P vk c w := ret (encode w)`. Every witness of the relation fits the format
-    (`fits_of_rel`: `acc` bounds the proof, empties the trace, and `SigOk` fixes the signature's
-    counts), so perfect completeness needs no normalisation (`complete_perfect`); the
-    certificate's completeness is at `δ = 0` through `complete_withError_zero`, for every key.
+    (`fits_of_rel`: `acc` keeps each child's proof length within a word, empties the trace, and
+    `SigOk` fixes the signature's counts), so perfect completeness needs no normalisation
+    (`complete_perfect`); the certificate's completeness is at `δ = 0` through
+    `complete_withError_zero`, for every key. Since V4-A11 the relation's witnesses are unbounded
+    below the word: a node proof is longer than its children, so the verifier accepts proofs of
+    every size up to about `2^65` bytes (`Controls/Relation.lean`, `deep_accepted`), and the
+    prover copies whatever it is given.
   * **Extractor.** `E c π L := decode π` (no key, V4-6), and the program `ext` (5 memory words,
     21 statements, v3's unchanged) copies the proof's packed words from the input tape to the
-    output, 8 steps per word (`computes`).
+    output, 8 steps per word (`computes`), on the contract's domain of proofs up to `8 · outCap`
+    bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
+    `ws_output_beyond_domain`).
   * **Security.** `KS` at `ε = 0`, `qV = 0` (`ks`), through the potential `μ := 0` (`kstate`,
     `KState.zero`) and the bridge `KState.ks` (`Library/PaperTheorem.lean`): an accepted proof
     decodes to a witness of the relation by the definition of `check` (`check_sound`), on every
@@ -91,9 +97,9 @@ theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
 
 /-- **The strict witness-sending decision** under the key `vk`: `π` is the canonical encoding of
 a leaf witness of `c` (its length within `chainCap`, checked before any hash), or of a node
-witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof,
-trace length (`qV = 0`) and queries capped, signature valid, trace empty, proof accepted
-recursively). -/
+witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof
+length within a word, trace length (`qV = 0`) and queries capped, signature valid, trace empty,
+proof accepted recursively). -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decodeF π with
   | some (.leaf s n) =>
@@ -102,10 +108,10 @@ def check (vk c : Digest) (π : Proof) : Bool :=
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encodeF (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmtF c₁ c₂) &&
-        (decide (p₁.π.size ≤ proofCap) && decide (p₁.tr.length ≤ 0) &&
+        (decide (p₁.π.size < 2 ^ 64) && decide (p₁.tr.length ≤ 0) &&
           decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
           SigOkF vk (traceDigestF p₁.tr) p₁.σ && (p₁.tr.isEmpty && check vk c₁ p₁.π)) &&
-        (decide (p₂.π.size ≤ proofCap) && decide (p₂.tr.length ≤ 0) &&
+        (decide (p₂.π.size < 2 ^ 64) && decide (p₂.tr.length ≤ 0) &&
           decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
           SigOkF vk (traceDigestF p₂.tr) p₂.σ && (p₂.tr.isEmpty && check vk c₂ p₂.π))
     else false
@@ -159,7 +165,7 @@ theorem runSeq_ret_eq (b : Bool) (tr : Trace) :
 
 /-- **What `acc` of this submission decides.** -/
 theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
-    (decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ 0) &&
+    (decide (p.π.size < 2 ^ 64) && decide (p.tr.length ≤ 0) &&
       decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
       (p.tr.isEmpty && check vk c p.π)) :=
   congrArg (_ && ·) (runSeq_ret_eq _ _)
@@ -204,13 +210,13 @@ theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
     ∃ w, decode π = some w ∧ Rel (submission.acc vk) c w :=
   (exists_of_check h).imp fun _ h => ⟨h.1, h.2.2⟩
 
-/-- An accepted child fits the output format: `acc` caps its proof, empties its trace, and
-`SigOk` fixes its signature's counts. -/
+/-- An accepted child fits the output format: `acc` keeps its proof's length within a word,
+empties its trace, and `SigOk` fixes its signature's counts. -/
 theorem fits_of_acc {vk c : Digest} {p : Signed} (h : submission.acc vk c p = true) :
     p.Fits := by
   simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff, SigOk] at h
   obtain ⟨⟨⟨⟨hπ, -⟩, -⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, htr, -⟩ := h
-  exact ⟨hπ.trans_lt (by decide), by simp [htr], by simp [htr], hi.trans (by decide), ho, hp⟩
+  exact ⟨hπ, by simp [htr], by simp [htr], hi.trans (by decide), ho, hp⟩
 
 /-- Every witness of the relation fits the output format. -/
 theorem fits_of_rel {vk c : Digest} {w : Wit} (h : Rel (submission.acc vk) c w) : w.Fits := by
@@ -307,10 +313,9 @@ theorem extractorInput_eq (c : Digest) (π : Proof) (L : Log) :
     List.nil_append]
 
 /-- The set-up block's result is the loop's initial memory. -/
-theorem pre_mem {s : ℕ} (hs : s ≤ proofCap) :
+theorem pre_mem {s : ℕ} (hs : s < 2 ^ 60) :
     (#[5, (toWord s + 7) >>> 3 + 5, if (5 : Word) < (toWord s + 7) >>> 3 + 5 then 1 else 0, 3, 1] :
       Array Word) = st ((s + 7) / 8) 0 3 := by
-  unfold proofCap at hs
   have he : (toWord s + 7) >>> 3 + 5 = toWord ((s + 7) / 8 + 5) := by
     apply BitVec.eq_of_toNat_eq
     have h7 : (7 : Word).toNat = 7 := rfl
@@ -324,8 +329,8 @@ theorem pre_mem {s : ℕ} (hs : s ≤ proofCap) :
   rfl
 
 /-- **The program on a proof's tape**: it outputs the proof's packed words, within `8 · t`
-steps. -/
-theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ proofCap) :
+steps (for every proof below `2^60` bytes, the contract's domain and beyond). -/
+theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size < 2 ^ 60) :
     ext.run (extractorInput c π L) (fuel (extractorInput c π L).length) =
       some (packBytes π.data.toList) := by
   set t := extractorInput c π L with ht
@@ -343,7 +348,7 @@ theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ proofCap)
   set m := (π.size + 7) / 8
   rw [show 8 * t.length - 5 = ((8 * t.length - 5 - 8 * m - 21) + 8 * m + 1 + 19) + 1 by omega,
     exec_seq, pre_exec, getD_toArray, g4, pre_mem hπ,
-    loop_exec _ (by unfold proofCap at hπ; omega) m 0 3 #[] _ (by omega)]
+    loop_exec _ (by omega) m 0 3 #[] _ (by omega)]
   congr 1
   refine List.ext_getElem (by simp [hm, m]) fun j _ h2 => ?_
   simp only [List.nil_append, List.getElem_map, List.getElem_range]
@@ -354,9 +359,10 @@ theorem ext_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ proofCap)
 /-- **The program computes the extractor** within `8 · t` steps on every input. -/
 theorem computes : Computes submission.ext submission.E submission.fuel := by
   intro c π L hπ _ _
-  refine ⟨packBytes π.data.toList, ext_run c π L hπ, ?_, rfl⟩
+  unfold outCap at hπ
+  refine ⟨packBytes π.data.toList, ext_run c π L (by omega), ?_, rfl⟩
   rw [packBytes_length, ← size_eq_length]
-  unfold outCap proofCap at *
+  unfold outCap
   omega
 
 /-- **The witness-sending submission is certified**, for every public key. -/

@@ -6,7 +6,8 @@ import struct
 import wots_ref as W
 import signed
 
-CHAIN_CAP, PROOF_CAP, QUERY_CAP = 1 << 20, 1 << 20, 1 << 20
+CHAIN_CAP, QUERY_CAP = 1 << 20, 1 << 20
+WORD = 1 << 64          # V4-A11: no proof cap; |π| must fit a word
 
 
 def H(b):
@@ -92,7 +93,7 @@ def acc(vk, c, data):
 
 
 def acc_signed(vk, c, s):
-    if s is None or len(s.pi) > PROOF_CAP or any(len(q) > QUERY_CAP for q, _ in s.trace):
+    if s is None or len(s.pi) >= WORD or any(len(q) > QUERY_CAP for q, _ in s.trace):
         return False
     if not W.sig_ok(vk, W.trace_digest(s.trace), s.idx, s.ots, s.path):
         return False

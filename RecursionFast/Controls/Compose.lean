@@ -137,12 +137,12 @@ theorem acc_nodeSigned (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : �
     submission.acc (Signer.pk sk)
       (nodeStmt (leafStmt (chainEnd s₁ n) n) (leafStmt (chainEnd s₂ n) n))
       (nodeSigned sk s₁ s₂ n) = true := by
-  have hsize : (encode (nodeWit sk s₁ s₂ n)).size ≤ proofCap := by
+  have hsize : (encode (nodeWit sk s₁ s₂ n)).size < 2 ^ 64 := by
     rw [size_encode]
     simp [witWords, signedWords, bytesWords, logWords, packBytes_length, sigWords_sign_length,
-      leafSigned, size_encode_leaf, proofCap]
-  rw [acc_eq]
-  simp [nodeSigned, hsize, Signer.sigOk_sign sk 2 (by decide),
+      leafSigned, size_encode_leaf]
+  rw [acc_eq, nodeSigned, decide_eq_true hsize]
+  simp [Signer.sigOk_sign sk 2 (by decide),
     check_encode (Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn)]
 
 /-- The same acceptance, stated at the tree's root digest. -/

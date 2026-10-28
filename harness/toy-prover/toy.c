@@ -4,13 +4,14 @@
  * It proves with the library's witness-sending argument: the proof `π` is the witness itself in the
  * encoding of the Lean library (WS_* below), the verifier makes no oracle query, so every trace is
  * empty and every proof is signed by one `SIGN` request with no items (service/PROTOCOL.md).
- * It computes the public BLAKE2s chains and statements itself, to name the children of a node.
+ * It computes the public BLAKE2s chains and statements itself, to name the children of a node. Its
+ * proofs grow with every step (a node carries its children whole): it is a correct, slow entry.
  *
  *   prover setup DIR      nothing to set up
- *   prover tree DIR       DIR/leaves.json, DIR/vk.hex -> DIR/root.bin (and DIR/proofs/L<i>.bin, N<l>_<j>.bin,
- *                         which the runner ignores since V4-A9)
- *   prover leaf DIR       ready/go handshake; DIR/leaf.json -> DIR/proof.bin
- *   prover node DIR       ready/go handshake; DIR/child{1,2}.{stmt,bin} -> DIR/proof.bin
+ *   prover first DIR      ready/go handshake; DIR/chainA.json, DIR/chainB.json -> DIR/proof.bin, a signed
+ *                         proof of nodeStmt (leaf A) (leaf B) (V4-A11 §2)
+ *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/chain.json -> DIR/proof.bin,
+ *                         a signed proof of nodeStmt prev (leaf)
  *
  * Built with -DBROKEN_CHAIN (proves a chain from a changed start), -DBROKEN_UNSIGNED (no SIGN, a
  * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
@@ -227,45 +228,30 @@ static void over_cap(void) {
 }
 #endif
 
-static int mode_tree(void) {
+/* A chain file {"n": N, "start": "HEX"}: its leaf's signed proof and statement. */
+static buf prove_chain_file(const char *path, uint8_t c[32]) {
+    buf j = readfile(path); app(&j, "", 1);
+    char *p = strstr((char *)j.p, "\"n\":"), *q = strstr((char *)j.p, "\"start\":");
+    if (!p || !q) die(path);
+    uint8_t s[32];
+    q = strchr(q + 8, '"'); if (!q || unhex(s, q + 1, 32)) die(path);
+    buf f = prove_leaf(s, strtoull(p + 4, NULL, 10), c);
+    free(j.p); return f;
+}
+
+static int mode_first(void) {
+    handshake();
 #ifdef BROKEN_CAP
     over_cap();
 #endif
 #ifdef BROKEN_OOM
     for (;;) { char *p = malloc(1 << 26); if (!p) die("malloc"); memset(p, 1, 1 << 26); }
 #endif
-    buf j = readfile("leaves.json");
-    app(&j, "", 1);
-    char *p = strstr((char *)j.p, "\"n\":"); if (!p) die("leaves.json: n");
-    uint64_t n = strtoull(p + 4, NULL, 10);
-    p = strstr((char *)j.p, "\"starts\":"); if (!p) die("leaves.json: starts");
-    size_t cnt = 0, cap = 16; uint8_t (*s)[32] = malloc(cap * 32);
-    for (char *q = strchr(p + 9, '"'); q; q = strchr(q + 66, '"')) {   /* every later string is a start */
-        if (strlen(q) < 66 || q[65] != '"') die("leaves.json: start length");
-        if (cnt == cap) s = realloc(s, (cap *= 2) * 32);
-        if (unhex(s[cnt], q + 1, 32)) die("leaves.json: start");
-        cnt++;
-    }
-    mkdir("proofs", 0755);
-    uint8_t (*c)[32] = malloc(cnt * 32);
-    buf *f = malloc(cnt * sizeof(buf));
-    char name[64];
-    for (size_t i = 0; i < cnt; i++) {
-        f[i] = prove_leaf(s[i], n, c[i]);
-        snprintf(name, sizeof name, "proofs/L%zu.bin", i); writefile(name, f[i]);
-    }
-    for (int l = 1; cnt > 1; l++) {
-        for (size_t k = 0; k < cnt / 2; k++) {
-            uint8_t cc[32]; node_stmt(cc, c[2*k], c[2*k+1]);
-            buf pi = ws_node(c[2*k], c[2*k+1], f[2*k], f[2*k+1]);
-            buf nf = signed_file(pi);
-            free(pi.p); free(f[2*k].p); free(f[2*k+1].p);
-            memcpy(c[k], cc, 32); f[k] = nf;
-            snprintf(name, sizeof name, "proofs/N%d_%zu.bin", l, k); writefile(name, nf);
-        }
-        cnt /= 2;
-    }
-    writefile("root.bin", f[0]);
+    uint8_t ca[32], cb[32];
+    buf fa = prove_chain_file("chainA.json", ca), fb = prove_chain_file("chainB.json", cb);
+    buf pi = ws_node(ca, cb, fa, fb);
+    writefile("proof.bin", signed_file(pi));
+    printf("done\n"); fflush(stdout);
     return 0;
 }
 
@@ -276,26 +262,15 @@ static void read_stmt(uint8_t c[32], const char *path) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) die("usage: prover setup|tree|leaf|node DIR");
+    if (argc != 3) die("usage: prover setup|first|step DIR");
     if (chdir(argv[2])) die("cannot enter DIR");
     if (!strcmp(argv[1], "setup")) return 0;
-    if (!strcmp(argv[1], "tree")) return mode_tree();
-    if (!strcmp(argv[1], "leaf")) {
-        handshake();
-        buf j = readfile("leaf.json"); app(&j, "", 1);
-        char *p = strstr((char *)j.p, "\"n\":"), *q = strstr((char *)j.p, "\"start\":");
-        if (!p || !q) die("leaf.json");
-        uint8_t s[32], c[32];
-        q = strchr(q + 8, '"'); if (!q || unhex(s, q + 1, 32)) die("leaf.json: start");
-        writefile("proof.bin", prove_leaf(s, strtoull(p + 4, NULL, 10), c));
-        printf("done\n"); fflush(stdout);
-        return 0;
-    }
-    if (!strcmp(argv[1], "node")) {
+    if (!strcmp(argv[1], "first")) return mode_first();
+    if (!strcmp(argv[1], "step")) {
         handshake();
         uint8_t c1[32], c2[32];
-        read_stmt(c1, "child1.stmt"); read_stmt(c2, "child2.stmt");
-        buf f1 = readfile("child1.bin"), f2 = readfile("child2.bin");
+        read_stmt(c1, "prev.stmt");
+        buf f1 = readfile("prev.bin"), f2 = prove_chain_file("chain.json", c2);
         buf pi = ws_node(c1, c2, f1, f2);
         writefile("proof.bin", signed_file(pi));
         printf("done\n"); fflush(stdout);

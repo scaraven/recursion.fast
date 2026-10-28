@@ -61,10 +61,10 @@ def check (vk c : Digest) (π : Proof) : Bool :=
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encode (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmt c₁ c₂) &&
-        (decide (p₁.π.size ≤ proofCap) && decide (p₁.tr.length ≤ 1) &&
+        (decide (p₁.π.size < 2 ^ 64) && decide (p₁.tr.length ≤ 1) &&
           decide (∀ e ∈ p₁.tr, e.1.size ≤ queryCap) &&
           SigOk vk (traceDigest p₁.tr) p₁.σ && onTrace p₁.tr c₁ p₁.π (check vk c₁ p₁.π)) &&
-        (decide (p₂.π.size ≤ proofCap) && decide (p₂.tr.length ≤ 1) &&
+        (decide (p₂.π.size < 2 ^ 64) && decide (p₂.tr.length ≤ 1) &&
           decide (∀ e ∈ p₂.tr, e.1.size ≤ queryCap) &&
           SigOk vk (traceDigest p₂.tr) p₂.σ && onTrace p₂.tr c₂ p₂.π (check vk c₂ p₂.π))
     else false
@@ -97,7 +97,7 @@ theorem runSeq_V (vk c : Digest) (π : Proof) (tr : Trace) :
   all_goals by_cases hq : q = q0 <;> simp [V, OProg.runSeq, onTrace, hq]
 
 theorem acc_eq (vk c : Digest) (p : Signed) : S.acc vk c p =
-    (decide (p.π.size ≤ proofCap) && decide (p.tr.length ≤ 1) &&
+    (decide (p.π.size < 2 ^ 64) && decide (p.tr.length ≤ 1) &&
       decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&
       onTrace p.tr c p.π (check vk c p.π)) :=
   congrArg (_ && ·) (runSeq_V vk c p.π p.tr)
@@ -152,7 +152,7 @@ theorem fits_of_rel {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) : w.Fits
     intro c' p h
     simp only [acc_eq, Bool.and_eq_true, decide_eq_true_eq, SigOk] at h
     obtain ⟨⟨⟨⟨hπ, hl⟩, hq⟩, ⟨⟨hi, ho⟩, hp⟩, -⟩, -⟩ := h
-    exact ⟨hπ.trans_lt (by decide), by omega, fun e he => (hq e he).trans_lt (by decide),
+    exact ⟨hπ, by omega, fun e he => (hq e he).trans_lt (by decide),
       hi.trans (by decide), ho, hp⟩
   cases w with
   | leaf s n => exact hR.1.trans_lt (by decide)
@@ -213,7 +213,7 @@ theorem magic_needs_trigger (vk c : Digest) (tr : Trace) (σ : Sig) :
     · cases ht
   · rintro ⟨rfl, hs⟩
     have h1 : (magic c).size = 32 := c.size_toArray
-    simp [onTrace, hs, h1, show q0.size = 0 from rfl, proofCap, queryCap]
+    simp [onTrace, hs, h1, show q0.size = 0 from rfl, queryCap]
 
 /-- **The known model gap (O-25), closed by the deployment in v4**: certified, and under every
 key `acc` accepts the 32-byte magic proof of every statement on a validly signed trace that

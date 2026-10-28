@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: r = 2, n = 16, M = 4).
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of 4 to 8 steps, chains of 16 to 128).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
   python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
@@ -9,17 +9,18 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    the toy prover (`harness/toy-prover/honest/prover.s`, C compiled to x86-64 assembly) goes
    through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
    certified;
-1. `evaluate.py bench` of that entry through every part (calibration, the tree run, its root's
-   statement canary, DoS, the stream run, its statement canaries, score) with the compiled `accF`
-   badge: verdict ACCEPT; then the organiser's canaries (`tests/harness/canaries.py`: the file
-   parser, the trace digest and the signature check, core CI only, V4-A9) on the honest root and
-   a stream leaf through the same badge: the files accepted, every mutation rejected;
+1. `evaluate.py bench` of that entry through every part (the calibration, the stream with its
+   interleaved samples, its statement canaries on π_1, π_2 and π_M and its re-timing, the DoS column
+   on π_M, the score) with the compiled `accF` badge: verdict ACCEPT; then the organiser's canaries
+   (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
+   only, V4-A9) on the first and the last step's outputs through the same badge: the files
+   accepted, every mutation rejected;
 2. five deliberately broken provers, built from the same C source with one option each, through
-   the T run with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
+   the stream with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
-   compiled into the binary): each REJECT, the root rejected by `acc`; a query above the service's
-   cap (`BROKEN_CAP`): REJECT naming the service's refusal (Q13); unbounded allocation under a
-   256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory (Q14);
+   compiled into the binary): each REJECT, the first step's output rejected by `acc`; a query above
+   the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal (Q13); unbounded allocation
+   under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory (Q14);
 3. the same entry with `certified := sorry`: PROVISIONAL (V4-15), not comparable;
 4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built;
 5. the entry's module that `Solution` does not import is never built (Q7), and a Lean-kernel run
@@ -109,15 +110,17 @@ def ws_entry(tmp, name, prover_s, solution_patch=None):
 
 
 def organiser_check(badge_dir, work, r):
-    """The organiser's canaries (V4-A9: core CI only) on the honest run's root and first stream leaf,
-    through the entry's compiled badge: (number of mutations, the answers that were wrong); each file
-    must be accepted and each mutation rejected."""
+    """The organiser's canaries (V4-A9: core CI only) on the honest run's first and last stream
+    outputs, through the entry's compiled badge: (number of mutations, the answers that were wrong);
+    each file must be accepted and each mutation rejected."""
     store = os.path.join(work, "store")
     os.makedirs(os.path.join(store, "organiser-canaries"))
     badge = Badge(badge_dir, "4G", 60, os.path.join(work, "organiser-canaries-scratch"))
     os.makedirs(badge.scratch)
-    targets = [(bytes.fromhex(r["tree"]["vk"]), bytes.fromhex(r["instance"]["root"]), r["tree"]["root_file"]),
-               (bytes.fromhex(r["stream"]["vk"]), bytes.fromhex(r["stream"]["leaf_digests"][0]), "stream/leaf0.bin")]
+    st = r["stream"]
+    vk = bytes.fromhex(st["vk"])
+    targets = [(vk, bytes.fromhex(st["statements"][0]), st["steps"][0]["file"]),
+               (vk, bytes.fromhex(st["last_stmt"]), st["last_file"])]
     items, want = [], []
     for vk, c, rel in targets:
         items.append((vk, c, rel))
@@ -165,11 +168,11 @@ def main():
                       (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
                        ("BROKEN_CAP", None), ("BROKEN_OOM", None))]
     # what each broken prover's rejection must say
-    expect = {"BROKEN_CHAIN": "root rejected by acc", "BROKEN_UNSIGNED": "root rejected by acc",
-              "BROKEN_STALE": "root rejected by acc",
+    expect = {"BROKEN_CHAIN": "step 1 rejected by acc", "BROKEN_UNSIGNED": "step 1 rejected by acc",
+              "BROKEN_STALE": "step 1 rejected by acc",
               "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # Q13
               # Q14; under the prlimit fallback an allocation fails instead and the prover exits 1
-              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "prover tree exit 1"}
+              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "step1: exit 1"}
     lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
     open(lowmem, "w").write(open(os.path.join(ROOT, "harness", "smoke.toml")).read().replace('prover = "11G"', 'prover = "256M"'))
     season_of = lambda flag: lowmem if flag == "BROKEN_OOM" else os.path.join(ROOT, "harness", "smoke.toml")  # noqa: E731
@@ -188,7 +191,7 @@ def main():
         results = {"honest": r}
         for flag, e in broken_entries:
             results[flag] = run_bench(e, badge, os.path.join(tmp, f"work-{flag}"), os.path.join(tmp, f"result-{flag}.json"),
-                                      "calibrate,tree", season_of(flag))
+                                      "calibrate,stream", season_of(flag))
     else:
         if not a.org:
             raise SystemExit("smoke: --org ORG or --mock")
@@ -220,15 +223,15 @@ def main():
             results["honest"] = r
             def organiser():
                 n, wrong = organiser_check(cj["badge_dir"], os.path.join(tmp, "work-honest"), r)
-                check(n > 0 and not wrong, f"organiser canaries (core CI only): {n} mutations of the root and a stream "
-                                           f"leaf rejected, both files accepted; wrong answers: {wrong}")
+                check(n > 0 and not wrong, f"organiser canaries (core CI only): {n} mutations of π_1 and π_M "
+                                           f"rejected, both files accepted; wrong answers: {wrong}")
             if r.get("verdict") == "ACCEPT":
                 step("organiser canaries", organiser)
             for flag, e in broken_entries:
                 out = os.path.join(tmp, f"result-{flag}.json")
                 step(flag, lambda e=e, flag=flag, out=out: evaluate(
                     "bench", "--entry", e, "--cert", cert, "--work", os.path.join(tmp, f"work-{flag}"), "--out", out,
-                    "--season", season_of(flag), "--parts", "calibrate,tree"))
+                    "--season", season_of(flag), "--parts", "calibrate,stream"))
                 results[flag] = load(out)
         else:
             check(False, f"the benchmarks need a certified entry; skipped (certificate {cj.get('status')})")
@@ -251,7 +254,7 @@ def main():
                 "theorem certified : CertificateR declared submission :=\n", "theorem certified : CertificateR declared submission := by\n  sorry\n\nexample : CertificateR declared submission :=\n")])
             pc = os.path.join(tmp, "cert-provisional.json")
             evaluate("all", "--entry", pe, "--org", a.org, "--work", os.path.join(tmp, "provisional"), "--out", pc,
-                     "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,tree")
+                     "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--parts", "calibrate,stream")
             pr = load(pc)
             check(pr.get("verdict") == "PROVISIONAL" and pr.get("comparable") is False,
                   f"an open certificate is PROVISIONAL and not comparable: {pr.get('verdict')} "
@@ -285,11 +288,19 @@ def main():
               f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')} (RF-M1)")
     step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
-        sc = r["score"]
-        check(all(k in sc for k in ("T_tree", "t_leaf", "t_merge", "t_link", "S")), f"score components: {sc}")
-        check(r["tree"]["canaries"] > 0 and r["stream"]["canaries"] > 0,
-              f"statement canaries rejected: tree {r['tree']['canaries']}, stream {r['stream']['canaries']}")
-        check(r["dos"]["proofs"] > 0, f"DoS column: {r['dos']}")
+        sc, st = r["score"], r["stream"]
+        check(all(k in sc for k in ("S", "P_bar", "V_bar", "c_P", "v_ref_ns", "M", "marginal", "fit")) and sc["M"] == st["M"]
+              and 4 <= st["M_drawn"] <= 8 and not st["truncated"],
+              f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, V̄ {sc.get('V_bar')}, M {sc.get('M')} of {st.get('M_drawn')}")
+        check(all(16 <= n <= 128 for n in st["lengths"]) and len(st["lengths"]) == st["M_drawn"] + 1,
+              f"chain lengths drawn per step: {st['lengths']}")
+        check(all(all(k in s for k in ("P_s", "V_ns", "V_runs_ns", "pi_bytes", "x", "startup_s", "kill_s")) for s in st["steps"]),
+              f"every step records P, V (both runs), |π|, x, start-up and kill latency: {sorted(st['steps'][0])}")
+        check(st["canaries"] >= 4, f"statement canaries on π_1, π_2, π_M rejected: {st['canaries']}")
+        check("retime" in st and len(st["calibration"]["samples"]) >= 2,
+              f"re-timing ran ({st.get('retime', {}).get('rerun')}) and calibration was sampled "
+              f"{len(st['calibration']['samples'])} times")
+        check(r["dos"]["proofs"] > 0 and r["dos"]["target"] == st["last_file"], f"DoS column on π_M: {r['dos']}")
     for flag, _ in broken_entries:
         rb = results.get(flag, {})
         why = " ".join(rb.get("reasons", []))

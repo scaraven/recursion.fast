@@ -49,11 +49,13 @@ def _leaf_digest(arg):
     return leaf_stmt(chain_end(s, n), n)
 
 
-def leaf_digests(starts, n: int, workers: int = 0):
-    """`leafStmt (chainEnd s n) n` for every start, on `workers` processes (default: all CPUs)."""
-    jobs = [(s, n) for s in starts]
+def leaf_digests(starts, n, workers: int = 0):
+    """`leafStmt (chainEnd s n) n` for every start, on `workers` processes (default: all CPUs); `n`
+    is one length for every start or a list of lengths, one per start."""
+    ns = list(n) if isinstance(n, (list, tuple)) else [n] * len(starts)
+    jobs = list(zip(starts, ns))
     workers = workers or os.cpu_count() or 1
-    if workers == 1 or len(jobs) * n < 1 << 16:
+    if workers == 1 or sum(ns) < 1 << 16:
         return [_leaf_digest(j) for j in jobs]
     with ProcessPoolExecutor(max_workers=min(workers, len(jobs)), mp_context=multiprocessing.get_context("fork")) as ex:
         return list(ex.map(_leaf_digest, jobs))

@@ -338,7 +338,7 @@ theorem scan_computes : Computes scan findE fun t => 16 * t := by
         packBytes π.data.toList) ++ toWord L.length :: L.flatMap ew by simp,
       show m + 5 = (packBytes c.toList ++ [toWord π.size] ++ packBytes π.data.toList).length by
         simp [h4, hm]; omega, getD_append_length]
-  have hπc : π.size + 13 < 2 ^ 64 := by unfold proofCap at hπ; omega
+  have hπc : π.size + 13 < 2 ^ 64 := by unfold outCap at hπ; omega
   have hrun := scan_loop c T ht L _ 0 (toWord m) 0 0 #[]
     (16 * T.length - 16 - 42 - 50 * L.length - 9) hA hq (by omega)
   rw [hAl] at hrun

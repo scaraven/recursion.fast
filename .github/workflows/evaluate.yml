@@ -15,15 +15,10 @@
 #   certificate  source rule, the one Lean build, comparator (Lean kernel; nanoda if `nanoda`), gate,
 #                badge build; deterministic; untrusted code runs only inside the sandbox
 #   benchmark    the GitHub-hosted runner: prover build, setup, the runs, the checks, the score;
-#                untrusted code runs only inside the sandbox. With `split` (the default) it is two
-#                parallel jobs, the tree job (calibration, the tree run, the DoS column) and the
-#                stream job (calibration, the stream run); one run of each, no repeats. Each job
-#                builds the prover, runs its own service lifetimes, measures its own `T_triv,best`
-#                and service throughput on its own machine, and checks its outputs against that
-#                calibration; `harness/aggregate.py` then takes `T_tree` from the tree run and
-#                `t_link` from the stream run, lists each job's CPU model, and marks a result whose
-#                jobs ran on different CPU models (`mixed_cpu`) as not usable for a paired record
-#                comparison. `split: false` runs everything in one job (the smoke shape). The parts
+#                untrusted code runs only inside the sandbox. Since V4-A11 it is **one job**: the
+#                calibration, the one IVC stream (interleaved `c_P` and `T_triv` samples, the
+#                re-timing) and the DoS column on the stream's last output; one run, no repeats.
+#                The input `split` is kept for callers and selects the same one job. The parts
 #                are defined once, in `harness/aggregate.py` (the `plan` job prints them), and the
 #                aggregation requires exactly that set: a missing, duplicated or mismatched part is
 #                ERROR, never ACCEPT (RF-M1).
@@ -315,7 +310,7 @@ jobs:
       # planned part (a missing one is ERROR, RF-M1)
       fail-fast: false
       matrix:
-        # every job calibrates T_V and the service on its own machine (V4-12, V4-A5)
+        # the job calibrates c_P, T_triv and the service on its own machine (V4-12, V4-A5, V4-A11)
         part: ${{ fromJSON(needs.plan.outputs.parts) }}
     steps:
       - name: machine
@@ -349,7 +344,7 @@ jobs:
             python3 -I - "$PART" "$msg" "$out" "$RF_HARNESS_COMMIT" <<'EOF'
           import json, sys
           part, msg, out, commit = sys.argv[1:]
-          parts = ["calibrate", "tree", "dos", "stream"] if part == "all" else part.split(",")
+          parts = ["calibrate", "stream", "dos"] if part == "all" else part.split(",")
           json.dump({"parts": parts, "benchmark": "error", "reasons": [msg], "harness": {"commit": commit}}, open(out, "w"))
           EOF
             exit 0

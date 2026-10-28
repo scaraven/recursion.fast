@@ -20,7 +20,7 @@ produces is checked by the compiled `acc` (`harness/FORMAT.md`); nothing it says
   committed toy prover went through it. CI assembles every committed `.s` file with the image's
   toolchain first (RF-M2).
 - Command, inside the build sandbox (V4-A6), in a directory holding only copies of the `.s` files,
-  within `build_s` (5 min in season 1):
+  within `build_s` (2 min in season 1, V4-A11):
 
   ```
   gcc -static -O2 -pthread /build/*.s -o /build/prover -lm
@@ -42,7 +42,7 @@ produces is checked by the compiled `acc` (`harness/FORMAT.md`); nothing it says
 | `/work` | the request's own directory, read-write, the working directory |
 | `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`) |
 | `/tmp` | an empty tmpfs (counted in the memory cap) |
-| `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); the prover's own processes |
+| `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes, but `/proc/stat`, `/proc/cpuinfo` and `/proc/meminfo` are the machine's (global) |
 | `/sys/devices/system/cpu` | the CPU topology (read-only) |
 
 Nothing else exists: no `/usr`, no shell, no network, no other process. The environment is
@@ -56,56 +56,87 @@ namespaces and module loading. When a request ends, every process the prover sta
 ## 3. Invocations
 
 All paths below are relative to `/work` unless absolute. Statements and keys are 64 lowercase hex
-characters plus an optional newline; `vk.hex` is the service's public key.
+characters plus an optional newline; `vk.hex` is the service's public key. A chain file is
+`{"n": N, "start": "HEX"}`: the chain of `N` steps from the 32-byte start.
 
 ### `prover setup /setup` (optional, untimed)
 
 Runs once per evaluation, before any instance or service exists, with `/setup` writable and no
-socket. It may write tables, keys or code there (up to `setup_s`, 5 min in season 1). A prover
-with nothing to set up exits 0.
+socket. It may write tables, keys or code there, within `setup_s` (4 min in season 1) and
+`setup_cap` (the directory holds at most 4 GiB afterwards; above it the setup fails, V4-A11 R-M1).
+A prover with nothing to set up exits 0.
 
-### `prover tree /work` (the T run, timed)
+### The stream: `prover first /work`, then `prover step /work` (timed per request)
 
-Inputs: `leaves.json` = `{"n": N, "starts": ["HEX", …]}` with `2^r` starts (the runner's secret
-chain starts, fresh per evaluation), `vk.hex`, and the service. Output:
+**One benchmark, pure IVC** (V4-A11 §2). An evaluation is one stream of `M` steps under one service
+lifetime; every step is a fresh process; nothing survives a request except the proof the runner
+copies, so **state between steps travels only inside `π`**.
 
-- `root.bin`: a signed proof of the tree root `treeRoot` (adjacent leaf statements
-  `leafStmt (chainEnd s_i n) n` joined by `nodeStmt`, level by level).
+- **Step 1** (`prover first /work`): inputs `chainA.json`, `chainB.json`. Output `proof.bin`: a
+  signed proof of `nodeStmt (leafStmt (chainEnd a nA) nA) (leafStmt (chainEnd b nB) nB)`.
+- **Step i ≥ 2** (`prover step /work`): inputs `prev.stmt`, `prev.bin` (the previous step's
+  statement and its signed proof, exactly as the runner received it) and `chain.json`. Output
+  `proof.bin`: a signed proof of `nodeStmt prev (leafStmt (chainEnd s n) n)`.
 
-Only `root.bin` is required and read (V4-A9): other files the prover writes, such as inner proofs,
-are ignored. The clock runs from the `exec` of the prover to its exit (`tree_s` cap, 10 min in
-season 1). `root.bin` must be a regular file; the runner checks it with `acc` under this run's
-`vk`, within `T_V`, and checks that it is rejected for the root's statement with one bit flipped
-(the statement canary).
+A step may make any number of `SIGN` requests within the lifetime's budget of `2^16` signatures (a
+node needs a signed proof of its leaf child as its witness). The runner computes every statement
+itself; every output is checked with `acc` under the run's `vk` against that statement, and must
+be accepted.
 
-### `prover leaf /work` and `prover node /work` (the stream, timed per request)
+**What is drawn, and what is told** (§3). Fresh per evaluation from the OS CSPRNG, published only
+after the run: `M = 64 + G` (`G` geometric with mean 16, memoryless) truncated at 112; each chain's
+length i.i.d. with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work per octave; step 1's
+two chains too); the starts. A step learns its own length only when its inputs arrive; `M` is
+never told. Two cross-step side channels exist and are harmless given the re-timing rule below
+(§11 m-6): the signature index the service returns (how many signatures this lifetime made) and
+`CLOCK_REALTIME`.
 
-A fresh process for every request (cost model §3.3, CM-6). The handshake:
+**The handshake** (per request):
 
 1. The runner starts the process (with `vk.hex` already in `/work`). The prover loads its setup and
-   prints the line **`ready`** on stdout. Start-up is untimed.
+   prints the line **`ready`** on stdout within `ready_s` (10 s). Start-up is untimed (reported).
 2. The runner writes the inputs to a staging directory the prover cannot see, **starts the
    clock**, renames them into `/work` (constant time, whatever their size; RB-m11) and writes the
    line **`go`** on the prover's stdin.
-3. The prover writes `/work/proof.bin` and either prints the line **`done`** or exits. The clock
-   stops at the first of the two (`step_s` cap, 60 s in season 1; the wait for `ready` has the
-   same cap). The runner then kills the request's sandbox and reads `proof.bin`.
+3. The prover writes `/work/proof.bin` and prints the line **`done`** (or exits). At `done`, or at
+   the prover's exit, the runner kills **every process of the sandbox at once and stops the clock
+   when all of them are dead** (V4-A11 §5.1). Only then is `proof.bin` read. So work done after
+   `done` (a thread, a forked child) is either on the clock or never happens: no byte written after
+   the clock stopped exists. A prover that closes stdout without `done` is timed until its last
+   process exits. The cap is `step_s` (60 s) from the inputs to the death of the last process.
 
-Inputs: `leaf`: `leaf.json` = `{"n": N, "start": "HEX"}`. `node`: `child1.stmt`, `child1.bin`
-(the running statement and its signed proof) and `child2.stmt`, `child2.bin` (the new leaf's
-statement and the signed proof the previous `leaf` request produced). The output of `node` is a
-signed proof of `nodeStmt child1 child2`.
+`/work` is on a tmpfs where the machine has one: what the prover writes there counts against its
+memory cgroup. If the prover makes `/work` unusable for the runner (an input's name taken, the
+directory made unreadable), the step fails as the entry's failure (R-M1).
 
-One request at a time; a start is released only after the previous output is written; nothing
-survives a request except the proofs the runner copies. The whole stream, every request and every
-check from the first request on, runs within `stream_s`, wall time: 960 s in season 1 (`M = 256`),
-of which 60 s allow for the runner's own overhead inside it (sandbox starts, badge starts; about
-30 s measured). A link that would end after it fails the run. So the entry has about 900 s for its
-513 requests, each from its process's start (its start-up to `ready` included) to its output, and
-for the checks of its outputs: with every check at `T_V` (about 178 ms on a runner), **about 3.1 s
-per link**, a leaf and a merge with their start-ups. Every output is checked with `acc` within
-`T_V`; the first two leaf and two node outputs are also checked against their statement with one
-bit flipped and against their sibling's statement, and must be rejected.
+**Between steps** the runner checks outputs (in batches of `check_every` = 8, each `V_i` the best of
+two measurements, pinned to one core) and takes calibration samples, **never while an entry
+process is alive**. The whole stream, every request, check, canary, calibration sample and re-run,
+runs within `stream_s` (960 s, wall time). A stream that reaches it is scored over its completed
+steps and flagged `truncated`; such a run is never ranked.
+
+**Re-timing** (§5.3). After the stream the runner fits `P ≈ a·n + b` (trimmed least squares) and
+runs once more, on the same inputs, every step with `P_i > 1.3 × (a·n_i + b)`, largest ratio first,
+at most 10% of the steps. The faster run is kept and scored (its time, its `V` and its `|π|`); the
+first output stays the child of the next step. The re-run's output must be accepted too.
+
+**The score** (§4; lower is better, seconds per `2^18`-compression step):
+
+```
+S  = P̄ + V̄
+P̄  = (2^18 / c_P) · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)
+V̄  = κ · (1/M) · Σ_i max(x_i, x_i^3),   x_i = V_i / v_ref + |π_i| / 2 MiB,   κ = 0.2667 s
+```
+
+`P_i` the step's time, `n_i` its new compressions (step 1: `nA + nB`), `c_P` the job's prover-shaped
+calibration ratio (`harness/tools/calib.c`), `V_i` one `acc` check of the step's file (parse
+included), `v_ref = T_triv / 10` (`T_triv` the organiser's chain checker on `2^24` compressions,
+about 1.78 s on a runner, so `v_ref` ≈ 178 ms), `|π_i|` the bytes of `π` alone. **There is no
+proof cap**: `|π|` is priced (100 KB of `π` costs about as much as 10 ms of verifier, estimate), and
+`acc` only requires its length to fit a 64-bit word. Compact accumulation (folding with a running
+state inside `π`) is a wanted design: `s_ref` keeps winning proofs within a few MB. The per-step
+records (`WORK/stream.jsonl`, and `stream.steps` in the result) give every term, the fit, the
+marginal values and the share of each step.
 
 ## 4. The oracle
 
@@ -118,18 +149,22 @@ queries. The service's measured throughput on the job's machine is published in 
 
 ## 5. What fails a run
 
-A non-zero exit of `tree`; a missing, non-regular or over-cap output; any output `acc` rejects; a
-statement canary `acc` accepts; a check above `T_V` (season shape; a check above the cap is measured
-again, best of `checker_runs`, like the cap itself, RB-M1) or `verify_s` (10 s); a timeout of any
-cap (`build_s`, `setup_s`, `tree_s`, `step_s`, `stream_s`; `harness/season.toml`); the service dying
-during the run; a stream link that is not accepted; in the DoS column, a mutated or random input
-that `acc` takes more than 10 × `T_V` to decide, the column above its 180 s, or a crash of the
-checker (an accepted DoS input is recorded, not failed). Every GitHub job of an evaluation ends
-within 30 minutes, and these caps are nested inside it (V4-A9). The first failure ends the
-evaluation (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's
-output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's
-refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13),
-and a kill by the memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).
+A prover build or setup that fails or exceeds `build_s`, `setup_s` or `setup_cap`; a request with no
+`ready` line within `ready_s`, a non-zero exit, a timeout of `step_s`, or a missing, non-regular or
+over-cap (`file_cap`, 64 MiB) `proof.bin`; any output `acc` rejects (re-runs included); a statement
+canary `acc` accepts (the outputs of steps 1, 2 and `M`, checked against their statement with one bit
+flipped, against the next step's leaf statement and against their first child's statement); a check
+above `verify_s` (10 s); a filesystem error the prover caused in `/work` (R-M1); the service dying
+during the run; in the DoS column on the last output, a mutated or random input that `acc` (parse
+plus the verifier) takes more than 10 × `v_ref` to decide, the column above its 180 s, or a crash of
+the checker (an accepted DoS input is recorded, not failed). No time is a pass/fail gate on the
+verifier any more: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
+completed steps, flagged `truncated` and not ranked. Every GitHub job of an evaluation ends within
+30 minutes, and these caps are nested inside it (V4-A9). The first failure ends the evaluation
+(`harness/run-benchmark.py`). The reason in the result names the cause: the prover's output (its
+first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's refusals of this
+run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13), and a kill by the
+memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).
 
 ## 6. The Lean side's caps (the certificate job)
 
