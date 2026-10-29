@@ -16,9 +16,7 @@ gate_s = 120
 badge_s = 180
 
 [stream]
-M_min = 4
-M_mean_extra = 2
-M_cap = 8
+M = 6
 n_lo = 16
 n_hi = 128
 ready_s = 10

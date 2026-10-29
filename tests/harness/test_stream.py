@@ -43,7 +43,7 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8, batch
     """A Bench over the smoke season with stubs: request i takes times[i] s (or the cap stops it at
     `stop_at`); re-runs take retime_times[i] s."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
-    p.M_min = p.M_cap = M
+    p.M = M
     p.calib_idle_s, p.retime_frac = 0.0, 0.25
     b = Bench.__new__(Bench)
     b.p, b.log, b.samples, b.deadline, b.req_root = p, (lambda m: None), [], None, None

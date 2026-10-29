@@ -55,9 +55,7 @@ class Params:
     n_ref: int
     s_ref: int
     R: float
-    M_min: int
-    M_mean_extra: int
-    M_cap: int
+    M: int
     n_lo: int
     n_hi: int
     ready_s: float
@@ -98,7 +96,7 @@ class Params:
         return Params(
             name=t["name"], K=float(g("score", "K")), kappa=float(g("score", "kappa")),
             n_ref=g("score", "n_ref"), s_ref=g("score", "s_ref"), R=float(g("score", "R")),
-            M_min=g("stream", "M_min"), M_mean_extra=g("stream", "M_mean_extra"), M_cap=g("stream", "M_cap"),
+            M=g("stream", "M"),
             n_lo=g("stream", "n_lo"), n_hi=g("stream", "n_hi"), ready_s=g("stream", "ready_s"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
             retime_factor=float(g("stream", "retime_factor")), retime_frac=float(g("stream", "retime_frac")),
@@ -366,7 +364,7 @@ class Bench:
         samples, the re-timing (§5.3), all within `stream_s`. A stream that reaches the cap is scored
         over its completed, checked steps and flagged `truncated` (§6)."""
         p, name = self.p, "stream"
-        M = draws.draw_M(p.M_min, p.M_mean_extra, p.M_cap)
+        M = p.M
         ns = draws.lengths(M + 1, p.n_lo, p.n_hi)
         starts = draws.starts(M + 1)
         self.log(f"[{name}] computing {M + 1} leaf digests (sum of lengths {sum(ns)})")

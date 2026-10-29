@@ -9,7 +9,7 @@
 2. The score: `P̄` is the work-weighted cubic mean of `P_i/n_i` times `n_ref / c_P`; `V̄ = κ · mean
    max(x, x³)` with `x = V/v_ref + |π|/s_ref`: a step at `x = 2` costs 8 units, one at `x = 0.5` half
    a unit; the marginal values have the right signs.
-3. The draws (§3, §11): `M` within `[M_min, M_cap]` with the truncated geometric's mean, lengths
+3. The draws (§3, §11): `M` a season constant (not drawn), lengths
    within `[n_lo, n_hi]` with equal expected work per octave, all from the OS CSPRNG.
 4. The fit (§11 m-4) is not moved by one slow step.
 """
@@ -83,12 +83,8 @@ def main():
     check(st["steps"][0]["x_verifier"] == 2 and st["steps"][1]["x_size"] == 0.5 and sc["largest_x"]["index"] == 1,
           "x is split into its verifier and size parts per step, and the largest is named")
 
-    Ms = [draws.draw_M(p.M_min, p.M_mean_extra, p.M_cap) for _ in range(20000)]
-    q = p.M_mean_extra / (p.M_mean_extra + 1)
-    want = sum(min(p.M_cap, p.M_min + k) * (1 - q) * q ** k for k in range(400))
-    check(min(Ms) >= p.M_min and max(Ms) <= p.M_cap and abs(statistics.fmean(Ms) - want) < 0.5,
-          f"M: within [{p.M_min}, {p.M_cap}], mean {statistics.fmean(Ms):.2f} (truncated geometric: {want:.2f}); "
-          f"P(M = M_cap) = {Ms.count(p.M_cap) / len(Ms):.3f} (exact {q ** (p.M_cap - p.M_min):.3f})")
+    check(isinstance(p.M, int) and p.M == 96 and not hasattr(draws, "draw_M"),
+          f"M is one season constant ({p.M}), not drawn")
     ns = draws.lengths(40000, p.n_lo, p.n_hi)
     work = [sum(n for n in ns if (1 << o) <= n < (2 << o)) for o in (17, 18, 19)]
     check(min(ns) >= p.n_lo and max(ns) <= p.n_hi and max(work) / min(work) < 1.1,

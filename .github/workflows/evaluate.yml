@@ -24,7 +24,8 @@
 #                ERROR, never ACCEPT (RF-M1).
 #   attest       signs the result JSON with a GitHub artifact attestation; runs no entry code
 #
-# Time (V4-A9): every job ends within 30 minutes. The caps inside a job (`harness/season.toml`) are
+# Time (V4-A9): every job ends within 30 minutes, the benchmark job within 50 (its stream cap doubled,
+# 2026-10-29). The caps inside a job (`harness/season.toml`) are
 # nested so that their sum and the job's fixed steps stay below its limit (design §3.4): an entry
 # that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its cap leaves
 # the certificate unchecked, Q12), never killed with its job, which would be a missing part and an
@@ -301,7 +302,7 @@ jobs:
     needs: [plan, setup-tools, certificate]
     if: needs.certificate.outputs.status == 'ok' || needs.certificate.outputs.status == 'provisional'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 50
     permissions: { contents: read }
     env:
       SVC_KEY: rf-svc-${{ needs.plan.outputs.core_sha }}
@@ -333,7 +334,7 @@ jobs:
         if: steps.svc.outputs.cache-hit == 'true'
         env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
         run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
-      - name: benchmark (every step capped by the season; the part within 28 min, harness/evaluate.py PART_S)
+      - name: benchmark (every step capped by the season; the part within 44 min, harness/evaluate.py PART_S)
         # RF_ENTRY_NAME: the entry's identity for the provisional ranking (aggregate.py --rank, review M-4)
         env: { PART: "${{ matrix.part }}", RF_HARNESS_COMMIT: "${{ needs.plan.outputs.core_sha }}", SVC_HIT: "${{ steps.svc.outputs.cache-hit }}",
                RF_ENTRY_NAME: "${{ inputs.entry_repo }}:${{ inputs.entry_path }}" }

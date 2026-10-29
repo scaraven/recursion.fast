@@ -112,7 +112,7 @@ two jobs, `M = 256` and `T_V` as a gate (below).
 **One IVC benchmark, scored continuously (V4-A11, the user's decisions of 2026-10-28).** One stream
 per evaluation in one job: `PROVER first` proves a node over two fresh chains, then each
 `PROVER step` a node over the previous output's statement and a fresh chain, a fresh process each,
-`M = 64 + G` steps (`G` geometric with mean 16, at most 112, never told) with lengths drawn i.i.d.
+`M = 96` steps (one published constant, the same for every entry) with lengths drawn i.i.d.
 on `[2^17, 2^20]`. The clock stops only when the request's whole process tree is dead. Every output
 is checked with `acc`, between steps. The score `S = P̄ + V̄` is a work-weighted cubic mean of the
 prover's time per compression, calibrated by a prover-shaped workload measured in the job, plus a
@@ -555,7 +555,7 @@ the certificate now makes pays the factor `N`.
 | an escape on a functional log is a win of `KS`'s game at that member (`Escape.wins`); an adversary that runs `A` keeping its log and outputs any function of `A`'s output and log is bounded like every other (`KS.select`), and a finite family of them by the sum (`KS.union`) | **kernel**: `Library/Compose.lean`, `Library/KS.lean` |
 | **the composition bound**: for `A` asking at most `Q` queries with `Q + qV ≤ logCap`, the probability that `acc` accepts the root and `walk` on `A`'s final log ends in an escape is at most `(2^(r+1) − 1)·(Q + qV)·ε` | **kernel**: `Library/Compose.lean`, `compose_prob` (through `escape_prob_le`, the union bound over any finite set of paths of the extraction tree, and `card_paths`) |
 | the meter's lossless form: with a knowledge state and one functional log within `logCap` below potential 1, no member escapes and the walk returns the first three outcomes; the potential reaches 1 with probability at most `n·ε` for a game of `n` queries | **kernel**: `compose_of_kstate`, `PaperTheorem.prob_potential_ge_one` (that a lazily sampled log is functional and within `logCap` joins them on paper) |
-| the stream (V4-A11): step `M`'s output proves `nodeStmt (nodeStmt (…) leaf) leaf`, a comb whose extraction tree has `2M + 1` members and depth `M` (225 at `M_cap = 112`; 513 at `M = 256` under v4 before V4-A11) | the union bound **kernel** for any finite set of paths (`escape_prob_le`, with the comb's paths); the walk over the comb **paper**: the kernel walk (`walk`, `compose_prob`) is stated over balanced trees, and no composition theorem covers the comb (open, §6.2) |
+| the stream (V4-A11): step `M`'s output proves `nodeStmt (nodeStmt (…) leaf) leaf`, a comb whose extraction tree has `2M + 1` members and depth `M` (193 at `M = 96`; 513 at `M = 256` under v4 before V4-A11) | the union bound **kernel** for any finite set of paths (`escape_prob_le`, with the comb's paths); the walk over the comb **paper**: the kernel walk (`walk`, `compose_prob`) is stated over balanced trees, and no composition theorem covers the comb (open, §6.2) |
 | `runSeq → runLog` | **kernel**: `Library/Trace.lean`, `OProg.runLog_of_runSeq` (on a functional log, a verdict on a trace whose entries are all in the log is the verdict on the log) |
 | equal trace digests are equal traces or an explicit collision | **kernel**: `Library/Trace.lean`, `traceDigest_eq` (for queries under `2^64` bytes, which `queryCap` implies) |
 | one member's bound `(Q + qV)·ε` | the certificate itself (`KS`), for a lazily sampled oracle and a deterministic adversary; the member's adversary is normalised (the verifier run after it on an accepted member asks nothing fresh, `KS.select`), so `KS`'s final-log extractor reads the adversary's log, as the textbook's does (§1.4); randomisation and the random function **paper** |
@@ -564,10 +564,10 @@ the certificate now makes pays the factor `N`.
 
 **The error.** `Pr[bad] ≤ N·(Q + qV)·ε + Adv^PRF(D) + Adv^EUF-CMA(B) + Adv^coll`, where `N` is
 the number of members of the composed output's extraction tree, `N = 2M + 1` for step `M`'s output
-of the stream (`M` nodes and `M + 1` leaves, depth `M`; at most 225 at `M_cap = 112`), and `B` and
+of the stream (`M` nodes and `M + 1` leaves, depth `M`; 193 at `M = 96`), and `B` and
 `D` run the evaluation and the walk: about `2^58` steps (**estimate**, [RD] §4.9 fine print; the
 walk runs `E` per node within `B t`). At the season shape `Q ≈ 2^28–2^30` (**estimate**, C §2
-item 1; the stream's chain work, about `2^24.6` compressions at the mean `M`, is close to v4's
+item 1; the stream's chain work, about `2^24.9` compressions at `M = 96`, is close to v4's
 `2^24`), inside `logCap = 2^96` and the efficient-extraction domain of about `2^61` entries, so at
 `ε = errorCap = 2^-120` the first term is at most about `225 · 2^30 · 2^-120 ≈ 2^-82` for the event
 that the stream's final output escapes (`qV ≤ 2^16` is negligible beside `Q`), where the
@@ -979,7 +979,8 @@ The runner never takes a statement from the prover: it computes every leaf diges
 `nodeStmt` itself, and the calibration instance's root with `treeRoot` (the contract's
 specification of it). The stream's statements form a comb, `nodeStmt (nodeStmt (…) leaf) leaf`.
 
-**Every job within 30 minutes** (V4-A9). A job killed at its limit is a missing part and makes the
+**Every job within 30 minutes** (V4-A9), **the benchmark job within 50** (since 2026-10-29, when the
+stream's cap was doubled to 1,920 s). A job killed at its limit is a missing part and makes the
 verdict ERROR, so the caps the entry controls are nested inside each job with room for its fixed
 steps: an entry that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its
 cap leaves the certificate unchecked, Q12, as before). The worst case of each job, with the caps of
@@ -990,7 +991,7 @@ cap leaves the certificate unchecked, Q12, as before). The worst case of each jo
 | setup (no entry code) | — | on a cold miss: an earlier commit's cache restore (about 45 s, **estimate**), `lake exe cache get` ≤ 240 s, `org-setup.sh` steps 1–4 ≤ 1,080 s (their timeouts), the save and its check (about 2 min, **estimate**): 22 min of timeouts and about 3 min of transfers. **Measured**: `cache get` 39 s warm and 139 s cold, `org-setup.sh` 237 s warm and 270 s cold (CI runs 39966237935, 39935079265, before CompPoly and `Mathlib.Tactic` joined), the `Mathlib.Tactic` objects 221 s on 4 cores of the development VM. On a hit: nothing | about 25 of 30 min |
 | setup-tools (no entry code) | — | on a miss: the comparator ≤ 240 s (14 s **measured**; 540 s with nanoda), the service ≤ 120 s (12–17 s **measured**), two small saves | 6 of 30 min |
 | certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 1,500 s (25 min) | checkout and runner setup 10 s (8 s **measured**); elan 1 s (**measured**); the two cache restores about 45 s (**estimate**: the 2.7 GB package-tree cache restores in 35 s, **measured**, and the organiser build and objects add some hundreds of MB); the Lean toolchain 29 s (**measured**, CI run 39966237935); fetch, render, source rule about 5 s; two olean-manifest checks over 7.58 GB, 15.5 s each on 4 cores with a warm page cache (**measured**, `logs/trim-fix/manifest-check-time.log`), allowed 40 s each cold; `lake env`, the upload about 10 s: about 3 min | 28 of 30 min; even at twice the restore estimate the job ends inside 30 |
-| benchmark (one job since V4-A11) | prover build 120 s + setup 240 s + measuring and hashing the setup directory (a walk of at most 2^20 entries, a hash of at most `setup_cap` bytes within 60 s) + the stream 960 s (a wall deadline from its first calibration sample over every request, check, canary, sample and re-run, §3.6) + at most 30 s of work begun before the cap and ending after it (§3.6, review M-3) + DoS 180 s = 1,590 s (26.5 min) at the worst case | `calib`'s build (seconds); the calibration instance's digests (2.2 s **measured** by the D-trim review for the tree's `2^24` compressions under v4 before V4-A11, the same instance size); the service calibration (two 2 s throughput runs and key generation, about 5 s); the stream's leaf digests before the deadline (about `2^24.6` compressions at the mean `M`, so a few seconds, **estimate** from the same rate); two service lifetimes; the score: under 60 s (**estimate**) | inside the part's 28 min (`evaluate.py` `PART_S` = 1,680 s), the job's fixed steps and upload inside 30. **A part that still runs past `PART_S` after the prover's build has started is the entry's REJECT** (`evaluate.py`, from the stage the runner's checkpoint names; review M-3), never a missing part |
+| benchmark (one job since V4-A11) | prover build 120 s + setup 240 s + measuring and hashing the setup directory (a walk of at most 2^20 entries, a hash of at most `setup_cap` bytes within 60 s) + the stream 1,920 s (a wall deadline from its first calibration sample over every request, check, canary, sample and re-run, §3.6) + at most 30 s of work begun before the cap and ending after it (§3.6, review M-3) + DoS 180 s = 2,560 s (42.7 min) at the worst case | `calib`'s build (seconds); the calibration instance's digests (2.2 s **measured** by the D-trim review for the tree's `2^24` compressions under v4 before V4-A11, the same instance size); the service calibration (two 2 s throughput runs and key generation, about 5 s); the stream's leaf digests before the deadline (about `2^24.9` compressions at `M = 96`, so a few seconds, **estimate** from the same rate); two service lifetimes; the score: under 60 s (**estimate**) | inside the part's 44 min (`evaluate.py` `PART_S` = 2,640 s), the job's fixed steps and upload inside its 50 (the benchmark job's limit since the stream's cap was doubled on 2026-10-29; every other job keeps 30). **A part that still runs past `PART_S` after the prover's build has started is the entry's REJECT** (`evaluate.py`, from the stage the runner's checkpoint names; review M-3), never a missing part |
 | plan, attest | — | data only | 10 min each |
 
 The benchmark job's caps were cut for this nesting (V4-A11): `build_s` from 300 to 120 s and
@@ -1002,12 +1003,10 @@ V4-A9).
 ### 3.5 What is measured, and how
 
 - **The draws** (V4-A11; `harness/rfh/draws.py`). From `secrets` (the OS CSPRNG), fresh per
-  evaluation, never from a seeded generator, published with the result after the run: `M = 64 + G`,
-  `G` geometric with mean 16 (each further step with probability 16/17), truncated at
-  `M_cap = 112`, so `P(M = 112) = (16/17)^48 ≈ 5.4%` and the mean is about 79 (**estimate**); chain
+  evaluation, never from a seeded generator, published with the result after the run: chain
   lengths **i.i.d.** with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work per octave), by
   inverse CDF `n = 1 / (1/n_lo − u·(1/n_lo − 1/n_hi))`, rounded, mean `ln 8 / (2^-17 − 2^-20)` ≈
-  311,500 (**estimate**), so about `2^24.6` compressions per evaluation at the mean `M`; 32-byte
+  311,500 (**estimate**), so about `2^24.9` compressions per evaluation (97 chains); 32-byte
   starts. No stratification (V4-A11 §11). `n_i` is the compressions step `i` is newly given
   (step 1: `nA + nB`). A step learns its own length only when its inputs arrive, and `M` is never
   told: only the distributions are public. Two cross-step side channels exist and are harmless
@@ -1112,7 +1111,7 @@ recomputed by `harness/aggregate.py`. *Under v4 before V4-A11 it was `S = T_tree
 
 | Parameter | Season 1 | Smoke (CI) | Source |
 |---|---|---|---|
-| stream steps `M` | `64 + G`, `G` geometric with mean 16, at most 112; drawn, never told | `4 + G`, mean 2, at most 8 | V4-A11 |
+| stream steps `M` | 96, a published constant, the same for every entry (the user's decision of 2026-10-29) | 6 | V4-A11 |
 | chain lengths | i.i.d., density `∝ 1/n²` on `[2^17, 2^20]` | on `[16, 128]` | V4-A11 |
 | `n_ref`; `K`; `κ`; `s_ref`; the power | `2^18`; 1.5; 0.2667 s; 2 MiB; 3 | same | V4-A11 |
 | `v_ref` | `T_triv / R`, `R = 10`, `T_triv` the median of the interleaved chain-checker samples on `2^24` compressions | fixed, 177.8 ms (`v_ref_ms`: the trivial check at `n = 16` takes microseconds) | V4-12, V4-A11 |
@@ -1123,7 +1122,7 @@ recomputed by `harness/aggregate.py`. *Under v4 before V4-A11 it was `S = T_tree
 | statement canaries; DoS column | `π_1`, `π_2`, `π_M`; 100 inputs on `π_M`, each within `10 × v_ref` (parse plus `acc`), 180 s | the same canaries; 64 inputs, each within `verify_s` | V4-A9, V4-A11 |
 | runs | one stream, no repeats, no medians | the same | V4-A9, V4-A11 |
 | certificate caps: the entry's build, the kernel, the gate, the badge build | 600 s, 600 s, 120 s, 180 s | same | V4-A9 |
-| benchmark caps: prover build, prover setup, setup directory, start-up to `ready`, one request, the stream, one `acc` check, the signed file | 120 s, 240 s, 4 GiB, 10 s, 60 s, 960 s, 10 s, 64 MiB | the same, but the stream 300 s | V4-A9, V4-A11, R-M1, m-3 |
+| benchmark caps: prover build, prover setup, setup directory, start-up to `ready`, one request, the stream, one `acc` check, the signed file | 120 s, 240 s, 4 GiB, 10 s, 60 s, 1,920 s, 10 s, 64 MiB | the same, but the stream 300 s | V4-A9, V4-A11, R-M1, m-3 |
 | `queryCap`, `qV`; the proof | `2^20` B, `≤ 2^16`; no proof cap, only `\|π\| < 2^64` | same | V4-A3, V4-A11 |
 | `errorCap`, `completenessCap`, `logCap` | `2^-120`, `2^-40`, `2^96` | same | V4-13, V4-A9 |
 | signatures per service lifetime | `2^16` | same | V4-3 |
@@ -1136,10 +1135,13 @@ The table is a selection of `harness/season.toml` and `harness/smoke.toml`.
 - *One stream, pure IVC.* Every step's output is a child in the next step's relation, so every step
   pays for recursion, there is no tree to flatten or bundle, and state between steps travels only
   inside `π`. The tree of V4-11 let a prover flatten, and only the stream priced recursion.
-- *Drawn `M` and lengths.* No fixed shape to tune to. The last step, whose chain no later step
-  re-proves, is unknown, so leaving its chain to the verifier cannot be planned: the truncation of
-  `M` gains about 0.03% (S2-T8), and deferring chain work to later steps pays it there (0.1–0.3%;
-  review F-ivc). Three octaves of length with equal expected work make the per-step overhead
+- *Drawn lengths, a constant `M`.* No fixed length to tune to. `M` is one published constant (the
+  user's decision of 2026-10-29: the loss study's memoryless `64 + Geometric(16)` was dropped for
+  simplicity), so the last step is known: a prover that stops proving in the last `j` steps and
+  leaves their chains to the final check gains about 0.4–1.0% at base estimates (0.56% at `M = 96`,
+  best `j = 4`; 0.36% at 128, 0.98% at 64; `sim2.py` with `M` fixed, `scratchpad/loss2/fixedM.py`),
+  under the 3% record threshold, because the cubic knee prices the verifier work it creates.
+  Deferring chain work to earlier-known later steps pays it there (0.1–0.3%; review F-ivc). Three octaves of length with equal expected work make the per-step overhead
   visible as `b` in `P ≈ a·n + b`. Under v4 before V4-A11 at most `c − 1 ≈ 24` of the stream's 256
   merges could escape that way (CM-R2, `c ≈ 2^24 / (R · n_f)`).
 - *The work-weighted cubic mean.* Each compression weighs the same, and the cube makes a step whose
@@ -1166,16 +1168,16 @@ the loss study's best honest Flock-class entry at its base estimates and 0.50 at
 (S2-T7); with `s_ref = 1 MiB` the class would be excluded. To be re-run once a folding prototype is
 measured (D1).
 
-**What the stream's cap holds** (**estimate**, at `M_cap = 112` and checks at `V_i ≈ v_ref`).
-`stream_s` = 960 s is wall time from the first calibration sample and holds every request, check,
+**What the stream's cap holds** (**estimate**, at `M = 96` and checks at `V_i ≈ v_ref`; the numbers below were computed at 112 steps and are an upper bound).
+`stream_s` = 1,920 s (doubled from 960 s on 2026-10-29) is wall time from the first calibration sample and holds every request, check,
 canary, sample and re-run. The organiser's share: 15 calibration samples of about 4.4 s (the 2 s
 gap, three `calib` runs of about 0.2 s each at the placeholder, the chain checker at 1.8 s; review
 m-2), about 66 s; 14 check batches of
 two measured passes of 9 checks at about 178 ms, about 45 s, plus the badge's start-ups, about 6 s;
 the canaries, about 2 s; the re-runs' checks, about 8 s; the requests' sandbox, staging, kill and
 read, at most 50 ms each (**measured** under v4 before V4-A11, `logs/trim-fix/stream-overhead.log`),
-about 6 s: about 133 s. That leaves about 827 s for the entry's 112 requests and up to 11 re-runs,
-**about 6.7 s per request**, its start-up included; an entry slower than that is truncated at the
+about 6 s: about 133 s. That leaves about 1,787 s for the entry's 96 requests and up to 9 re-runs,
+**about 17 s per request**, its start-up included; an entry slower than that is truncated at the
 cap, scored and flagged, not ranked. **Work begun before the cap ends within 30 s of it** (review
 M-3, m-8): every badge run of a check batch, of the canaries or of a re-run's check has a timeout
 of at most the time left plus 30 s, and a batch's second measurement is skipped once the cap is
@@ -1217,7 +1219,7 @@ that a maintainer admits. So a run the entry dislikes cannot be discarded for fr
 incumbent, on the same draws, each entry with its own service lifetime) on **different CPU models**,
 the worse median ratio ≤ 0.97, the incumbent rebuilt in the same job. It is a design rule, **not
 implemented** (as v4's one paired job was not), and a **season-1 condition**. Its cost: about 763 s
-at the mean `M` and 1,080 s at `M_cap` for a leader-class pair (**estimate**, loss study §7); it
+at 79 steps and 1,080 s at 112 for a leader-class pair (**estimate**, loss study §7), so about 925 s at `M = 96`; it
 needs build and setup outputs cached by binary hash.
 
 **What the badge cap pays for** (review D-trim m-1). The badge build links the object code of every
@@ -1364,7 +1366,7 @@ question was `proofCap`).
   column is a follow-up (FB-5, §6.3).
 - **The 30-minute jobs bind entries** (V4-A9): an entry's Lean must build within 10 min and check
   within 10 min on a 4-vCPU runner, and its prover must build, set up and prove the stream within
-  their caps (about 6.9 s per request at `M_cap`, §3.6). The baseline's build took 147 s and its
+  their caps (about 17 s per request at `M = 96` with the doubled stream cap, §3.6). The baseline's build took 147 s and its
   kernel phase about 144 s on the 32-vCPU
   development VM (§3.1); on a runner neither has been measured. A larger runner for the
   certificate job is the alternative (§6.2).
@@ -1400,7 +1402,7 @@ decisions of 2026-10-26.
 | fresh random starts per evaluation; the runner's own root and digests | the instance is precomputed, or the prover names the statement it proves |
 | the verifier term, its knee `v_ref` relative to the same job's chain checker (V4-A11; the `T_V` gate before) | witness-sending: the verifier redoes the chain work the prover skips, unpriced (CM-R7 bounds the rest) |
 | `\|π\|/s_ref` in the verifier term (V4-A11; `proofCap` before) | bundling the children's proofs in place of recursion, unpriced |
-| the stream: a fresh process per step, state only in `π`, the clock stopped at the death of the process tree, `M` and the lengths drawn and never told (V4-A11) | recursion is unpriced; with state or preparation across steps, or work after `done`, work leaves the clock; a known shape is tuned to, and its last step left to the verifier |
+| the stream: a fresh process per step, state only in `π`, the clock stopped at the death of the process tree, the lengths drawn and told only at their step, `M` a published constant (V4-A11) | recursion is unpriced; with state or preparation across steps, or work after `done`, work leaves the clock; a known shape is tuned to, and its last step left to the verifier |
 | the calibration `c_P` and `v_ref` from interleaved samples in the job (V4-A11) | the runner's CPU model and state move the score |
 | the re-timing, with the kept run's `P_i`, `V_i` and `\|π_i\|` scored (V4-A11, R-M2) | a runner's hiccup decides a run; a detectable re-run swaps in a prove-fast, verify-slow variant |
 | the provisional ranking by the median of three, failures counted; a run that fails while an entry process is alive is the entry's (V4-A11, R-M1) | a run the entry dislikes is discarded for free |
@@ -1548,7 +1550,7 @@ user's own.
 | V4-A8 | this document states the impossibility, the `vk` caveat, `E` without `vk`, the unrankable season shape, the paper split, the trace-hash cost | C-m6, C-m9, C-m10 |
 | V4-A9 | the trim (the user's): every job within 30 min with nested caps and a cached organiser setup; one tree run and one stream run, no medians, two parallel jobs; `M = 256`; no per-entry liveness; per entry only the statement canaries, 2 per kind; the organiser's checks in the core CI only; DoS 100 inputs, failing on time and crashes only; only the root read; one Lean build; `errorCap = 2^-120`, `completenessCap = 2^-40` | keep only what serves valid verifiers or honest, fast, recursion-priced proving (§4.4) |
 | V4-A10 | the contract states textbook single-output knowledge soundness in the random-oracle model (`prob`, `KS`); v3's potential (`KState`) is an untrusted library tool, an intermediate artifact of a proof (`KState.ks`); the tree composes by a union bound over the extracted proofs (`Compose.compose_prob`) (the user's, 2026-10-27); the extractor reads the final log, the verifier's answers included: textbook for adversaries that ask the verifier's queries themselves (option B, the user's choice after review E-ks M-1; option A, the adversary's log only, rejected: it breaks the potential's bridge and exceeds the deployment's need); no conjunct `qV ≤ logCap` (the cap `qV ≤ 2^16` excludes the vacuous case, m-1) | the certificate states the standard notion a cryptographer reads and accepts any correct proof technique; cost: about `2^-81` against `2^-90` per composed output (§2.4) |
-| V4-A11 | one IVC benchmark in one job: `PROVER first`, then `PROVER step` over the previous output and a fresh chain, a fresh process each, `M = 64 + G` (mean 16, ≤ 112, never told), lengths i.i.d. `∝ 1/n²` on `[2^17, 2^20]`; the clock stops when the step's process tree is dead; `S = P̄ + V̄` (work-weighted cubic mean of calibrated time per compression, plus `κ·mean max(x, x³)`, `x = V/v_ref + \|π\|/s_ref`, `K = 1.5`, `κ = 0.2667 s`, `s_ref = 2 MiB`); `c_P` and `T_triv` from interleaved samples; re-timing of outliers, the kept run scored; R-M1's failure rule, tmpfs and `setup_cap`; the provisional ranking by the median of three; compact accumulation wanted (R-M3); `proofCap` removed, `\|π\| < 2^64` in `acc`, `Computes` on proofs up to `8 · outCap`; the two-model paired record designed, not built (BRIEF §5d) | one benchmark that is real IVC, scored continuously; size priced rather than capped (§3.4–§3.6) |
+| V4-A11 | one IVC benchmark in one job: `PROVER first`, then `PROVER step` over the previous output and a fresh chain, a fresh process each, `M = 96` (a published constant), lengths i.i.d. `∝ 1/n²` on `[2^17, 2^20]`; the clock stops when the step's process tree is dead; `S = P̄ + V̄` (work-weighted cubic mean of calibrated time per compression, plus `κ·mean max(x, x³)`, `x = V/v_ref + \|π\|/s_ref`, `K = 1.5`, `κ = 0.2667 s`, `s_ref = 2 MiB`); `c_P` and `T_triv` from interleaved samples; re-timing of outliers, the kept run scored; R-M1's failure rule, tmpfs and `setup_cap`; the provisional ranking by the median of three; compact accumulation wanted (R-M3); `proofCap` removed, `\|π\| < 2^64` in `acc`, `Computes` on proofs up to `8 · outCap`; the two-model paired record designed, not built (BRIEF §5d) | one benchmark that is real IVC, scored continuously; size priced rather than capped (§3.4–§3.6) |
 | RA-M2 | `acc` checks `\|tr\| ≤ qV` (one trusted line) | `KS`'s query bound ranges over oracle functions and does not bound a non-functional trace |
 | Q5 | CI checks certificates with the Lean kernel only | nanoda needs more than 16 GB (§2.7) |
 | B dev. 1 | the prover isolated by namespaces, not a separate uid; two memory cgroups (11 GB + 2 GB) | no system user needed; the prover cannot make the OOM killer pick the service |
@@ -1566,7 +1568,7 @@ user's own.
    39966237935.)
 2. **The 30-minute caps against a real entry on a runner** (C-M2, C10, V4-A9): the entry's build
    and kernel caps (10 min each), the badge cap (3 min, which also compiles any module the entry
-   imports beyond the precompiled set, §3.6) and the stream's (about 6.9 s per request at `M_cap`
+   imports beyond the precompiled set, §3.6) and the stream's (about 17 s per request at `M = 96`
    since V4-A11, §3.6; about 3.1 s per link before) bind entries
    and are a rule; the baseline's figures are from the 32-vCPU development VM (§3.1), and the
    certificate job's fixed steps are partly estimated (§3.4). The user's alternative: a larger

@@ -85,14 +85,14 @@ itself; every output is checked with `acc` under the run's `vk` against that sta
 be accepted.
 
 **What is drawn, and what is told** (§3). Fresh per evaluation from the OS CSPRNG, published only
-after the run: `M = 64 + G` (`G` geometric with mean 16, memoryless) truncated at 112; each chain's
+after the run: each chain's
 length i.i.d. with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work per octave; step 1's
-two chains too); the starts. A step learns its own length only when its inputs arrive; `M` is
-never told. Two cross-step side channels exist and are harmless given the re-timing rule below
+two chains too); the starts. A step learns its own length only when its inputs arrive. The number of
+steps is **not** drawn: `M = 96` in season 1 (6 in the smoke), the same for every entry. Two cross-step side channels exist and are harmless given the re-timing rule below
 (§11 m-6): the signature index the service returns (how many signatures this lifetime made) and
-`CLOCK_REALTIME`. The index tells a step `i < 64` that it is not the last (`M ≥ 64`); that is
-harmless: the score is a work-weighted cubic mean over every step, so knowing that more steps
-follow changes nothing a step can gain (about 0.1–0.3 % of `P̄` at most, estimate; review m-9).
+`CLOCK_REALTIME`. With `M` public a step can count its position anyway;
+leaving the last few chains to the final check gains about 0.4–1.0 % at most (estimate), because
+the verifier charge prices the work it creates.
 
 **The handshake** (per request):
 
@@ -118,7 +118,7 @@ files the runner cannot remove, the filesystem left fuller after cleanup.
 **Between steps** the runner checks outputs (in batches of `check_every` = 8, each `V_i` the best of
 two measurements, pinned to one core) and takes calibration samples, **never while an entry
 process is alive**. The whole stream, every request, check, canary, calibration sample and re-run,
-runs within `stream_s` (960 s, wall time). A stream that reaches it is scored over its completed
+runs within `stream_s` (1,920 s, wall time). A stream that reaches it is scored over its completed
 steps and flagged `truncated`; such a run is never ranked.
 
 **Re-timing** (§5.3). After the stream the runner fits `P ≈ a·n + b` (trimmed least squares) and
@@ -166,7 +166,7 @@ plus the verifier) takes more than 10 × `v_ref` to decide, the column above its
 the checker (an accepted DoS input is recorded, not failed). No time is a pass/fail gate on the
 verifier any more: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
 completed steps, flagged `truncated` and not ranked. Every GitHub job of an evaluation ends within
-30 minutes, and these caps are nested inside it (V4-A9). The first failure ends the evaluation
+30 minutes, the benchmark job within 50, and these caps are nested inside them (V4-A9). The first failure ends the evaluation
 (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's output (its
 first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's refusals of this
 run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13), and a kill by the
