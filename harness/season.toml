@@ -1,7 +1,7 @@
 # recursion.fast v4, season 1: every shape and cap of an evaluation (BRIEF V4-10 … V4-13, V4-A5,
 # V4-A9, V4-A11). The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
-# Every GitHub job of an evaluation runs at most 30 minutes, except the benchmark job (50 minutes since
-# the stream's cap was doubled, 2026-10-29), and the caps below are nested inside those limits (design §3.4): an entry that is slow or hangs fails a cap and is REJECTed with the
+# Every GitHub job of an evaluation runs at most 30 minutes, except the certificate job (40 minutes) and the
+# benchmark job (50 minutes), whose caps were doubled on 2026-10-29, and the caps below are nested inside those limits (design §3.4): an entry that is slow or hangs fails a cap and is REJECTed with the
 # reason, never killed with its job.
 name = "season-1"
 
@@ -14,7 +14,7 @@ R = 10            # v_ref = T_triv / R (V4-12, CM-8; a knee of the score, no lon
 
 [certificate]     # the certificate job's Lean steps (V4-A9), on a 4-vCPU runner; a breach is the
                   # entry's REJECT, except the kernel's, which leaves the certificate unchecked (Q12)
-build_s = 600     # the entry's `lake build` of the challenge and Solution's import closure
+build_s = 1200    # the entry's `lake build` of the challenge and Solution's import closure (doubled 2026-10-29)
 kernel_s = 600    # the comparator: the exports and the Lean kernel's replay
 gate_s = 120      # the gate
 badge_s = 180     # the badge build

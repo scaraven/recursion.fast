@@ -24,8 +24,8 @@
 #                ERROR, never ACCEPT (RF-M1).
 #   attest       signs the result JSON with a GitHub artifact attestation; runs no entry code
 #
-# Time (V4-A9): every job ends within 30 minutes, the benchmark job within 50 (its stream cap doubled,
-# 2026-10-29). The caps inside a job (`harness/season.toml`) are
+# Time (V4-A9): every job ends within 30 minutes, except the certificate job (40: the entry's Lean
+# build cap doubled) and the benchmark job (50: its stream cap doubled), both 2026-10-29. The caps inside a job (`harness/season.toml`) are
 # nested so that their sum and the job's fixed steps stay below its limit (design §3.4): an entry
 # that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its cap leaves
 # the certificate unchecked, Q12), never killed with its job, which would be a missing part and an
@@ -230,7 +230,7 @@ jobs:
   certificate:
     needs: [plan, setup, setup-tools]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions: { contents: read }
     env:
       ORG_KEY: rf-org-${{ needs.plan.outputs.core_sha }}

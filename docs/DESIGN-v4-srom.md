@@ -979,8 +979,9 @@ The runner never takes a statement from the prover: it computes every leaf diges
 `nodeStmt` itself, and the calibration instance's root with `treeRoot` (the contract's
 specification of it). The stream's statements form a comb, `nodeStmt (nodeStmt (…) leaf) leaf`.
 
-**Every job within 30 minutes** (V4-A9), **the benchmark job within 50** (since 2026-10-29, when the
-stream's cap was doubled to 1,920 s). A job killed at its limit is a missing part and makes the
+**Every job within 30 minutes** (V4-A9), **the certificate job within 40 and the benchmark job within 50**
+(since 2026-10-29, when the entry's Lean build cap was doubled to 1,200 s and the stream's cap to
+1,920 s). A job killed at its limit is a missing part and makes the
 verdict ERROR, so the caps the entry controls are nested inside each job with room for its fixed
 steps: an entry that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its
 cap leaves the certificate unchecked, Q12, as before). The worst case of each job, with the caps of
@@ -990,7 +991,7 @@ cap leaves the certificate unchecked, Q12, as before). The worst case of each jo
 |---|---|---|---|
 | setup (no entry code) | — | on a cold miss: an earlier commit's cache restore (about 45 s, **estimate**), `lake exe cache get` ≤ 240 s, `org-setup.sh` steps 1–4 ≤ 1,080 s (their timeouts), the save and its check (about 2 min, **estimate**): 22 min of timeouts and about 3 min of transfers. **Measured**: `cache get` 39 s warm and 139 s cold, `org-setup.sh` 237 s warm and 270 s cold (CI runs 39966237935, 39935079265, before CompPoly and `Mathlib.Tactic` joined), the `Mathlib.Tactic` objects 221 s on 4 cores of the development VM. On a hit: nothing | about 25 of 30 min |
 | setup-tools (no entry code) | — | on a miss: the comparator ≤ 240 s (14 s **measured**; 540 s with nanoda), the service ≤ 120 s (12–17 s **measured**), two small saves | 6 of 30 min |
-| certificate | build 600 s + kernel 600 s + gate 120 s + badge 180 s = 1,500 s (25 min) | checkout and runner setup 10 s (8 s **measured**); elan 1 s (**measured**); the two cache restores about 45 s (**estimate**: the 2.7 GB package-tree cache restores in 35 s, **measured**, and the organiser build and objects add some hundreds of MB); the Lean toolchain 29 s (**measured**, CI run 39966237935); fetch, render, source rule about 5 s; two olean-manifest checks over 7.58 GB, 15.5 s each on 4 cores with a warm page cache (**measured**, `logs/trim-fix/manifest-check-time.log`), allowed 40 s each cold; `lake env`, the upload about 10 s: about 3 min | 28 of 30 min; even at twice the restore estimate the job ends inside 30 |
+| certificate | build 1,200 s (doubled from 600 s on 2026-10-29) + kernel 600 s + gate 120 s + badge 180 s = 2,100 s (35 min) | checkout and runner setup 10 s (8 s **measured**); elan 1 s (**measured**); the two cache restores about 45 s (**estimate**: the 2.7 GB package-tree cache restores in 35 s, **measured**, and the organiser build and objects add some hundreds of MB); the Lean toolchain 29 s (**measured**, CI run 39966237935); fetch, render, source rule about 5 s; two olean-manifest checks over 7.58 GB, 15.5 s each on 4 cores with a warm page cache (**measured**, `logs/trim-fix/manifest-check-time.log`), allowed 40 s each cold; `lake env`, the upload about 10 s: about 3 min | 38 of 40 min (the certificate job's limit since 2026-10-29); even at twice the restore estimate the job ends inside 40 |
 | benchmark (one job since V4-A11) | prover build 120 s + setup 240 s + measuring and hashing the setup directory (a walk of at most 2^20 entries, a hash of at most `setup_cap` bytes within 60 s) + the stream 1,920 s (a wall deadline from its first calibration sample over every request, check, canary, sample and re-run, §3.6) + at most 30 s of work begun before the cap and ending after it (§3.6, review M-3) + DoS 180 s = 2,560 s (42.7 min) at the worst case | `calib`'s build (seconds); the calibration instance's digests (2.2 s **measured** by the D-trim review for the tree's `2^24` compressions under v4 before V4-A11, the same instance size); the service calibration (two 2 s throughput runs and key generation, about 5 s); the stream's leaf digests before the deadline (about `2^24.9` compressions at `M = 96`, so a few seconds, **estimate** from the same rate); two service lifetimes; the score: under 60 s (**estimate**) | inside the part's 44 min (`evaluate.py` `PART_S` = 2,640 s), the job's fixed steps and upload inside its 50 (the benchmark job's limit since the stream's cap was doubled on 2026-10-29; every other job keeps 30). **A part that still runs past `PART_S` after the prover's build has started is the entry's REJECT** (`evaluate.py`, from the stage the runner's checkpoint names; review M-3), never a missing part |
 | plan, attest | — | data only | 10 min each |
 
@@ -1364,8 +1365,8 @@ question was `proofCap`).
   the then `verify_s = 60 s`. The DoS column fails a run whose input takes more than 10 × `v_ref`
   (§3.4), but it draws 100 random mutations and does not search for such inputs; a crafted-input
   column is a follow-up (FB-5, §6.3).
-- **The 30-minute jobs bind entries** (V4-A9): an entry's Lean must build within 10 min and check
-  within 10 min on a 4-vCPU runner, and its prover must build, set up and prove the stream within
+- **The 30-minute jobs bind entries** (V4-A9): an entry's Lean must build within 20 min (10 min until
+  2026-10-29) and check within 10 min on a 4-vCPU runner, and its prover must build, set up and prove the stream within
   their caps (about 17 s per request at `M = 96` with the doubled stream cap, §3.6). The baseline's build took 147 s and its
   kernel phase about 144 s on the 32-vCPU
   development VM (§3.1); on a runner neither has been measured. A larger runner for the
@@ -1567,7 +1568,7 @@ user's own.
    the submissions repository. (The end-to-end smoke of `ci.yml` ran on a runner before V4-A9: run
    39966237935.)
 2. **The 30-minute caps against a real entry on a runner** (C-M2, C10, V4-A9): the entry's build
-   and kernel caps (10 min each), the badge cap (3 min, which also compiles any module the entry
+   and kernel caps (20 and 10 min), the badge cap (3 min, which also compiles any module the entry
    imports beyond the precompiled set, §3.6) and the stream's (about 17 s per request at `M = 96`
    since V4-A11, §3.6; about 3.1 s per link before) bind entries
    and are a rule; the baseline's figures are from the 32-vCPU development VM (§3.1), and the

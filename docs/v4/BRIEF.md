@@ -308,6 +308,9 @@ records it as implemented.
    so `build_s` falls from 300 to 120 s and `setup_s` from 300 to 240 s. On 2026-10-29, at the user's
    request, the stream's cap was doubled to 1,920 s, so the benchmark job's limit rose from 30 to 50
    minutes and `PART_S` to 2,640 s (120 + 240 + 1,920 + 180 = 2,460 s plus the organiser's steps).
+   The same day the certificate job's entry Lean build cap `[certificate] build_s` was doubled from
+   600 to 1,200 s, so that job's limit rose from 30 to 40 minutes (1,200 + 600 + 120 + 180 = 2,100 s
+   plus about 3 minutes of fixed steps).
 6. *Per-step service queries and bytes* (draft §8) are not output: the service keeps no per-request
    statistics, only its lifetime's totals.
 7. *A re-timed step's nearest calibration sample* is the one before its original position, not the
