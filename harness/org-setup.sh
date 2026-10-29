@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# The organiser's preparation of a machine (TRUSTED; run before any entry code exists on it):
+#   1. build the organiser's Lean targets (contract, library, controls, and CompPoly's BF64/Ext3
+#      field with its byte codec) in ORG (Mathlib from its cache on CI: `lake exe cache get`
+#      happens before this script, never on a shared tree; CompPoly builds from source);
+#   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, chaincheck);
+#   3. write the import allowlist (gate rule 6: the import closure of the organiser's roots) and the
+#      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
+#   4. build, once and outside any sandbox, what Lake links into every badge executable: the
+#      compiled objects of every module of the organiser's import closure, of `Mathlib.Tactic`'s
+#      (what entries import for their proofs; review D-trim m-1) and the external C libraries of the
+#      package tree (a throw-away executable that imports `RecursionFast`, the CompPoly roots and
+#      `RF_BADGE_OBJECTS`, default `Mathlib.Tactic`), so that a badge build in the sandbox compiles
+#      only the modules an entry adds beyond these, within its cap (`badge_s`);
+#   5. build the service (`cargo build --release`), unless `RF_ORG_SERVICE=0` (the evaluation's
+#      `setup` job, whose `setup-tools` job builds and caches the service).
+#
+#   harness/org-setup.sh ORG          (ORG: the organiser checkout, e.g. the repository root)
+# Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`; the timeouts of steps 1–4 sum
+# to 18 min, the evaluation's `setup` job's bound for this script (V4-A9; measured on a runner with
+# the package tree cached: 237 s, CI run 39966237935; step 4's `Mathlib.Tactic` objects 221 s on 4
+# cores of the development VM, `logs/trim-fix/objects-mathlib-tactic-4cores.log`).
+set -euo pipefail
+ORG=$(cd "${1:?usage: org-setup.sh ORG}" && pwd)
+HERE=$(cd "$(dirname "$0")" && pwd)
+LOG=$ORG/logs/org-setup; mkdir -p "$LOG" "$ORG/.lake/rf"
+# The organiser's roots: an entry may import any module of their import closure (gate rule 6).
+# CompPoly's binary field `BF64`/`Ext3` and its byte codec are organiser-built and pinned (v3
+# precedent 09668b5, FIXLIST Q2): their modules are in the manifest as pinned, so the gate reports
+# their `@[csimp]` lemma instead of rejecting it as an untrusted one.
+COMPPOLY=CompPoly.Fields.Binary.BF64.Ext3,CompPoly.Fields.Binary.BF64.Bytes
+ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls,$COMPPOLY}
+TARGETS=${RF_ORG_TARGETS:-RecursionFast +${COMPPOLY//,/ +}}
+# Further modules whose objects step 4 precompiles for the badge (empty in the core CI, whose badges
+# import nothing beyond the organiser's closure).
+BADGE_OBJECTS=${RF_BADGE_OBJECTS-Mathlib.Tactic}
+t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
+
+step "1 organiser build ($TARGETS)"
+(cd "$ORG" && timeout 300 lake build $TARGETS) > "$LOG/build.log" 2>&1 || { tail -20 "$LOG/build.log"; exit 1; }
+step "2 harness tools"
+(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit chaincheck tokensweep) > "$LOG/tools.log" 2>&1 \
+  || { tail -20 "$LOG/tools.log"; exit 1; }
+step "3 allowlist and olean manifest"
+(cd "$ORG" && timeout 90 lake env "$HERE/lean-tools/.lake/build/bin/gate" --closure "$ROOTS" "$ORG/.lake/rf/allowlist.txt") \
+  > "$LOG/allowlist.log" 2>&1 || { cat "$LOG/allowlist.log"; exit 1; }
+timeout 90 python3 -I "$ORG/scripts/olean-manifest.py" gen --org "$ORG" --closure "$ORG/.lake/rf/allowlist.txt" \
+  "$ORG/.lake/rf/manifest.sha256" > "$LOG/manifest.log" 2>&1 || { cat "$LOG/manifest.log"; exit 1; }
+tail -1 "$LOG/allowlist.log"; tail -1 "$LOG/manifest.log"
+step "4 compiled objects and external libraries for the badge executables"
+X=$(mktemp -d "$ORG/.lake/rf/extlibs.XXXXXX")
+PK=$(python3 -I -c 'import json,os,sys; o=sys.argv[1]; m=json.load(open(os.path.join(o,"lake-manifest.json"))); print(os.path.realpath(os.path.join(o, m.get("packagesDir") or ".lake/packages")))' "$ORG")
+cp "$ORG/lean-toolchain" "$X/"
+{ echo "import RecursionFast"; for m in ${COMPPOLY//,/ } ${BADGE_OBJECTS//,/ }; do echo "import $m"; done
+  echo "def main : IO Unit := pure ()"; } > "$X/Nop.lean"
+python3 -I - "$ORG" "$X" "$PK" <<'EOF'
+import json, os, sys
+org, x, pk = sys.argv[1:]
+open(os.path.join(x, "lakefile.toml"), "w").write(
+    f'name = "rfextlibs"\npackagesDir = {json.dumps(pk)}\n[[require]]\nname = "RecursionFast"\npath = {json.dumps(org)}\n'
+    '[[lean_exe]]\nname = "nop"\nroot = "Nop"\n')
+m = json.load(open(os.path.join(org, "lake-manifest.json")))
+for p in m["packages"]:
+    p["inherited"] = True
+m["packages"].insert(0, {"type": "path", "scope": "", "name": "RecursionFast", "manifestFile": "lake-manifest.json",
+                         "inherited": False, "dir": org, "configFile": "lakefile.toml"})
+m["name"], m["packagesDir"] = "rfextlibs", pk
+json.dump(m, open(os.path.join(x, "lake-manifest.json"), "w"), indent=1)
+EOF
+(cd "$X" && timeout 540 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
+rm -rf "$X"
+if [[ "${RF_ORG_SERVICE:-1}" != 0 ]]; then
+  step "5 service"
+  (cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }
+fi
+step "done"

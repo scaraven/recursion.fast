@@ -1,0 +1,396 @@
+# The evaluation of one entry (reusable; TRUSTED). The submissions repository calls it from an
+# organiser-controlled workflow (harness/ci-template/evaluate-entry.yml), pinned to a commit of this
+# repository, with the entry's commit SHA and root. V4-A1, V4-A2, V4-A9:
+#
+#   plan         the resolved core commit and the benchmark's parts; runs no entry code. Every later
+#                job checks out that commit, and the caches are keyed on it (review D-trim m-4).
+#   setup        the organiser's Lean environment and nothing else: the package tree, the organiser
+#                build with its olean manifest and import allowlist, and the badge's precompiled
+#                objects (harness/org-setup.sh)
+#   setup-tools  beside it, the comparator and the service. Both setup jobs cache their output per
+#                core commit and never fetch the entry, so what they save exists before any entry
+#                code is on any machine of the run, and a cache miss costs their time, never an
+#                entry's. A save that did not land fails its job with the reason, and a later job
+#                that finds a cache missing ends as a signalled ERROR with the reason.
+#   certificate  source rule, the one Lean build, comparator (Lean kernel; nanoda if `nanoda`), gate,
+#                badge build; deterministic; untrusted code runs only inside the sandbox
+#   benchmark    the GitHub-hosted runner: prover build, setup, the runs, the checks, the score;
+#                untrusted code runs only inside the sandbox. Since V4-A11 it is **one job**: the
+#                calibration, the one IVC stream (interleaved `c_P` and `T_triv` samples, the
+#                re-timing) and the DoS column on the stream's last output; one run, no repeats.
+#                The input `split` is kept for callers and selects the same one job. The parts
+#                are defined once, in `harness/aggregate.py` (the `plan` job prints them), and the
+#                aggregation requires exactly that set: a missing, duplicated or mismatched part is
+#                ERROR, never ACCEPT (RF-M1).
+#   attest       signs the result JSON with a GitHub artifact attestation; runs no entry code
+#
+# Time (V4-A9): every job ends within 30 minutes, except the certificate job (40: the entry's Lean
+# build cap doubled) and the benchmark job (50: its stream cap doubled), both 2026-10-29. The caps inside a job (`harness/season.toml`) are
+# nested so that their sum and the job's fixed steps stay below its limit (design §3.4): an entry
+# that is slow or hangs fails a cap and is REJECTed with the reason (a kernel over its cap leaves
+# the certificate unchecked, Q12), never killed with its job, which would be a missing part and an
+# ERROR.
+#
+# What runs here (V4-A9): only what is about the entry, and the organiser's environment it runs in
+# (the package tree and its olean-manifest check, the comparator, the service, `T_triv,best`; the
+# result records the environment's commit and its manifest's and allowlist's hashes). Every
+# check whose subject is organiser code (the contract's `acc`, the file parser, the service, the
+# sandbox, the badge template, the extractor interpreter, the harness) runs in this repository's
+# `ci.yml`, once per harness commit.
+#
+# Nothing here holds a write token while entry code runs: `permissions` are read-only in the
+# certificate and benchmark jobs, checkouts do not persist credentials, the entry is fetched by SHA
+# as data with plain git, and every sandboxed process starts with an empty environment.
+#
+# Record acceptance (V4-A1, RF-m1): a result is a record only if `harness/verify-record.sh
+# result.json` passes. It runs `gh attestation verify` with `--signer-workflow
+# scaraven/recursion.fast/.github/workflows/evaluate.yml` and `--deny-self-hosted-runners`, then
+# requires the certificate's signer digest (the commit the reusable workflow ran at) to equal the
+# result's `harness_commit`, and the verdict to be ACCEPT and comparable. The attested JSON binds
+# the verdict to vk, the CPU model, the runner image, the harness commit and the service binary's
+# hash.
+name: evaluate
+on:
+  workflow_call:
+    inputs:
+      entry_repo: { type: string, required: true, description: "owner/name of the repository holding the entry" }
+      entry_sha: { type: string, required: true, description: "the commit to evaluate (full SHA)" }
+      entry_path: { type: string, required: true, description: "the entry's root in that commit" }
+      pr_ref: { type: string, required: false, default: "", description: "refs/pull/N/head, fetched from entry_repo" }
+      core_ref: { type: string, required: true, description: "the commit of scaraven/recursion.fast to use (the caller's pin)" }
+      season: { type: string, required: false, default: "harness/season.toml" }
+      nanoda: { type: boolean, required: false, default: false }
+      split: { type: boolean, required: false, default: true }
+    outputs:
+      verdict: { value: "${{ jobs.attest.outputs.verdict }}" }
+permissions:
+  contents: read
+
+# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    # the resolved core commit, and the benchmark's parts, defined once in harness/aggregate.py; the
+    # aggregation requires exactly these (RF-M1). Runs no entry code.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: { contents: read }
+    outputs:
+      name: ${{ steps.plan.outputs.name }}
+      parts: ${{ steps.plan.outputs.parts }}
+      core_sha: ${{ steps.plan.outputs.core_sha }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ inputs.core_ref }}", path: core, persist-credentials: false }
+      - id: plan
+        run: |
+          name=${{ inputs.split && 'split' || 'single' }}
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "parts=$(python3 -I core/harness/aggregate.py --print-matrix "$name")" >> "$GITHUB_OUTPUT"
+          echo "core_sha=$(git -C core rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  setup:
+    # the organiser's Lean environment, cached per core commit (`rf-org-SHA`); this job never fetches
+    # the entry (V4-A9). On a cold miss its steps' timeouts sum to 22 min (`lake exe cache get` 240 s,
+    # `org-setup.sh` 1,080 s), with the cache transfers inside 30 (design §3.4); on a hit it does
+    # nothing.
+    needs: [plan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: { contents: read }
+    env:
+      ORG_KEY: rf-org-${{ needs.plan.outputs.core_sha }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
+      - id: org
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/.lake
+            core/harness/lean-tools/.lake
+          key: ${{ env.ORG_KEY }}
+          lookup-only: true
+      - name: elan
+        if: steps.org.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: an earlier core commit's organiser tree, if any (written by this job only)
+        if: steps.org.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/.lake
+            core/harness/lean-tools/.lake
+          key: ${{ env.ORG_KEY }}
+          restore-keys: rf-org-
+      - name: organiser setup (package tree, build, tools, allowlist, manifest, the badge's objects)
+        if: steps.org.outputs.cache-hit != 'true'
+        working-directory: core
+        env: { RF_ORG_SERVICE: "0" }      # the service is setup-tools' (its own cache)
+        run: |
+          timeout 240 lake exe cache get
+          mkdir -p logs && timeout 1080 harness/org-setup.sh "$PWD"
+      - uses: actions/cache/save@v4
+        if: steps.org.outputs.cache-hit != 'true'
+        with:
+          path: |
+            core/.lake
+            core/harness/lean-tools/.lake
+          key: ${{ env.ORG_KEY }}
+      - name: the cache was saved (a failed upload is this job's failure, not a later job's surprise)
+        if: steps.org.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/.lake
+            core/harness/lean-tools/.lake
+          key: ${{ env.ORG_KEY }}
+          lookup-only: true
+          fail-on-cache-miss: true
+      - name: why this job failed
+        if: failure()
+        run: echo "::error title=organiser setup::the organiser's environment ($ORG_KEY) was not built or not saved; the evaluation cannot run (ERROR, the organiser's)"
+
+  setup-tools:
+    # the comparator (`rf-kernels-…-SHA`) and the service (`rf-svc-SHA`), cached per core commit,
+    # beside `setup`; never fetches the entry
+    needs: [plan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions: { contents: read }
+    env:
+      KERNELS_KEY: rf-kernels-${{ inputs.nanoda && 'nanoda' || 'lean' }}-${{ needs.plan.outputs.core_sha }}
+      SVC_KEY: rf-svc-${{ needs.plan.outputs.core_sha }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
+      - id: kernels
+        uses: actions/cache/restore@v4
+        with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}", lookup-only: true }
+      - id: svc
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/service/target/release/rf-oracle
+            core/service/target/release/rf-bench
+          key: ${{ env.SVC_KEY }}
+          lookup-only: true
+      - name: elan
+        if: steps.kernels.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: proof checkers (its inner timeouts sum to 180 s, and 300 s more for nanoda)
+        if: steps.kernels.outputs.cache-hit != 'true'
+        env: { RF_NANODA: "${{ inputs.nanoda && '1' || '0' }}" }
+        run: timeout ${{ inputs.nanoda && 540 || 240 }} core/harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" > /dev/null
+      - name: service
+        if: steps.svc.outputs.cache-hit != 'true'
+        working-directory: core/service
+        run: timeout 120 cargo build --release
+      - uses: actions/cache/save@v4
+        if: steps.kernels.outputs.cache-hit != 'true'
+        with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}" }
+      - uses: actions/cache/save@v4
+        if: steps.svc.outputs.cache-hit != 'true'
+        with:
+          path: |
+            core/service/target/release/rf-oracle
+            core/service/target/release/rf-bench
+          key: ${{ env.SVC_KEY }}
+      - name: the comparator's cache was saved
+        if: steps.kernels.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}", lookup-only: true, fail-on-cache-miss: true }
+      - name: the service's cache was saved
+        if: steps.svc.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/service/target/release/rf-oracle
+            core/service/target/release/rf-bench
+          key: ${{ env.SVC_KEY }}
+          lookup-only: true
+          fail-on-cache-miss: true
+      - name: why this job failed
+        if: failure()
+        run: echo "::error title=organiser setup::the comparator ($KERNELS_KEY) or the service ($SVC_KEY) was not built or not saved; the evaluation cannot run (ERROR, the organiser's)"
+
+  certificate:
+    needs: [plan, setup, setup-tools]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions: { contents: read }
+    env:
+      ORG_KEY: rf-org-${{ needs.plan.outputs.core_sha }}
+      KERNELS_KEY: rf-kernels-${{ inputs.nanoda && 'nanoda' || 'lean' }}-${{ needs.plan.outputs.core_sha }}
+    outputs:
+      status: ${{ steps.cert.outputs.status }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
+      - name: runner setup
+        run: core/harness/ci/runner-setup.sh
+      - name: elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: the organiser's environment (the setup job's cache, saved before any entry code existed)
+        id: org
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/.lake
+            core/harness/lean-tools/.lake
+          key: ${{ env.ORG_KEY }}
+      - name: the comparator (setup-tools' cache)
+        id: kernels
+        uses: actions/cache/restore@v4
+        with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}" }
+      - name: proof checkers (from the cache) and the Lean toolchain
+        if: steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
+        env: { RF_NANODA: "${{ inputs.nanoda && '1' || '0' }}" }
+        run: |
+          core/harness/ci/build-kernels.sh --env-only "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
+          (cd core && timeout 300 lean --version)
+      - name: fetch the entry by SHA (data only; never executed outside the sandbox)
+        if: steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
+        env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
+        run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
+      - name: certificate (source rule, the one build, comparator, gate, badge; each capped by the season)
+        id: cert
+        env: { ORG_HIT: "${{ steps.org.outputs.cache-hit }}", KERNELS_HIT: "${{ steps.kernels.outputs.cache-hit }}" }
+        run: |
+          mkdir -p cert-out
+          if [[ "$ORG_HIT" != true || "$KERNELS_HIT" != true ]]; then
+            # a missing cache is the organiser's failure, never the entry's: a signalled ERROR with its
+            # reason, aggregated and attested like any result (review D-trim m-4)
+            msg="harness error: the organiser's environment is not in the cache ($ORG_KEY: ${ORG_HIT:-miss}, $KERNELS_KEY: ${KERNELS_HIT:-miss}); a setup job's save failed or the cache was evicted"
+            echo "::error title=organiser cache missing::$msg"
+            python3 -I -c 'import json, sys; json.dump({"status": "error", "reasons": [sys.argv[1]]}, open("cert.json", "w"))' "$msg"
+            echo "status=error" >> "$GITHUB_OUTPUT"
+            cp cert.json cert-out/
+            exit 0
+          fi
+          # RB-m3: a rejected entry is a result (exit 1, cert.json says `reject`; a harness error
+          # says `error`, exit 2); a crash (no cert.json) fails the job, and any unreadable status
+          # counts as `reject`
+          rc=0
+          python3 -I core/harness/evaluate.py cert --entry entry --org "$PWD/core" --work "$RUNNER_TEMP/cert" \
+            --season "core/${{ inputs.season }}" --out cert.json ${{ inputs.nanoda && '--nanoda' || '' }} || rc=$?
+          status=$(python3 -I -c 'import json; print(json.load(open("cert.json"))["status"])' 2>/dev/null || echo reject)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          [[ -s cert.json ]] || { echo "evaluate.py cert crashed (exit $rc)"; exit 1; }
+          cp cert.json cert-out/ && cp -r "$RUNNER_TEMP/cert/badge" cert-out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with: { name: certificate, path: cert-out/ }
+
+  benchmark:
+    needs: [plan, setup-tools, certificate]
+    if: needs.certificate.outputs.status == 'ok' || needs.certificate.outputs.status == 'provisional'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions: { contents: read }
+    env:
+      SVC_KEY: rf-svc-${{ needs.plan.outputs.core_sha }}
+    strategy:
+      # RB-M1: one job's failure must not cancel the other; the aggregation then requires every
+      # planned part (a missing one is ERROR, RF-M1)
+      fail-fast: false
+      matrix:
+        # the job calibrates c_P, T_triv and the service on its own machine (V4-12, V4-A5, V4-A11)
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
+      - name: runner setup
+        run: core/harness/ci/runner-setup.sh
+      - name: service (setup-tools' cache, saved before any entry code existed)
+        id: svc
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            core/service/target/release/rf-oracle
+            core/service/target/release/rf-bench
+          key: ${{ env.SVC_KEY }}
+      - uses: actions/download-artifact@v4
+        with: { name: certificate, path: cert }
+      - name: fetch the entry by SHA
+        if: steps.svc.outputs.cache-hit == 'true'
+        env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
+        run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
+      - name: benchmark (every step capped by the season; the part within 44 min, harness/evaluate.py PART_S)
+        # RF_ENTRY_NAME: the entry's identity for the provisional ranking (aggregate.py --rank, review M-4)
+        env: { PART: "${{ matrix.part }}", RF_HARNESS_COMMIT: "${{ needs.plan.outputs.core_sha }}", SVC_HIT: "${{ steps.svc.outputs.cache-hit }}",
+               RF_ENTRY_NAME: "${{ inputs.entry_repo }}:${{ inputs.entry_path }}" }
+        run: |
+          out="result-${{ strategy.job-index }}.json"
+          if [[ "$SVC_HIT" != true ]]; then
+            # a missing cache is the organiser's failure: a signalled ERROR with its reason (m-4)
+            msg="harness error: the service is not in the cache ($SVC_KEY); setup-tools' save failed or the cache was evicted"
+            echo "::error title=organiser cache missing::$msg"
+            python3 -I - "$PART" "$msg" "$out" "$RF_HARNESS_COMMIT" <<'EOF'
+          import json, sys
+          part, msg, out, commit = sys.argv[1:]
+          parts = ["calibrate", "stream", "dos"] if part == "all" else part.split(",")
+          json.dump({"parts": parts, "benchmark": "error", "reasons": [msg], "harness": {"commit": commit}}, open(out, "w"))
+          EOF
+            exit 0
+          fi
+          chmod +x cert/badge/*
+          python3 -I - <<'EOF'
+          import json; c = json.load(open("cert/cert.json")); c["badge_dir"] = "cert/badge"; json.dump(c, open("cert/cert.json", "w"))
+          EOF
+          args=(); [[ "$PART" == all ]] || args=(--parts "$PART")
+          # a failed part is a result (REJECT); a part with no result JSON is a harness error
+          python3 -I core/harness/evaluate.py bench --entry entry --cert cert/cert.json --work "$RUNNER_TEMP/bench" \
+            --season "core/${{ inputs.season }}" --out "$out" "${args[@]}" || true
+          [[ -s "$out" ]] || { echo "evaluate.py bench wrote no result"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with: { name: "result-${{ strategy.job-index }}", path: "result-*.json" }
+
+  attest:
+    needs: [plan, certificate, benchmark]
+    if: always() && needs.certificate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: { contents: read, id-token: write, attestations: write }
+    outputs:
+      verdict: ${{ steps.agg.outputs.verdict }}
+    steps:
+      - name: machine
+        run: lscpu
+      - uses: actions/checkout@v4
+        with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { pattern: "result-*", path: parts, merge-multiple: true }
+      - uses: actions/download-artifact@v4
+        with: { name: certificate, path: cert }
+      - name: aggregate (data only; no entry code runs in this job)
+        id: agg
+        env: { SEASON: "core/${{ inputs.season }}", RUN: "${{ github.run_id }}", ATTEMPT: "${{ github.run_attempt }}" }
+        run: |
+          shopt -s nullglob
+          python3 -I core/harness/aggregate.py --plan "${{ needs.plan.outputs.name }}" --season "$SEASON" \
+            --cert cert/cert.json --out result.json --job "$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT" \
+            parts/result-*.json
+          echo "verdict=$(python3 -I -c 'import json; print(json.load(open("result.json"))["verdict"])')" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: result.json }
+      - uses: actions/upload-artifact@v4
+        with: { name: result, path: result.json }

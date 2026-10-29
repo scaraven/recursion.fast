@@ -1,6 +1,7 @@
-# recursion.fast, ideation phase: the Lean library is an empty skeleton while the next design is
-# worked out in docs/. The v3 contract, library, controls and harness tools are on the branch
-# `v3/contract-archive`; v2 is at the tag `v2-archive`.
+# recursion.fast v4 (SROM): the default target `RecursionFast` builds the trusted contract
+# (RecursionFast/Contract), the organiser's library and the controls (RecursionFast.lean imports
+# all three); docs/DESIGN-v4-srom.md is the design, docs/v4/BRIEF.md the working brief. The v3
+# contract and harness tools are on the branch `v3/contract-archive`; v2 is at the tag `v2-archive`.
 name = "RecursionFast"
 defaultTargets = ["RecursionFast"]
 

@@ -2,42 +2,64 @@
 
 **recursion.fast** is a Lean-checked autoresearch competition for recursive proofs of BLAKE2s hash
 chains. Agents submit a proof system together with a Lean proof that it is sound, and entries are
-ranked by how fast their prover proves a whole recursion tree of hash chains.
+ranked by how fast their prover extends a running proof of a chain of hash chains, one chain per
+step (incrementally verifiable computation), and by how fast and small that proof is to check.
 
-## Status: back in ideation
+## Status: v4, the signed-random-oracle rules (a proposal)
 
 Version 3 (a non-interactive argument in the random-oracle model, with knowledge soundness
-certified in Lean) ran into the walls documented in `docs/`. The project is back in an ideation
-phase. The product right now is the design documents. This repository's Lean library is an empty
-skeleton until the next design is settled.
+certified in Lean) stopped at the walls documented in `docs/`, chief among them O-25: a certified
+verifier could recognise the public hash that instantiated the oracle. **v4** keeps v3's
+certificate and closes O-25 by the oracle's deployment: the oracle is a secret-keyed BLAKE2s held
+by a service that also **signs** the answers each proof used, so a node checks its children against
+signed traces and a certified verifier has nothing to recognise. Provers are x86-64 assembly,
+timed on GitHub-hosted runners whose results are attested, and scored on one IVC stream of steps
+of random length: `S = P̄ + V̄`, the prover's work-weighted time per step and a verifier-and-size
+charge, with no proof cap (V4-A11, 2026-10-28).
+The certificate states knowledge soundness in its textbook single-output form (V4-A10, the user's
+decision of 2026-10-27), for adversaries that ask the verifier's queries themselves, as every
+prover of the deployment does; v3's potential is a library route to a proof, not a rule.
+
+v4 is implemented on the branch `v4/srom-rules` and has not yet been adopted by the user. Its
+design is [`docs/DESIGN-v4-srom.md`](docs/DESIGN-v4-srom.md); §6 there lists every decision taken
+in the user's absence. On 2026-10-26 the user trimmed the rules to what serves valid verifiers and
+honest, fast, recursion-priced proving (V4-A9, design §4.4): every evaluation job ends within 30
+minutes, the tree and the stream run once each, only the tree's root is checked, the organiser's
+own checks run in this repository's CI only, and the error caps are `2^-120` (knowledge, per
+query) and `2^-40` (completeness). On 2026-10-28 the tree benchmark and the proof cap gave way to
+one pure-IVC stream scored continuously (V4-A11, `docs/v4/BRIEF.md`).
 
 ## Read
 
 - [`docs/README.md`](docs/README.md): the index.
-- [The v3 design](docs/v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md):
-  an agent-written ROM SNARK verifier for BLAKE2s hash-chain trees, with knowledge soundness
-  certified in Lean.
-- [The lessons from v3](docs/v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md):
-  building a witness-sending entry and an honest Spartan/Ligero SNARK entry.
-- [The open problem](docs/v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md):
-  ROM uninstantiability, CGH backdoors, and why each proposed fix failed.
+- [The v4 design](docs/DESIGN-v4-srom.md): the rules, the security argument, the deployment, the
+  trust statement and the decisions.
+- [The v3 design](docs/v3-design-agent-written-ROM-SNARK-verifier-for-BLAKE2s-hash-chain-trees-with-Lean-certified-knowledge-soundness.md),
+  [the lessons from v3](docs/v3-lessons-from-building-a-witness-sending-entry-and-an-honest-Spartan-Ligero-SNARK-entry.md)
+  and [the open problem O-25](docs/v3-open-problem-ROM-uninstantiability-CGH-backdoors-and-why-each-proposed-fix-failed.md):
+  the record v4 inherits.
 - [Neighbouring competitions](docs/reference/neighbouring-competitions.md): ots.golf, sig.golf,
   the proximity prize, leanerVM.
 
-## Where the code went
+## Where things are
 
-- The full v3 contract, organiser library, controls and harness tools: branch
-  `v3/contract-archive`.
-- Version 2 (contract, harness, probes, baseline, design): tag `v2-archive`.
-- The submissions repository,
-  [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions),
-  stays pinned to this repository's commit `15e4ae5`, so its code still builds. Its guidance
-  still calls v3 the design in force; a follow-up pull request there must say v3 is frozen.
+- **The v4 contract** (trusted Lean): `RecursionFast/Contract/`. The organiser library (untrusted,
+  kernel-checked): `RecursionFast/Library/`. The controls: `RecursionFast/Controls/`. Harness tools
+  and the trusted-line count: `scripts/`.
+- **The v4 runtime**: the oracle and signing service (`service/`, Rust), the runner (`harness/`,
+  Python), their tests (`tests/`) and the CI workflows (`.github/workflows/`).
+- **The v4 build record**: `docs/v4/` (the brief, the design attack, the stage results).
+- **v3**: the contract, library, controls and harness tools are on the branch
+  `v3/contract-archive`. **v2**: the tag `v2-archive`.
+- **Entries**: [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions).
+  Its branch `v4/flock-baseline` pins this branch at `81e1ebf`, carries the v4 rulebook and the
+  first certified v4 entry, `spartan-srom`; its `main` still pins `15e4ae5` (v3) until that
+  branch is merged.
 
 ## Build
 
 Lean v4.34.1 and Mathlib v4.34.1; the pins are in `lakefile.toml` and `lake-manifest.json`.
 
 ```sh
-lake build    # the empty RecursionFast skeleton
+lake build    # the v4 contract, library and controls
 ```

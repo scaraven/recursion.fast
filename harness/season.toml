@@ -1,0 +1,64 @@
+# recursion.fast v4, season 1: every shape and cap of an evaluation (BRIEF V4-10 … V4-13, V4-A5,
+# V4-A9, V4-A11). The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
+# Every GitHub job of an evaluation runs at most 30 minutes, except the certificate job (40 minutes) and the
+# benchmark job (50 minutes), whose caps were doubled on 2026-10-29, and the caps below are nested inside those limits (design §3.4): an entry that is slow or hangs fails a cap and is REJECTed with the
+# reason, never killed with its job.
+name = "season-1"
+
+[score]           # S = P̄ + V̄ (V4-A11 §4, §11 simplification 1); seconds per 2^18-compression step
+K = 1.5           # the verifier term's weight; kappa = K · v0 is what the score uses
+kappa = 0.2667    # seconds per unit of max(x, x^3): K · v0, v0 = 177.8 ms (v_ref measured on a runner)
+n_ref = 262144    # 2^18: P̄ is per n_ref compressions
+s_ref = 2097152   # 2 MiB: x_i = V_i / v_ref + |π_i| / s_ref
+R = 10            # v_ref = T_triv / R (V4-12, CM-8; a knee of the score, no longer a gate)
+
+[certificate]     # the certificate job's Lean steps (V4-A9), on a 4-vCPU runner; a breach is the
+                  # entry's REJECT, except the kernel's, which leaves the certificate unchecked (Q12)
+build_s = 1200    # the entry's `lake build` of the challenge and Solution's import closure (doubled 2026-10-29)
+kernel_s = 600    # the comparator: the exports and the Lean kernel's replay
+gate_s = 120      # the gate
+badge_s = 180     # the badge build
+
+[stream]          # the one IVC stream (V4-A11 §2, §3): PROVER first, then PROVER step, a fresh process each
+M = 96            # steps per stream: one published constant, the same for every entry (2026-10-29)
+n_lo = 131072     # chain lengths i.i.d. with density ∝ 1/n² on [2^17, 2^20] (no stratification, §11)
+n_hi = 1048576
+ready_s = 10      # seconds from a request's process start to its `ready` line (§11 m-3)
+step_s = 60       # seconds per request from its inputs to the death of its last process
+stream_s = 1920   # wall seconds (doubled from 960 on 2026-10-29) for the whole stream from its first calibration sample: every request,
+                  # check, canary, calibration sample and re-run (§6); the entry's share is stated in
+                  # design §3.6
+check_every = 8   # outputs checked in batches of this many, between steps (no entry process alive)
+retime_factor = 1.3   # §5.3: a step above 1.3 × the fit's prediction is run once more ...
+retime_frac = 0.1     # ... at most 10% of the steps, largest ratio first
+
+[calibration]     # V4-A11 §5.4, §11 m-2: interleaved samples with no entry process alive, medians used
+every = 8         # one sample before step 1 and every 8 steps after
+idle_s = 2.0      # the idle gap before a sample (review m-2: 1 s left residual load)
+rounds = 32       # the work of one `calib` run (harness/tools/calib.c)
+runs_per_sample = 3     # a sample is the median of this many short runs (review m-2)
+ref_ns = 200000000      # `calib`'s time (32 rounds) on the season's reference runner: a placeholder
+ref_provisional = true  # until ref_ns is measured on a runner (D10); results say `c_P_provisional`
+clamp = [0.5, 2.0]      # c_P = median(samples) / ref_ns, clamped
+triv_chains = 64        # the chain checker's instance: 64 chains of 2^18 steps (2^24 compressions)
+triv_n = 262144
+service_s = 2           # seconds per service throughput measurement (V4-A5; published, not scored)
+
+[dos]             # on the stream's last output π_M
+proofs = 100
+item_factor = 10      # an input may take at most item_factor · v_ref (parse plus acc, §11 m-12)
+item_cap = "v_ref"    # "v_ref": item_factor · v_ref; "verify_s": the per-check cap (the smoke)
+total_s = 180         # the whole column's budget; a breach is the entry's failure (RF-M1)
+
+[caps]            # no proof cap since V4-A11: |π| is priced by s_ref, and acc only requires it to fit a word
+file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
+verify_s = 10           # one acc check
+setup_s = 240           # `prover setup` (untimed)
+setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB (R-M1)
+work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size (review M-1)
+build_s = 120           # the prover's build
+
+[memory]          # cgroup caps (13 GB for prover and service together, V4-13)
+prover = "11G"
+service = "2G"
+badge = "4G"

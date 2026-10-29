@@ -1,0 +1,59 @@
+# recursion.fast v4: the CI smoke shape (V4-A11: M from 4 to 8, chains of 16 to 128 steps). Same keys
+# as season.toml.
+name = "smoke"
+
+[score]
+K = 1.5
+kappa = 0.2667
+n_ref = 262144
+s_ref = 2097152
+R = 10
+
+[certificate]     # the certificate job's Lean steps (V4-A9), as in the season
+build_s = 600
+kernel_s = 600
+gate_s = 120
+badge_s = 180
+
+[stream]
+M = 6
+n_lo = 16
+n_hi = 128
+ready_s = 10
+step_s = 60
+stream_s = 300
+check_every = 2
+retime_factor = 1.3
+retime_frac = 0.25    # at least one re-run is allowed at M = 4
+
+[calibration]
+every = 4
+idle_s = 0.2
+rounds = 2
+runs_per_sample = 3
+ref_ns = 50000000
+ref_provisional = true
+clamp = [0.5, 2.0]
+triv_chains = 4
+triv_n = 16
+v_ref_ms = 177.8      # the smoke fixes v_ref (the trivial check at n = 16 takes microseconds)
+service_s = 1
+
+[dos]
+proofs = 64
+item_factor = 10
+item_cap = "verify_s"   # at the smoke shape v_ref is not this machine's: the per-check cap applies
+total_s = 180
+
+[caps]
+file_cap = 67108864
+verify_s = 10
+setup_s = 240
+setup_cap = 4294967296
+work_cap = 4294967296
+build_s = 120
+
+[memory]
+prover = "11G"
+service = "2G"
+badge = "4G"
