@@ -229,7 +229,13 @@ def combWalk (L : Log) (l₀ : Digest × ℕ) (ls : List (Digest × ℕ))
 
 /-- **The composition theorem over the comb**, the proposition `combWalk` proves: the leaf starts
 exist, or a BLAKE2s collision exists, or a capped forgery against `L` lies in the extraction tree
-of the root signed proof, or a member of that tree at a comb path (depth at most `M`) escapes. -/
+of the root signed proof, or a member of that tree at a comb path (depth at most `M`) escapes.
+
+As a proposition it is trivially true: its collision disjunct `Nonempty Collision` holds
+unconditionally by pigeonhole (BLAKE2s maps the infinite `List UInt8` into the finite `Digest`),
+without `hn` or `hacc` (review-lean F1). Its content is the computable `combWalk`, whose outcome
+carries an explicit collision, forgery, escape or the starts, and the walk-outcome events of
+`comb_prob` and `StreamBound.stream_prob`; cite those, not this theorem. -/
 theorem comb_compose (L : Log) (l₀ : Digest × ℕ) (ls : List (Digest × ℕ))
     (hn : ∀ x ∈ l₀ :: ls, x.2 ≤ chainCap) (p : Signed) (hacc : S.acc vk (combStmt l₀ ls) p = true) :
     (∃ ss, List.Forall₂ (fun s x => chainEnd s x.2 = x.1) ss (l₀ :: ls)) ∨ Nonempty Collision ∨

@@ -1,5 +1,7 @@
 # Synthesis (orchestrator's draft conclusions, for adversarial review)
 
+**Superseded by `REPORT.md`**, which applies both reviews (`review.md`, `review-lean.md`); kept as the reviewed draft.
+
 Evidence files in this directory: `literature.md`, `seams-T1.md`, `ideation.md`, `comb.md`,
 `stream-bound.md`, `T2-backdoor.md`, `T2-gkr.md`. Lean probes: `RecursionFast/Explore/*.lean`.
 

@@ -9,11 +9,15 @@
   The node clause of the T2 relation (`RelT2`) uses `accT2` on plain child proofs.
 
   * `accT2_magic`: under every `vk`, `accT2` accepts the 32-byte magic proof of **every** digest.
-  * `extract_magic`: the submission's extractor returns no witness from it, on every log.
-  * `relT2_node_magic`, `comb_spine_magic`, `comb_collapse`, `tree_collapse`: the collapse runs
-    through recursion at every depth: a node with two magic children satisfies `RelT2`, every
-    spine node of a comb over arbitrary digests does, and the root of a comb or balanced tree of
-    any size over arbitrary digests has an accepted proof.
+  * `extract_magic`: the submission's own extractor (`S.E`, the named one; not every extractor)
+    returns no witness from it, at its statement, on every log.
+  * `relT2_node_magic`, `comb_spine_magic`: the recursion content: a node with two magic children
+    satisfies `RelT2`, and so does every spine node of a comb over arbitrary digests.
+  * `comb_collapse`, `tree_collapse`: `accT2_magic` and `extract_magic` instantiated at the root
+    of a comb or balanced tree over arbitrary digests; the root is accepted directly and no child
+    is checked, so these two carry no recursive content of their own.
+  The extractor is applied to the statement being proved (`S.E c …`); an earlier version passed
+  `vk` there, which was true only because `S.E` ignores its statement (review-lean F3).
   * `node_wraps_magic`: also for the literal v4 relation (signatures kept, the T2 prover holding
     the key): an honest v4 node proof whose children are magic proofs is accepted under `Hpub`.
   * `t1_vs_t2`: the contrast, citing `certified` and `magic_needs_trigger`.
@@ -64,9 +68,11 @@ theorem accT2_magic (vk c : Digest) : accT2 (S.V vk) c (magic c) = true := by
   show (V vk c (magic c)).run Hpub = true
   simp [V, OProg.run, Hpub_q0]
 
-/-- **Extraction fails**: the submission's extractor returns no witness from a magic proof, on
-every log. -/
-theorem extract_magic (vk c : Digest) (L : Log) : S.E vk (magic c) L = none := decode_magic c
+/-- **Extraction fails for the named extractor**: the submission's extractor `S.E`, applied to
+the statement `c`, returns no witness from the magic proof of `c`, on every log. This is a failure
+of this extractor, not of every extractor: `relT2_node_magic` gives every node statement a `RelT2`
+witness one level down, and no false leaf statement is exhibited here. -/
+theorem extract_magic (c : Digest) (L : Log) : S.E c (magic c) L = none := decode_magic c
 
 /-- A node whose two children are magic proofs satisfies the T2 relation, for any children. -/
 theorem relT2_node_magic (vk c₁ c₂ : Digest) :
@@ -89,17 +95,21 @@ theorem comb_spine_magic (vk d₀ : Digest) (ds : List Digest) (k : ℕ) (hk : k
   exact relT2_node_magic vk _ _
 
 /-- **The comb's root at every depth** has an accepted T2 proof, with arbitrary digests (not
-leaf statements) as leaves, and its extraction fails. -/
+leaf statements) as leaves, and the named extractor fails on it at the root's statement. This is
+`accT2_magic` and `extract_magic` at `combRoot d₀ ds`: no child is checked; the per-node recursion
+content is `comb_spine_magic`. -/
 theorem comb_collapse (vk d₀ : Digest) (ds : List Digest) :
     accT2 (S.V vk) (combRoot d₀ ds) (magic (combRoot d₀ ds)) = true ∧
-      ∀ L, S.E vk (magic (combRoot d₀ ds)) L = none :=
-  ⟨accT2_magic vk _, extract_magic vk _⟩
+      ∀ L, S.E (combRoot d₀ ds) (magic (combRoot d₀ ds)) L = none :=
+  ⟨accT2_magic vk _, extract_magic _⟩
 
-/-- **The balanced tree's root** over any list of arbitrary digests has an accepted T2 proof. -/
+/-- **The balanced tree's root** over any list of arbitrary digests has an accepted T2 proof, and
+the named extractor fails on it at the root's statement (`accT2_magic` and `extract_magic` at
+`treeRoot cs`; no child is checked). -/
 theorem tree_collapse (vk : Digest) (cs : List Digest) :
     accT2 (S.V vk) (treeRoot cs) (magic (treeRoot cs)) = true ∧
-      ∀ L, S.E vk (magic (treeRoot cs)) L = none :=
-  ⟨accT2_magic vk _, extract_magic vk _⟩
+      ∀ L, S.E (treeRoot cs) (magic (treeRoot cs)) L = none :=
+  ⟨accT2_magic vk _, extract_magic _⟩
 
 /-! ## The literal v4 relation, signatures kept -/
 
@@ -125,12 +135,12 @@ theorem node_wraps_magic (vk c₁ c₂ : Digest) (σ₁ σ₂ : Sig)
 /-- **T1 vs T2**: the submission is certified; in v4 (T1) `acc` accepts the magic proof only on
 the signed trace answering the empty query with the public value (`magic_needs_trigger`), which
 the keyed service signs with probability `2^-256` per key; in T2 the magic proof of every digest
-is accepted and extraction from it fails. -/
+is accepted and the named extractor fails on it at its statement. -/
 theorem t1_vs_t2 :
     Certificate S ∧
     (∀ vk c tr σ, S.acc vk c ⟨magic c, tr, σ⟩ = true ↔
       tr = [(q0, trigger)] ∧ SigOk vk (traceDigest tr) σ = true) ∧
-    (∀ vk c, accT2 (S.V vk) c (magic c) = true ∧ ∀ L, S.E vk (magic c) L = none) :=
-  ⟨certified, magic_needs_trigger, fun vk c => ⟨accT2_magic vk c, extract_magic vk c⟩⟩
+    (∀ vk c, accT2 (S.V vk) c (magic c) = true ∧ ∀ L, S.E c (magic c) L = none) :=
+  ⟨certified, magic_needs_trigger, fun vk c => ⟨accT2_magic vk c, extract_magic c⟩⟩
 
 end RecursionFast.Explore.T2Backdoor

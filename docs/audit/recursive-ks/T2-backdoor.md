@@ -18,7 +18,9 @@ Probe `RecursionFast/Explore/T2Backdoor.lean` (not imported) on the certified O-
 
 1. **Every statement is accepted** (**kernel**, `accT2_magic`): `∀ vk c, accT2 (S.V vk) c (magic c)
    = true`, the 32-byte magic proof, no witness, no work.
-2. **Extraction fails** (**kernel**, `extract_magic`): `∀ vk c L, S.E vk (magic c) L = none`. False
+2. **Extraction fails for the named extractor** (**kernel**, `extract_magic`): `∀ c L, S.E c (magic c) L
+   = none` (the statement argument was `vk` until the review, true only because `S.E` ignores it;
+   review-lean F3, F4). False
    leaf statements are not exhibited (that needs a non-preimage of BLAKE2s; counting does not give
    one, since `leafStmt` has `2^276` inputs); finding 1 holds for them in particular.
 3. **The collapse runs through recursion at every depth** (**kernel**):
@@ -26,7 +28,8 @@ Probe `RecursionFast/Explore/T2Backdoor.lean` (not imported) on the certified O-
    for all `c₁ c₂`; `comb_spine_magic`: every spine node `combRoot d₀ (ds.take (k+1))` of a comb
    over arbitrary digests `d₀, ds` (any length, so depth 96 and beyond) has that witness;
    `comb_collapse`, `tree_collapse`: the root of a comb or of `treeRoot cs` over arbitrary
-   digests is accepted (magic proof) and its extraction fails.
+   digests is accepted (magic proof) and its extraction fails; these two are `accT2_magic` at the
+   root and check no child (review-lean F5).
 4. **Honest-looking nodes wrap fake children** (**kernel**, `node_wraps_magic`): keeping the v4
    signature check with a key the T2 prover holds (T2 has no service), for any `σ₁ σ₂` with
    `SigOk vk (traceDigest [(q0, trigger)]) σᵢ`, the honest v4 node proof
