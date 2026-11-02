@@ -52,10 +52,10 @@ log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_ve
   their square: among `Q` answers two agree on `t` given bits with probability about
   `Q² · 2^-t`, above `Q · ε` once `Q > ε · 2^t`. So no verifier that relies on a commitment's
   binding could meet the bound for every `Q`; under `logCap` such an event costs at most about
-  `logCap · 2^-t` per query, so at `logCap = 2^96` events of at least `216` bits are chargeable
-  at `errorCap` (birthday cost `2^108`), a full digest costs `2^-160`, and an honest Merkle
+  `logCap · 2^-t` per query, so at `logCap = 2^96` events of at least `224` bits are chargeable
+  at `errorCap` (birthday cost `2^112`), a full digest costs `2^-160`, and an honest Merkle
   verifier comparing at most `2^15` digests per query about `2^-145`. At the caps the bound is
-  `2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64` (V3-KS-A6). Nothing is claimed
+  `2^96 · 2^-128 = 2^-32` at `2^96` queries and `2^-64` at `2^64` (V3-KS-A6). Nothing is claimed
   for `Q + qV > logCap`, and a `qV` above `logCap` makes `KS` vacuous (`Controls/Security.lean`,
   `acceptAll_ks_above_logCap`). No conjunct excludes it here, by decision (review E-ks m-1):
   `Certificate`'s cap `qV ≤ 2^16 < logCap` does.
@@ -102,11 +102,11 @@ An evaluation's prover makes about 640 proofs (the tree's 127, the stream's 513)
 each a run fails this way with probability about `2^-30.7`. Grinding to difficulty `2^g` meets
 the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2^-128`).
 
-**Why `errorCap = 2^-120` (V4-A9, the user's decision of 2026-10-26; v3 had `2^-128`).** It
-admits designs over GF(2^128): a degree-2 sumcheck round costs `2^-127` and a univariate-skip
-round about `126 / 2^128 ≈ 2^-121` per fresh query (FB-9). The deployed run stays negligible:
-composing the tree from single-output knowledge soundness takes a union bound over the extracted
-proofs, about `513 · 2^30 · 2^-120 ≈ 2^-81` at `2^30` queries (design §2.4).
+**Why `errorCap = 2^-128` (V4-A13, the user's decision of 2026-11-02; V4-A9 had `2^-120`, v3
+`2^-128`).** 128 bits per fresh query. A design over GF(2^128) no longer fits as it stands (a
+degree-2 sumcheck round costs `2^-127`, FB-9): it must draw its challenges from a larger field or
+repeat. Composing the tree from single-output knowledge soundness takes a union bound over the
+extracted proofs, about `513 · 2^30 · 2^-128 ≈ 2^-89` at `2^30` queries (design §2.4).
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs
@@ -123,8 +123,8 @@ noncomputable instance : Fintype Digest :=
   Fintype.ofSurjective (fun f : Fin 32 → Fin 256 => Vector.ofFn fun i => UInt8.ofFin (f i))
     fun d => ⟨fun i => d[i].toFin, by ext i hi; simp⟩
 
-/-- The contract's cap on the per-query knowledge error: `2^-120`. -/
-noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 120
+/-- The contract's cap on the per-query knowledge error: `2^-128`. -/
+noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 128
 
 /-- The most oracle queries, the adversary's and the verifier's together, for which knowledge
 soundness is claimed: `2^96`. -/

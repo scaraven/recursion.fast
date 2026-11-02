@@ -27,9 +27,9 @@ digests). Its error is `2^-96 · 2^-96 = 2^-192`.
 accepts a proof naming two distinct queries with equal answers. Its error is at most
 `(Q + 2)^2 / 2^257`.
 * `collision_no_bool_kstate` (negative): no boolean state is bounded at `errorCap` over logs of
-  every length: the probe's induction builds a good log of `2^136 + 1` distinct answers, every one
-  of which is then bad for the next query, more than the `2^136` bad answers `errorCap = 2^-120`
-  allows (v3's cap `2^-128` needed `2^128 + 1`).
+  every length: the probe's induction builds a good log of `2^128 + 1` distinct answers, every one
+  of which is then bad for the next query, more than the `2^128` bad answers `errorCap = 2^-128`
+  allows (V4-A9's cap `2^-120` needed `2^136 + 1`).
 * `colBool_below`, `colState` (positive): with the length guard, the boolean state "the answers
   so far are distinct" is bounded at `2^-160` on logs of fewer than `logCap = 2^96` entries, so
   it embeds as a potential and `KS` holds at the cap (`collision_ks`).
@@ -39,8 +39,8 @@ So the guard is what lets the binding of a commitment be charged at all.
 proof naming two distinct queries whose answers agree on their first 24 bytes: a birthday search
 succeeds after about `2^96` queries.
 * `v24_no_bool_kstate` (negative): under `logCap = 2^96` no boolean state is bounded at
-  `errorCap`, even on short logs: `2^72 + 1` answers with distinct prefixes leave more than
-  `2^136` bad answers for the next query (at v3's `2^-128`, `2^64 + 1` answers and `2^128`). Under
+  `errorCap`, even on short logs: `2^64 + 1` answers with distinct prefixes leave more than
+  `2^128` bad answers for the next query (at V4-A9's `2^-120`, `2^72 + 1` answers and `2^136`). Under
   the first value of the guard, `2^64`, the review proved one exists (`Probe.v24_ks`): a
   96-bit-secure verifier certified at v3's 128-bit cap.
 * `bool24_below`, `v24_ks` (positive): its natural state is bounded at `2^-96` within the guard.
@@ -53,7 +53,7 @@ is its collision half, kernel-checked by the ADV1 probe (`collision_not_capped`)
 the dangling-target half is the same counting argument over a longer log and is not built. Not
 shown either: that a *potential* (not only a boolean state) needs the guard at `errorCap` (review
 m1). For `Vcol` itself it does not quite: without the guard a potential is borderline feasible at
-exactly v3's cap `2^-128` (F1 §4.1, third row; the review's estimate, not redone at `2^-120`).
+exactly v3's cap `2^-128` (F1 §4.1, third row; the review's estimate).
 The candidate control is a 31-byte comparison (F1 §4.1 with `Δ ≥ 2`, the review's `V31`), a paper
 argument, not built.
 -/
@@ -257,7 +257,7 @@ is knowledge-sound at the cap (`twoLucky_ks`). -/
 theorem twoLucky_no_bool_kstate {E : Digest → Proof → Log → Option Wit}
     (k : BoolKState (fun _ _ => False) twoLucky E) : ¬ k.BoundedBelow errorCap := fun h =>
   (pow_lt_pow_right_of_lt_one₀ (by positivity) (by norm_num) (by norm_num) :
-    (2 : ℝ≥0)⁻¹ ^ 120 < (2 : ℝ≥0)⁻¹ ^ 96).not_ge (twoLucky_bool_ge k h)
+    (2 : ℝ≥0)⁻¹ ^ 128 < (2 : ℝ≥0)⁻¹ ^ 96).not_ge (twoLucky_bool_ge k h)
 
 /-! ## `Vcol`: collisions, and the length guard -/
 
@@ -380,10 +380,10 @@ theorem collision_no_bound (K : ℕ) (hK : ∀ L q, Nat.card {a // ks.bad L q a}
 
 /-- **Without the length guard, the collision verifier has no boolean state at the cap.** -/
 theorem collision_no_bool_kstate : ¬ ks.Bounded errorCap := fun hb =>
-  collision_no_bound hR ks (2 ^ 136) (fun L q => by
+  collision_no_bound hR ks (2 ^ 128) (fun L q => by
     have h := hb L q
     rw [card_digest, errorCap] at h
-    exact_mod_cast h.trans_eq (c := ((2 ^ 136 : ℕ) : ℝ≥0)) (by norm_num)) (by norm_num)
+    exact_mod_cast h.trans_eq (c := ((2 ^ 128 : ℕ) : ℝ≥0)) (by norm_num)) (by norm_num)
 
 end
 
@@ -619,16 +619,16 @@ theorem v24_no_bound (K M : ℕ)
   have := hK (logOf f (K + 1)) (z (K + 1)) (by rw [hlen])
   omega
 
-/-- **Under `logCap = 2^96`, `V24` has no boolean state at the cap**: a log of `2^72 + 1`
-answers with distinct 24-byte prefixes, well within the guard, leaves more than `2^136` bad
+/-- **Under `logCap = 2^96`, `V24` has no boolean state at the cap**: a log of `2^64 + 1`
+answers with distinct 24-byte prefixes, well within the guard, leaves more than `2^128` bad
 answers for the next query. (Under `logCap = 2^64` and v3's cap it had one: the review's
 `v24_ks`.) -/
 theorem v24_no_bool_kstate : ¬ ks.BoundedBelow errorCap := by
   intro hb
-  refine v24_no_bound hR ks (2 ^ 72) (2 ^ 136) (fun L q hL => ?_) (by norm_num) (by norm_num)
+  refine v24_no_bound hR ks (2 ^ 64) (2 ^ 128) (fun L q hL => ?_) (by norm_num) (by norm_num)
   have h := hb L q (hL.trans_lt (by simp [logCap]))
   rw [card_digest, errorCap] at h
-  exact_mod_cast h.trans_eq (c := ((2 ^ 136 : ℕ) : ℝ≥0)) (by norm_num)
+  exact_mod_cast h.trans_eq (c := ((2 ^ 128 : ℕ) : ℝ≥0)) (by norm_num)
 
 end
 

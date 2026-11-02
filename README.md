@@ -25,8 +25,8 @@ design is [`docs/DESIGN-v4-srom.md`](docs/DESIGN-v4-srom.md); §6 there lists ev
 in the user's absence. On 2026-10-26 the user trimmed the rules to what serves valid verifiers and
 honest, fast, recursion-priced proving (V4-A9, design §4.4): every evaluation job ends within 30
 minutes, the tree and the stream run once each, only the tree's root is checked, the organiser's
-own checks run in this repository's CI only, and the error caps are `2^-120` (knowledge, per
-query) and `2^-40` (completeness). On 2026-10-28 the tree benchmark and the proof cap gave way to
+own checks run in this repository's CI only, and the error caps were `2^-120` (knowledge, per
+query; `2^-128` again since V4-A13 of 2026-11-02) and `2^-40` (completeness). On 2026-10-28 the tree benchmark and the proof cap gave way to
 one pure-IVC stream scored continuously (V4-A11, `docs/v4/BRIEF.md`).
 
 ## Read

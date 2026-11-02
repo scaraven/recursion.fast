@@ -328,6 +328,15 @@ entry, certified or not, has run the V4-A11 shape; on the development VM the har
 smoke with a mock badge pass (`logs/f-ivc/test_sandbox.log`, 52 checks; `logs/f-ivc/smoke-mock.log`), and
 the end-to-end smoke with the compiled Lean badge, 21 checks (`logs/f-ivc/smoke-e2e.log`).
 
+## 5e. Amendment V4-A13: `errorCap = 2^-128` (the user's decision of 2026-11-02)
+
+It overrides item 10 of V4-A9 (§5b). (V4-A12 is reserved by the two-term knowledge-soundness
+branch `v4/two-term-ks`, which leaves `errorCap` unchanged.)
+
+| Id | Decision | Reason and consequence |
+|---|---|---|
+| V4-A13 | **`errorCap = 2^-120 → 2^-128`** per fresh query; `logCap = 2^96`, `completenessCap = 2^-40` and `qV ≤ 2^16` unchanged | 128 bits per query. A design over GF(2^128) no longer fits as it stands (a degree-2 sumcheck round costs `2^-127`, FB-9) and must take its challenges from a larger field or repeat; the certified baseline is updated outside this repository. Collision-type events are chargeable from `224` bits up (was `216`); the whole-run estimate at `2^30` queries becomes about `2^-90` for the stream's final output and `2^-84` for every output (§2.4). Controls (**kernel**): `collision_no_bool_kstate` now builds `2^128 + 1` answers, `v24_no_bool_kstate` `2^64 + 1` (within `logCap`); every positive control holds unchanged (`le_errorCap_160`, `le_errorCap_192`, `Backdoor.bounded`, `small_of_caps`) |
+
 ## 6. Conventions for every agent
 
 - Work only in `/home/devops/Verified-zkEVM/recursion.fast-v4` (branch `v4/srom-rules`); never in
