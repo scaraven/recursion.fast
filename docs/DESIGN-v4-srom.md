@@ -107,7 +107,7 @@ kind, and a DoS column of 100 inputs that fails on time and crashes only; no per
 the organiser's own checks (the canaries that never reach `V`, the extractor interpreter) in the
 core CI only; one Lean build per certificate; stream `M = 256`; `errorCap = 2^-120` (admits
 GF(2^128) designs, FB-9) and `completenessCap = 2^-40`. V4-A11 has since replaced the tree, the
-two jobs, `M = 256` and `T_V` as a gate (below).
+two jobs, `M = 256` and `T_V` as a gate (below), and V4-A13 (2026-11-02) restored `errorCap = 2^-128`.
 
 **One IVC benchmark, scored continuously (V4-A11, the user's decisions of 2026-10-28).** One stream
 per evaluation in one job: `PROVER first` proves a node over two fresh chains, then each
@@ -291,7 +291,7 @@ not adopted (V4-A4), and is the fallback if a reviewer insists on a published sc
 
 `Machine.lean` and `Tree.lean` are v3's, word for word (V4-1, V4-16). `Contract/Security.lean`
 keeps v3's completeness and its caps' roles, with their values changed by V4-A9
-(`errorCap = 2^-120`, `completenessCap = 2^-40`; v3 §6 and §7.1 explain them), and since V4-A10
+(`completenessCap = 2^-40`; `errorCap = 2^-120`, back to `2^-128` since V4-A13; v3 §6 and §7.1 explain them), and since V4-A10
 (the user's decision of 2026-10-27) states knowledge soundness in its textbook single-output form,
 where v3 required a knowledge state. In `KS` below, `runLog L` answers each query from the first
 matching entry of the log `L` (`none` on a miss), where `runSeq tr` answers from the next entry of
@@ -427,7 +427,7 @@ outside the language because of a predicate `Φ(vk, π, answers)` that an unboun
 oracle access can make true for every oracle: a valid signature under `vk` in `π`, `sk` in `π`, a
 signed answer in `π` that agrees with the oracle's. Then for that `vk`, `V vk` is not
 knowledge-sound at any `ε` with `(q + qV)·ε < 1`, where `q ≤ qV` is the number of oracle queries
-on the branch; in particular not at `errorCap = 2^-120`, since `q + qV ≤ 2^17`.
+on the branch; in particular not at `errorCap = 2^-128`, since `q + qV ≤ 2^17`.
 
 **Proof.** The adversary asks the branch's queries itself, makes `Φ` true (it is unbounded, so it
 can sign anything under `vk`) and outputs `(c, π)`. The verifier run after it asks only queries
@@ -569,18 +569,18 @@ of the stream (`M` nodes and `M + 1` leaves, depth `M`; 193 at `M = 96`), and `B
 walk runs `E` per node within `B t`). At the season shape `Q ≈ 2^28–2^30` (**estimate**, C §2
 item 1; the stream's chain work, about `2^24.9` compressions at `M = 96`, is close to v4's
 `2^24`), inside `logCap = 2^96` and the efficient-extraction domain of about `2^61` entries, so at
-`ε = errorCap = 2^-120` the first term is at most about `225 · 2^30 · 2^-120 ≈ 2^-82` for the event
+`ε = errorCap = 2^-128` (V4-A13) the first term is at most about `225 · 2^30 · 2^-128 ≈ 2^-90` for the event
 that the stream's final output escapes (`qV ≤ 2^16` is negligible beside `Q`), where the
-potential's lossless composition gave `2^30 · 2^-120 = 2^-90` (**estimate**). The harness checks
+potential's lossless composition gave `2^30 · 2^-128 = 2^-98` (**estimate**). The harness checks
 every stream output, not only the last: a union over the `M` outputs' extraction trees
 (`Σ_{i ≤ M} (2i + 1) = M² + 2M`, 12,768 members at `M = 112`) gives about
-`2^13.6 · 2^30 · 2^-120 ≈ 2^-76` for "some checked stream output escapes" (**estimate**). Under v4
-before V4-A11 the same arithmetic gave `2^-81` for the stream's final output (`N = 513`), `2^-83`
+`2^13.6 · 2^30 · 2^-128 ≈ 2^-84` for "some checked stream output escapes" (**estimate**). Under v4
+before V4-A11 the same arithmetic at `2^-120` gave `2^-81` for the stream's final output (`N = 513`), `2^-83`
 for the tree's root (`N = 127`) and `2^-74` for every stream output (`257²` members). The kernel
 theorem is per root and for balanced trees; the stream's comb needs the paper walk (table above).
 At the caps one member's bound is
-`2^96 · 2^-120 = 2^-24` at `2^96` queries and `2^-56` at `2^64`; collision-type events are
-chargeable at the cap from `216` bits up (`logCap · 2^-t ≤ 2^-120`; a full digest costs `2^-160`
+`2^96 · 2^-128 = 2^-32` at `2^96` queries and `2^-64` at `2^64`; collision-type events are
+chargeable at the cap from `224` bits up (`logCap · 2^-t ≤ 2^-128`; a full digest costs `2^-160`
 and an honest Merkle verifier comparing `2^15` digests per query `2^-145`, both below it).
 
 **Fiore–Nitulescu** (ePrint 2016/112) show that SNARK extraction can fail against adversaries with
@@ -629,7 +629,7 @@ resistance and one-wayness are the assumptions every hash-based signature makes.
 **Margins** (**estimate**). Generic attacks on 256-bit BLAKE2s: a collision among `2^58`
 evaluations has probability about `2^-141`; inverting one of `2^45` targets (`2^20` key trees) with
 `2^80` evaluations about `2^-131`. Collision resistance (128-bit generic) is the binding term,
-below `errorCap = 2^-120`.
+below `errorCap = 2^-128`.
 
 **Operational conditions** (§3.2): the index is taken in one atomic step before the
 signature is computed, and never reused; the signer refuses after `2^16`; a restart is a new key and
@@ -1125,7 +1125,7 @@ recomputed by `harness/aggregate.py`. *Under v4 before V4-A11 it was `S = T_tree
 | certificate caps: the entry's build, the kernel, the gate, the badge build | 600 s, 600 s, 120 s, 180 s | same | V4-A9 |
 | benchmark caps: prover build, prover setup, setup directory, start-up to `ready`, one request, the stream, one `acc` check, the signed file | 120 s, 240 s, 4 GiB, 10 s, 60 s, 1,920 s, 10 s, 64 MiB | the same, but the stream 300 s | V4-A9, V4-A11, R-M1, m-3 |
 | `queryCap`, `qV`; the proof | `2^20` B, `≤ 2^16`; no proof cap, only `\|π\| < 2^64` | same | V4-A3, V4-A11 |
-| `errorCap`, `completenessCap`, `logCap` | `2^-120`, `2^-40`, `2^96` | same | V4-13, V4-A9 |
+| `errorCap`, `completenessCap`, `logCap` | `2^-128`, `2^-40`, `2^96` | same | V4-13, V4-A9, V4-A13 |
 | signatures per service lifetime | `2^16` | same | V4-3 |
 | memory cgroups | prover 11 GB, service 2 GB (13 GB together), badge 4 GB | same | V4-13 |
 | job limit | 30 min; one benchmark job | 30 min | V4-A9, V4-A11 (the runner allows 6 h, P3) |
@@ -1488,7 +1488,7 @@ stage A RESULT §3). The ones that carry the v4 changes:
 | `Certificate` with `∀ vk` | `ws_certificate`, `Backdoor.certified`; `sigTrust_ks_unsignable` | `sigTrust_no_certificate`, `sigTrust_certificate_opens` (the adversary holding `sk` wins with probability 1), v3's negatives (`acceptAll_no_certificate` re-proved against the textbook `KS`); `acc_rejects_all_certified` (certified, `acc` accepts nothing: proofs of `2^64` bytes or more since V4-A11) |
 | `KS`, textbook single-output for normalised adversaries (V4-A10) | `ws_ks`, `twoLucky_ks_exact` (through its potential, at `2^-192`), `queryThenAccept_ks_one` (direct, at `ε = 1`), `Backdoor.certified`; `ws_textbook` (the textbook notion at 0, giving `KS` back through `KSTextbook.ks`) | `acceptAll_wins`, `acceptAll_not_ks` (the adversary that asks nothing wins with probability 1), `queryThenAccept_ks_ge_one` (the verifier's own query is charged), `oneQuery_not_KS` (the query bound); what it does not say: `acceptAll_ks_above_logCap`; what it does not exclude: `lucky_ks` (certified at 0) with `lucky_not_textbook` (textbook error at least `2^-112`) |
 | `prob` (V4-A10) | `prob_askGood` (a fresh answer is uniform: exactly `1/2`) | `prob_askTwice` (a repeated query is the table's: probability `0`, not `1 − 2^-256`) |
-| `errorCap = 2^-120`, `completenessCap = 2^-40` (V4-A9) | `twoLucky_ks`, `collision_ks` (potentials at the cap), `grind40_complete` (40 nonces: exactly `2^-40`) | `twoLucky_no_bool_kstate`, `collision_no_bool_kstate` (a log of `2^136 + 1` answers), `v24_no_bool_kstate` (`2^72 + 1` answers within the guard), `grind39_not_complete` |
+| `errorCap = 2^-128` (V4-A13), `completenessCap = 2^-40` (V4-A9) | `twoLucky_ks`, `collision_ks` (potentials at the cap), `grind40_complete` (40 nonces: exactly `2^-40`) | `twoLucky_no_bool_kstate`, `collision_no_bool_kstate` (a log of `2^128 + 1` answers), `v24_no_bool_kstate` (`2^64 + 1` answers within the guard), `grind39_not_complete` |
 | composition (Library) | `walk_one_leaf`, `walk_two_leaves`, `ws_compose_prob` (the walk escapes with probability 0) | `forgery_trivial`, `compose_exists_free`; `noExt_walk_escaped`, `noExt_escape_prob` (an extractor that returns nothing: the walk escapes, `compose_prob`'s event is certain) |
 
 The Library theorems the badge and the decoder rest on, `Fast.accF_eq` (the badge's `accF` is `acc`)
@@ -1617,9 +1617,9 @@ user's own.
   first step (§3.4); a crafted-input column is the follow-up.
 - **Gate rule 4 still requires `P` and `ext` compiled** (V4-A9): no badge runs them any more, so
   the rule could be relaxed to `V`; relaxing it changes what entries may submit and is the user's.
-- **The deployment's whole-run bound at `errorCap = 2^-120`**: about `2^-82` at `2^30` queries for
-  the stream's final output at `M = 112` and about `2^-76` for every stream output at once (§2.4,
-  V4-A10's union bound; under v4 before V4-A11 `2^-81`, `2^-83` for the tree's root and `2^-74`;
+- **The deployment's whole-run bound at `errorCap = 2^-128`** (V4-A13): about `2^-90` at `2^30` queries for
+  the stream's final output at `M = 112` and about `2^-84` for every stream output at once (§2.4,
+  V4-A10's union bound; at `2^-120`, under v4 before V4-A11, `2^-81`, `2^-83` for the tree's root and `2^-74`;
   `2^-90` before V4-A10); a season whose runs ask far more queries, or a longer stream, moves it.
 - **Keyed BLAKE2s as a named assumption** (C unsettled 1): the alternative wording calls it the
   design's one heuristic, since its only analysis is in an ideal-cipher model.

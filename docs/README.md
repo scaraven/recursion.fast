@@ -9,7 +9,7 @@ runners with attested results, and (since V4-A11, 2026-10-28) one pure-IVC strea
 [`DESIGN-v4-srom.md`](DESIGN-v4-srom.md); its build record (the brief, the design attack, the stage
 results) is under [`v4/`](v4/). On 2026-10-26 the user trimmed it (V4-A9, design §4.4: 30-minute
 jobs, one run each of the tree and the stream, the organiser's checks in the core CI only,
-`errorCap = 2^-120`, `completenessCap = 2^-40`). On 2026-10-27 the user made the certificate state
+`errorCap = 2^-120`, `completenessCap = 2^-40`; V4-A13 of 2026-11-02 restored `errorCap = 2^-128`). On 2026-10-27 the user made the certificate state
 textbook single-output knowledge soundness, the potential becoming a library route to it (V4-A10,
 design §1.4, §2.4: the tree then composes by a union bound, about `2^-81` against `2^-90`). The
 next paragraph is the record v4 starts from.
