@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The clean slate between a duel's two runs (`harness/rfh/slate.py`, launch R4 m2).
+"""The clean slate between a duel's two runs (`harness/rfh/slate.py`).
 
   python3 tests/harness/test_slate.py
 

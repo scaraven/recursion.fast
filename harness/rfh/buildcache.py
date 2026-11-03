@@ -1,4 +1,4 @@
-"""The record's entry build, reused by later evaluations (TRUSTED RUNTIME; launch stage S5).
+"""The record's entry build, reused by later evaluations (TRUSTED RUNTIME).
 
 An entry that sets a record is usually the base of the next ones: the same Lean modules, a few
 changed. The certificate job of an ACCEPTed entry exports the build outputs of its own modules
@@ -14,7 +14,7 @@ in the organiser's tree, not the entry's), never a badge module, never Lake's `.
 recomputes them from the restored bytes), `.setup.json`, `.ltar` or compiled objects.
 
 Nothing is restored unless the manifest's sha256 equals the one the caller passes, the record's
-attested `certificate.entry_build.manifest_sha256` (launch R4 m4: the cache is bound to the record,
+attested `certificate.entry_build.manifest_sha256` (so the cache is bound to the record,
 not to whoever wrote the cache store). A module is then restored only if (1) the cache was exported
 at the same core commit, (2) the entry's `lean/M.lean` is byte-identical to the record's, and (3)
 every file's sha256 equals that manifest, written by the record's harness after its last sandboxed

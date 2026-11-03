@@ -47,7 +47,7 @@ jobs:
         run: |
           mkdir -p logs
           # no `Mathlib.Tactic` objects here: the core CI's badges import only the organiser's closure
-          RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
+          RF_BADGE_OBJECTS='' timeout 540 harness/org-setup.sh "$PWD"
       - name: line budget (trusted contract <= 500 code lines)
         run: |
           python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/*.lean | tee logs/loc.log
@@ -139,7 +139,7 @@ jobs:
         run: timeout 60 python3 tests/harness/test_tv.py
       - name: the stream's control flow, re-timing and truncation (V4-A11 §2, §5.3, §6, R-M2)
         run: timeout 60 python3 tests/harness/test_stream.py
-      - name: a duel's second run starts on a clean slate (an orphaned service, tmpfs requests, the work directory; R4 m2)
+      - name: a duel's second run starts on a clean slate (an orphaned service, tmpfs requests, the work directory)
         run: timeout 120 python3 tests/harness/test_slate.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT (review M-3)
         run: timeout 120 python3 tests/harness/test_partcap.py
@@ -177,7 +177,7 @@ jobs:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
       - run: timeout 300 lake exe cache get
-      - run: mkdir -p logs && RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
+      - run: mkdir -p logs && RF_BADGE_OBJECTS='' timeout 540 harness/org-setup.sh "$PWD"
       - name: comparator and lean4export (pinned in scripts/tools.env)
         run: timeout 240 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
       - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, organiser canaries, broken provers, provisional, source rule)

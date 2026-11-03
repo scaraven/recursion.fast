@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The record build cache (`harness/rfh/buildcache.py`, launch stage S5) against a real Lake: the
+"""The record build cache (`harness/rfh/buildcache.py`) against a real Lake: the
 repository's Lean toolchain, core only (no Mathlib, no package tree).
 
   python3 -I tests/harness/test_record_cache.py [WORKDIR]

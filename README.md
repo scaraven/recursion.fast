@@ -30,7 +30,7 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
   prover's time per `2^18` compressions plus a charge for verifier time and proof size; lower is
   better. Results are signed with GitHub artifact attestations.
 - **Records.** A new record must be accepted, attested, run at the current rules commit, and beat the
-  incumbent by at least 3 % in a head-to-head run on the same runner.
+  incumbent by at least 3 % in a head-to-head run on the same runner, twice (a confirmation duel).
 
 ## Read and take part
 

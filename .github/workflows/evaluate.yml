@@ -134,9 +134,11 @@ jobs:
       - id: plan
         run: |
           name=${{ inputs.split && 'split' || 'single' }}
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "parts=$(python3 -I core/harness/aggregate.py --print-matrix "$name")" >> "$GITHUB_OUTPUT"
-          echo "core_sha=$(git -C core rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=$name"
+            echo "parts=$(python3 -I core/harness/aggregate.py --print-matrix "$name")"
+            echo "core_sha=$(git -C core rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
 
   setup:
     # the organiser's Lean environment, cached per core commit (`rf-org-SHA`); this job never fetches
@@ -352,7 +354,7 @@ jobs:
 
   certificate-incumbent:
     # a duel only: the incumbent (the current record) certified like the candidate, beside it, at the
-    # same core commit, under incumbent_build_s (R4 M2: a cache miss must not fail it); its build
+    # same core commit, under incumbent_build_s (so that a cache miss cannot fail it); its build
     # seeded from the record cache when that hits (it is the record); no export. Its failure is the
     # organiser's (an ERROR, never the incumbent's loss): it was certified before.
     needs: [plan, setup, setup-tools]

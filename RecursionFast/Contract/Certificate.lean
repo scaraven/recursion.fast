@@ -57,7 +57,7 @@ that honest proofs pass `acc` under the deployment: the harness checks that conc
 by the deployment, not by this file: such a `V` is still certified (`Controls/Backdoor.lean`), but
 no public function it can compute is the keyed oracle.
 
-**Rendering (v2's pattern, S5-A13, S9-A41; unchanged).** A challenge renders the claim as
+**Rendering (unchanged since v2).** A challenge renders the claim as
 organiser data (`Declared`): the declared knowledge error, completeness error, query bound and
 fuel. `CertificateR` binds them: the submission's numbers are within the declared ones, and the
 declared fuel is within the budget, so the harness may run the program with it (V3-S1-A10, A21).

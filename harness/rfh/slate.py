@@ -1,4 +1,4 @@
-"""A clean slate between the two runs of a duel (TRUSTED RUNTIME; launch R4 m2).
+"""A clean slate between the two runs of a duel (TRUSTED RUNTIME).
 
 `evaluate.py bench --duel` runs `run-benchmark.py` with `RF_RUN_TOKEN=<duel id>-<role>` in its
 environment. Every organiser process of the run inherits it: `systemd-run`'s scopes, `bubblewrap`'s

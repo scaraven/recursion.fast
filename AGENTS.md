@@ -15,7 +15,8 @@ Identifiers such as `V4-A11`, `C-m4` or `RF-M1` in code comments and the interfa
 to the development record on the branch `archive/v4-dev-record`. Documents cited there by name:
 BRIEF is `docs/v4/BRIEF.md`, "design" is `docs/DESIGN-v4-srom.md`, DESIGN-v3 is
 `docs/v3-design-agent-written-ROM-SNARK-verifier-…md`, FIXLIST is `docs/v4/FIXLIST.md`, and a stage
-RESULT is under `docs/v4/stages/`, all on that branch.
+RESULT is under `docs/v4/stages/`, all on that branch. The v2 identifiers in the harness's Lean
+tools and source rule (`S6b-M3`, `S7-M1`, `S9D-M1`, …) refer to v2's record at the tag `v2-archive`.
 
 ## 1. What is contested
 
@@ -269,12 +270,13 @@ A result is **comparable** iff it is ACCEPT, its stream was not truncated, all i
 CPU model and the job plan matched. A stream that reaches `stream_s` is scored over its completed
 steps, flagged `truncated` and not comparable.
 
-**The record rule: a head-to-head duel.** Scores from different runners are not comparable: the
-same entry scored 29.05 and 34.20 on two CPU models. So once a record exists, every evaluation is a
-**duel**: the core workflow certifies the candidate and re-certifies the incumbent record at the
-same pin, then one benchmark job on one runner runs both streams back to back, in an order drawn at
-random, each with its own work directory, service lifetime and keys, on the same drawn chain lengths
-(fresh starts per run), and reports both scores. The candidate becomes the record iff all of:
+**The record rule: a head-to-head duel, confirmed.** Scores from different runners are not
+comparable: the same entry scored 29.05 and 34.20 on two CPU models. So once a record exists, every
+evaluation is a **duel**: the core workflow certifies the candidate and re-certifies the incumbent
+record at the same pin, then one benchmark job on one runner runs both streams back to back, in an
+order drawn at random, each with its own work directory, service lifetime and keys, on the same
+drawn chain lengths (fresh starts per run), and reports both scores. The candidate **wins the
+duel** iff all of:
 
 1. its verdict is ACCEPT and `comparable: true`;
 2. its attestation verifies ([`harness/verify-record.sh`](harness/verify-record.sh); its
@@ -282,17 +284,30 @@ random, each with its own work directory, service lifetime and keys, on the same
    `scaraven/recursion.fast/.github/workflows/evaluate.yml` on a GitHub-hosted runner, and the
    signer's commit equals the result's `harness_commit`;
 3. `harness_commit` equals the core commit the submissions repository pins;
-4. `S_cand ≤ 0.97 × S_inc`, both measured in that one job.
+4. `S_cand ≤ 0.97 × S_inc`, both measured in that one job;
+5. its prover binary's SHA-256 is not that of an earlier record (a resubmitted copy is `accepted`,
+   never a record).
+
+**One win is not a record**, because the noise of one runner can hand a duel to a copy. A candidate
+that wins is `confirming`: one more duel of the same commit against the same incumbent runs before
+any other entry, on whatever runner it gets. It becomes the record iff it wins that duel too, and its
+credited gain is the smaller of the two. If it loses, it is `accepted` and both duels are shown.
 
 - **The incumbent fails on the duel's runner** (`incumbent.entry_failed`: its REJECT or truncated
-  stream): not a win. The candidate is `accepted` and re-queued once for another duel; a record whose
-  own run fails in two duels is `retired`, and there is then no standing record.
+  stream): not a win and not a loss. The candidate is evaluated once more (a confirming candidate
+  keeps its first win), then `accepted`; a record whose own run fails in two duels is `retired`, and
+  there is then no standing record.
 - **Organiser-side failures** (the incumbent's certificate not `ok`, a broken pairing): ERROR,
-  re-queued once.
+  re-queued once (a confirming candidate keeps its win).
 - **Records are per pin**: the standing record is the newest, not retired, record evaluated at the
   pinned core commit. With none (the first record, after a retirement, or after a pin move), the
-  first result meeting items 1–3 is the record, unpaired. After a pin move the owner re-queues the
-  old record first, so it can keep the crown.
+  first result meeting items 1–3 and 5 is the record, unpaired and with no confirmation.
+- **A pin move ports the record first.** When the pin moves while a record stands, the bot
+  re-evaluates that record's retained commit at the new pin before any other entry, unpaired; it
+  keeps the crown if that is a comparable, attested ACCEPT. If it fails, no record stands and the
+  queue proceeds.
+- **The threshold (3 %) and the number of duel wins (2) are not yet calibrated** (§12); the owner
+  may change either, which changes this file.
 
 The submissions repository's bot applies this rule to the attested results.
 
@@ -378,9 +393,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   were all seen (29.05 against 34.20 for one entry, §8); `c_P` and `v_ref` normalise for the CPU
   only partly, so a published `S` is not comparable across evaluations.
 - **The 3 % threshold is not yet calibrated** at the season shape on GitHub runners. Back to back on
-  one machine at the smoke shape, the same prover differed by 2.5–9 %. The owner will calibrate it
-  with self-duels (a record dueled against itself). Order effects (thermal state, page cache) are
-  randomised by the drawn order, not removed.
+  one machine at the smoke shape, the same prover differed by 2.5–9 %, so a copy of the record can
+  win one duel by noise; the confirmation duel makes it win two. The owner will calibrate both with
+  self-duels (a record dueled against itself) and may raise them. Order effects (thermal state, page
+  cache) are randomised by the drawn order, not removed. A near-copy that wins both duels stands
+  until the owner retires it.
 - **`ref_ns` is a placeholder** (200 ms). `P̄` is consistent within one pin but not yet anchored
   to a measured reference runner; measuring it moves every `P̄`.
 - **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains
@@ -473,9 +490,7 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
 small shape (6 steps, chains of 16 to 128); `harness/season.toml` is the real one. Set
 `RF_HARNESS_COMMIT` when the checkout is not a git checkout. `harness/ci/build-kernels.sh` holds the
-kernels' pins; [`scripts/tools.env`](scripts/tools.env) sets the variables from `RF_KERNELS` instead. The core's own checks:
-`python3 tests/harness/smoke.py --mock --work DIR` (the runner with a stand-in badge) and
-`python3 tests/harness/smoke.py --org "$PWD" --work DIR` (end to end).
+kernels' pins; [`scripts/tools.env`](scripts/tools.env) sets the variables from `RF_KERNELS` instead.
 
 ## 15. Submitting
 
@@ -485,7 +500,8 @@ that changes files under exactly one `submissions/<root>/` (root name `[a-z][a-z
 nothing else; include a `NOTES.md` (idea, result, what failed and why, what to try next). Pull
 requests are never merged: a bot evaluates each with the core's attested `evaluate.yml` at the pin,
 publishes every verdict, and copies a new record's root to `main`. Once a record exists, every
-evaluation is a duel against it (§8). The queue is round-robin by author: the author whose last
-evaluation started earliest goes next, and a new push supersedes the PR's queued entry and goes to
-the back. Re-submitting does not re-roll a record: each attempt is a fresh duel on one runner and
-must win by 3 % there. That repository's `AGENTS.md` gives the submission procedure.
+evaluation is a duel against it, and a win is confirmed by a second duel (§8). The queue is
+round-robin by author: the author whose last evaluation started earliest goes next, and a new push
+supersedes the PR's queued entry and goes to the back. Re-submitting does not re-roll a record: an
+unchanged root is refused, a prover binary of an earlier record never takes it, and each attempt
+must win two duels by 3 %. That repository's `AGENTS.md` gives the submission procedure.

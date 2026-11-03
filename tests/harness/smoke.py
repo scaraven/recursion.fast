@@ -200,7 +200,7 @@ def main():
                                       "calibrate,stream", season_of(flag))
 
         def debris(token):
-            """What a first run killed at PART_S can leave (R4 m2): an orphan carrying its token, an
+            """What a first run killed at PART_S can leave: an orphan carrying its token, an
             orphaned service in its scope whose stdin an orphan holds open, a tmpfs request directory."""
             env = dict(os.environ, RF_RUN_TOKEN=token)
             wrap = " ".join(memcap("2G", f"rf-svc-{token}-stream")) if memcap_method() == "systemd" else ""

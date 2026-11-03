@@ -2,9 +2,9 @@
 """`evaluate.py cert`'s handling of entry data with the organiser side stubbed (a fake Org, a stub
 comparator and gate, no badge build) and the one build a real Lake run (the repository's Lean
 toolchain, core only, no package tree). Checks:
-  * the record cache (launch S5): restore before the build, prune before the binding (Q7), export
+  * the record cache: restore before the build, prune before the binding (Q7), export
     only for status `ok`, the `record_cache` and `entry_build` fields;
-  * the entry caps (`[entry]`, launch R1 M6): a breach is the entry's REJECT, before the source rule;
+  * the entry caps (`[entry]`): a breach is the entry's REJECT, before the source rule;
     a source rule or a renderer past its timeout is the entry's REJECT, not an ERROR.
 
   python3 -I tests/harness/test_cert_cache.py [WORKDIR]

@@ -240,7 +240,7 @@ def cert_job(a):
     org = Org(a.org)
     season = tomllib.load(open(a.season, "rb"))
     caps = season["certificate"]
-    # R4 M2: the incumbent of a duel (certified before, at this cap) is re-certified under a
+    # the incumbent of a duel (certified before, at this cap) is re-certified under a
     # generous cap, so that a missing record cache never fails it; candidates keep build_s
     build_cap = "incumbent_build_s" if a.incumbent else "build_s"
     work = os.path.abspath(a.work)
@@ -494,7 +494,7 @@ def bench_job(a, cert):
     env = None
     if duel:
         cmd += ["--lengths", a.duel]
-        # R4 m2: nothing of an earlier run of this duel may be alive or on a tmpfs when this one starts
+        # nothing of an earlier run of this duel may be alive or on a tmpfs when this one starts
         before = slate.clean(duel["id"])
         if before["left"] != {"processes": 0, "shm": 0, "work": 0}:
             res = {"parts": ["calibrate", "stream", "dos"] if not a.parts else a.parts.split(","), "benchmark": "error",

@@ -39,7 +39,7 @@ It rejects (exit code 1) if:
    function computes, and are allowed. Pinned modules may register `csimp` lemmas (kernel-proved
    equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
    others; these are reported;
-4. with `--computable N`, a **badge-path field** of `N` has no compiled code (A7-M2, S5-A9;
+4. with `--computable N`, a **badge-path field** of `N` has no compiled code (since v2;
    v3: V3-S2R-A3; v4: unchanged). The v4 badge executes the compiled `acc` (the field `V`, run on
    the signed trace) and nothing else of the submission; `P` (kept as in v3) and `ext` (run by the
    per-entry liveness check until V4-A9 removed it) are still required to be compiled, a rule
@@ -217,7 +217,7 @@ def closure (env : Environment) (root : Name) : NameSet :=
       | .recInfo v => v.all.toArray
       | _ => #[]
 
-/-! ### Rule 4: badge-path computability (A7-M2) -/
+/-! ### Rule 4: badge-path computability -/
 
 open Meta
 
