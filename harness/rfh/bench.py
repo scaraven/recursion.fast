@@ -1,6 +1,5 @@
 """The benchmark of one entry (TRUSTED RUNTIME): the IVC stream, its checks and calibration, the
-re-timing, the DoS column and the score (`docs/v4/BRIEF.md` V4-A11; the normative text is the
-amendment's §2–§8 as amended by its §11). One stream per evaluation, with its own service lifetime;
+re-timing, the DoS column and the score (V4-A11; the rules are in `AGENTS.md`). One stream per evaluation, with its own service lifetime;
 every request is a fresh sandboxed process; every check and every calibration sample runs while no
 entry process is alive. Every step the entry controls is capped by the season file, so an entry that
 is slow or hangs fails with the reason, inside its job's time limit (V4-A9).

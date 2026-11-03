@@ -1,12 +1,12 @@
 # The core CI of recursion.fast v4 (this repository): the Lean build with Mathlib from its cache,
 # the line budget, the axiom audit, the source rule and gate fixtures, the service's tests, the
-# sandbox tests, and the harness smoke end to end (BRIEF stage B; V4-A2: the certificate side and the
+# sandbox tests, and the harness smoke end to end (archive/v4-dev-record:docs/v4/BRIEF.md stage B; V4-A2: the certificate side and the
 # benchmark side are separate jobs). A push or a pull request to this repository triggers it; it
 # runs no submission. Every check whose subject is organiser code runs here and only here, once per
 # harness commit, never in an evaluation (V4-A9): the contract's `acc` before the entry's `V` (the
 # organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
 # template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
-# steps' timeouts nested inside that (V4-A9; the measured step times are in design §3.4).
+# steps' timeouts nested inside that (V4-A9; the measured step times are in archive/v4-dev-record:docs/DESIGN-v4-srom.md §3.4).
 name: ci
 on:
   push:

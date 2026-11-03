@@ -1,7 +1,7 @@
 /-
   RecursionFast.Library.WitnessSending  (UNTRUSTED, kernel-checked)
 
-  **The witness-sending argument under v4** (DESIGN-v3 §7.3, V3-9; docs/v4/BRIEF.md stage A): the
+  **The witness-sending argument under v4** (DESIGN-v3 §7.3, V3-9; archive/v4-dev-record:docs/v4/BRIEF.md stage A): the
   proof is the witness, the verifier decides the relation directly with no oracle query, and the
   extractor reads the witness off the proof. It is a complete `Certificate` (`certificate`, for
   every public key), the core-side positive control that the v4 certificate is satisfiable, and

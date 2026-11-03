@@ -1,4 +1,4 @@
-//! The contract-fixed signature (BRIEF §4.2, normative byte layouts): Winternitz one-time
+//! The contract-fixed signature (`RecursionFast/Contract/Signature.lean`, normative byte layouts): Winternitz one-time
 //! signatures with `w = 4` (base-4 digits), `ℓ = 133` chains, under a Merkle tree of height 16,
 //! all hashes BLAKE2s-256. `vk` is the Merkle root; the signer is stateful and signs at most
 //! `2^16` messages, each with the next one-time key.

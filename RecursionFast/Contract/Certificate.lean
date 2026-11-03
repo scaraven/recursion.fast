@@ -1,8 +1,8 @@
 /-
 # Contract: what a submission is and what its record certifies                     (TRUSTED)
 
-DESIGN-v3 §3.2 (V3-2, V3-6, V3-S2R-A1 … A3), changed for the signed random oracle (docs/v4/
-BRIEF.md §2, §4.1; V4-1, V4-6, V4-7). A submission is a non-interactive argument in the
+DESIGN-v3 §3.2 (V3-2, V3-6, V3-S2R-A1 … A3), changed for the signed random oracle
+(archive/v4-dev-record:docs/v4/BRIEF.md §2, §4.1; V4-1, V4-6, V4-7). A submission is a non-interactive argument in the
 random-oracle model: the verifier `V` and the honest prover `P` as query programs that also take
 the **public key** `vk` of the deployment's signer, the extractor's specification `E` and its
 program `ext` (neither takes `vk`, V4-6), and four declared numbers.

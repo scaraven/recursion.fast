@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of the oracle service against Python's hashlib and the independent reading of BRIEF §4.2
+"""Tests of the oracle service against Python's hashlib and the independent reading of `Contract/Signature.lean`
 in `wots_ref.py`.
 
   python3 tests/service/test_service.py [RF_ORACLE_TEST_BINARY]

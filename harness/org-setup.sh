@@ -26,7 +26,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 LOG=$ORG/logs/org-setup; mkdir -p "$LOG" "$ORG/.lake/rf"
 # The organiser's roots: an entry may import any module of their import closure (gate rule 6).
 # CompPoly's binary field `BF64`/`Ext3` and its byte codec are organiser-built and pinned (v3
-# precedent 09668b5, FIXLIST Q2): their modules are in the manifest as pinned, so the gate reports
+# precedent 09668b5, archive/v4-dev-record:docs/v4/FIXLIST.md Q2): their modules are in the manifest as pinned, so the gate reports
 # their `@[csimp]` lemma instead of rejecting it as an untrusted one.
 COMPPOLY=CompPoly.Fields.Binary.BF64.Ext3,CompPoly.Fields.Binary.BF64.Bytes
 ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls,$COMPPOLY}

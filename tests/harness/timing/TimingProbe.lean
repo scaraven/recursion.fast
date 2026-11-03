@@ -1,5 +1,5 @@
 /-
-  Probe for the badge's timing barrier (FIXLIST Q10; not a harness tool). `work` is a pure
+  Probe for the badge's timing barrier (archive/v4-dev-record:docs/v4/FIXLIST.md Q10; not a harness tool). `work` is a pure
   computation of about a second; each variant times it between two `IO.monoNanosNow` readings the
   way a badge might. Printed: the measured nanoseconds and the result.
 

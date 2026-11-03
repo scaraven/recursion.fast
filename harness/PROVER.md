@@ -1,7 +1,7 @@
 # The prover interface (normative)
 
 The efficient prover of an entry is an **x86-64 Linux program submitted as GNU assembly**
-(BRIEF P4, V4-9). The runner builds it, runs it in a sandbox, and measures it. Everything it
+(V4-9; `archive/v4-dev-record:docs/v4/BRIEF.md` P4). The runner builds it, runs it in a sandbox, and measures it. Everything it
 produces is checked by the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 
 ## 1. Build
@@ -84,12 +84,12 @@ node needs a signed proof of its leaf child as its witness). The runner computes
 itself; every output is checked with `acc` under the run's `vk` against that statement, and must
 be accepted.
 
-**What is drawn, and what is told** (§3). Fresh per evaluation from the OS CSPRNG, published only
+**What is drawn, and what is told** (AGENTS.md §6). Fresh per evaluation from the OS CSPRNG, published only
 after the run: each chain's
 length i.i.d. with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work per octave; step 1's
 two chains too); the starts. A step learns its own length only when its inputs arrive. The number of
 steps is **not** drawn: `M = 96` in season 1 (6 in the smoke), the same for every entry. Two cross-step side channels exist and are harmless given the re-timing rule below
-(§11 m-6): the signature index the service returns (how many signatures this lifetime made) and
+(V4-A11 m-6): the signature index the service returns (how many signatures this lifetime made) and
 `CLOCK_REALTIME`. With `M` public a step can count its position anyway;
 leaving the last few chains to the final check gains about 0.4–1.0 % at most (estimate), because
 the verifier charge prices the work it creates.
@@ -121,12 +121,12 @@ process is alive**. The whole stream, every request, check, canary, calibration 
 runs within `stream_s` (1,920 s, wall time). A stream that reaches it is scored over its completed
 steps and flagged `truncated`; such a run is never ranked.
 
-**Re-timing** (§5.3). After the stream the runner fits `P ≈ a·n + b` (trimmed least squares) and
+**Re-timing** (AGENTS.md §6). After the stream the runner fits `P ≈ a·n + b` (trimmed least squares) and
 runs once more, on the same inputs, every step with `P_i > 1.3 × (a·n_i + b)`, largest ratio first,
 at most 10% of the steps. The faster run is kept and scored (its time, its `V` and its `|π|`); the
 first output stays the child of the next step. The re-run's output must be accepted too.
 
-**The score** (§4; lower is better, seconds per `2^18`-compression step):
+**The score** (AGENTS.md §7; lower is better, seconds per `2^18`-compression step):
 
 ```
 S  = P̄ + V̄
@@ -166,7 +166,7 @@ plus the verifier) takes more than 10 × `v_ref` to decide, the column above its
 the checker (an accepted DoS input is recorded, not failed). No time is a pass/fail gate on the
 verifier any more: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
 completed steps, flagged `truncated` and not ranked. Every GitHub job of an evaluation ends within
-30 minutes, the benchmark job within 50, and these caps are nested inside them (V4-A9). The first failure ends the evaluation
+30 minutes, the certificate job within 40 and the benchmark job within 50, and these caps are nested inside them (V4-A9). The first failure ends the evaluation
 (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's output (its
 first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's refusals of this
 run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes; Q13), and a kill by the
@@ -174,8 +174,8 @@ memory cgroup (`killed: out of memory (cap …, peak …)`; Q14).
 
 ## 6. The Lean side's caps (the certificate job)
 
-Each within a GitHub job of 30 minutes on a 4-vCPU runner (V4-A9, `[certificate]` of the season
-file): the entry's `lake build` of the challenge and `Solution`'s import closure 600 s; the kernel's
+Each within the certificate job of 40 minutes on a 4-vCPU runner (V4-A9, `[certificate]` of the
+season file): the entry's `lake build` of the challenge and `Solution`'s import closure 1,200 s; the kernel's
 check of the exported proofs 600 s (a breach leaves the certificate unchecked: PROVISIONAL); the
 gate 120 s; the badge build 180 s. The badge build compiles the object code of every module of
 `Solution`'s import closure that the organiser has not precompiled. Precompiled, once per core

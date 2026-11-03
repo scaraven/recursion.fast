@@ -1,5 +1,5 @@
 /-
-# recursion.fast v4 (SROM): the trusted contract, in reading order (docs/v4/BRIEF.md §4).
+# recursion.fast v4 (SROM): the trusted contract, in reading order (`archive/v4-dev-record:docs/v4/BRIEF.md` §4).
 
 Hash.Blake2s (v2, unchanged) · Relation (signed children, V4-16) · Signature (trace digest and
 WOTS/Merkle check, V4-3) · Oracle (adds `runSeq`, V4-4) · Security (`prob` and the textbook

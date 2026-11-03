@@ -6,7 +6,7 @@ description = "recursion.fast v4 (SROM) oracle and signing service: keyed BLAKE2
 license = "Apache-2.0"
 publish = false
 
-# No dependencies: std only (trusted runtime, BRIEF §4.3).
+# No dependencies: std only (trusted runtime, `service/PROTOCOL.md`).
 [dependencies]
 
 [features]

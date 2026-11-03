@@ -1,5 +1,5 @@
-"""An independent Python reading of BRIEF §4.2 (the trace digest and the WOTS/Merkle signature),
-written from the BRIEF's text, for testing the service and the runner. Not part of the runtime.
+"""An independent Python reading of `RecursionFast/Contract/Signature.lean` (the trace digest and the WOTS/Merkle
+signature), written from `archive/v4-dev-record:docs/v4/BRIEF.md` §4.2, for testing the service and the runner. Not part of the runtime.
 
   traceDigest tr = BLAKE2s-256(0x54 ‖ item_0 ‖ …),  item_i = enc64 |q_i| ‖ q_i ‖ a_i
   digits(m):  d[4i+t] = (m[i] >> 2t) & 3  (i < 32, t < 4);  C = Σ_{k<128} (3 − d[k]);

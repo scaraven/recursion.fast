@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measures the oracle service on this machine (RESULT §3): keygen time, round-trip latency, and
+# Measures the oracle service on this machine (archive/v4-dev-record:docs/v4/stages/B-harness-RESULT.md §3): keygen time, round-trip latency, and
 # QUERY throughput for 1 and N client threads over batch sizes and query sizes; SIGN throughput.
 #   tests/service/measure.sh [THREADS_MAX]      (logs to stdout; the caller tees into logs/)
 set -euo pipefail

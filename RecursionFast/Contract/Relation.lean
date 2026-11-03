@@ -1,14 +1,14 @@
 /-
 # Contract: the relation over digests                                             (TRUSTED)
 
-v4 (docs/v4/BRIEF.md §2, §4.1; V4-3, V4-16), from DESIGN-v3 §2.1 (V3-7). One relation over
+v4 (archive/v4-dev-record:docs/v4/BRIEF.md §2, §4.1; V4-3, V4-16), from DESIGN-v3 §2.1 (V3-7). One relation over
 32-byte statement digests, parameterised by an acceptance predicate `acc` on **signed proofs**
 (`Certificate.lean` plugs in `Submission.acc` under a public key). A **leaf** digest commits to
 the end of a BLAKE2s chain of at most `chainCap` steps and its length; its witness is the chain's
 start (unchanged from v3). A **node** digest commits to two child digests; its witness is two
 signed proofs that `acc` accepts.
 
-**Why signed proofs (V4-3, BRIEF P2).** Under the signed random oracle the oracle is a keyed
+**Why signed proofs (V4-3; archive/v4-dev-record:docs/v4/BRIEF.md P2).** Under the signed random oracle the oracle is a keyed
 BLAKE2s held by a service that also signs the answers a proof used. A signed proof `(π, tr, σ)`
 is a proof, the trace of oracle answers it was verified against (queries in the order asked), and
 the service's signature on the trace's digest. A child is accepted relative to its signed trace,
