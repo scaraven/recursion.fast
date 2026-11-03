@@ -1,4 +1,4 @@
-//! `rf-oracle`: the oracle and signing service of one timed run (TRUSTED RUNTIME; BRIEF §4.3,
+//! `rf-oracle`: the oracle and signing service of one timed run (TRUSTED RUNTIME; `service/PROTOCOL.md`,
 //! wire format `PROTOCOL.md`).
 //!
 //!   rf-oracle --socket PATH [--threads N]

@@ -1,5 +1,5 @@
 /-
-  An entry module that `Solution` does not import (FIXLIST Q7): the harness never builds it, and
+  An entry module that `Solution` does not import (archive/v4-dev-record:docs/v4/FIXLIST.md Q7): the harness never builds it, and
   the certificate job must still certify the entry.
 -/
 

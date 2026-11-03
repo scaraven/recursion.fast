@@ -1,7 +1,8 @@
-# recursion.fast v4, season 1: every shape and cap of an evaluation (BRIEF V4-10 … V4-13, V4-A5,
+# recursion.fast v4, season 1: every shape and cap of an evaluation (archive/v4-dev-record:docs/v4/BRIEF.md V4-10 … V4-13, V4-A5,
 # V4-A9, V4-A11). The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
-# Every GitHub job of an evaluation runs at most 30 minutes, except the certificate job (40 minutes) and the
-# benchmark job (50 minutes), whose caps were doubled on 2026-10-29, and the caps below are nested inside those limits (design §3.4): an entry that is slow or hangs fails a cap and is REJECTed with the
+# Job limits are in .github/workflows/evaluate.yml (AGENTS.md §9): the certificate job 50 minutes (90 for the
+# incumbent's re-certification), the benchmark job 50 minutes (100 for a duel), every other job at most 30. The
+# caps below are nested inside those limits: an entry that is slow or hangs fails a cap and is REJECTed with the
 # reason, never killed with its job.
 name = "season-1"
 
@@ -18,18 +19,35 @@ build_s = 1200    # the entry's `lake build` of the challenge and Solution's imp
 kernel_s = 600    # the comparator: the exports and the Lean kernel's replay
 gate_s = 120      # the gate
 badge_s = 180     # the badge build
+incumbent_build_s = 3600  # 3 × build_s: a duel's incumbent, certified before under build_s, re-derived
+                          # here whether or not the record cache hit; never a candidate's cap
+render_s = 30     # the challenge rendered from claim.json (≤ claim_bytes)
+source_rule_s = 120   # the source rule on lean/ (≤ lean_bytes; 8.9 MB took 10 s on the development VM)
+
+[entry]           # the entry root as data, checked before the source rule (so a huge unused file
+                  # cannot force a timeout); a breach is the entry's REJECT. flock-recursive
+                  # (v4/flock-submit): lean/ 263 files, 8.9 MB, largest 145 kB; prover/ 44 files,
+                  # 58.6 MB, prover.s 35.1 MB; the whole root 67.5 MB
+files = 2048              # every regular file of the root
+bytes = 536870912         # 512 MiB, the whole root
+file_bytes = 134217728    # 128 MiB, any one file
+lean_files = 1024         # lean/ (all files, any depth)
+lean_bytes = 33554432     # 32 MiB: the source rule's input (8.9 MB took 10 s on the development VM)
+prover_files = 256        # prover/
+prover_bytes = 268435456  # 256 MiB
+claim_bytes = 65536       # claim.json, the renderer's input
 
 [stream]          # the one IVC stream (V4-A11 §2, §3): PROVER first, then PROVER step, a fresh process each
 M = 96            # steps per stream: one published constant, the same for every entry (2026-10-29)
-n_lo = 131072     # chain lengths i.i.d. with density ∝ 1/n² on [2^17, 2^20] (no stratification, §11)
+n_lo = 131072     # chain lengths i.i.d. with density ∝ 1/n² on [2^17, 2^20] (no stratification, V4-A11 §11)
 n_hi = 1048576
-ready_s = 10      # seconds from a request's process start to its `ready` line (§11 m-3)
+ready_s = 10      # seconds from a request's process start to its `ready` line (V4-A11 §11 m-3)
 step_s = 60       # seconds per request from its inputs to the death of its last process
 stream_s = 1920   # wall seconds (doubled from 960 on 2026-10-29) for the whole stream from its first calibration sample: every request,
-                  # check, canary, calibration sample and re-run (§6); the entry's share is stated in
-                  # design §3.6
+                  # check, canary, calibration sample and re-run (V4-A11 §6); the entry's share is stated in
+                  # archive/v4-dev-record:docs/DESIGN-v4-srom.md §3.6
 check_every = 8   # outputs checked in batches of this many, between steps (no entry process alive)
-retime_factor = 1.3   # §5.3: a step above 1.3 × the fit's prediction is run once more ...
+retime_factor = 1.3   # V4-A11 §5.3: a step above 1.3 × the fit's prediction is run once more ...
 retime_frac = 0.1     # ... at most 10% of the steps, largest ratio first
 
 [calibration]     # V4-A11 §5.4, §11 m-2: interleaved samples with no entry process alive, medians used
@@ -46,7 +64,7 @@ service_s = 2           # seconds per service throughput measurement (V4-A5; pub
 
 [dos]             # on the stream's last output π_M
 proofs = 100
-item_factor = 10      # an input may take at most item_factor · v_ref (parse plus acc, §11 m-12)
+item_factor = 10      # an input may take at most item_factor · v_ref (parse plus acc, V4-A11 §11 m-12)
 item_cap = "v_ref"    # "v_ref": item_factor · v_ref; "verify_s": the per-check cap (the smoke)
 total_s = 180         # the whole column's budget; a breach is the entry's failure (RF-M1)
 

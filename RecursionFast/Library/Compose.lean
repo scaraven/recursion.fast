@@ -52,8 +52,8 @@
   digest, which is a collision of `traceBytes` encodings (injective on queries of at most
   `queryCap` bytes, `traceBytes_inj`; the forgery carries that cap, and the service's traces have
   it by the wire cap). Collisions and forgeries are then bounded by `Adv_coll + Adv_EUF-CMA`
-  (BRIEF §2). Also on paper: lazy sampling against a random function, randomised adversaries,
-  and the PRF hybrid (design §2.3).
+  (archive/v4-dev-record:docs/v4/BRIEF.md §2). Also on paper: lazy sampling against a random function, randomised adversaries,
+  and the PRF hybrid (archive/v4-dev-record:docs/DESIGN-v4-srom.md §2.3).
 -/
 import RecursionFast.Library.Trace
 import RecursionFast.Library.Tree

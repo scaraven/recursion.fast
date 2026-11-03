@@ -1,8 +1,9 @@
 /-
 # Contract: the trace digest and the signature check                             (TRUSTED)
 
-v4, V4-3 and the byte layouts of docs/v4/BRIEF.md §4.2 (normative: the service, this file and the
-runner agree byte for byte). The service signs, per `sign` request, the digest of the whole trace
+v4, V4-3 and the byte layouts, normative here and in `harness/FORMAT.md` and `service/PROTOCOL.md`
+(from `archive/v4-dev-record:docs/v4/BRIEF.md` §4.2): the service, this file and the runner agree
+byte for byte. The service signs, per `sign` request, the digest of the whole trace
 it answered (hash-then-sign), with a **stateful hash-based signature**: Winternitz one-time
 signatures (WOTS) with base-4 digits (`w = 4`, chains of 3 steps), 133 chains per key, under a
 Merkle tree of `2^16` one-time keys whose root is the public key `vk`. Every hash below is public
@@ -12,7 +13,7 @@ BLAKE2s-256 under its own tag (`Relation.lean`, V4-16).
 BLAKE2s, so a node circuit needs one hash gadget for chains, statements, traces and signatures;
 `w = 4`, which minimises the in-circuit cost of one check (about 200 chain steps on average, 67
 compressions for the leaf, 32 for the path). Stateful: the service uses each index once and
-refuses after `2^16` signatures (BRIEF §4.3).
+refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 
 **Layouts.**
 * `traceDigest tr = BLAKE2s-256(tagTrace ‖ item₀ ‖ item₁ ‖ …)`, `itemᵢ = enc64 |qᵢ| ‖ qᵢ ‖ aᵢ`.

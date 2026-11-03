@@ -1,7 +1,7 @@
 # The signed-proof file (normative)
 
 Every proof a prover outputs, and every proof the runner, the badge `verify` and any third party
-check, is one **signed proof** `p = (π, tr, σ)` (BRIEF §4.1 `Signed`) in this file format. It is
+check, is one **signed proof** `p = (π, tr, σ)` (`Signed`, `RecursionFast/Contract/Relation.lean`) in this file format. It is
 the whole input of `acc vk c p` besides the public key `vk` and the statement `c`.
 
 ## Layout
@@ -33,10 +33,10 @@ The file ends exactly after `path_15`. Its size is
   exactly `q_0, …, q_{m−1}` in order, uses every entry, and returns `true`.
 - **The trace digest** is computed over the same bytes the file stores for the entries:
   `traceDigest tr = BLAKE2s-256(0x54 ‖ item_0 ‖ … ‖ item_{m−1})` with
-  `item_i = u64 |q_i| ‖ q_i ‖ a_i` (BRIEF §4.2). A prover gets `(a_i)` and `σ` from one service
+  `item_i = u64 |q_i| ‖ q_i ‖ a_i` (`RecursionFast/Contract/Signature.lean`). A prover gets `(a_i)` and `σ` from one service
   `SIGN` request with `q_0, …, q_{m−1}` (`service/PROTOCOL.md` §2.2); the wire format carries the
   index as `u32`, the file as `u64`.
-- **The signature** is the contract's WOTS/Merkle signature (BRIEF §4.2): `j < 2^16`, 133 chain
+- **The signature** is the contract's WOTS/Merkle signature (`Contract/Signature.lean`): `j < 2^16`, 133 chain
   values, 16 siblings; the file format fixes the two counts.
 - **The trace's length**: since the contract fix pass `ea2e8ab` (review RA-M2), `acc` also
   requires `m ≤ qV` of the entry (right after the size cap); nothing in this format changes.
@@ -55,8 +55,8 @@ node (`WitnessSending.encode`) carries its children in that word encoding, so a 
 re-encodes each child's file by padding `π` and the queries (`harness/toy-prover/toy.c`,
 `app_signed_words`). The file itself is not padded: the badge parses it at byte level
 (`harness/badge/Common.lean.in`, `parseSigned`) in linear time, about 30 ms for a 9.2 MB file
-(`logs/harness/accprobe.log`), where reading words through `packFast` and `Word = BitVec 64` costs
-about 0.4 µs per byte (stage A RESULT §4).
+(measured), where reading words through `packFast` and `Word = BitVec 64` costs
+about 0.4 µs per byte (`archive/v4-dev-record:docs/v4/stages/A-contract-RESULT.md` §4).
 
 ## Statements and keys
 
@@ -68,5 +68,5 @@ against is always the runner's own digest.
 
 The toy prover's signed leaf proof (`π` the 48-byte witness-sending encoding of a leaf, no query) is
 `8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes; its first stream step (a node of two such leaves, carried
-whole) is 14,544 bytes, and every further step adds 9,704 (measured,
-`logs/f-ivc/smoke-mock-work/result-honest.json`).
+whole) is 14,544 bytes, and every further step adds 9,704 (measured on the
+smoke).

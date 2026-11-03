@@ -1,12 +1,12 @@
 # The core CI of recursion.fast v4 (this repository): the Lean build with Mathlib from its cache,
 # the line budget, the axiom audit, the source rule and gate fixtures, the service's tests, the
-# sandbox tests, and the harness smoke end to end (BRIEF stage B; V4-A2: the certificate side and the
+# sandbox tests, and the harness smoke end to end (archive/v4-dev-record:docs/v4/BRIEF.md stage B; V4-A2: the certificate side and the
 # benchmark side are separate jobs). A push or a pull request to this repository triggers it; it
 # runs no submission. Every check whose subject is organiser code runs here and only here, once per
 # harness commit, never in an evaluation (V4-A9): the contract's `acc` before the entry's `V` (the
 # organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
 # template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
-# steps' timeouts nested inside that (V4-A9; the measured step times are in design §3.4).
+# steps' timeouts nested inside that (V4-A9; the measured step times are in archive/v4-dev-record:docs/DESIGN-v4-srom.md §3.4).
 name: ci
 on:
   push:
@@ -30,14 +30,14 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
       - name: elan
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: package tree from the cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
@@ -47,7 +47,7 @@ jobs:
         run: |
           mkdir -p logs
           # no `Mathlib.Tactic` objects here: the core CI's badges import only the organiser's closure
-          RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
+          RF_BADGE_OBJECTS='' timeout 540 harness/org-setup.sh "$PWD"
       - name: line budget (trusted contract <= 500 code lines)
         run: |
           python3 scripts/loc.py RecursionFast/Contract.lean RecursionFast/Contract/*.lean RecursionFast/Contract/Hash/*.lean | tee logs/loc.log
@@ -58,6 +58,10 @@ jobs:
         run: |
           scripts/check-hygiene.sh
           tests/source-rule/check.sh
+      - name: the record build cache and the entry caps (a real Lake on probe trees, core Lean only; evaluate.py cert with the organiser side stubbed)
+        run: |
+          timeout 300 python3 -I tests/harness/test_record_cache.py "$RUNNER_TEMP/record-cache" | tee logs/record-cache.log
+          timeout 600 python3 -I tests/harness/test_cert_cache.py "$RUNNER_TEMP/cert-cache" | tee logs/cert-cache.log
       - name: source rule token sweep
         run: |
           timeout 60 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
@@ -87,7 +91,7 @@ jobs:
               print(subprocess.run(["taskset", "-c", core, "harness/lean-tools/.lake/build/bin/chaincheck", "logs/leaves.json",
                                     root.hex()], capture_output=True, text=True).stdout.strip())
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: lean-logs, path: logs/ }
 
@@ -97,7 +101,7 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
       - name: build and unit tests (toolchain pinned by service/rust-toolchain.toml)
         working-directory: service
@@ -109,7 +113,7 @@ jobs:
         run: timeout 300 python3 tests/service/test_service.py
       - name: service measurements on this runner
         run: timeout 300 tests/service/measure.sh 4 | tee service-measure.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: service-measure, path: service-measure.log }
 
   harness:
@@ -118,7 +122,7 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
       - name: committed assembly assembles with this image's toolchain (RF-M2)
         run: |
@@ -135,13 +139,15 @@ jobs:
         run: timeout 60 python3 tests/harness/test_tv.py
       - name: the stream's control flow, re-timing and truncation (V4-A11 §2, §5.3, §6, R-M2)
         run: timeout 60 python3 tests/harness/test_stream.py
+      - name: a duel's second run starts on a clean slate (an orphaned service, tmpfs requests, the work directory)
+        run: timeout 120 python3 tests/harness/test_slate.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT (review M-3)
         run: timeout 120 python3 tests/harness/test_partcap.py
-      - name: the aggregation requires every planned part (two jobs, single runs), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
+      - name: the aggregation requires every planned part (single runs and duels), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
         run: |
           timeout 60 python3 tests/harness/test_aggregate.py
           timeout 60 python3 tests/harness/test_dos.py
-      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
+      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, three duels)
         run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
   smoke:
@@ -154,7 +160,7 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
       - name: committed assembly assembles with this image's toolchain (RF-M2)
         run: |
@@ -166,19 +172,19 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .lake/packages
           key: lake-packages-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
       - run: timeout 300 lake exe cache get
-      - run: mkdir -p logs && RF_BADGE_OBJECTS= timeout 540 harness/org-setup.sh "$PWD"
+      - run: mkdir -p logs && RF_BADGE_OBJECTS='' timeout 540 harness/org-setup.sh "$PWD"
       - name: comparator and lean4export (pinned in scripts/tools.env)
         run: timeout 240 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
       - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, organiser canaries, broken provers, provisional, source rule)
         run: timeout 480 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: smoke, path: "${{ runner.temp }}/smoke/*.json" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: ci-logs, path: logs/ }

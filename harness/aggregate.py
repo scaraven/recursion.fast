@@ -5,6 +5,9 @@ entries provisionally.
   python3 -I harness/aggregate.py --print-matrix single                 the benchmark jobs' parts
   python3 -I harness/aggregate.py --plan single --season SEASON --cert CERT.json --out RESULT.json
                                   [--job URL] PART.json...
+  python3 -I harness/aggregate.py --plan single --season SEASON --cert CERT.json --out RESULT.json
+                                  --duel DUEL.json --incumbent-cert INC_CERT.json --incumbent-part INC_PART.json...
+                                  --incumbent-sha SHA --incumbent-path ROOT PART.json...     a duel (`pair`)
   python3 -I harness/aggregate.py --rank --out RANKING.json RESULT.json...
 
 **The plan** (RF-M1). This file is the one definition of the benchmark jobs: `evaluate.yml` builds
@@ -53,6 +56,11 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--job", default=None)
     ap.add_argument("--rank", action="store_true")
+    ap.add_argument("--duel", help="a duel's draws (evaluate.py draw-duel): pair the candidate with the incumbent")
+    ap.add_argument("--incumbent-cert")
+    ap.add_argument("--incumbent-part", action="append", default=[])
+    ap.add_argument("--incumbent-sha")
+    ap.add_argument("--incumbent-path")
     ap.add_argument("parts", nargs="*")
     a = ap.parse_args()
     if a.print_matrix:
@@ -66,13 +74,31 @@ def main():
     if not (a.plan and a.season and a.cert and a.out):
         ap.error("--plan, --season, --cert and --out are required")
     p = Params.load(a.season)
-    cert = json.load(open(a.cert))
-    parts = [json.load(open(f)) for f in sorted(a.parts)]
-    res = {"schema": "recursion.fast/v4/result-1", "season": p.name,
-           "season_sha256": hashlib.sha256(open(a.season, "rb").read()).hexdigest(), "job": a.job,
+    season_sha = hashlib.sha256(open(a.season, "rb").read()).hexdigest()
+    res = combine(p, a.plan, season_sha, a.job, json.load(open(a.cert)), [json.load(open(f)) for f in sorted(a.parts)])
+    if a.duel or a.incumbent_cert:
+        pair(res, p, a.plan, season_sha, [json.load(open(f)) for f in sorted(a.parts)],
+             load_or(a.incumbent_cert, {"status": "error", "reasons": ["the incumbent's certificate is missing"]}),
+             [json.load(open(f)) for f in sorted(a.incumbent_part)], load_or(a.duel, None), a.incumbent_sha, a.incumbent_path)
+    json.dump(res, open(a.out, "w"), indent=1)
+    print(f"VERDICT: {res['verdict']} ({len(res['parts'])} part(s), CPU {res['cpu_models']})"
+          + (f"; duel, incumbent {res['incumbent']['verdict']}" if res.get("duel") else ""))
+    return 0
+
+
+def load_or(path, default):
+    try:
+        return json.load(open(path))
+    except (OSError, ValueError, TypeError):
+        return default
+
+
+def combine(p, plan, season_sha, job, cert, parts):
+    """One entry's result from its certificate and its benchmark parts: RF-M1, the verdict, the score."""
+    res = {"schema": "recursion.fast/v4/result-1", "season": p.name, "season_sha256": season_sha, "job": job,
            "certificate": {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels",
                                                      "second_kernel", "kernel_runs", "gate", "badge_sha256", "claim",
-                                                     "built_modules", "environment")},
+                                                     "built_modules", "environment", "record_cache", "entry_build")},
            "parts": [], "reasons": list(cert.get("reasons", []))}
     res["stream"] = None
     for r in parts:
@@ -82,17 +108,17 @@ def main():
         res["stream"] = r.get("stream") or res["stream"]     # one run; the plan check rejects a second
         res["reasons"] += r.get("reasons", [])
     # RF-M1: exactly the planned parts, one result each, from one season and one harness commit
-    want = collections.Counter(ALL_PARTS if p == "all" else p for p in PLANS[a.plan])
+    want = collections.Counter(ALL_PARTS if p == "all" else p for p in PLANS[plan])
     got = collections.Counter(",".join(r.get("parts") or []) for r in parts)
     plan_errors = []
     if got != want:
-        plan_errors.append(f"benchmark parts do not match the plan `{a.plan}`: missing {sorted((want - got).elements())}, "
+        plan_errors.append(f"benchmark parts do not match the plan `{plan}`: missing {sorted((want - got).elements())}, "
                            f"unexpected {sorted((got - want).elements())}")
     commits = {(r.get("harness") or {}).get("commit") for r in parts}
     seasons = {r.get("season_sha256") for r in parts}
     if len(commits) > 1 or len(seasons) > 1:
         plan_errors.append(f"parts from different harness commits {sorted(map(str, commits))} or seasons")
-    res["plan"], res["harness_commit"] = a.plan, (commits.pop() if len(commits) == 1 else None)
+    res["plan"], res["harness_commit"] = plan, (commits.pop() if len(commits) == 1 else None)
     res["reasons"] += plan_errors
     models = sorted({(r.get("machine") or {}).get("cpu_model") or "?" for r in parts})
     res["cpu_models"], res["mixed_cpu"] = models, len(models) > 1
@@ -117,9 +143,60 @@ def main():
     res["entry"] = next((r.get("entry") for r in parts if r.get("entry")), None)
     if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
         res["score"] = score(p, res["stream"])
-    json.dump(res, open(a.out, "w"), indent=1)
-    print(f"VERDICT: {verdict} ({len(parts)} part(s), CPU {models})")
-    return 0
+    return res
+
+
+
+
+def pair(res, p, plan, season_sha, cand_parts, inc_cert, inc_parts, draw, sha, path):
+    """A duel (the record decided head-to-head on one runner): the incumbent's result from its own
+    certificate and parts, the pairing checks, and the facts the record rule needs, all in `res`
+    (the candidate's result). The pairing is RF-M1 for two entries: every candidate part is this
+    duel's candidate run and every incumbent part its incumbent run (the draw's identifier), each
+    entry has exactly the planned parts (`combine`), both streams ran the draw's chain lengths, on
+    one runner. The organiser's failure makes the result ERROR, unless the candidate failed on its
+    own (its REJECT stands): an incumbent certificate that is not `ok`, an incumbent benchmark with
+    a harness error or a missing part, a pairing that does not hold. The incumbent's own failure on
+    this runner is `entry_failed`: its benchmark REJECTed, or its stream truncated (not comparable)."""
+    inc = combine(p, plan, season_sha, None, inc_cert, inc_parts) if inc_cert.get("status") == "ok" else None
+    errs = []
+    did = (draw or {}).get("id")
+    if not did:
+        errs.append("the duel's draws are missing")
+    for role, rs in (("candidate", cand_parts), ("incumbent", inc_parts)):
+        if any((r.get("duel") or {}).get("role") != role or (r.get("duel") or {}).get("id") != did for r in rs):
+            errs.append(f"a {role} part is not this duel's {role} run")
+    for who, st in (("candidate", res.get("stream")), ("incumbent", (inc or {}).get("stream"))):
+        if st and draw and st.get("lengths") != draw.get("lengths"):
+            errs.append(f"the {who}'s stream did not run the duel's chain lengths")
+    if inc and inc_parts and cand_parts and inc["harness_commit"] != res["harness_commit"]:
+        errs.append("the two runs are from different harness commits or seasons")
+    runners = {(r.get("machine") or {}).get("runner_name") for r in cand_parts + inc_parts}
+    if len(runners) > 1:
+        errs.append(f"the two runs were on different runners {sorted(map(str, runners))}")
+    models = sorted({(r.get("machine") or {}).get("cpu_model") or "?" for r in cand_parts + inc_parts})
+    res["cpu_models"], res["mixed_cpu"] = models, len(models) > 1
+    res["duel"], res["duel_id"], res["order"] = True, did, (draw or {}).get("order")
+    ic = {"sha": sha, "path": path, "certificate_status": inc_cert.get("status"), "verdict": None, "comparable": False,
+          "truncated": None, "score": None, "entry_failed": False, "benchmarked": bool(inc_parts),
+          "reasons": list(inc_cert.get("reasons") or [])[:20]}
+    if inc:
+        ic.update(verdict=inc["verdict"], comparable=inc["comparable"], truncated=inc["truncated"], score=inc.get("score"),
+                  entry_failed=inc["verdict"] == "REJECT" or (inc["verdict"] == "ACCEPT" and inc["truncated"]),
+                  failure=("stream truncated (stream_s)" if inc["verdict"] == "ACCEPT" and inc["truncated"]
+                           else (inc["reasons"] or [None])[0] if inc["verdict"] == "REJECT" else None),
+                  reasons=inc["reasons"][:20], prover_sha256=inc["prover_sha256"], entry=inc["entry"],
+                  certificate=inc["certificate"], harness_commit=inc["harness_commit"], parts=inc["parts"],
+                  stream=inc["stream"])
+    res["incumbent"] = ic
+    if (errs or ic["certificate_status"] != "ok" or ic["verdict"] == "ERROR") and res["verdict"] != "REJECT":
+        why = errs or [f"the incumbent's certificate is {ic['certificate_status']}" if ic["certificate_status"] != "ok"
+                       else "the incumbent's benchmark had a harness error or a missing part"]
+        res["reasons"] += [f"duel (organiser side): {w}" for w in why]
+        res["verdict"] = "ERROR"
+        res.pop("score", None)
+    if res["verdict"] != "ACCEPT" or res["mixed_cpu"]:
+        res["comparable"] = False
 
 
 def entry_key(r):

@@ -1,8 +1,8 @@
 /-
 # Contract: what a submission is and what its record certifies                     (TRUSTED)
 
-DESIGN-v3 §3.2 (V3-2, V3-6, V3-S2R-A1 … A3), changed for the signed random oracle (docs/v4/
-BRIEF.md §2, §4.1; V4-1, V4-6, V4-7). A submission is a non-interactive argument in the
+DESIGN-v3 §3.2 (V3-2, V3-6, V3-S2R-A1 … A3), changed for the signed random oracle
+(archive/v4-dev-record:docs/v4/BRIEF.md §2, §4.1; V4-1, V4-6, V4-7). A submission is a non-interactive argument in the
 random-oracle model: the verifier `V` and the honest prover `P` as query programs that also take
 the **public key** `vk` of the deployment's signer, the extractor's specification `E` and its
 program `ext` (neither takes `vk`, V4-6), and four declared numbers.
@@ -57,7 +57,7 @@ that honest proofs pass `acc` under the deployment: the harness checks that conc
 by the deployment, not by this file: such a `V` is still certified (`Controls/Backdoor.lean`), but
 no public function it can compute is the keyed oracle.
 
-**Rendering (v2's pattern, S5-A13, S9-A41; unchanged).** A challenge renders the claim as
+**Rendering (unchanged since v2).** A challenge renders the claim as
 organiser data (`Declared`): the declared knowledge error, completeness error, query bound and
 fuel. `CertificateR` binds them: the submission's numbers are within the declared ones, and the
 declared fuel is within the budget, so the harness may run the program with it (V3-S1-A10, A21).

@@ -26,7 +26,11 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
 5. the entry's module that `Solution` does not import is never built (Q7), and a Lean-kernel run
    over a 400 MiB budget is its own outcome, PROVISIONAL, not a failed certificate (Q12).
 With `--mock`: steps 1 and 2 with the Python stand-in badge (`tests/harness/mock_badge/`), which
-tests the runner without Lean.
+tests the runner without Lean, and 6. two duels through `evaluate.py draw-duel` and `bench --duel`
+(the record decided head-to-head on one runner): the honest toy prover against itself (both
+ACCEPT, the same drawn chain lengths, fresh starts and keys per run, the drawn order) and against
+the `BROKEN_CHAIN` prover as the incumbent (the incumbent's REJECT is `entry_failed`), each paired by
+`aggregate.py --duel`.
 """
 import argparse
 import json
@@ -35,13 +39,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 sys.path.insert(0, HERE)
 from rfh.checks import Badge  # noqa: E402
-from rfh.sandbox import memcap_method  # noqa: E402
+from rfh import slate  # noqa: E402
+from rfh.sandbox import memcap, memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 from canaries import organiser_canaries  # noqa: E402
 
@@ -192,6 +198,72 @@ def main():
         for flag, e in broken_entries:
             results[flag] = run_bench(e, badge, os.path.join(tmp, f"work-{flag}"), os.path.join(tmp, f"result-{flag}.json"),
                                       "calibrate,stream", season_of(flag))
+
+        def debris(token):
+            """What a first run killed at PART_S can leave: an orphan carrying its token, an
+            orphaned service in its scope whose stdin an orphan holds open, a tmpfs request directory."""
+            env = dict(os.environ, RF_RUN_TOKEN=token)
+            wrap = " ".join(memcap("2G", f"rf-svc-{token}-stream")) if memcap_method() == "systemd" else ""
+            sock = tempfile.mkdtemp(dir=tmp)
+            for cmd in (["sleep", "600"], ["sh", "-c", f"cd '{sock}' && sleep 600 | exec {wrap} '{SERVICE}' --socket s"]):
+                subprocess.Popen(cmd, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            d = tempfile.mkdtemp(prefix=f"rf-req-{token}-", dir="/dev/shm")
+            open(os.path.join(d, "chain.json"), "wb").write(b"x" * (1 << 20))
+            time.sleep(1.0)
+
+        def duel(name, incumbent, inc_ok, dirty=False):
+            """6. a duel: one draw, both runs in its order, paired by the aggregation; with `dirty`,
+            the first run's leftovers are planted before the second starts, which must clean them."""
+            smoke = os.path.join(ROOT, "harness", "smoke.toml")
+            cj = os.path.join(tmp, f"cert-{name}.json")
+            json.dump({"status": "ok", "reasons": [], "badge_dir": badge}, open(cj, "w"))
+            dj = os.path.join(tmp, f"{name}.json")
+            evaluate("draw-duel", "--season", smoke, "--out", dj)
+            draw = load(dj)
+            out = {}
+            for k, role in enumerate(draw["order"]):
+                if dirty and k == 1:
+                    debris(f"{draw['id']}-{draw['order'][0]}")
+                out[role] = os.path.join(tmp, f"{name}-{role}.json")
+                evaluate("bench", "--entry", honest if role == "candidate" else incumbent, "--cert", cj, "--work",
+                         os.path.join(tmp, f"work-{name}-{role}"), "--out", out[role], "--season", smoke,
+                         "--duel", dj, "--role", role)
+            second = load(out[draw["order"][1]]).get("duel") or {}
+            sb = second.get("slate_before") or {}
+            ca = (load(out[draw["order"][0]]).get("duel") or {}).get("cleanup_after") or {}
+            clean = {"processes": 0, "shm": 0, "work": 0}
+            check(sb.get("left") == clean and ca.get("left") == clean and slate.empty(slate.leftovers(draw["id"]))
+                  and (not dirty or (sb["found"]["processes"] >= 3 and sb["found"]["shm"] == 1)),
+                  f"{name}: the second run started on a clean slate (found {sb.get('found')}, "
+                  f"{sb.get('found_processes')}; the first run's cleanup {ca.get('found')})")
+            rc, ri = load(out["candidate"]), load(out["incumbent"])
+            sc, si = rc.get("stream") or {}, ri.get("stream") or {}
+            check(rc.get("benchmark") == "pass" and sc.get("lengths") == draw["lengths"]
+                  and (si.get("lengths") == draw["lengths"] or not inc_ok),
+                  f"{name}: both streams ran the draw's chain lengths {draw['lengths']}")
+            if inc_ok:
+                check(sc.get("starts") != si.get("starts") and sc.get("vk") != si.get("vk"),
+                      f"{name}: fresh chain starts and service keys per run")
+            check([rc.get("duel", {}).get("role"), ri.get("duel", {}).get("role")] == ["candidate", "incumbent"]
+                  and rc["duel"]["position"] == draw["order"].index("candidate"), f"{name}: roles and order {draw['order']}")
+            agg = os.path.join(tmp, f"{name}-result.json")
+            subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"), "--plan", "single",
+                            "--season", smoke, "--cert", cj, "--out", agg, "--duel", dj, "--incumbent-cert", cj,
+                            "--incumbent-sha", "0" * 40, "--incumbent-path", "submissions/x", "--incumbent-part", out["incumbent"],
+                            out["candidate"]], check=True, capture_output=True)
+            g = load(agg)
+            ic = g.get("incumbent") or {}
+            want = ("ACCEPT", False) if inc_ok else ("REJECT", True)
+            check(g.get("verdict") == "ACCEPT" and g.get("duel") is True and g.get("order") == draw["order"]
+                  and len(g.get("cpu_models") or []) == 1 and (ic.get("verdict"), ic.get("entry_failed")) == want
+                  and ((ic.get("score") or {}).get("S") is not None) == inc_ok,
+                  f"{name}: aggregated {g.get('verdict')}, candidate S {(g.get('score') or {}).get('S')}, incumbent "
+                  f"{ic.get('verdict')} S {(ic.get('score') or {}).get('S')}, entry_failed {ic.get('entry_failed')}")
+        step("duel (honest against itself)", lambda: duel("duel-honest", entry_from(honest_s, os.path.join(tmp, "entry-inc")), True))
+        step("duel (the incumbent broken)", lambda: duel("duel-broken", dict(broken_entries)["BROKEN_CHAIN"], False))
+        step("duel (the first run leaves debris)", lambda: duel("duel-dirty", entry_from(honest_s, os.path.join(tmp, "entry-inc2")),
+                                                               True, dirty=True))
     else:
         if not a.org:
             raise SystemExit("smoke: --org ORG or --mock")

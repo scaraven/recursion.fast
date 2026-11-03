@@ -42,7 +42,7 @@ def main():
     out = os.path.join(tmp, "result.json")
     a = SimpleNamespace(season=os.path.join(ROOT, "harness", "smoke.toml"), entry=entry, work=os.path.join(tmp, "work"),
                         out=out, parts=None, service=os.path.join(ROOT, "service", "target", "release", "rf-oracle"),
-                        bench=os.path.join(ROOT, "service", "target", "release", "rf-bench"))
+                        bench=os.path.join(ROOT, "service", "target", "release", "rf-bench"), duel=None, role=None)
     res = ev.bench_job(a, {"status": "ok", "badge_dir": badge})
     why = " ".join(res.get("reasons", []))
     ok = res.get("benchmark") == "fail" and res.get("verdict") == "REJECT" and "PART_S" in why and "prover setup" in why

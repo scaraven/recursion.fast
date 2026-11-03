@@ -12,7 +12,7 @@ use blake2s::{Digest, Hasher};
 pub const TAG_T: u8 = 0x54;
 
 /// `traceDigest tr = BLAKE2s-256(0x54 ‖ item_0 ‖ item_1 ‖ …)`, `item_i = enc64 |q_i| ‖ q_i ‖ a_i`
-/// (BRIEF §4.2).
+/// (`RecursionFast/Contract/Signature.lean`).
 pub fn trace_digest(qs: &[&[u8]], answers: &[Digest]) -> Digest {
     let mut h = Hasher::new();
     h.update(&[TAG_T]);

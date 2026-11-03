@@ -1,6 +1,5 @@
 """The benchmark of one entry (TRUSTED RUNTIME): the IVC stream, its checks and calibration, the
-re-timing, the DoS column and the score (`docs/v4/BRIEF.md` V4-A11; the normative text is the
-amendment's §2–§8 as amended by its §11). One stream per evaluation, with its own service lifetime;
+re-timing, the DoS column and the score (V4-A11; the rules are in `AGENTS.md`). One stream per evaluation, with its own service lifetime;
 every request is a fresh sandboxed process; every check and every calibration sample runs while no
 entry process is alive. Every step the entry controls is capped by the season file, so an entry that
 is slow or hangs fails with the reason, inside its job's time limit (V4-A9).
@@ -146,12 +145,15 @@ def request_root():
     work directory)."""
     d = "/dev/shm"
     if os.path.isdir(d) and os.access(d, os.W_OK) and not os.environ.get("RF_NO_SHM"):
-        return tempfile.mkdtemp(prefix="rf-req-", dir=d)
+        tok = os.environ.get("RF_RUN_TOKEN", "")      # a duel's run (rfh.slate finds what it leaves)
+        return tempfile.mkdtemp(prefix=f"rf-req-{tok}-" if tok else "rf-req-", dir=d)
     return None
 
 
 class Bench:
-    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print):
+    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print,
+                 lengths=None):
+        self.lengths = lengths               # a duel's shared chain lengths (`draws.duel`), else drawn here
         self.p, self.run, self.service_bin, self.bench_bin = p, run, service_bin, bench_bin
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
@@ -166,7 +168,10 @@ class Bench:
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
         svc = Service(self.service_bin, os.path.join(self.work, "svc", name),
-                      wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
+                      # a duel's run names the scope by its token (rfh.slate finds an orphaned service by it:
+                      # the service is non-dumpable, its environment unreadable)
+                      wrap=memcap(self.p.mem_service, f"rf-svc-{os.environ['RF_RUN_TOKEN']}-{name}"
+                                  if os.environ.get("RF_RUN_TOKEN") else f"rf-svc-{name}-{os.getpid()}"),
                       stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
         return svc.start()
@@ -365,7 +370,9 @@ class Bench:
         over its completed, checked steps and flagged `truncated` (§6)."""
         p, name = self.p, "stream"
         M = p.M
-        ns = draws.lengths(M + 1, p.n_lo, p.n_hi)
+        ns = draws.lengths(M + 1, p.n_lo, p.n_hi) if self.lengths is None else list(self.lengths)
+        if not (len(ns) == M + 1 and all(type(n) is int and p.n_lo <= n <= p.n_hi for n in ns)):
+            raise RuntimeError(f"the duel's chain lengths do not fit the season (M + 1 = {M + 1} in [{p.n_lo}, {p.n_hi}])")
         starts = draws.starts(M + 1)
         self.log(f"[{name}] computing {M + 1} leaf digests (sum of lengths {sum(ns)})")
         ld = digest.leaf_digests(starts, ns)          # §11 m-7: all before the first request

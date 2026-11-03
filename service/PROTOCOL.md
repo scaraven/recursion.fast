@@ -1,8 +1,8 @@
 # The oracle service wire protocol (normative for provers)
 
 This is the interface between a prover and `rf-oracle`, the oracle and signing service of
-recursion.fast v4 (SROM; `docs/v4/BRIEF.md` §4.3). One service process lives for one timed run
-(the tree run, the stream run). It holds a fresh secret PRF key `k` and a fresh signing key pair
+recursion.fast v4 (SROM; the rules are in [`AGENTS.md`](../AGENTS.md)). One service process lives for
+one timed run (the stream; the calibration has its own). It holds a fresh secret PRF key `k` and a fresh signing key pair
 `(sk, vk)`; neither ever leaves the process.
 
 ## 1. Transport
@@ -67,7 +67,7 @@ ots_0 ‖ … ‖ ots_132          133 × 32 bytes
 path_0 ‖ … ‖ path_15         16 × 32 bytes (Merkle siblings, leaf level first)
 ```
 
-`body_len = 32·m + 4772`. The signature is the contract's `Sig` (BRIEF §4.2): it verifies with
+`body_len = 32·m + 4772`. The signature is the contract's `Sig` (`RecursionFast/Contract/Signature.lean`): it verifies with
 `SigOk vk (traceDigest tr) σ`. Each `SIGN` uses one of the **2^16** one-time keys of the service's
 lifetime; after that every `SIGN` is refused with status 3. Signing the same trace twice uses two
 keys and gives two different valid signatures.
@@ -121,7 +121,7 @@ kills the prover first (V4-A5).
 ## 4. Performance notes (informative)
 
 - Batch: one round trip costs tens of microseconds; a batch of 256–4096 queries amortises it.
-  `docs/v4/stages/B-harness-RESULT.md` §3 has the measured latency and throughput.
+  Every result publishes the service's throughput measured on its runner (`calibration.service`).
 - Within one request the service hashes eight queries at a time with AVX2 when the CPU has it,
   grouping queries of equal block count (`⌈|q|/64⌉`); a batch of equal-size queries is fastest.
 - Each request is computed on the connection's thread; use several connections to use several

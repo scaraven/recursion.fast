@@ -7,6 +7,14 @@ V4-A1, V4-A2, V4-15, V4-A9).
   python3 -I harness/evaluate.py bench --entry ENTRY --cert CERT.json --work WORK --out RESULT.json
                                        [--season harness/season.toml] [--parts PARTS]
   python3 -I harness/evaluate.py all   --entry ENTRY --org ORG --work WORK --out RESULT.json [...]
+  python3 -I harness/evaluate.py draw-duel --out DUEL.json [--season harness/season.toml]
+  python3 -I harness/evaluate.py bench ... --duel DUEL.json --role candidate|incumbent
+
+A duel (the record decided head-to-head on one runner, `evaluate.yml` with an incumbent): the
+benchmark job draws once (`draw-duel`: an identifier, the order of the two runs, the stream's
+chain lengths; `rfh.draws.duel`), then runs `bench` for each entry in that order, each with its own
+work directory, service, keys and sandbox, the same chain lengths, and fresh chain starts. The
+result records `duel: {id, role, position}`; `aggregate.py` pairs the two.
 
 ENTRY: `claim.json` (the declared numbers: `error`, `completeness_error` as "a/b" strings, `qV`,
 `fuel_base`, `fuel_per_word` as integers), `lean/*.lean` (the solution; `lean/Solution.lean`
@@ -18,11 +26,16 @@ defines `RecursionFast.Challenge.submission` and proves `RecursionFast.Challenge
 The certificate job (`cert`; deterministic, any machine with the package tree), every Lean step
 capped by the season file's `[certificate]` (V4-A9; a breach is the entry's REJECT, except the
 kernel's, Q12):
+  0. the entry's size caps (`[entry]`: file counts and bytes of the root, `lean/`, `prover/`, any
+     one file, `claim.json`), so that every organiser step on entry data is bounded by its input;
   1. render the challenge from the organiser's stub and the claim (the entry supplies no stub);
-  2. the source rule on the entry's Lean files (no elaboration-time code);
+  2. the source rule on the entry's Lean files (no elaboration-time code); a render or source rule
+     past its organiser timeout is the entry's REJECT (their input is the entry's, capped in 0);
   3. the one build (V4-A9): in a fresh tree, in the sandbox, the comparator's targets (the
      challenge and the solution's import closure; entry modules that `Solution` does not import are
-     never built, Q7), within `build_s`;
+     never built, Q7), within `build_s` (`incumbent_build_s` with `--incumbent`); with `--record-cache`, the outputs of the entry's modules
+     that are unchanged since the record are first restored into the tree (`rfh/buildcache.py`:
+     never `Challenge`; the result records which), and those the build does not visit are removed;
   4. the comparator on that build (`scripts/bwrap-landrun.sh`; its `lake build` finds it up to
      date): it replays the exported proof of `certified` against the rendered statement in the
      Lean kernel, and in nanoda with `--nanoda` (the result says which kernels ran), within
@@ -38,6 +51,8 @@ kernel's, Q12):
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
   result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
   each kernel run's memory peak (`kernel_runs`, sampled while it runs: review E-ks).
+  With `--export-build DIR` and status `ok`, the entry modules' build outputs and their manifest
+  are written to DIR (`entry_build` in the result; the bot caches them if the result is a record).
 The benchmark job (`bench`; the GitHub-hosted runner): `harness/run-benchmark.py` with the badge.
 Verdict: ACCEPT (certificate ok, benchmark pass), PROVISIONAL (certificate provisional, benchmark
 pass; never ranked, V4-15, its numbers marked uncomparable), REJECT (anything else).
@@ -55,6 +70,7 @@ import tomllib
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+from rfh import buildcache, draws, slate  # noqa: E402
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
@@ -95,6 +111,34 @@ def entry_modules(entry):
     if f"{SOLUTION_MODULE}.lean" not in files:
         raise Reject(f"lean/{SOLUTION_MODULE}.lean is missing")
     return files
+
+
+def entry_caps(entry, caps):
+    """The entry root's size caps (`[entry]` of the season): a breach is the entry's REJECT."""
+    count, total = {"": 0, "lean": 0, "prover": 0}, {"": 0, "lean": 0, "prover": 0}
+    for dp, dns, fns in os.walk(entry):
+        for fn in fns:
+            q = os.path.join(dp, fn)
+            if os.path.islink(q) or not os.path.isfile(q):
+                raise Reject(f"{os.path.relpath(q, entry)} is not a regular file")
+            n = os.path.getsize(q)
+            rel = os.path.relpath(q, entry)
+            if n > caps["file_bytes"]:
+                raise Reject(f"{rel} has {n} bytes, above the cap file_bytes = {caps['file_bytes']}")
+            top = rel.split(os.sep)[0] if os.sep in rel else ""
+            for k in {"", top} & set(count):
+                count[k], total[k] = count[k] + 1, total[k] + n
+    for k, name in (("", ""), ("lean", "lean_"), ("prover", "prover_")):
+        where = f"{k}/" if k else "the entry root"
+        if count[k] > caps[f"{name}files"]:
+            raise Reject(f"{where} holds {count[k]} files, above the cap {name}files = {caps[name + 'files']}")
+        if total[k] > caps[f"{name}bytes"]:
+            raise Reject(f"{where} holds {total[k]} bytes, above the cap {name}bytes = {caps[name + 'bytes']}")
+    c = os.path.join(entry, "claim.json")
+    if os.path.isfile(c) and os.path.getsize(c) > caps["claim_bytes"]:
+        raise Reject(f"claim.json has {os.path.getsize(c)} bytes, above the cap claim_bytes = {caps['claim_bytes']}")
+    return {"files": count[""], "bytes": total[""], "lean_files": count["lean"], "lean_bytes": total["lean"],
+            "prover_files": count["prover"], "prover_bytes": total["prover"]}
 
 
 def mkfresh(t, org, entry, challenge, files):
@@ -194,18 +238,30 @@ def sandboxed(org, cmd, tree, log, rw=(), mem="12G", env=None, timeout=TIMEOUT, 
 
 def cert_job(a):
     org = Org(a.org)
-    caps = tomllib.load(open(a.season, "rb"))["certificate"]
+    season = tomllib.load(open(a.season, "rb"))
+    caps = season["certificate"]
+    # the incumbent of a duel (certified before, at this cap) is re-certified under a
+    # generous cap, so that a missing record cache never fails it; candidates keep build_s
+    build_cap = "incumbent_build_s" if a.incumbent else "build_s"
     work = os.path.abspath(a.work)
     os.makedirs(work, exist_ok=False)
     entry = os.path.abspath(a.entry)
-    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": [], "caps": caps}
+    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": [], "caps": caps,
+           "build_cap": build_cap}
     logs = {k: os.path.join(work, f"{k}.log") for k in ("render", "source-rule", "build", "gate", "badge", "manifest")}
     try:
+        # 0. the entry's size caps, before any organiser step reads it
+        res["entry_size"] = entry_caps(entry, season["entry"])
         files = entry_modules(entry)
         # 1. the challenge
         challenge = os.path.join(work, f"{CHALLENGE_MODULE}.lean")
-        if sh([sys.executable, "-I", os.path.join(HERE, "render-challenge.py"), os.path.join(HERE, "challenge",
-               "Challenge.lean.in"), os.path.join(entry, "claim.json"), challenge], log=logs["render"]):
+        try:
+            rc = sh([sys.executable, "-I", os.path.join(HERE, "render-challenge.py"), os.path.join(HERE, "challenge",
+                    "Challenge.lean.in"), os.path.join(entry, "claim.json"), challenge], log=logs["render"],
+                    timeout=caps["render_s"])
+        except subprocess.TimeoutExpired:
+            raise Reject(f"the claim did not render within render_s = {caps['render_s']} s (its input is the entry's claim.json)")
+        if rc:
             raise Reject("claim does not render: " + open(logs["render"]).read()[-300:])
         res["claim"] = json.load(open(os.path.join(entry, "claim.json")))
         # 2. the source rule
@@ -213,7 +269,13 @@ def cert_job(a):
         os.makedirs(sr)
         for f in files:
             shutil.copy(os.path.join(entry, "lean", f), sr)
-        if sh([sys.executable, "-I", os.path.join(REPO, "scripts", "source-rule.py"), sr], log=logs["source-rule"]):
+        try:
+            rc = sh([sys.executable, "-I", os.path.join(REPO, "scripts", "source-rule.py"), sr], log=logs["source-rule"],
+                    timeout=caps["source_rule_s"])
+        except subprocess.TimeoutExpired:
+            raise Reject(f"the source rule did not finish within source_rule_s = {caps['source_rule_s']} s on the entry's Lean files "
+                         f"(capped at lean_bytes = {season['entry']['lean_bytes']})")
+        if rc:
             raise Reject("source rule: " + open(logs["source-rule"]).read()[-600:])
         # 3. the one build (V4-A9), in a fresh tree, in the sandbox: exactly the comparator's targets,
         # the challenge and the solution's import closure; an entry module that `Solution` does not
@@ -226,14 +288,19 @@ def cert_job(a):
         mkfresh(tree, org.dir, entry, challenge, files)
         lake = os.path.join(org.prefix, "bin", "lake")
         os.makedirs(os.path.join(tree, ".lake"))
+        if a.record_cache:      # the record's outputs of unchanged entry modules (never Challenge)
+            res["record_cache"] = buildcache.restore(a.record_cache, tree, files, res["environment"]["core_commit"],
+                                                     key=a.record_cache_key, expect=a.record_manifest_sha256)
         t0 = time.monotonic()
         rc = sandboxed(org, [lake, "build", f"+{CHALLENGE_MODULE}", f"+{SOLUTION_MODULE}"], tree, logs["build"],
-                       rw=(os.path.join(tree, ".lake"),), timeout=caps["build_s"])
+                       rw=(os.path.join(tree, ".lake"),), timeout=caps[build_cap])
         res["build_s"] = round(time.monotonic() - t0, 1)
         if rc == "timeout":
-            raise Reject(f"the solution did not build within build_s = {caps['build_s']} s (V4-A9)")
+            raise Reject(f"the solution did not build within {build_cap} = {caps[build_cap]} s (V4-A9)")
         if rc != 0:
             raise Reject(f"the solution does not build ({rc}): " + open(logs["build"], errors="replace").read()[-400:])
+        if res.get("record_cache", {}).get("restored"):     # Q7: only Solution's import closure stays
+            res["record_cache"]["unused"] = buildcache.prune(tree, res["record_cache"]["restored"])
         built = artifacts(tree)
         # 4. the comparator on that build: its own `lake build` of the two targets finds them up to
         # date, and it exports them and replays the proofs in the kernel
@@ -368,6 +435,12 @@ def cert_job(a):
         res["status"] = "error"
         res["reasons"].append(f"harness error: an organiser command did not finish within {e.timeout} s: "
                               f"{' '.join(map(str, e.cmd))[:200] if e.cmd else ''}")
+    if a.export_build and res["status"] == "ok":        # no sandboxed process is alive any more
+        try:
+            res["entry_build"] = buildcache.export(tree, files, a.export_build, res["environment"]["core_commit"])
+        except Exception as e:                          # never the entry's failure: the bot caches nothing
+            res["entry_build"] = {"error": str(e)[:300]}
+            shutil.rmtree(a.export_build, ignore_errors=True)
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"certificate: {res['status']} {res['reasons'] or res['provisional_reasons']}")
     return res
@@ -417,10 +490,24 @@ def bench_job(a, cert):
         cmd.append("--provisional")
     if a.parts:
         cmd += ["--parts", a.parts]
+    duel = json.load(open(a.duel)) if a.duel else None
+    env = None
+    if duel:
+        cmd += ["--lengths", a.duel]
+        # nothing of an earlier run of this duel may be alive or on a tmpfs when this one starts
+        before = slate.clean(duel["id"])
+        if before["left"] != {"processes": 0, "shm": 0, "work": 0}:
+            res = {"parts": ["calibrate", "stream", "dos"] if not a.parts else a.parts.split(","), "benchmark": "error",
+                   "reasons": [f"harness error: the duel's earlier run left {before['left']} after cleaning"],
+                   "harness": {"commit": os.environ.get("RF_HARNESS_COMMIT")},
+                   "duel": {"id": duel["id"], "role": a.role, "position": duel["order"].index(a.role), "slate_before": before}}
+            json.dump(res, open(a.out, "w"), indent=1)
+            return res
+        env = dict(os.environ, RF_RUN_TOKEN=f"{duel['id']}-{a.role}")
     # every step the entry controls is capped inside (season file); this bounds the organiser's own
     # steps, so that a part ends inside its job (V4-A9; the benchmark job's 50 minutes)
     try:
-        subprocess.run(cmd, timeout=PART_S)
+        subprocess.run(cmd, timeout=PART_S, env=env)
         res = json.load(open(a.out))
     except subprocess.TimeoutExpired:
         # review M-3: the part ran past its bound; once the prover's build has started, the entry's
@@ -438,7 +525,13 @@ def bench_job(a, cert):
             + (": the entry's failure (review M-3)" if entry_stage else ": a harness error"))
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
-                                                   "built_modules", "environment")}
+                                                   "built_modules", "environment", "record_cache", "entry_build")}
+    if duel:
+        # this run's leftovers (an orphaned service after a PART_S kill, its tmpfs requests, its work
+        # directory) are removed before the other run starts
+        after = slate.clean(f"{duel['id']}-{a.role}", a.work)
+        res["duel"] = {"id": duel["id"], "role": a.role, "position": duel["order"].index(a.role),
+                       "slate_before": before, "cleanup_after": after}
     ok = res["benchmark"] == "pass"
     res["verdict"] = ("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject" else "REJECT"
     res["comparable"] = res["verdict"] == "ACCEPT" and not (res.get("stream") or {}).get("truncated")
@@ -449,10 +542,10 @@ def bench_job(a, cert):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["cert", "bench", "all"])
-    ap.add_argument("--entry", required=True)
+    ap.add_argument("mode", choices=["cert", "bench", "all", "draw-duel"])
+    ap.add_argument("--entry")
     ap.add_argument("--org")
-    ap.add_argument("--work", required=True)
+    ap.add_argument("--work")
     ap.add_argument("--out", required=True)
     ap.add_argument("--cert")
     ap.add_argument("--nanoda", action="store_true")
@@ -462,7 +555,23 @@ def main():
     ap.add_argument("--service", default=os.path.join(REPO, "service", "target", "release", "rf-oracle"))
     ap.add_argument("--bench", default=os.path.join(REPO, "service", "target", "release", "rf-bench"))
     ap.add_argument("--parts")
+    ap.add_argument("--record-cache", help="a restored record build (rfh/buildcache.py) to seed the build tree from")
+    ap.add_argument("--record-cache-key", help="its cache key, recorded in the result")
+    ap.add_argument("--record-manifest-sha256", help="the attested record's entry_build.manifest_sha256: "
+                    "a cache with another manifest is not restored")
+    ap.add_argument("--incumbent", action="store_true", help="cert: the incumbent of a duel (build cap incumbent_build_s)")
+    ap.add_argument("--export-build", help="with status ok, write the entry modules' build outputs here")
+    ap.add_argument("--duel", help="bench: a duel's draws (`draw-duel`): its chain lengths and order")
+    ap.add_argument("--role", choices=["candidate", "incumbent"], help="bench with --duel: which entry this is")
     a = ap.parse_args()
+    if a.mode == "draw-duel":
+        p = tomllib.load(open(a.season, "rb"))["stream"]
+        json.dump(draws.duel(p["M"], p["n_lo"], p["n_hi"]), open(a.out, "w"), indent=1)
+        return 0
+    if not (a.entry and a.work):
+        ap.error("--entry and --work are required")
+    if bool(a.duel) != bool(a.role) or (a.duel and a.mode != "bench"):
+        ap.error("--duel and --role go together, with bench")
     if a.mode == "bench":
         res = bench_job(a, json.load(open(a.cert)))
     else:

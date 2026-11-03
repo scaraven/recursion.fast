@@ -10,7 +10,7 @@ chains. Version 4 keeps v3's model (knowledge soundness in the random-oracle mod
 step-counted extractor, completeness with error), states knowledge soundness in its textbook
 single-output form (V4-A10; v3's potential is a library route to it), and replaces "BLAKE2s
 instantiates the oracle" by a keyed oracle service that signs the answers a proof used (the
-signed random oracle, SROM). The working brief is `docs/v4/BRIEF.md`.
+signed random oracle, SROM). The rules: `AGENTS.md`; the brief: `archive/v4-dev-record:docs/v4/BRIEF.md`.
 
 * `RecursionFast.Contract`: the trusted contract (Lean core and Mathlib only).
 * `RecursionFast.Library`: the organiser's untrusted, kernel-checked library.

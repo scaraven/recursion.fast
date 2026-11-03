@@ -17,7 +17,7 @@
     `loopB` (the block loop, `loopB_eq` against `compressInput`), `outBytes` (`outBytes_eq`), and
     **`digestB_eq : digestB b = blake2sDigest b.data.toList`**; `digestL` for lists.
   Measured: about 0.25 µs per compression and 0.4 µs per block of a long message, against 1 µs and
-  5.5 µs for the reference (`docs/v4/stages/A-contract-RESULT.md`).
+  5.5 µs for the reference (`archive/v4-dev-record:docs/v4/stages/A-contract-RESULT.md`).
 -/
 import RecursionFast.Contract.Relation
 import Mathlib.Tactic.IntervalCases

@@ -106,7 +106,7 @@ the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2
 `2^-128`).** 128 bits per fresh query. A design over GF(2^128) no longer fits as it stands (a
 degree-2 sumcheck round costs `2^-127`, FB-9): it must draw its challenges from a larger field or
 repeat. Composing the tree from single-output knowledge soundness takes a union bound over the
-extracted proofs, about `513 · 2^30 · 2^-128 ≈ 2^-89` at `2^30` queries (design §2.4).
+extracted proofs, about `513 · 2^30 · 2^-128 ≈ 2^-89` at `2^30` queries (archive/v4-dev-record:docs/DESIGN-v4-srom.md §2.4).
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs

@@ -15,7 +15,7 @@
     recomputes chains, such as the witness-sending one, runs these);
   * **`Submission.accF`** = `Submission.acc` (`accF_eq`): the harness may run `accF` and the
     record is about `acc`.
-  Measured numbers are in `docs/v4/stages/A-contract-RESULT.md`.
+  Measured numbers are in `archive/v4-dev-record:docs/v4/stages/A-contract-RESULT.md`.
 -/
 import RecursionFast.Contract.Certificate
 import RecursionFast.Library.Blake2sFast
