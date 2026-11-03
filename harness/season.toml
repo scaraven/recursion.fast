@@ -18,6 +18,10 @@ build_s = 1200    # the entry's `lake build` of the challenge and Solution's imp
 kernel_s = 600    # the comparator: the exports and the Lean kernel's replay
 gate_s = 120      # the gate
 badge_s = 180     # the badge build
+incumbent_build_s = 3600  # 3 × build_s: a duel's incumbent, certified before under build_s, re-derived
+                          # here whether or not the record cache hit (launch R4 M2); never a candidate's cap
+render_s = 30     # the challenge rendered from claim.json (≤ claim_bytes)
+source_rule_s = 120   # the source rule on lean/ (≤ lean_bytes; 8.9 MB took 10 s on the development VM)
 
 [entry]           # the entry root as data, checked before the source rule (launch R1 M6); a breach is
                   # the entry's REJECT. flock-recursive (v4/flock-submit): lean/ 263 files, 8.9 MB,

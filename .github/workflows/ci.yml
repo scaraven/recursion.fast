@@ -139,13 +139,15 @@ jobs:
         run: timeout 60 python3 tests/harness/test_tv.py
       - name: the stream's control flow, re-timing and truncation (V4-A11 §2, §5.3, §6, R-M2)
         run: timeout 60 python3 tests/harness/test_stream.py
+      - name: a duel's second run starts on a clean slate (an orphaned service, tmpfs requests, the work directory; R4 m2)
+        run: timeout 120 python3 tests/harness/test_slate.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT (review M-3)
         run: timeout 120 python3 tests/harness/test_partcap.py
       - name: the aggregation requires every planned part (single runs and duels), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
         run: |
           timeout 60 python3 tests/harness/test_aggregate.py
           timeout 60 python3 tests/harness/test_dos.py
-      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, two duels)
+      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, three duels)
         run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
   smoke:

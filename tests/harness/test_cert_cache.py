@@ -104,10 +104,16 @@ def entry(name, src):
     return e
 
 
-def cert(name, src, seed=None, export=True):
+def msha(d):
+    p = os.path.join(d or "", "manifest.json")
+    return ev.buildcache._sha(p) if d and os.path.isfile(p) else None
+
+
+def cert(name, src, seed=None, export=True, expect="manifest", incumbent=False):
     a = types.SimpleNamespace(org=CORE, season=os.path.join(CORE, "harness/season.toml"), work=os.path.join(WORK, f"w-{name}"),
                               entry=entry(name, src), out=os.path.join(WORK, f"{name}.json"), nanoda=False,
                               cert_mem="4G", nanoda_mem="4G", record_cache=seed, record_cache_key="rf-record-build-x-pr1" if seed else None,
+                              record_manifest_sha256=msha(seed) if expect == "manifest" else expect, incumbent=incumbent,
                               export_build=os.path.join(WORK, f"export-{name}") if export else None)
     ev.cert_job(a)
     return json.load(open(a.out)), a
@@ -134,6 +140,12 @@ r3, a3 = cert("broken", dict(SRC, **{"Solution.lean": "import Bar\ntheorem sol :
 check(r3["status"] == "reject" and "entry_build" not in r3 and not os.path.exists(a3.export_build),
       f"a rejected certificate exports nothing ({r3['status']})")
 
+r5, a5 = cert("unbound", s2, seed=a1.export_build, expect="0" * 64, export=False)
+check(r5["status"] == "ok" and r5["record_cache"]["restored"] == [] and "attested" in r5["record_cache"].get("note", ""),
+      f"a cache whose manifest is not the attested record's restores nothing: {r5.get('record_cache')}")
+r6, a6 = cert("incumbent", SRC, seed=a1.export_build, export=False, incumbent=True)
+check(r6["status"] == "ok" and r6["build_cap"] == "incumbent_build_s" and r2["build_cap"] == "build_s",
+      f"the incumbent's build cap is incumbent_build_s, a candidate's build_s ({r6.get('build_cap')}, {r2.get('build_cap')})")
 r4, a4 = cert("noseed", SRC, export=False)
 check(r4["status"] == "ok" and "record_cache" not in r4 and "entry_build" not in r4, "without the flags: as before")
 
@@ -152,7 +164,8 @@ def cert_with(name, src, season, extra=None):
         open(os.path.join(e, rel), "wb").write(data)
     a = types.SimpleNamespace(org=CORE, season=season, work=os.path.join(WORK, f"w-{name}"), entry=e,
                               out=os.path.join(WORK, f"{name}.json"), nanoda=False, cert_mem="4G", nanoda_mem="4G",
-                              record_cache=None, record_cache_key=None, export_build=None)
+                              record_cache=None, record_cache_key=None, record_manifest_sha256=None, incumbent=False,
+                              export_build=None)
     ev.cert_job(a)
     return json.load(open(a.out))
 

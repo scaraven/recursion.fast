@@ -283,8 +283,9 @@ scores. <!-- DUEL: S6 --> The candidate becomes the record iff all of:
 3. `harness_commit` equals the core commit the submissions repository pins;
 4. `S_cand ≤ 0.97 × S_inc`, both measured in that one job.
 
-If the incumbent's run fails on that runner for an entry reason, an ACCEPT and comparable candidate
-becomes the record. An organiser-side failure is ERROR. With no record, the first result that meets
+If the incumbent's run fails on that runner for an entry reason (`incumbent.entry_failed`), that is
+not a win: the bot re-queues the candidate once, and retires a record whose run fails in two duels.
+An organiser-side failure is ERROR. With no record, the first result that meets
 items 1–3 is the record, with no duel. The submissions repository's bot applies this rule to the
 attested scores.
 

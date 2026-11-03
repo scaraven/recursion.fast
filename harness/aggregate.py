@@ -183,6 +183,8 @@ def pair(res, p, plan, season_sha, cand_parts, inc_cert, inc_parts, draw, sha, p
     if inc:
         ic.update(verdict=inc["verdict"], comparable=inc["comparable"], truncated=inc["truncated"], score=inc.get("score"),
                   entry_failed=inc["verdict"] == "REJECT" or (inc["verdict"] == "ACCEPT" and inc["truncated"]),
+                  failure=("stream truncated (stream_s)" if inc["verdict"] == "ACCEPT" and inc["truncated"]
+                           else (inc["reasons"] or [None])[0] if inc["verdict"] == "REJECT" else None),
                   reasons=inc["reasons"][:20], prover_sha256=inc["prover_sha256"], entry=inc["entry"],
                   certificate=inc["certificate"], harness_commit=inc["harness_commit"], parts=inc["parts"],
                   stream=inc["stream"])

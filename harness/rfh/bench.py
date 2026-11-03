@@ -145,7 +145,8 @@ def request_root():
     work directory)."""
     d = "/dev/shm"
     if os.path.isdir(d) and os.access(d, os.W_OK) and not os.environ.get("RF_NO_SHM"):
-        return tempfile.mkdtemp(prefix="rf-req-", dir=d)
+        tok = os.environ.get("RF_RUN_TOKEN", "")      # a duel's run (rfh.slate finds what it leaves)
+        return tempfile.mkdtemp(prefix=f"rf-req-{tok}-" if tok else "rf-req-", dir=d)
     return None
 
 
@@ -167,7 +168,10 @@ class Bench:
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
         svc = Service(self.service_bin, os.path.join(self.work, "svc", name),
-                      wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
+                      # a duel's run names the scope by its token (rfh.slate finds an orphaned service by it:
+                      # the service is non-dumpable, its environment unreadable)
+                      wrap=memcap(self.p.mem_service, f"rf-svc-{os.environ['RF_RUN_TOKEN']}-{name}"
+                                  if os.environ.get("RF_RUN_TOKEN") else f"rf-svc-{name}-{os.getpid()}"),
                       stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
         return svc.start()

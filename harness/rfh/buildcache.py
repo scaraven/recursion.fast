@@ -13,17 +13,21 @@ comparator's challenge never comes from a cache), never an organiser or package 
 in the organiser's tree, not the entry's), never a badge module, never Lake's `.hash` files (Lake
 recomputes them from the restored bytes), `.setup.json`, `.ltar` or compiled objects.
 
-A module is restored only if (1) the cache was exported at the same core commit, (2) the entry's
-`lean/M.lean` is byte-identical to the record's, and (3) every file's sha256 equals the manifest
-written by the record's harness after its last sandboxed step. Lake then decides, on its own
-trace (source, imports' olean hashes, toolchain, options), whether `M` is up to date.
+Nothing is restored unless the manifest's sha256 equals the one the caller passes, the record's
+attested `certificate.entry_build.manifest_sha256` (launch R4 m4: the cache is bound to the record,
+not to whoever wrote the cache store). A module is then restored only if (1) the cache was exported
+at the same core commit, (2) the entry's `lean/M.lean` is byte-identical to the record's, and (3)
+every file's sha256 equals that manifest, written by the record's harness after its last sandboxed
+step. Lake then decides, on its own trace (source, imports' olean hashes, toolchain, options), whether `M` is up to date.
 
 What this trusts (the residual): Lake does not rehash an up-to-date module's outputs, so a
 restored module's olean and `.c` are the record's build outputs, not this entry's. The record's
 certificate was checked on exactly those bytes (its kernel replay covered every declaration that
 `certified` and `submission` depend on, and its gate and badge read the same files), and this
-entry's comparator replays every declaration again from an empty environment. What a cache adds
-is O-12's residual one step removed: compiled code (or an olean differing from its source) that
+entry's comparator replays every declaration of the oleans again from an empty environment. The
+kernel never reads `.c`: a restored module's `.c`, which the badge is compiled from, is trusted as
+the record's run produced it, bound to the record by the attested manifest hash (the input
+`expect`). What a cache adds is O-12's residual one step removed: compiled code (or an olean differing from its source) that
 elaboration-time code in the record's build could have forged, which the source rule guards in
 the record's run as it guards this entry's. The result records the restored modules.
 """
@@ -101,17 +105,21 @@ def export(tree, files, out, core_commit):
     return {"modules": len(mods), "files": n, "bytes": size, "manifest_sha256": _sha(man)}
 
 
-def restore(src, tree, files, core_commit, key=None):
-    """Copy into `tree/.lake/build` the cached outputs of every entry module that passes the three
-    checks above; returns what the certificate records. A cache that is absent, unreadable or from
-    another core commit restores nothing (it is organiser data: it never fails an entry)."""
-    res = {"key": key, "restored": [], "manifest_sha256": None}
+def restore(src, tree, files, core_commit, key=None, expect=None):
+    """Copy into `tree/.lake/build` the cached outputs of every entry module that passes the checks
+    above; returns what the certificate records. A cache that is absent, unreadable, not the attested
+    record's (`expect`, its manifest's sha256; None restores nothing) or from another core commit
+    restores nothing (it is organiser data: it never fails an entry)."""
+    res = {"key": key, "restored": [], "manifest_sha256": None, "expected_manifest_sha256": expect}
     man = os.path.join(src, MANIFEST)
     try:
         if not _regular(man) or os.path.getsize(man) > MANIFEST_CAP:
             res["note"] = "no manifest"
             return res
         res["manifest_sha256"] = _sha(man)
+        if not expect or res["manifest_sha256"] != expect:
+            res["note"] = "the cache is not the attested record's build (manifest sha256 differs or none was given)"
+            return res
         m_all = json.load(open(man))
         if not core_commit or m_all.get("schema") != SCHEMA or m_all.get("core_commit") != core_commit:
             res["note"] = f"exported at another core commit or schema ({m_all.get('core_commit')}, {m_all.get('schema')})"

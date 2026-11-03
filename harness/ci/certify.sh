@@ -5,7 +5,9 @@
 # `entry/` (the fetched entry); writes `cert.json`, `cert-out/` and the step output `status`.
 #   harness/ci/certify.sh [evaluate.py cert options, e.g. --nanoda, --export-build DIR]
 # Environment: SEASON (relative to core/), ORG_HIT, KERNELS_HIT, ORG_KEY, KERNELS_KEY (the cache
-# lookups), RECORD_KEY (the restored record build's key, or empty), RUNNER_TEMP, GITHUB_OUTPUT.
+# lookups), RECORD_KEY (the restored record build's key, or empty), RECORD_MANIFEST (the attested
+# record's `entry_build.manifest_sha256`, or empty: then nothing is restored), RUNNER_TEMP,
+# GITHUB_OUTPUT.
 set -eo pipefail
 mkdir -p cert-out
 if [[ "$ORG_HIT" != true || "$KERNELS_HIT" != true ]]; then
@@ -23,7 +25,8 @@ fi
 rc=0
 seed=()
 if [[ -n "${RECORD_KEY:-}" && -s "$RUNNER_TEMP/record-build/manifest.json" ]]; then
-  seed=(--record-cache "$RUNNER_TEMP/record-build" --record-cache-key "$RECORD_KEY")
+  seed=(--record-cache "$RUNNER_TEMP/record-build" --record-cache-key "$RECORD_KEY"
+        --record-manifest-sha256 "${RECORD_MANIFEST:-}")
 fi
 python3 -I core/harness/evaluate.py cert --entry entry --org "$PWD/core" --work "$RUNNER_TEMP/cert" \
   --season "core/$SEASON" --out cert.json "${seed[@]}" "$@" || rc=$?

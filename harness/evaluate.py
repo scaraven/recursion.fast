@@ -33,7 +33,7 @@ kernel's, Q12):
      past its organiser timeout is the entry's REJECT (their input is the entry's, capped in 0);
   3. the one build (V4-A9): in a fresh tree, in the sandbox, the comparator's targets (the
      challenge and the solution's import closure; entry modules that `Solution` does not import are
-     never built, Q7), within `build_s`; with `--record-cache`, the outputs of the entry's modules
+     never built, Q7), within `build_s` (`incumbent_build_s` with `--incumbent`); with `--record-cache`, the outputs of the entry's modules
      that are unchanged since the record are first restored into the tree (`rfh/buildcache.py`:
      never `Challenge`; the result records which), and those the build does not visit are removed;
   4. the comparator on that build (`scripts/bwrap-landrun.sh`; its `lake build` finds it up to
@@ -70,7 +70,7 @@ import tomllib
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from rfh import buildcache, draws  # noqa: E402
+from rfh import buildcache, draws, slate  # noqa: E402
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
@@ -240,10 +240,14 @@ def cert_job(a):
     org = Org(a.org)
     season = tomllib.load(open(a.season, "rb"))
     caps = season["certificate"]
+    # R4 M2: the incumbent of a duel (certified before, at this cap) is re-certified under a
+    # generous cap, so that a missing record cache never fails it; candidates keep build_s
+    build_cap = "incumbent_build_s" if a.incumbent else "build_s"
     work = os.path.abspath(a.work)
     os.makedirs(work, exist_ok=False)
     entry = os.path.abspath(a.entry)
-    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": [], "caps": caps}
+    res = {"stage": "certificate", "kernels": [], "reasons": [], "provisional_reasons": [], "caps": caps,
+           "build_cap": build_cap}
     logs = {k: os.path.join(work, f"{k}.log") for k in ("render", "source-rule", "build", "gate", "badge", "manifest")}
     try:
         # 0. the entry's size caps, before any organiser step reads it
@@ -253,9 +257,10 @@ def cert_job(a):
         challenge = os.path.join(work, f"{CHALLENGE_MODULE}.lean")
         try:
             rc = sh([sys.executable, "-I", os.path.join(HERE, "render-challenge.py"), os.path.join(HERE, "challenge",
-                    "Challenge.lean.in"), os.path.join(entry, "claim.json"), challenge], log=logs["render"])
+                    "Challenge.lean.in"), os.path.join(entry, "claim.json"), challenge], log=logs["render"],
+                    timeout=caps["render_s"])
         except subprocess.TimeoutExpired:
-            raise Reject(f"the claim did not render within {TIMEOUT} s (its input is the entry's claim.json)")
+            raise Reject(f"the claim did not render within render_s = {caps['render_s']} s (its input is the entry's claim.json)")
         if rc:
             raise Reject("claim does not render: " + open(logs["render"]).read()[-300:])
         res["claim"] = json.load(open(os.path.join(entry, "claim.json")))
@@ -265,9 +270,10 @@ def cert_job(a):
         for f in files:
             shutil.copy(os.path.join(entry, "lean", f), sr)
         try:
-            rc = sh([sys.executable, "-I", os.path.join(REPO, "scripts", "source-rule.py"), sr], log=logs["source-rule"])
+            rc = sh([sys.executable, "-I", os.path.join(REPO, "scripts", "source-rule.py"), sr], log=logs["source-rule"],
+                    timeout=caps["source_rule_s"])
         except subprocess.TimeoutExpired:
-            raise Reject(f"the source rule did not finish within {TIMEOUT} s on the entry's Lean files "
+            raise Reject(f"the source rule did not finish within source_rule_s = {caps['source_rule_s']} s on the entry's Lean files "
                          f"(capped at lean_bytes = {season['entry']['lean_bytes']})")
         if rc:
             raise Reject("source rule: " + open(logs["source-rule"]).read()[-600:])
@@ -284,13 +290,13 @@ def cert_job(a):
         os.makedirs(os.path.join(tree, ".lake"))
         if a.record_cache:      # the record's outputs of unchanged entry modules (never Challenge)
             res["record_cache"] = buildcache.restore(a.record_cache, tree, files, res["environment"]["core_commit"],
-                                                     key=a.record_cache_key)
+                                                     key=a.record_cache_key, expect=a.record_manifest_sha256)
         t0 = time.monotonic()
         rc = sandboxed(org, [lake, "build", f"+{CHALLENGE_MODULE}", f"+{SOLUTION_MODULE}"], tree, logs["build"],
-                       rw=(os.path.join(tree, ".lake"),), timeout=caps["build_s"])
+                       rw=(os.path.join(tree, ".lake"),), timeout=caps[build_cap])
         res["build_s"] = round(time.monotonic() - t0, 1)
         if rc == "timeout":
-            raise Reject(f"the solution did not build within build_s = {caps['build_s']} s (V4-A9)")
+            raise Reject(f"the solution did not build within {build_cap} = {caps[build_cap]} s (V4-A9)")
         if rc != 0:
             raise Reject(f"the solution does not build ({rc}): " + open(logs["build"], errors="replace").read()[-400:])
         if res.get("record_cache", {}).get("restored"):     # Q7: only Solution's import closure stays
@@ -485,12 +491,23 @@ def bench_job(a, cert):
     if a.parts:
         cmd += ["--parts", a.parts]
     duel = json.load(open(a.duel)) if a.duel else None
+    env = None
     if duel:
         cmd += ["--lengths", a.duel]
+        # R4 m2: nothing of an earlier run of this duel may be alive or on a tmpfs when this one starts
+        before = slate.clean(duel["id"])
+        if before["left"] != {"processes": 0, "shm": 0, "work": 0}:
+            res = {"parts": ["calibrate", "stream", "dos"] if not a.parts else a.parts.split(","), "benchmark": "error",
+                   "reasons": [f"harness error: the duel's earlier run left {before['left']} after cleaning"],
+                   "harness": {"commit": os.environ.get("RF_HARNESS_COMMIT")},
+                   "duel": {"id": duel["id"], "role": a.role, "position": duel["order"].index(a.role), "slate_before": before}}
+            json.dump(res, open(a.out, "w"), indent=1)
+            return res
+        env = dict(os.environ, RF_RUN_TOKEN=f"{duel['id']}-{a.role}")
     # every step the entry controls is capped inside (season file); this bounds the organiser's own
     # steps, so that a part ends inside its job (V4-A9; the benchmark job's 50 minutes)
     try:
-        subprocess.run(cmd, timeout=PART_S)
+        subprocess.run(cmd, timeout=PART_S, env=env)
         res = json.load(open(a.out))
     except subprocess.TimeoutExpired:
         # review M-3: the part ran past its bound; once the prover's build has started, the entry's
@@ -510,7 +527,11 @@ def bench_job(a, cert):
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
                                                    "built_modules", "environment", "record_cache", "entry_build")}
     if duel:
-        res["duel"] = {"id": duel["id"], "role": a.role, "position": duel["order"].index(a.role)}
+        # this run's leftovers (an orphaned service after a PART_S kill, its tmpfs requests, its work
+        # directory) are removed before the other run starts
+        after = slate.clean(f"{duel['id']}-{a.role}", a.work)
+        res["duel"] = {"id": duel["id"], "role": a.role, "position": duel["order"].index(a.role),
+                       "slate_before": before, "cleanup_after": after}
     ok = res["benchmark"] == "pass"
     res["verdict"] = ("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject" else "REJECT"
     res["comparable"] = res["verdict"] == "ACCEPT" and not (res.get("stream") or {}).get("truncated")
@@ -536,6 +557,9 @@ def main():
     ap.add_argument("--parts")
     ap.add_argument("--record-cache", help="a restored record build (rfh/buildcache.py) to seed the build tree from")
     ap.add_argument("--record-cache-key", help="its cache key, recorded in the result")
+    ap.add_argument("--record-manifest-sha256", help="the attested record's entry_build.manifest_sha256: "
+                    "a cache with another manifest is not restored")
+    ap.add_argument("--incumbent", action="store_true", help="cert: the incumbent of a duel (build cap incumbent_build_s)")
     ap.add_argument("--export-build", help="with status ok, write the entry modules' build outputs here")
     ap.add_argument("--duel", help="bench: a duel's draws (`draw-duel`): its chain lengths and order")
     ap.add_argument("--role", choices=["candidate", "incumbent"], help="bench with --duel: which entry this is")

@@ -31,6 +31,16 @@ TOOLCHAIN = open(os.path.join(ROOT, "lean-toolchain")).read()
 FAIL = []
 
 
+def msha(src):
+    p = os.path.join(src, "manifest.json")
+    return buildcache._sha(p) if os.path.isfile(p) else None
+
+
+def restore(src, *a, **k):
+    """`buildcache.restore` with the manifest's own hash as the attested one (the bot's input)."""
+    return buildcache.restore(src, *a, expect=msha(src), **k)
+
+
 def check(c, what):
     print(("ok   " if c else "FAIL ") + what)
     c or FAIL.append(what)
@@ -89,7 +99,7 @@ check(summary["modules"] == 3 and len(summary["manifest_sha256"]) == 64, f"expor
 
 # 1. unchanged entry: nothing but Challenge is built
 t = tree("same", SRC)
-r = buildcache.restore(exp, t, files, "c0ffee", key="k")
+r = restore(exp, t, files, "c0ffee", key="k")
 check(r["restored"] == ["Bar", "Foo", "Solution"] and r["key"] == "k", f"unchanged: restored {r['restored']}")
 check(build(t) == ["Challenge"], "unchanged: Lake rebuilds only the fresh Challenge")
 check(buildcache.prune(t, r["restored"]) == [], "unchanged: nothing pruned")
@@ -97,14 +107,14 @@ check(buildcache.prune(t, r["restored"]) == [], "unchanged: nothing pruned")
 # 2. a changed Solution: Foo and Bar reused, Solution rebuilt
 s2 = dict(SRC, **{"Solution.lean": "import Bar\ntheorem sol : bar = 42 := by rfl\n"})
 t = tree("sol", s2)
-r = buildcache.restore(exp, t, sorted(s2), "c0ffee")
+r = restore(exp, t, sorted(s2), "c0ffee")
 check(r["restored"] == ["Bar", "Foo"], f"changed Solution: restored {r['restored']}")
 check(build(t) == ["Challenge", "Solution"], "changed Solution: only Challenge and Solution built")
 
 # 3. a changed Foo: not restored; Bar restored but rebuilt (its import changed); Solution too
 s3 = dict(SRC, **{"Foo.lean": "def foo : Nat := 40 + 1\ntheorem foo_eq : foo = 41 := rfl\n"})
 t = tree("foo", s3)
-r = buildcache.restore(exp, t, sorted(s3), "c0ffee")
+r = restore(exp, t, sorted(s3), "c0ffee")
 check(r["restored"] == ["Bar", "Solution"], f"changed Foo: restored {r['restored']}")
 check(build(t) == ["Bar", "Challenge", "Foo", "Solution"], "changed Foo: Lake rebuilds its importers (trace)")
 check(buildcache.prune(t, r["restored"]) == [], "changed Foo: rebuilt modules are not pruned")
@@ -112,7 +122,7 @@ check(buildcache.prune(t, r["restored"]) == [], "changed Foo: rebuilt modules ar
 # 4. Q7: a restored module Solution no longer imports is removed after the build
 s4 = dict(SRC, **{"Solution.lean": "import Foo\ntheorem sol : foo = 41 := rfl\n"})
 t = tree("q7", s4)
-r = buildcache.restore(exp, t, sorted(s4), "c0ffee")
+r = restore(exp, t, sorted(s4), "c0ffee")
 built = build(t)
 unused = buildcache.prune(t, r["restored"])
 check(unused == ["Bar"] and oleans(t) == ["Challenge", "Foo", "Solution"],
@@ -128,7 +138,7 @@ p = os.path.join(bad, "lib/lean/Foo.olean")
 os.remove(p)
 shutil.copyfile(os.path.join(exp, "lib/lean/Bar.olean"), p)
 t = tree("bad", SRC)
-r = buildcache.restore(bad, t, files, "c0ffee")
+r = restore(bad, t, files, "c0ffee")
 check(r["restored"] == ["Bar", "Solution"], f"tampered Foo.olean: restored {r['restored']}")
 check(build(t) == ["Challenge", "Foo"], "tampered Foo.olean: Foo rebuilt, byte-identical, so its restored "
       "importers stay up to date (Lake keys them on the olean's content hash)")
@@ -147,28 +157,33 @@ for rel in buildcache.outputs("Challenge"):
         fm["modules"]["Challenge"]["files"][rel] = buildcache._sha(os.path.join(rec_ch, rel))
 json.dump(fm, open(os.path.join(forged, "manifest.json"), "w"))
 t = tree("forged", dict(SRC, **{"Challenge.lean": CHALLENGE}))
-r = buildcache.restore(forged, t, files + ["Challenge.lean"], "c0ffee")
+r = restore(forged, t, files + ["Challenge.lean"], "c0ffee")
 check("Challenge" not in r["restored"] and not os.path.exists(os.path.join(t, ".lake/build/lib/lean/Challenge.olean")),
       f"Challenge is never restored: restored {r['restored']}")
 
+# 6b. the cache must be the attested record's: another manifest hash, or none, restores nothing
+t = tree("unbound", SRC)
+check(buildcache.restore(exp, t, files, "c0ffee", expect="0" * 64)["restored"] == [], "another attested manifest hash: nothing")
+check(buildcache.restore(exp, t, files, "c0ffee")["restored"] == [], "no attested manifest hash: nothing")
+
 # 7. another core commit, no manifest, a garbage manifest: nothing restored, no exception
 t = tree("other", SRC)
-check(buildcache.restore(exp, t, files, "deadbeef")["restored"] == [], "another core commit: nothing restored")
-check(buildcache.restore(exp, t, files, None)["restored"] == [], "an unknown core commit: nothing restored")
-check(buildcache.restore(os.path.join(WORK, "nowhere"), t, files, "c0ffee")["restored"] == [], "no cache: nothing")
+check(restore(exp, t, files, "deadbeef")["restored"] == [], "another core commit: nothing restored")
+check(restore(exp, t, files, None)["restored"] == [], "an unknown core commit: nothing restored")
+check(restore(os.path.join(WORK, "nowhere"), t, files, "c0ffee")["restored"] == [], "no cache: nothing")
 g = os.path.join(WORK, "export-garbage")
 shutil.rmtree(g, ignore_errors=True)
 os.makedirs(g)
 for body in ("not json", "[]", '{"schema": "recursion.fast/v4/entry-build-1", "core_commit": "c0ffee", "modules": []}',
              '{"schema": "recursion.fast/v4/entry-build-1", "core_commit": "c0ffee", "modules": {"Foo": 1}}'):
     open(os.path.join(g, "manifest.json"), "w").write(body)
-    r = buildcache.restore(g, t, files, "c0ffee")
+    r = restore(g, t, files, "c0ffee")
     check(r["restored"] == [], f"garbage manifest {body[:40]!r}: nothing restored ({r.get('note')})")
 check(build(t) == ["Bar", "Challenge", "Foo", "Solution"], "after the failed restores: a clean build")
 
 # 8. the artifacts the comparator binding hashes are byte-identical between a clean and a seeded build
 t = tree("seeded", SRC)
-buildcache.restore(exp, t, files, "c0ffee")
+restore(exp, t, files, "c0ffee")
 build(t)
 same = all(open(os.path.join(t, ".lake/build", rel), "rb").read() == open(os.path.join(rec, ".lake/build", rel), "rb").read()
            for m in ("Foo", "Bar", "Solution", "Challenge") for rel in (f"lib/lean/{m}.olean", f"ir/{m}.c"))
