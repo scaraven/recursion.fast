@@ -129,7 +129,7 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ inputs.core_ref }}", path: core, persist-credentials: false }
       - id: plan
         run: |
@@ -152,10 +152,10 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - id: org
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/.lake
@@ -169,7 +169,7 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: an earlier core commit's organiser tree, if any (written by this job only)
         if: steps.org.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/.lake
@@ -183,7 +183,7 @@ jobs:
         run: |
           timeout 240 lake exe cache get
           mkdir -p logs && timeout 1080 harness/org-setup.sh "$PWD"
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         if: steps.org.outputs.cache-hit != 'true'
         with:
           path: |
@@ -192,7 +192,7 @@ jobs:
           key: ${{ env.ORG_KEY }}
       - name: the cache was saved (a failed upload is this job's failure, not a later job's surprise)
         if: steps.org.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/.lake
@@ -217,13 +217,13 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - id: kernels
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}", lookup-only: true }
       - id: svc
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/service/target/release/rf-oracle
@@ -243,10 +243,10 @@ jobs:
         if: steps.svc.outputs.cache-hit != 'true'
         working-directory: core/service
         run: timeout 120 cargo build --release
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         if: steps.kernels.outputs.cache-hit != 'true'
         with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}" }
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         if: steps.svc.outputs.cache-hit != 'true'
         with:
           path: |
@@ -255,11 +255,11 @@ jobs:
           key: ${{ env.SVC_KEY }}
       - name: the comparator's cache was saved
         if: steps.kernels.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}", lookup-only: true, fail-on-cache-miss: true }
       - name: the service's cache was saved
         if: steps.svc.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/service/target/release/rf-oracle
@@ -288,7 +288,7 @@ jobs:
         run: |
           lscpu
           echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - name: runner setup
         run: core/harness/ci/runner-setup.sh
@@ -298,7 +298,7 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: the organiser's environment (the setup job's cache, saved before any entry code existed)
         id: org
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/.lake
@@ -306,7 +306,7 @@ jobs:
           key: ${{ env.ORG_KEY }}
       - name: the comparator (setup-tools' cache)
         id: kernels
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}" }
       - name: proof checkers (from the cache) and the Lean toolchain
         if: steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
@@ -323,7 +323,7 @@ jobs:
         if: inputs.record_cache && steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
         continue-on-error: true     # a miss or a failed download is a clean build, never an error
         timeout-minutes: 2
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ runner.temp }}/record-build
           key: ${{ env.RECORD_PREFIX }}
@@ -334,7 +334,7 @@ jobs:
                RECORD_KEY: "${{ steps.record.outputs.cache-matched-key }}", SEASON: "${{ inputs.season }}",
                RECORD_MANIFEST: "${{ inputs.record_manifest_sha256 }}" }
         run: core/harness/ci/certify.sh ${{ inputs.nanoda && '--nanoda' || '' }} --export-build "$RUNNER_TEMP/entry-build"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: certificate, path: cert-out/ }
       - name: time left for the entry's build outputs (the upload never costs the attestation)
         id: room
@@ -347,7 +347,7 @@ jobs:
         if: steps.room.outputs.upload == 'true'
         continue-on-error: true
         timeout-minutes: 4
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: entry-build, path: "${{ runner.temp }}/entry-build/", retention-days: 7, if-no-files-found: ignore }
 
   certificate-incumbent:
@@ -369,7 +369,7 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - name: runner setup
         run: core/harness/ci/runner-setup.sh
@@ -379,7 +379,7 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: the organiser's environment (the setup job's cache)
         id: org
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/.lake
@@ -387,7 +387,7 @@ jobs:
           key: ${{ env.ORG_KEY }}
       - name: the comparator (setup-tools' cache)
         id: kernels
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with: { path: "${{ runner.temp }}/kernels", key: "${{ env.KERNELS_KEY }}" }
       - name: proof checkers (from the cache) and the Lean toolchain
         if: steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
@@ -404,7 +404,7 @@ jobs:
         if: inputs.record_cache && steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
         continue-on-error: true
         timeout-minutes: 2
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: ${{ runner.temp }}/record-build
           key: ${{ env.RECORD_PREFIX }}
@@ -415,7 +415,7 @@ jobs:
                RECORD_KEY: "${{ steps.record.outputs.cache-matched-key }}", SEASON: "${{ inputs.season }}",
                RECORD_MANIFEST: "${{ inputs.record_manifest_sha256 }}" }
         run: core/harness/ci/certify.sh ${{ inputs.nanoda && '--nanoda' || '' }} --incumbent
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: certificate-incumbent, path: cert-out/ }
 
   benchmark:
@@ -441,21 +441,21 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - name: runner setup
         run: core/harness/ci/runner-setup.sh
       - name: service (setup-tools' cache, saved before any entry code existed)
         id: svc
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             core/service/target/release/rf-oracle
             core/service/target/release/rf-bench
           key: ${{ env.SVC_KEY }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with: { name: certificate, path: cert }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         if: inputs.incumbent_sha != ''
         with: { name: certificate-incumbent, path: cert-inc }
       - name: fetch the entry by SHA
@@ -531,9 +531,9 @@ jobs:
             # recorded in its part); the runner is this job's alone, so sweep the rest too
             rm -rf "$RUNNER_TEMP/bench-$role" /dev/shm/rf-req-*
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: "result-${{ strategy.job-index }}", path: "result-*.json" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: inputs.incumbent_sha != ''
         with:
           name: incumbent-${{ strategy.job-index }}
@@ -552,20 +552,20 @@ jobs:
     steps:
       - name: machine
         run: lscpu
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with: { pattern: "result-*", path: parts, merge-multiple: true }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with: { name: certificate, path: cert }
       - name: the incumbent's certificate and runs (a duel; missing ones make the result ERROR)
         if: inputs.incumbent_sha != ''
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with: { name: certificate-incumbent, path: inc-cert }
       - if: inputs.incumbent_sha != ''
         continue-on-error: true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with: { pattern: "incumbent-*", path: inc, merge-multiple: true }
       - name: aggregate (data only; no entry code runs in this job)
         id: agg
@@ -582,7 +582,7 @@ jobs:
             --cert cert/cert.json --out result.json --job "$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT" \
             "${duel[@]}" parts/result-*.json
           echo "verdict=$(python3 -I -c 'import json; print(json.load(open("result.json"))["verdict"])')" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
         with: { subject-path: result.json }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with: { name: result, path: result.json }
