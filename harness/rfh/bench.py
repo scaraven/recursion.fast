@@ -151,7 +151,9 @@ def request_root():
 
 
 class Bench:
-    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print):
+    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print,
+                 lengths=None):
+        self.lengths = lengths               # a duel's shared chain lengths (`draws.duel`), else drawn here
         self.p, self.run, self.service_bin, self.bench_bin = p, run, service_bin, bench_bin
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
@@ -365,7 +367,9 @@ class Bench:
         over its completed, checked steps and flagged `truncated` (§6)."""
         p, name = self.p, "stream"
         M = p.M
-        ns = draws.lengths(M + 1, p.n_lo, p.n_hi)
+        ns = draws.lengths(M + 1, p.n_lo, p.n_hi) if self.lengths is None else list(self.lengths)
+        if not (len(ns) == M + 1 and all(type(n) is int and p.n_lo <= n <= p.n_hi for n in ns)):
+            raise RuntimeError(f"the duel's chain lengths do not fit the season (M + 1 = {M + 1} in [{p.n_lo}, {p.n_hi}])")
         starts = draws.starts(M + 1)
         self.log(f"[{name}] computing {M + 1} leaf digests (sum of lengths {sum(ns)})")
         ld = digest.leaf_digests(starts, ns)          # §11 m-7: all before the first request

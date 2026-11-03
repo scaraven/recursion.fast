@@ -46,7 +46,7 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8, batch
     p.M = M
     p.calib_idle_s, p.retime_frac = 0.0, 0.25
     b = Bench.__new__(Bench)
-    b.p, b.log, b.samples, b.deadline, b.req_root = p, (lambda m: None), [], None, None
+    b.p, b.log, b.samples, b.deadline, b.req_root, b.lengths = p, (lambda m: None), [], None, None, None
     b.store = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.calls, b.inputs = [], {}
     b.service = lambda name: FakeSvc()
