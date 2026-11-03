@@ -42,7 +42,7 @@ Everything else in the root (README, NOTES, sources the assembly was generated f
 the evaluation and read by people. The root must hold only regular files and directories (no
 symbolic links).
 
-Size caps on `lean/` and `prover/`: to be stated with the harness change that enforces them. <!-- CAP: S6 -->
+The root is size-capped (§9, `[entry]` of the season file), checked before anything else runs.
 
 **`claim.json`** has exactly these keys (strict JSON: no floats, no duplicates;
 [`harness/render-challenge.py`](harness/render-challenge.py)). The first recursive entry's:
@@ -273,21 +273,28 @@ steps, flagged `truncated` and not comparable.
 same entry scored 29.05 and 34.20 on two CPU models. So once a record exists, every evaluation is a
 **duel**: the core workflow certifies the candidate and re-certifies the incumbent record at the
 same pin, then one benchmark job on one runner runs both streams back to back, in an order drawn at
-random, each under its own service lifetime and with the same drawn chain lengths, and reports both
-scores. <!-- DUEL: S6 --> The candidate becomes the record iff all of:
+random, each with its own work directory, service lifetime and keys, on the same drawn chain lengths
+(fresh starts per run), and reports both scores. The candidate becomes the record iff all of:
 
 1. its verdict is ACCEPT and `comparable: true`;
-2. its attestation verifies ([`harness/verify-record.sh`](harness/verify-record.sh)): signed by
+2. its attestation verifies ([`harness/verify-record.sh`](harness/verify-record.sh); its
+   `--provenance-only` mode checks this for any verdict): signed by
    `scaraven/recursion.fast/.github/workflows/evaluate.yml` on a GitHub-hosted runner, and the
    signer's commit equals the result's `harness_commit`;
 3. `harness_commit` equals the core commit the submissions repository pins;
 4. `S_cand ≤ 0.97 × S_inc`, both measured in that one job.
 
-If the incumbent's run fails on that runner for an entry reason (`incumbent.entry_failed`), that is
-not a win: the bot re-queues the candidate once, and retires a record whose run fails in two duels.
-An organiser-side failure is ERROR. With no record, the first result that meets
-items 1–3 is the record, with no duel. The submissions repository's bot applies this rule to the
-attested scores.
+- **The incumbent fails on the duel's runner** (`incumbent.entry_failed`: its REJECT or truncated
+  stream): not a win. The candidate is `accepted` and re-queued once for another duel; a record whose
+  own run fails in two duels is `retired`, and there is then no standing record.
+- **Organiser-side failures** (the incumbent's certificate not `ok`, a broken pairing): ERROR,
+  re-queued once.
+- **Records are per pin**: the standing record is the newest, not retired, record evaluated at the
+  pinned core commit. With none (the first record, after a retirement, or after a pin move), the
+  first result meeting items 1–3 is the record, unpaired. After a pin move the owner re-queues the
+  old record first, so it can keep the crown.
+
+The submissions repository's bot applies this rule to the attested results.
 
 ## 9. Limits
 
@@ -296,18 +303,21 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 
 | Limit | Value |
 |---|---|
-| entry's `lake build` (challenge and `Solution`'s import closure) | 1,200 s |
+| entry root: files; bytes; any one file | 2,048; 512 MiB; 128 MiB |
+| `lean/`: files, bytes; `prover/`: files, bytes; `claim.json` | 1,024, 32 MiB; 256, 256 MiB; 64 KiB |
+| rendering the challenge; the source rule | 30 s; 120 s |
+| entry's `lake build` (challenge and `Solution`'s import closure); the incumbent's in a duel | 1,200 s; 3,600 s |
 | kernel replay (comparator, Lean kernel), memory | 600 s (a breach: PROVISIONAL), 14 GiB |
 | gate; badge build | 120 s; 180 s |
 | prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB, `2^20` entries |
 | start-up to `ready`; one request (`step_s`) | 10 s; 60 s |
-| the whole stream, every request, check, canary, sample and re-run (`stream_s`) | 1,920 s wall per stream (reached: truncated, §8) <!-- DUEL: S6 --> |
+| the whole stream, every request, check, canary, sample and re-run (`stream_s`) | 1,920 s wall per stream (reached: truncated, §8) |
 | one `acc` check (`verify_s`); one DoS input; the DoS column | 10 s; `10 × v_ref`; 180 s |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 11 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
-| GitHub jobs: certificate; benchmark; every other job | 40 min; 50 min; at most 30 min <!-- DUEL: S6 --> |
-| entry size: `lean/`; `prover/` | to be set <!-- CAP: S6 --> |
+| GitHub jobs: certificate; incumbent certificate (with nanoda) | 50 min; 90 min (60; 100) |
+| GitHub jobs: benchmark, a duel's; setup, setup-tools; plan, attest | 50 min, 100 min; 30 min; 10 min |
 
 ## 10. Hard rules for the Lean side
 
@@ -344,9 +354,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   with lean4export `076e8e5`, pinned and built by
   [`harness/ci/build-kernels.sh`](harness/ci/build-kernels.sh)), with Lean core, Mathlib and the
   pinned packages as hashed in the olean manifest.
-- **The record build cache**: in a duel the incumbent's Lean build may be restored from a cache of
-  the record's build; only byte-identical entry modules are reused, the kernel still replays every
-  proof, and the rendered challenge is never taken from the cache.
+- **The record build cache**: a certificate job may seed its build from the record's attested build
+  (bound by its manifest's hash): only entry modules whose source is byte-identical are reused,
+  never the challenge, and the kernel still replays every proof. A candidate's build stays under
+  `build_s`, so a slow build may fit only when the cache hits; the incumbent's re-certification
+  must not depend on it and has `incumbent_build_s = 3 × build_s`.
 - **BLAKE2s** (RFC 7693): collision resistance on the seven tagged domains, one-wayness of the
   chain step, and keyed BLAKE2s-256 as a PRF. The signature's unforgeability follows from these
   (on paper).
@@ -363,10 +375,12 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **One kernel.** Records are not cross-checked by a second kernel (nanoda reached 17.6–20.9 GB
   without finishing on the first entries). A Lean kernel bug, or a proof exploiting one, would stand.
 - **Runners vary, so only a duel decides.** AMD EPYC 7763, 9V45, 9V74 and Intel Xeon 8370C, 8573C
-  were all seen; the same entry and prover scored `S = 29.05` on an EPYC 9V45 and `S = 34.20` on an
-  EPYC 9V74. `c_P` and `v_ref` normalise for the CPU only partly, so a published `S` from one
-  evaluation is not comparable with another's; the duel compares two streams on one runner, but
-  run-to-run noise on one runner remains, which is what the 3 % threshold absorbs.
+  were all seen (29.05 against 34.20 for one entry, §8); `c_P` and `v_ref` normalise for the CPU
+  only partly, so a published `S` is not comparable across evaluations.
+- **The 3 % threshold is not yet calibrated** at the season shape on GitHub runners. Back to back on
+  one machine at the smoke shape, the same prover differed by 2.5–9 %. The owner will calibrate it
+  with self-duels (a record dueled against itself). Order effects (thermal state, page cache) are
+  randomised by the drawn order, not removed.
 - **`ref_ns` is a placeholder** (200 ms). `P̄` is consistent within one pin but not yet anchored
   to a measured reference runner; measuring it moves every `P̄`.
 - **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains
@@ -424,18 +438,15 @@ toy prover.
   real literal fails the badge build. Write them as casts from `ℚ≥0`.
 - **Compiled `ByteArray.data` copies the array**: a parser reading through it is quadratic (88 s on
   539 KB). Read in place (`b[i]`, `ByteArray.get!`) or use the library's twins.
-- **The kernel is slow on evaluation**: BLAKE2s costs about 2.4 s per compression in the kernel,
-  and large case splits or `decide` over concrete words can exhaust the kernel cap. Prove
-  symbolically.
+- **The kernel is slow on evaluation** (BLAKE2s: about 2.4 s per compression); large case splits
+  or `decide` over concrete words can exhaust the kernel cap. Prove symbolically.
 - **Assemble with binutils 2.42** (the runner image's): GCC 15's `.base64` and newer directives do
   not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. No
   AVX-512 or GFNI is guaranteed: dispatch on `cpuid`; a `SIGILL` fails the run.
-- **Memory**: the 11 GiB cap counts `/tmp` and `/work`. A Spartan+Ligero leaf prover peaked at
-  15.1 GiB at `n = 2^16` before it was restructured to 2.47 GiB.
+- **Memory**: the 11 GiB cap counts `/tmp` and `/work` (a Spartan+Ligero leaf prover peaked at
+  15.1 GiB at `n = 2^16`, 2.47 GiB after restructuring).
 - **Fiat–Shamir must bind the statement**: the canaries flip a statement bit and substitute other
   statements.
-- **Unix socket paths are under 108 bytes**: the runner's `/run/rf/oracle.sock` is short; a deep
-  local test directory is not.
 
 ## 14. Checking locally
 

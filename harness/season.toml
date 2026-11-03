@@ -1,7 +1,8 @@
 # recursion.fast v4, season 1: every shape and cap of an evaluation (archive/v4-dev-record:docs/v4/BRIEF.md V4-10 … V4-13, V4-A5,
 # V4-A9, V4-A11). The runner reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
-# Every GitHub job of an evaluation runs at most 30 minutes, except the certificate job (40 minutes) and the
-# benchmark job (50 minutes), whose caps were doubled on 2026-10-29, and the caps below are nested inside those limits (AGENTS.md §9): an entry that is slow or hangs fails a cap and is REJECTed with the
+# Job limits are in .github/workflows/evaluate.yml (AGENTS.md §9): the certificate job 50 minutes (90 for the
+# incumbent's re-certification), the benchmark job 50 minutes (100 for a duel), every other job at most 30. The
+# caps below are nested inside those limits: an entry that is slow or hangs fails a cap and is REJECTed with the
 # reason, never killed with its job.
 name = "season-1"
 
