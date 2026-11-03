@@ -3,7 +3,7 @@
 
   python3 -I harness/run-benchmark.py --season harness/season.toml --entry ENTRY --badge BADGE_DIR \
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
-      [--parts calibrate,stream,dos] [--provisional]
+      [--parts calibrate,stream,dos] [--provisional] [--lengths DUEL.json]
 
 ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
 `chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; the calibration
@@ -14,7 +14,9 @@ step a fresh process, every output checked, the statement canaries, interleaved 
 samples, the re-timing); the DoS column on its last output; the score (`rfh.bench.score`). One stream
 per evaluation, no repeats (V4-A9, V4-A11). The per-step JSON lines go to WORK/stream.jsonl and into
 the result. The first failure ends the run with `benchmark: fail` and its reason; a truncated stream
-(its cap reached) is scored over its completed steps and flagged, never ranked.
+(its cap reached) is scored over its completed steps and flagged, never ranked. With `--lengths`,
+the stream's chain lengths are the duel's (`rfh.draws.duel`, drawn once for both entries by the
+trusted harness, outside every sandbox), not drawn here; the prover sees each one only in its request.
 """
 import argparse
 import glob
@@ -56,6 +58,7 @@ def main():
         ap.add_argument(a, required=True)
     ap.add_argument("--parts", default=",".join(ALL_PARTS))
     ap.add_argument("--provisional", action="store_true")
+    ap.add_argument("--lengths", help="a duel's draws (JSON with `lengths`): the stream's chain lengths")
     a = ap.parse_args()
     p = Params.load(a.season)
     parts = a.parts.split(",")
@@ -121,7 +124,7 @@ def main():
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
-                      calib_bin=calib_bin, log=log)
+                      calib_bin=calib_bin, log=log, lengths=json.load(open(a.lengths))["lengths"] if a.lengths else None)
         if "calibrate" in parts:
             save("calibration")
             res["calibration"] = bench.calibrate()

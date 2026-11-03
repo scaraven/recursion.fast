@@ -58,6 +58,10 @@ jobs:
         run: |
           scripts/check-hygiene.sh
           tests/source-rule/check.sh
+      - name: the record build cache and the entry caps (a real Lake on probe trees, core Lean only; evaluate.py cert with the organiser side stubbed)
+        run: |
+          timeout 300 python3 -I tests/harness/test_record_cache.py "$RUNNER_TEMP/record-cache" | tee logs/record-cache.log
+          timeout 600 python3 -I tests/harness/test_cert_cache.py "$RUNNER_TEMP/cert-cache" | tee logs/cert-cache.log
       - name: source rule token sweep
         run: |
           timeout 60 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
@@ -137,11 +141,11 @@ jobs:
         run: timeout 60 python3 tests/harness/test_stream.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT (review M-3)
         run: timeout 120 python3 tests/harness/test_partcap.py
-      - name: the aggregation requires every planned part (two jobs, single runs), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
+      - name: the aggregation requires every planned part (single runs and duels), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
         run: |
           timeout 60 python3 tests/harness/test_aggregate.py
           timeout 60 python3 tests/harness/test_dos.py
-      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers)
+      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, two duels)
         run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
   smoke:

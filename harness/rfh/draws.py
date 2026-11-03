@@ -9,7 +9,9 @@ decision of 2026-10-29).
 * chain lengths i.i.d. with density proportional to `1/n²` on `[n_lo, n_hi]` (equal expected work
   per octave), by inverse CDF `n = 1 / (1/n_lo − u·(1/n_lo − 1/n_hi))`, rounded (no stratification,
   §11 simplification 2);
-* chain starts: 32 bytes each.
+* chain starts: 32 bytes each;
+* a duel (the record decided head-to-head on one runner): one set of chain lengths for both
+  entries' streams and the order in which they run, a fair coin. Each stream draws its own starts.
 
 A length goes through a float on its way to an integer (review m-10); the realised integers, which
 the result publishes (`stream.lengths`), are what the evaluation used.
@@ -34,3 +36,9 @@ def lengths(count: int, n_lo: int, n_hi: int):
 
 def starts(count: int):
     return [secrets.token_bytes(32) for _ in range(count)]
+
+
+def duel(M: int, n_lo: int, n_hi: int):
+    """The draws of a duel: an identifier, the order of the two runs, the `M + 1` chain lengths."""
+    order = ["candidate", "incumbent"] if secrets.randbits(1) else ["incumbent", "candidate"]
+    return {"id": secrets.token_hex(16), "order": order, "M": M, "lengths": lengths(M + 1, n_lo, n_hi)}
