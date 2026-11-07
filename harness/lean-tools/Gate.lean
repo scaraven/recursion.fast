@@ -1,17 +1,17 @@
 /-
-# Environment-level hygiene and computability gate (A4-F3, A6-G1/G2; v4 port)   (TRUSTED harness tool)
+# Environment-level hygiene and computability gate   (TRUSTED harness tool)
 
   lake exe gate MODULE THEOREM --manifest FILE [--computable N1,N2,...] [--allowed-imports FILE]
        [--badge-root CONST]
   lake exe gate --closure ROOT1,ROOT2,... OUT        (writes the import closure of the roots: the
-                                                     allowed-imports list, scripts/org-build.sh)
+                                                     allowed-imports list, harness/org-setup.sh)
 
 Loads the **elaborated environment** of `MODULE` (its `.olean` and imports; no source text is
 read, so comment/string tricks are irrelevant; no `[init]` code is run, since this process never
 enables initializer execution) and walks the transitive dependency closure of the certificate
 `THEOREM` (types and values; inductives with their constructors and recursors).
 
-**Trust is by content hash** (A6-G2), never by name, location or import graph: a module is
+**Trust is by content hash**, never by name, location or import graph: a module is
 *trusted* (Lean core, Mathlib and its dependencies, the contract) or
 *pinned* (CompPoly, ArkLib, VCVio, PolyFun) iff every one of its `.olean` files
 (`.olean`, `.olean.server`, `.olean.private`) hashes (sha256) to the organiser's manifest
@@ -29,21 +29,20 @@ It rejects (exit code 1) if:
 3. **any** untrusted module registers an entry of an attribute that substitutes compiled code,
    runs code at load time or changes the compiler, for any target. Lean 4.34's attributes with an
    effect on compiled code are: `implemented_by`, `extern`, `export` (symbol interposition in a
-   linked badge executable), `init`/`builtin_init` (code run when a compiled executable starts,
-   A6-G1: `@[init f] def x := 0` is an ordinary `def` whose compiled value is `f`'s result; also
+   linked badge executable), `init`/`builtin_init` (code run when a compiled executable starts:
+   `@[init f] def x := 0` is an ordinary `def` whose compiled value is `f`'s result; also
    every `initialize`, `register_simp_attr`, `register_option`), `csimp` (replacement lemmas),
-   `cpass` (a compiler-pass installer, run by every importer's compiler: S7-M1),
+   `cpass` (a compiler-pass installer, run by every importer's compiler),
    `computed_field` (compiled field implementations); all rejected (`tagged_return` qualifies
    only `extern` declarations, already rejected, and is private to the compiler). `inline`, `noinline`, `macro_inline`,
    `specialize`, `never_extract` and `unbox` steer the compiler without changing what a total
    function computes, and are allowed. Pinned modules may register `csimp` lemmas (kernel-proved
    equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
    others; these are reported;
-4. with `--computable N`, a **badge-path field** of `N` has no compiled code (since v2;
-   v3: V3-S2R-A3; v4: unchanged). The v4 badge executes the compiled `acc` (the field `V`, run on
-   the signed trace) and nothing else of the submission; `P` (kept as in v3) and `ext` (run by the
-   per-entry liveness check until V4-A9 removed it) are still required to be compiled, a rule
-   whose relaxation to `V` alone is an open question of V4-A9.
+4. with `--computable N`, a **badge-path field** of `N` has no compiled code. The badge
+   executes the compiled `acc` (the field `V`, run on the signed trace) and nothing else of the
+   submission; `P` and `ext` are still required to be compiled, a rule whose relaxation to `V`
+   alone is an open question.
    `badgeFields`: `Submission`: `V`, `P`, `ext`. If `N` itself has compiled code, every field has.
    Otherwise `N` is unfolded (`whnf`, all transparency) to its constructor, and each badge-path
    field term is **compiled in this process** as an auxiliary definition; it passes iff the
@@ -51,31 +50,30 @@ It rejects (exit code 1) if:
    `qV`, `fuel`) is specification data: it is never executed and may be `noncomputable` (e.g.
    `ε := errorCap`). "Computable" means *executable* (Lean has compiled code), not *feasible*: a
    brute-force verifier is computable. Feasibility is enforced by the badge path's time and memory
-   budget (A7-M1) and, for the extractor, by the certificate's proved step bound. No imported
+   budget and, for the extractor, by the certificate's proved step bound. No imported
    extension code runs: environment extensions keep their initial state except the pure-data ones
    the compiler needs (`pureExts`), and initializer execution is never enabled;
 5. an organiser module of the environment does not match the manifest (above);
-6. (S7-M1, with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
+6. (with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
    is neither untrusted itself nor in FILE. FILE is the import closure of the organiser's roots
    (`Mathlib`, `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`; written
-   by `gate --closure` in `scripts/org-build.sh`).
-   This keeps the compiler's internals out of a submission's reach: the S7-M1 forgery overwrote a
+   by `gate --closure` in `harness/org-setup.sh`).
+   This keeps the compiler's internals out of a submission's reach: a known forgery overwrites a
    definition's emitted code from an elaboration-time `run_meta`, which leaves no declaration, but
    needs `Lean.Compiler.LCNF.PhaseExt` (`impureExt`, `saveImpureDeclCore`), which no module of the
    closure imports (nor `Lean` itself). A submission may import any module of Mathlib, the
    contract, the organiser library and controls, and its own modules; nothing else (`Lean`,
-   `Lean.Compiler.*` beyond Mathlib's, `Lake`, …). And transitively (S6b fix pass, `rule6t`): every
+   `Lean.Compiler.*` beyond Mathlib's, `Lake`, …). And transitively (`rule6t`): every
    module a submission-owned module reaches is its own or in FILE, so an untrusted organiser module
-   outside the list (the harness driver imports `Lean`) cannot carry the compiler in. (v3's
-   frontend list for Clean, S6b-A11, is gone: v4 has no frontend);
-7. (S7-M1) a **definition** declared in an untrusted module refers, in its type or value, to a
+   outside the list (the harness driver imports `Lean`) cannot carry the compiler in;
+7. a **definition** declared in an untrusted module refers, in its type or value, to a
    non-theorem constant of the compiler or the environment: under `Lean.Elab`, `Lean.Compiler`,
    `Lean.IR`, `Lean.Meta`, `Lean.Environment`, `Lean.Kernel`, `Lean.Core`, the environment
    extension types, or one of `Lean.modifyEnv`, `Lean.setEnv`, `Lean.persistentEnvExtensionsRef`,
    `Lean.envExtensionsRef`, `Lean.addDecl`, `Lean.compileDecl(s)`, `unsafeCast`. A submission
    defines no elaborator, tactic, compiler pass or environment manipulation (macros, notation and
    `syntax` are fine). Theorems are exempt (their terms are never executed);
-8. (S6b-A11, with `--badge-root CONST`) the module that declares `CONST` (the constant the badge
+8. (with `--badge-root CONST`) the module that declares `CONST` (the constant the badge
    executables are built from: the rendered challenge's `submission`) imports, transitively, a
    module that is neither untrusted nor in the `--allowed-imports` closure, i.e. it reaches the
    compiler. The badge executables import only that module (the gate prints
@@ -84,24 +82,24 @@ It rejects (exit code 1) if:
 
 Each rule is a function below: `classify` (5), `rules12` over `closure` (1, 2), `rule3`, `rule6`
 and `rule6t`, `rule8`, `rule7`, and `rule4` (`checkExec`). `main` runs them in that order, which is
-the order of the `REJECT` lines. (v3's rule 9, frontend references, is gone with the frontend.)
+the order of the `REJECT` lines.
 
-**What the gate cannot see (S7-M1, S6b-M3, S6b-A20, open item O-12).** The executed code is the
+**What the gate cannot see.** The executed code is the
 code Lean's compiler emitted while elaborating the submission's badge-root module and its imports.
 A metaprogram run at elaboration time (`run_meta`, `#eval`, …) leaves no declaration. Rules 6 and
 8 keep `Lean.Compiler.LCNF.PhaseExt` out of reach, but not the raw route: `persistentEnvExtensionsRef`
 (in `Lean.Environment`, which every Mathlib module imports) and `unsafeCast` let a `run_meta` in a
-Mathlib-only module rewrite the compiler data its importers inline (`probes/s6b/gate/ForgeRaw.lean`:
-the gate PASSES it, its importer's code runs `acceptAll`). The harness's source rule
-(`scripts/source-rule.py`, run before any build) rejects the commands such code needs; that raises
-the bar. The sound fix is O-12: badge executables regenerated from kernel terms, without linking the
-submission's objects, which must ship before any ranked board opens.
+Mathlib-only module rewrite the compiler data its importers inline
+(`tests/source-rule/forge/ForgeRaw.lean`: the gate PASSES it, its importer's code runs `acceptAll`).
+The harness's source rule (`scripts/source-rule.py`, run before any build) rejects the commands such
+code needs; that raises the bar. The sound fix would be badge executables regenerated from kernel
+terms, without linking the submission's objects.
 -/
 import Lean
 
 open Lean
 
-/-- Manifest packages of the **pinned** class (DESIGN §13); every other manifest entry is trusted. -/
+/-- Manifest packages of the **pinned** class; every other manifest entry is trusted. -/
 def pinnedPackages : List String := ["CompPoly", "Arklib", "VCVio", "PolyFun"]
 
 /-- Rule 1: constants the certificate's closure must not use. -/
@@ -221,11 +219,10 @@ def closure (env : Environment) (root : Name) : NameSet :=
 
 open Meta
 
-/-- The computational fields **rule 4 requires compiled**, per contract structure (v4, as v3's
-V3-S2R-A3): the verifier `V` (the badge `verify` is the compiled `Submission.acc`, which runs `V`
-on the signed trace), the prover `P`, and the extractor program `ext` (the last two no longer run
-by any badge since V4-A9 removed the liveness check). Everything else (`E`, `ε`, `δ`, `qV`,
-`fuel`) is specification data. -/
+/-- The computational fields **rule 4 requires compiled**, per contract structure: the verifier `V`
+(the badge `verify` is the compiled `Submission.acc`, which runs `V` on the signed trace), the
+prover `P`, and the extractor program `ext` (the last two run by no badge). Everything else (`E`,
+`ε`, `δ`, `qV`, `fuel`) is specification data. -/
 def badgeFields : List (Name × List Name) :=
   [(`RecursionFast.Submission, [`V, `P, `ext])]
 
@@ -348,7 +345,7 @@ partial def checkExec (path : String) (e : Expr) : MetaM (Array String) := do
     | none => errs := errs.push s!"{path}: structure {S} has no field {f}"
   return errs
 
-/-! ### Rule 7: the compiler's and the environment's API (S7-M1) -/
+/-! ### Rule 7: the compiler's and the environment's API -/
 
 /-- Rule 7: name prefixes of the compiler's and the environment's API. -/
 def metaPrefixes : List Name :=
@@ -436,7 +433,7 @@ def rule3 (g : GateCtx) (m : Name) (i : ModuleIdx) : IO (Array String) := do
     (inits.map fun d => s!"module {m}: [init]/[builtin_init] on {d}"))
   errs := errs ++ (← pinnedNote (Compiler.CSimp.ext.ext.getModuleEntries g.env i (level := .private)).size
     "@[csimp] lemma(s) (proved equalities)" #[s!"module {m}: registers @[csimp] lemmas"])
-  -- S7-M1: compiler-pass installers, computed fields
+  -- compiler-pass installers, computed fields
   for (a, ds) in [("cpass", Compiler.LCNF.passManagerExt.getModuleEntries g.env i (level := .private)),
       ("computed_field", Elab.ComputedFields.computedFieldAttr.ext.getModuleEntries g.env i (level := .private))] do
     errs := errs ++ (← pinnedNote ds.size s!"@[{a}] entr(y/ies)" (ds.map fun d => s!"module {m}: @[{a}] on {d}"))
@@ -454,7 +451,7 @@ closure (a submission's module roots are fresh, `harness/evaluate.py`). -/
 def GateCtx.submissionOwned (g : GateCtx) (m : Name) : Bool :=
   g.untrusted m && !g.allowed.contains m
 
-/-- Rule 6, transitive (S6b-M3 fix pass) on the submission-owned module `m`: every module it
+/-- Rule 6, transitive, on the submission-owned module `m`: every module it
 reaches is submission-owned or in the allowed closure; so an untrusted organiser module outside the
 list (e.g. the harness driver, which imports `Lean`) cannot carry the compiler into a submission. -/
 def rule6t (g : GateCtx) (m : Name) : Array String :=

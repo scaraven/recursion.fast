@@ -1,154 +1,143 @@
 #!/usr/bin/env python3
-"""Generates `ChainCheck.lean`, the organiser's compiled-Lean chain checker (V4-12, v3 §8.5):
+"""Generates `ChainCheck.lean`, the organiser's compiled-Lean chain checker (AGENTS.md §6,
+calibration):
 
   chaincheck LEAVES_JSON ROOT_HEX   ->  `ok NS` | `mismatch NS`
 
-It recomputes `chainEnd s n` for every start of LEAVES_JSON, eight chains interleaved (one
-chain step is BLAKE2s-256 of `0x43 ‖ d`, one compression, fully unrolled over `UInt32` locals, as
-an entry's verifier may legally write it in core Lean), then the leaf statements and the tree root,
-and compares with ROOT_HEX. NS is the time of that computation (monotonic clock; the runner pins
-the process to one core, so it is the CPU time of the check). `T_triv` is the median NS of the samples
-taken during the stream on the calibration instance's chains (2^24 compressions); `v_ref = T_triv
-/ R` (V4-A11, §11 m-2).
+It recomputes `chainEnd s n` for every start of LEAVES_JSON (one chain step is Keccak-256 of
+`0x43 ‖ d`, 33 bytes, one permutation: the padded block is built in lanes and `Keccak-f[1600]` is
+fully unrolled over `UInt64` locals, as an entry's verifier may legally write it in core Lean), then
+the leaf statements and the tree root, and compares with ROOT_HEX. NS is the time of that
+computation (monotonic clock; the runner pins the process to one core, so it is the CPU time of the
+check). `T_triv` is the median NS of the samples taken during the stream on the calibration
+instance's chains (2^24 permutations); `v_ref = T_triv / R`.
 
 The checker is calibration, not a trusted predicate: a wrong hash would fail its comparison with the
 runner's root. `python3 gen_chaincheck.py > ChainCheck.lean`.
 """
-SIGMA = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-    [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
-    [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
-    [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
-    [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
-    [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
-    [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
-    [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
-    [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
-    [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+RC = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000,
+    0x000000000000808B, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008A, 0x0000000000000088, 0x0000000080008009, 0x000000008000000A,
+    0x000000008000808B, 0x800000000000008B, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
 ]
-IV = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19]
+RHO = [0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14]
+
+
+def rot(e, r):
+    return e if r == 0 else f"rotl{r} ({e})"
+
+
+def round_lines(r):
+    """One round on the locals a0 … a24 (rebound), FIPS 202 θ, ρ, π, χ, ι."""
+    L = []
+    for x in range(5):
+        L.append(f"  let c{x} := a{x} ^^^ a{x+5} ^^^ a{x+10} ^^^ a{x+15} ^^^ a{x+20}")
+    for x in range(5):
+        L.append(f"  let d{x} := c{(x+4)%5} ^^^ rotl1 c{(x+1)%5}")
+    for y in range(5):
+        for x in range(5):
+            j = (x + 3 * y) % 5 + 5 * x          # π: B[x, y] = A[x + 3y, x] after θ and ρ
+            L.append(f"  let b{x+5*y} := {rot(f'a{j} ^^^ d{j % 5}', RHO[j])}")
+    for y in range(5):
+        for x in range(5):
+            i = x + 5 * y
+            e = f"b{i} ^^^ (~~~b{(x+1)%5+5*y} &&& b{(x+2)%5+5*y})"
+            if i == 0:
+                e = f"{e} ^^^ 0x{RC[r]:016x}"
+            L.append(f"  let a{i} := {e}")
+    return L
 
 
 def step_body():
-    """Lines of `stepU`: one chain step on the chaining value `h` (fields h0 … h7)."""
-    L = []
-    m = ["(0x43 : UInt32) ||| (h.h0 <<< 8)"] + [f"(h.h{i} >>> 24) ||| (h.h{i + 1} <<< 8)" for i in range(7)] + ["h.h7 >>> 24"]
-    for i, e in enumerate(m):
-        L.append(f"  let m{i} : UInt32 := {e}")
-    init = [f"0x{IV[0] ^ 0x01010020:08x}"] + [f"0x{x:08x}" for x in IV[1:]] + [f"0x{x:08x}" for x in IV]
-    init[12] = f"0x{IV[4] ^ 33:08x}"
-    init[14] = f"0x{IV[6] ^ 0xFFFFFFFF:08x}"
-    for i, e in enumerate(init):
-        L.append(f"  let v{i} : UInt32 := {e}")
-
-    def word(k):
-        return f"m{k}" if k <= 8 else None
-
-    def add3(a, b, k):
-        w = word(k)
-        return f"  let v{a} := v{a} + v{b}" + (f" + {w}" if w else "")
-
-    def g(a, b, c, d, x, y):
-        return [add3(a, b, x), f"  let v{d} := rotr16 (v{d} ^^^ v{a})", f"  let v{c} := v{c} + v{d}",
-                f"  let v{b} := rotr12 (v{b} ^^^ v{c})", add3(a, b, y), f"  let v{d} := rotr8 (v{d} ^^^ v{a})",
-                f"  let v{c} := v{c} + v{d}", f"  let v{b} := rotr7 (v{b} ^^^ v{c})"]
-    for s in SIGMA:
-        for (a, b, c, d), k in zip([(0, 4, 8, 12), (1, 5, 9, 13), (2, 6, 10, 14), (3, 7, 11, 15),
-                                    (0, 5, 10, 15), (1, 6, 11, 12), (2, 7, 8, 13), (3, 4, 9, 14)], range(8)):
-            L += g(a, b, c, d, s[2 * k], s[2 * k + 1])
-    out = [f"0x{IV[0] ^ 0x01010020:08x} ^^^ v0 ^^^ v8"] + [f"0x{IV[i]:08x} ^^^ v{i} ^^^ v{i + 8}" for i in range(1, 8)]
-    L.append("  ⟨" + ", ".join(f"({e})" for e in out) + "⟩")
+    """Lines of `stepU`: one chain step on the chaining value `h` (lanes h0 … h3)."""
+    init = ["(0x43 : UInt64) ||| (h.h0 <<< 8)", "(h.h0 >>> 56) ||| (h.h1 <<< 8)", "(h.h1 >>> 56) ||| (h.h2 <<< 8)",
+            "(h.h2 >>> 56) ||| (h.h3 <<< 8)", "(h.h3 >>> 56) ||| 0x100"] + ["(0 : UInt64)"] * 11 + \
+           ["(0x8000000000000000 : UInt64)"] + ["(0 : UInt64)"] * 8
+    L = [f"  let a{i} : UInt64 := {e}" for i, e in enumerate(init)]
+    for r in range(24):
+        L += round_lines(r)
+    L.append("  ⟨a0, a1, a2, a3⟩")
     return L
 
 
 HEADER = '''/-
-`chaincheck`: the organiser's compiled-Lean interleaved chain checker (V4-12; GENERATED by
+`chaincheck`: the organiser's compiled-Lean chain checker (GENERATED by
 `gen_chaincheck.py`, do not edit). See the generator's docstring.
 -/
 
-/-- A BLAKE2s chaining value: eight words. -/
-structure H8 where
-  (h0 h1 h2 h3 h4 h5 h6 h7 : UInt32)
+/-- A Keccak-256 chaining value: the 32 bytes as four little-endian lanes. -/
+structure H4 where
+  (h0 h1 h2 h3 : UInt64)
 
-/-- Eight chaining values, advanced together. -/
-structure S8 where
-  (a b c d e f g h : H8)
-
-@[inline] def rotr16 (x : UInt32) : UInt32 := (x >>> 16) ||| (x <<< 16)
-@[inline] def rotr12 (x : UInt32) : UInt32 := (x >>> 12) ||| (x <<< 20)
-@[inline] def rotr8 (x : UInt32) : UInt32 := (x >>> 8) ||| (x <<< 24)
-@[inline] def rotr7 (x : UInt32) : UInt32 := (x >>> 7) ||| (x <<< 25)
-
+@[inline] def rotl1 (x : UInt64) : UInt64 := (x <<< 1) ||| (x >>> 63)
+''' + "".join(f"@[inline] def rotl{r} (x : UInt64) : UInt64 := (x <<< {r}) ||| (x >>> {64 - r})\n"
+                for r in sorted(set(RHO) - {0, 1})) + '''
 set_option maxRecDepth 100000 in
-/-- One chain step: BLAKE2s-256 of `0x43 ‖ bytes(h)` (33 bytes, one compression), unrolled. -/
-@[inline] def stepU (h : H8) : H8 :=
+/-- One chain step: Keccak-256 of `0x43 ‖ bytes(h)` (33 bytes padded to one block, one
+permutation), unrolled. -/
+def stepU (h : H4) : H4 :=
 '''
 
 TAIL = r'''
-set_option maxRecDepth 100000 in
-/-- Eight chain steps, one per chaining value; inlined, so the eight compressions interleave. -/
-def step8 (s : S8) : S8 :=
-  ⟨stepU s.a, stepU s.b, stepU s.c, stepU s.d, stepU s.e, stepU s.f, stepU s.g, stepU s.h⟩
+/-- `n` steps of one chain. -/
+def iterU : Nat → H4 → H4
+  | 0, h => h
+  | n + 1, h => iterU n (stepU h)
 
-/-- `n` steps of eight chains. -/
-def iter8 : Nat → S8 → S8
-  | 0, s => s
-  | n + 1, s => iter8 n (step8 s)
-
-/-- Little-endian words of a 32-byte digest. -/
-def toH8 (b : ByteArray) : H8 :=
-  let w (i : Nat) : UInt32 := b[4*i]!.toUInt32 ||| (b[4*i+1]!.toUInt32 <<< 8) |||
-    (b[4*i+2]!.toUInt32 <<< 16) ||| (b[4*i+3]!.toUInt32 <<< 24)
-  ⟨w 0, w 1, w 2, w 3, w 4, w 5, w 6, w 7⟩
+/-- The four little-endian lanes of a 32-byte digest. -/
+def toH4 (b : ByteArray) : H4 :=
+  let w (i : Nat) : UInt64 := (List.range 8).foldl (fun acc k => acc ||| (b[8*i+k]!.toUInt64 <<< (8*k).toUInt64)) 0
+  ⟨w 0, w 1, w 2, w 3⟩
 
 /-- The 32 bytes of a chaining value. -/
-def ofH8 (h : H8) : ByteArray := Id.run do
+def ofH4 (h : H4) : ByteArray := Id.run do
   let mut out := ByteArray.empty
-  for w in [h.h0, h.h1, h.h2, h.h3, h.h4, h.h5, h.h6, h.h7] do
-    for k in [0, 8, 16, 24] do out := out.push (w >>> k.toUInt32).toUInt8
+  for w in [h.h0, h.h1, h.h2, h.h3] do
+    for k in [0:8] do out := out.push (w >>> (8 * k).toUInt64).toUInt8
   return out
 
-/-! Generic BLAKE2s-256 for the few leaf and node statements (41 and 65 bytes). -/
+/-! Generic Keccak-256 for the few leaf and node statements (41 and 65 bytes). -/
 
-def iv : Array UInt32 := #[0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C,
-  0x1F83D9AB, 0x5BE0CD19]
-def sigma : Array (Array Nat) := #[SIGMA_ROWS]
+def rc : Array UInt64 := #[RC_ROWS]
+def rho : Array UInt64 := #[RHO_ROW]
 
-def compress (h : Array UInt32) (blk : ByteArray) (t : UInt64) (last : Bool) : Array UInt32 := Id.run do
-  let m := (List.range 16).toArray.map fun i => blk[4*i]!.toUInt32 ||| (blk[4*i+1]!.toUInt32 <<< 8) |||
-    (blk[4*i+2]!.toUInt32 <<< 16) ||| (blk[4*i+3]!.toUInt32 <<< 24)
-  let mut v := h ++ iv
-  v := v.set! 12 (v[12]! ^^^ t.toUInt32)
-  v := v.set! 13 (v[13]! ^^^ (t >>> 32).toUInt32)
-  if last then v := v.set! 14 (~~~ v[14]!)
-  for s in sigma do
-    for (a, b, c, d, k) in [(0, 4, 8, 12, 0), (1, 5, 9, 13, 1), (2, 6, 10, 14, 2), (3, 7, 11, 15, 3),
-        (0, 5, 10, 15, 4), (1, 6, 11, 12, 5), (2, 7, 8, 13, 6), (3, 4, 9, 14, 7)] do
-      v := v.set! a (v[a]! + v[b]! + m[s[2*k]!]!)
-      v := v.set! d (rotr16 (v[d]! ^^^ v[a]!))
-      v := v.set! c (v[c]! + v[d]!)
-      v := v.set! b (rotr12 (v[b]! ^^^ v[c]!))
-      v := v.set! a (v[a]! + v[b]! + m[s[2*k+1]!]!)
-      v := v.set! d (rotr8 (v[d]! ^^^ v[a]!))
-      v := v.set! c (v[c]! + v[d]!)
-      v := v.set! b (rotr7 (v[b]! ^^^ v[c]!))
-  return (List.range 8).toArray.map fun i => h[i]! ^^^ v[i]! ^^^ v[i+8]!
+def keccakF (a : Array UInt64) : Array UInt64 := Id.run do
+  let mut a := a
+  for r in rc do
+    let c := (List.range 5).toArray.map fun x => a[x]! ^^^ a[x+5]! ^^^ a[x+10]! ^^^ a[x+15]! ^^^ a[x+20]!
+    let t := (List.range 25).toArray.map fun i =>
+      let v := a[i]! ^^^ c[(i % 5 + 4) % 5]! ^^^ ((c[(i % 5 + 1) % 5]! <<< 1) ||| (c[(i % 5 + 1) % 5]! >>> 63))
+      (v <<< rho[i]!) ||| (v >>> (64 - rho[i]!))
+    let b := (List.range 25).toArray.map fun i => let x := i % 5; let y := i / 5; t[(x + 3 * y) % 5 + 5 * x]!
+    a := (List.range 25).toArray.map fun i => let x := i % 5; let y := i / 5;
+      b[i]! ^^^ (~~~b[(x + 1) % 5 + 5 * y]! &&& b[(x + 2) % 5 + 5 * y]!)
+    a := a.set! 0 (a[0]! ^^^ r)
+  return a
 
-def blake2s (msg : ByteArray) : ByteArray := Id.run do
-  let mut h := iv.set! 0 (iv[0]! ^^^ 0x01010020)
-  let nb := max 1 ((msg.size + 63) / 64)
-  for i in [:nb] do
-    let blk := (msg.extract (64*i) (64*i+64)) ++ ByteArray.mk (Array.replicate (64 - min 64 (msg.size - min msg.size (64*i))) 0)
-    let last := i + 1 == nb
-    h := compress h blk (if last then msg.size.toUInt64 else (64*(i+1)).toUInt64) last
-  return ofH8 ⟨h[0]!, h[1]!, h[2]!, h[3]!, h[4]!, h[5]!, h[6]!, h[7]!⟩
+def keccak256 (msg : ByteArray) : ByteArray := Id.run do
+  let p := 136 - msg.size % 136
+  let pad := if p = 1 then ByteArray.mk #[0x81] else
+    ByteArray.mk #[0x01] ++ ByteArray.mk (Array.replicate (p - 2) 0) ++ ByteArray.mk #[0x80]
+  let m := msg ++ pad
+  let mut a : Array UInt64 := Array.replicate 25 0
+  for blk in [:m.size / 136] do
+    for i in [:17] do
+      let w := (List.range 8).foldl (fun acc k => acc ||| (m[136*blk+8*i+k]!.toUInt64 <<< (8*k).toUInt64)) 0
+      a := a.set! i (a[i]! ^^^ w)
+    a := keccakF a
+  return ofH4 ⟨a[0]!, a[1]!, a[2]!, a[3]!⟩
 
 def enc64 (n : Nat) : ByteArray := ByteArray.mk ((List.range 8).toArray.map fun i => (n >>> (8*i)).toUInt8)
 
-def leafStmt (h : ByteArray) (n : Nat) : ByteArray := blake2s (ByteArray.mk #[0x4C] ++ h ++ enc64 n)
-def nodeStmt (a b : ByteArray) : ByteArray := blake2s (ByteArray.mk #[0x4E] ++ a ++ b)
+def leafStmt (h : ByteArray) (n : Nat) : ByteArray := keccak256 (ByteArray.mk #[0x4C] ++ h ++ enc64 n)
+def nodeStmt (a b : ByteArray) : ByteArray := keccak256 (ByteArray.mk #[0x4E] ++ a ++ b)
 
-partial def treeRoot (cs : Array ByteArray) : ByteArray :=
+'''
+
+LEAN_REST = r'''partial def treeRoot (cs : Array ByteArray) : ByteArray :=
   if cs.size ≤ 1 then cs[0]! else
   treeRoot ((List.range ((cs.size + 1) / 2)).toArray.map fun i =>
     if 2*i+1 < cs.size then nodeStmt cs[2*i]! cs[2*i+1]! else cs[2*i]!)
@@ -180,14 +169,8 @@ def parseLeaves (s : String) : Option (Nat × Array ByteArray) := do
     if i % 2 == 1 then starts := starts.push (← unhex parts[i]!)
   return (n, starts)
 
-def chainEnds (starts : Array ByteArray) (n : Nat) : Array ByteArray := Id.run do
-  let z : H8 := ⟨0, 0, 0, 0, 0, 0, 0, 0⟩
-  let mut out := #[]
-  for g in [:(starts.size + 7) / 8] do
-    let get (k : Nat) := if 8*g + k < starts.size then toH8 starts[8*g+k]! else z
-    let s := iter8 n ⟨get 0, get 1, get 2, get 3, get 4, get 5, get 6, get 7⟩
-    for h in [s.a, s.b, s.c, s.d, s.e, s.f, s.g, s.h] do out := out.push (ofH8 h)
-  return out.extract 0 starts.size
+def chainEnds (starts : Array ByteArray) (n : Nat) : Array ByteArray :=
+  starts.map fun s => ofH4 (iterU n (toH4 s))
 
 def main (args : List String) : IO UInt32 := do
   let [file, rootHex] := args | IO.eprintln "usage: chaincheck LEAVES_JSON ROOT_HEX"; return 2
@@ -202,8 +185,9 @@ def main (args : List String) : IO UInt32 := do
 
 
 def main():
-    rows = ",\n  ".join("#[" + ", ".join(str(x) for x in s) + "]" for s in SIGMA)
-    print(HEADER + "\n".join(step_body()) + "\n" + TAIL.replace("SIGMA_ROWS", rows))
+    rc = ",\n  ".join(", ".join(f"0x{x:016x}" for x in RC[i:i + 4]) for i in range(0, 24, 4))
+    tail = TAIL.replace("RC_ROWS", rc).replace("RHO_ROW", ", ".join(str(x) for x in RHO))
+    print(HEADER + "\n".join(step_body()) + "\n" + tail + LEAN_REST)
 
 
 if __name__ == "__main__":

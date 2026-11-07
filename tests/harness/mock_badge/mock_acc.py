@@ -1,19 +1,22 @@
 """A Python stand-in for the Lean badge (pre-merge testing of the runner only; never used to judge
 an entry): `acc` for the toy prover's placeholder witness-sending encoding, with `SigOk` and the
-trace digest from tests/service/wots_ref.py and the file format from harness/rfh/signed.py."""
-import hashlib
+trace digest from tests/service/wots_ref.py and the file format from harness/rfh/signed.py. Keccak-256
+is wots_ref's `H` (tests/service/keccak_ref.c, else harness/rfh/keccak.py); the smoke copies them
+beside this file, `keccak.py` as `rfh/keccak.py`."""
+import functools
 import struct
 import wots_ref as W
 import signed
 
 CHAIN_CAP, QUERY_CAP = 1 << 20, 1 << 20
-WORD = 1 << 64          # V4-A11: no proof cap; |π| must fit a word
+WORD = 1 << 64          # no proof cap; |π| must fit a word
 
 
 def H(b):
-    return hashlib.blake2s(b, digest_size=32).digest()
+    return W.H(b)
 
 
+@functools.lru_cache(maxsize=None)
 def chain_end(s, n):
     for _ in range(n):
         s = H(b"C" + s)
@@ -92,9 +95,24 @@ def acc(vk, c, data):
     return acc_signed(vk, c, signed.parse(data))
 
 
+_decided = {}
+
+
 def acc_signed(vk, c, s):
-    if s is None or len(s.pi) >= WORD or any(len(q) > QUERY_CAP for q, _ in s.trace):
+    """`acc` on a parsed signed proof, each distinct one decided once per process: a node carries its
+    children whole, so the files of one batch share most of their signatures (in pure-Python Keccak
+    a signature check is about 250 permutations)."""
+    if s is None:
+        return False
+    key = (vk, c, s.pi, tuple(s.trace), s.idx, tuple(s.ots), tuple(s.path))
+    if key not in _decided:
+        _decided[key] = _acc_signed(vk, c, s)
+    return _decided[key]
+
+
+def _acc_signed(vk, c, s):
+    if len(s.pi) >= WORD or any(len(q) > QUERY_CAP for q, _ in s.trace):
         return False
     if not W.sig_ok(vk, W.trace_digest(s.trace), s.idx, s.ots, s.path):
         return False
-    return not s.trace and check(vk, c, s.pi)     # V asks nothing: the trace must be empty (V4-A3)
+    return not s.trace and check(vk, c, s.pi)     # V asks nothing: the trace must be empty

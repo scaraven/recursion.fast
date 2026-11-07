@@ -4,7 +4,7 @@
 //! `count` (u32 LE), `body_len` (u64 LE). Response header: `status` (u8), three zero bytes,
 //! `count` (u32 LE), `body_len` (u64 LE). All integers little-endian.
 
-use crate::blake2s::Digest;
+use crate::keccak::Digest;
 use crate::wots::{Sig, HEIGHT, LEN};
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -25,7 +25,7 @@ pub const ST_CAP: u8 = 2;
 /// All `2^16` one-time signing keys are used.
 pub const ST_EXHAUSTED: u8 = 3;
 
-/// Largest query: 2^20 bytes (`queryCap`, V4-A3: `acc` rejects a trace with a longer query).
+/// Largest query: 2^20 bytes (`queryCap`: `acc` rejects a trace with a longer query).
 pub const MAX_QUERY_BYTES: u32 = 1 << 20;
 /// Largest request body: 16 MiB.
 pub const MAX_BODY: u64 = 1 << 24;
@@ -33,10 +33,9 @@ pub const MAX_BODY: u64 = 1 << 24;
 pub const MAX_QUERY_COUNT: u32 = 1 << 18;
 /// Most items in one `SIGN` (the verifier query bound `qV ≤ 2^16`).
 pub const MAX_SIGN_COUNT: u32 = 1 << 16;
-/// Most concurrent connections.
 /// Most concurrent connections: 32. A connection holds at most a 16 MiB body, an 8 MiB response and
-/// about 17 MiB of per-request temporaries (the sort of a mixed-size `QUERY`), so 32 of them fit the
-/// service's 2 GiB cgroup with room for the keys (RF-m20; 64 did not).
+/// 4 MiB of per-request temporaries (the list of `2^18` query slices), so 32 of them fit the
+/// service's 2 GiB cgroup with room for the keys (64 did not).
 pub const MAX_CONNS: usize = 32;
 
 /// The 16-byte header.

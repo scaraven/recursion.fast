@@ -1,15 +1,15 @@
 /-
 # Contract: the recursion tree's root (a specification of the runner)                (TRUSTED)
 
-DESIGN-v3 §5.1, **unchanged in v4** (V4-16). The root digest of `2^r` leaves, computed from the
+The root digest of `2^r` leaves, computed from the
 leaf digests by hashing up (`nodeStmt`, adjacent pairs, level by level), never from a digest a
-prover supplies. Since V4-A11 no prover is benchmarked on a tree (the benchmark is one stream of
-`nodeStmt` steps); the runner still computes this root for the instance of the chain checker
+prover supplies. No prover is benchmarked on a tree (the benchmark is one stream of
+`nodeStmt` steps); the runner computes this root for the instance of the chain checker
 that measures `T_triv,best`, and the library's composition theorem (`Library/Compose.lean`) is
 stated over it. The runner's Python `treeRoot` is tested against this definition by a
 known-answer control (`Controls/Tree.lean`).
 
-**Convention (V3-S1-A8).** The runner always has a power of two of leaves. `treeRoot` is total:
+**Convention.** The runner always has a power of two of leaves. `treeRoot` is total:
 on an odd level the last digest is carried up unhashed, a single digest is its own root, and the
 empty list has the zero digest. None of these cases occurs in a benchmark run.
 -/

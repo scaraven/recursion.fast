@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Tests of the oracle service against Python's hashlib and the independent reading of `Contract/Signature.lean`
-in `wots_ref.py`.
+"""Tests of the oracle service against independent Keccak-256 references and the independent reading of
+`Contract/Signature.lean` in `wots_ref.py`.
 
   python3 tests/service/test_service.py [RF_ORACLE_TEST_BINARY]
 
-1. keyed BLAKE2s (`QUERY`) against `hashlib.blake2s(key=…)` on the empty message (whose only block
-   is the key block, V4-A5), one-block,
-   block-boundary and multi-block messages, up to 64 KiB, in mixed-size batches, with and without
-   the AVX2 path (`RF_ORACLE_NO_SIMD`);
+0. the references: `keccak_ref.c` (compiled by `wots_ref`; gcc is required) and the pure-Python
+   `harness/rfh/keccak.py` against the published Keccak-256 vectors and against each other;
+1. the keyed hash (`QUERY`), `PRF_k(q) = Keccak-256(k ‖ q)`, against the references on the empty
+   query, queries around the permutation boundaries (`32 + |q|` a multiple of 136) and multi-block
+   queries up to 64 KiB, in mixed-size batches and one at a time;
 2. `SIGN`: the answers, the signature byte for byte against `wots_ref` (from the fixed test seed),
    `SigOk` against `vk`, the index sequence, the empty trace;
 3. `VK` against the root of the full Merkle tree computed by `wots_ref` from the seed;
@@ -15,8 +16,11 @@ in `wots_ref.py`.
 5. 32 concurrent connections, a 33rd refused; 8 concurrent signers get a permutation of indices;
    32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
 6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
-7. shutdown on stdin end of file: exit 0, socket removed, statistics printed.
+7. shutdown on stdin end of file: exit 0, socket removed, statistics printed;
+8. `rf-oracle --leaves`: leaf digests of chains against the references, in input order, on 1 and
+   several threads; a malformed line exits 2.
 """
+import functools
 import os
 import random
 import struct
@@ -33,9 +37,10 @@ sys.path.insert(0, HERE)
 import wots_ref as W  # noqa: E402
 from rfh.service import Client, Service, ServiceError, OP_QUERY, OP_SIGN, OP_VK  # noqa: E402
 from rfh.signed import from_wire  # noqa: E402
+from rfh import keccak as pykeccak  # noqa: E402
 
 # the test build (`cargo build --release --features insecure-test-keys --target-dir target/test-keys`);
-# the release binary rejects `--insecure-test-keys` (RB-m5)
+# the release binary rejects `--insecure-test-keys`
 BIN = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "service", "target", "test-keys", "release", "rf-oracle")
 RELEASE = os.path.join(ROOT, "service", "target", "release", "rf-oracle")
 PRF_KEY = bytes(range(32))
@@ -75,51 +80,108 @@ def stop(p):
     return p.wait(timeout=60), out
 
 
+def pattern(n):
+    """leanVM's test pattern."""
+    return bytes((7 * i + 3) % 256 for i in range(n))
+
+
+VECTORS = [  # Keccak-256 (Ethereum), published values
+    (b"", "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"),
+    (b"abc", "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"),
+    (pattern(135), "00ef96af9cf4b24c7f269d922294444a197d0a33638c2e56634c57e892103a8f"),
+    (pattern(136), "742061bcad767ed4c4f5883b1dcb1aad11afdcc140dc469d953759b127b9f9ed"),
+    (pattern(137), "e3371f61e770abf254c34239c3b0099ad90594507415bc81dd0a10b9692bbf2a"),
+    (pattern(271), "4401c4afbe16ff911bdbf2d38e556e5b861f3fdf0f9d4306b1c46f6ae4f73584"),
+    (pattern(272), "ac141fd7b0a0ffcd2e967254d508da3ec616596493c36fa304425647d90e6de5"),
+    (b"C" + bytes(range(32)), "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97"),
+]
+
+
+def chain_leaf(s, n):
+    """`leafStmt (chainEnd s n) n` by the C reference."""
+    for _ in range(n):
+        s = W.keccak_c(b"C" + s)
+    return W.keccak_c(b"L" + s + W.enc64(n))
+
+
+def test_leaves(binary):
+    rnd = random.Random(2)
+    jobs = [(bytes(rnd.getrandbits(8) for _ in range(32)), rnd.choice([0, 1, 2, 7, 100, 1000])) for _ in range(300)]
+    stdin = "".join(f"{s.hex()} {n}\n" for s, n in jobs)
+    want = "".join(chain_leaf(s, n).hex() + "\n" for s, n in jobs)
+    check(chain_leaf(bytes(range(32)), 5) == pykeccak.keccak256(
+        b"L" + functools.reduce(lambda d, _: pykeccak.keccak256(b"C" + d), range(5), bytes(range(32))) + W.enc64(5)),
+        "leaf digest: the C reference equals the pure-Python reference on a 5-step chain")
+    for threads in ([], ["--threads", "1"], ["--threads", "7"]):
+        r = subprocess.run([binary, "--leaves"] + threads, input=stdin, capture_output=True, text=True, timeout=120)
+        check(r.returncode == 0 and r.stdout == want,
+              f"--leaves {' '.join(threads)}: {len(jobs)} chains (n up to 1000) equal the reference, in input order")
+    r = subprocess.run([binary, "--leaves"], input="", capture_output=True, text=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == "", "--leaves on empty input: exit 0, no output")
+    for bad in [stdin + "zz\n", f"{jobs[0][0].hex().upper()} 3\n", f"{jobs[0][0].hex()} -1\n", "\n"]:
+        r = subprocess.run([binary, "--leaves"], input=bad, capture_output=True, text=True, timeout=120)
+        check(r.returncode == 2 and r.stdout == "" and "rf-oracle --leaves" in r.stderr,
+              f"--leaves refuses a malformed line {bad.splitlines()[-1][:20]!r}…: exit {r.returncode}, nothing on stdout")
+    r = subprocess.run([binary, "--leaves", "--socket", "x.sock"], input="", capture_output=True, text=True, timeout=60)
+    check(r.returncode == 2, f"--leaves with --socket is a usage error (exit {r.returncode})")
+
+
 def main():
     rnd = random.Random(1)
     tmp = tempfile.mkdtemp(prefix="rf-svc-test-", dir=os.environ.get("RF_TEST_TMP"))
     print(f"tests in {tmp}")
-    sizes = [0, 1, 2, 31, 32, 33, 55, 56, 63, 64, 65, 100, 127, 128, 129, 191, 192, 193, 1000, 4096, 4265,
-             9000, 65535, 65536]
+
+    # 0. the references
+    W.c_lib(required=True)
+    for m, d in VECTORS:
+        check(W.keccak_c(m).hex() == d and pykeccak.keccak256(m).hex() == d,
+              f"keccak_ref.c and rfh/keccak.py: Keccak-256 of {len(m)} bytes = {d[:16]}…")
+    agree = all(W.keccak_c(m) == pykeccak.keccak256(m) for m in (bytes(rnd.getrandbits(8) for _ in range(n))
+                                                                  for n in range(0, 600, 3)))
+    check(agree, "keccak_ref.c = rfh/keccak.py on 200 random messages of 0 … 597 bytes")
+
+    # the queries: 32 + |q| around multiples of the rate 136, and multi-block
+    sizes = [0, 1, 2, 31, 32, 33, 64, 103, 104, 105, 135, 136, 137, 239, 240, 241, 271, 272, 375, 376, 377,
+             1000, 4096, 4265, 9000, 65535, 65536]
     msgs = [bytes(rnd.getrandbits(8) for _ in range(n)) for n in sizes]
     msgs += [bytes([7]) * 64 for _ in range(20)] + [b""] * 3
     rnd.shuffle(msgs)
     want = [W.H(m, key=PRF_KEY) for m in msgs]
+    check(all(pykeccak.keyed(PRF_KEY, m) == w for m, w in zip(msgs, want) if len(m) < 2000),
+          "keyed hash: the C reference = rfh/keccak.py keyed on the short test queries")
 
     print("computing the reference Merkle tree from the test seed ...")
     t0 = time.time()
     levels = W.tree(SEED)
     print(f"  {time.time() - t0:.1f} s")
 
-    for simd in ("avx2", "scalar"):
-        env = {"RF_ORACLE_NO_SIMD": "1"} if simd == "scalar" else {}
-        p, info, sock = start(os.path.join(tmp, f"svc-{simd}"), env)
-        check(info.get("simd") == simd or simd == "avx2", f"[{simd}] service reports simd={info.get('simd')}")
-        check(bytes.fromhex(info["vk"]) == levels[16][0], f"[{simd}] vk equals the reference Merkle root")
-        c = Client(sock)
-        check(c.vk() == levels[16][0], f"[{simd}] VK request")
-        got = c.query(msgs)
-        check(got == want, f"[{simd}] QUERY of {len(msgs)} messages (sizes 0 … 65536) = hashlib keyed BLAKE2s")
-        one = [c.query([m])[0] for m in msgs[:10]]
-        check(one == want[:10], f"[{simd}] QUERY one at a time")
-        for k, trace_q in enumerate([[], [b"abc"], msgs[:7], [bytes(64)] * 9]):
-            body = c.sign(trace_q)
-            s = from_wire(b"", trace_q, body)
-            td = W.trace_digest(s.trace)
-            check([a for _, a in s.trace] == [W.H(q, key=PRF_KEY) for q in trace_q],
-                  f"[{simd}] SIGN {k}: answers = hashlib keyed BLAKE2s")
-            check(s.idx == k, f"[{simd}] SIGN {k}: one-time key index {s.idx}")
-            check(s.ots == W.wots_sign(SEED, s.idx, td), f"[{simd}] SIGN {k}: ots = reference WOTS signature")
-            check(s.path == W.auth_path(levels, s.idx), f"[{simd}] SIGN {k}: path = reference authentication path")
-            check(W.sig_ok(levels[16][0], td, s.idx, s.ots, s.path), f"[{simd}] SIGN {k}: SigOk vk (traceDigest tr) σ")
-            bad = list(s.ots)
-            bad[3] = bytes(32)
-            check(not W.sig_ok(levels[16][0], td, s.idx, bad, s.path), f"[{simd}] SIGN {k}: a changed ots fails")
-            check(not W.sig_ok(levels[16][0], W.H(td), s.idx, s.ots, s.path), f"[{simd}] SIGN {k}: another digest fails")
-        c.close()
-        code, out = stop(p)
-        check(code == 0 and "stats " in out, f"[{simd}] shutdown on stdin EOF: exit {code}, stats printed")
-        check(not os.path.exists(sock), f"[{simd}] socket removed at exit")
+    p, info, sock = start(os.path.join(tmp, "svc"))
+    check(info.get("simd") == "scalar", f"service reports simd={info.get('simd')}")
+    check(bytes.fromhex(info["vk"]) == levels[16][0], "vk equals the reference Merkle root")
+    c = Client(sock)
+    check(c.vk() == levels[16][0], "VK request")
+    got = c.query(msgs)
+    check(got == want, f"QUERY of {len(msgs)} messages (sizes 0 … 65536) = Keccak-256(k ‖ q) of the reference")
+    one = [c.query([m])[0] for m in msgs[:10]]
+    check(one == want[:10], "QUERY one at a time")
+    for k, trace_q in enumerate([[], [b"abc"], msgs[:7], [bytes(64)] * 9]):
+        body = c.sign(trace_q)
+        s = from_wire(b"", trace_q, body)
+        td = W.trace_digest(s.trace)
+        check([a for _, a in s.trace] == [W.H(q, key=PRF_KEY) for q in trace_q],
+              f"SIGN {k}: answers = Keccak-256(k ‖ q) of the reference")
+        check(s.idx == k, f"SIGN {k}: one-time key index {s.idx}")
+        check(s.ots == W.wots_sign(SEED, s.idx, td), f"SIGN {k}: ots = reference WOTS signature")
+        check(s.path == W.auth_path(levels, s.idx), f"SIGN {k}: path = reference authentication path")
+        check(W.sig_ok(levels[16][0], td, s.idx, s.ots, s.path), f"SIGN {k}: SigOk vk (traceDigest tr) σ")
+        bad = list(s.ots)
+        bad[3] = bytes(32)
+        check(not W.sig_ok(levels[16][0], td, s.idx, bad, s.path), f"SIGN {k}: a changed ots fails")
+        check(not W.sig_ok(levels[16][0], W.H(td), s.idx, s.ots, s.path), f"SIGN {k}: another digest fails")
+    c.close()
+    code, out = stop(p)
+    check(code == 0 and "stats " in out, f"shutdown on stdin EOF: exit {code}, stats printed")
+    check(not os.path.exists(sock), "socket removed at exit")
 
     # 4. malformed and over-cap requests
     p, info, sock = start(os.path.join(tmp, "svc-errors"))
@@ -172,7 +234,7 @@ def main():
         cc.close()
     stop(p)
 
-    # concurrent signers get distinct, consecutive indices (RF-m22)
+    # concurrent signers get distinct, consecutive indices
     p, info, sock = start(os.path.join(tmp, "svc-perm"))
     got, lock = [], threading.Lock()
 
@@ -193,7 +255,7 @@ def main():
     check(sorted(map(str, got)) == sorted(map(str, range(512))),
           f"8 concurrent signers: indices are a permutation of 0…511 ({len(set(got))} distinct of {len(got)})")
     stop(p)
-    # 32 maximal requests at once fit the service's 2 GiB cgroup (RF-m20)
+    # 32 maximal requests at once fit the service's 2 GiB cgroup
     from rfh.sandbox import memcap, memcap_method
     if memcap_method() == "systemd":
         p, info, sock = start(os.path.join(tmp, "svc-mem"), wrap=memcap("2G", f"rf-svc-memtest-{os.getpid()}"))
@@ -261,6 +323,9 @@ def main():
           f"exactly 2^16 signatures, then EXHAUSTED ({count[0]} signed, statuses {set(res)}, {time.time() - t0:.1f} s)")
     stats = s1.stop()
     check(stats.get("signatures") == 1 << 16, f"service statistics: {stats}")
+
+    # 8. the runner's chain hasher
+    test_leaves(RELEASE if os.path.exists(RELEASE) else BIN)
 
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0

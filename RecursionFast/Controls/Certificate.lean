@@ -1,5 +1,5 @@
 /-
-# Controls: the certificate (`Contract/Certificate.lean`), positive and negative (V4-1, V4-7)
+# Controls: the certificate (`Contract/Certificate.lean`), positive and negative
 
 Positive:
 * `ws_certificate`: the witness-sending submission (`Library/WitnessSending.lean`) has a
@@ -12,13 +12,13 @@ Positive:
 
 Negative:
 * `fuel_low_claim`, `fuel_over_budget_claim`: claims the submission does not meet, or that exceed
-  the budget, are not certified (v3).
+  the budget, are not certified.
 * `rejectAll_no_certificate`, `acceptAll_no_certificate`, `error_one_no_certificate`,
   `delta_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_program_no_certificate`:
-  v3's, with the verifier now a function of the key; `acceptAll_no_certificate` re-proved against
-  the textbook `KS` (V4-A10): the adversary that asks nothing and outputs `(0, ∅)` wins with
+  with the verifier a function of the key; `acceptAll_no_certificate` against
+  the textbook `KS`: the adversary that asks nothing and outputs `(0, ∅)` wins with
   probability `1`, above `qV · ε < 1`, which the caps give (`small_of_caps`).
-* **The `∀ vk` (V4-1, C-m1)**: `sigTrust_no_certificate`: a submission whose verifier accepts any
+* **The `∀ vk`**: `sigTrust_no_certificate`: a submission whose verifier accepts any
   proof carrying a signature of the statement valid under `vk` (`Library/SigTrust.lean`'s `Vsig`),
   with an extractor that returns nothing, is **not certified**: the certificate's key quantifier
   reaches `Signer.pk sk`, and the adversary that holds `sk` (`SigTrust.adversary`) asks nothing,
@@ -27,19 +27,19 @@ Negative:
   statement, on the empty log, to a witness of the relation. **Why the quantifier is what does
   it**: `sigTrust_ks_unsignable` (the same verifier is knowledge-sound at error `0` under any key
   for which no signature verifies), so a certificate stated for one key could not exclude it.
-  That no such key can be exhibited (it would need a digest outside the image of a BLAKE2s
+  That no such key can be exhibited (it would need a digest outside the image of a Keccak-256
   tree) is why the twin is stated for every such key rather than for one.
 * The certificate does **not** exclude a verifier that recognises a public function of the
-  oracle (`Controls/Backdoor.lean`); the deployment does (V4-2).
+  oracle (`Controls/Backdoor.lean`); the deployment does.
 
-What the certificate does not say (v3's, kept):
+What the certificate does not say:
 * `acc_rejects_all_certified`: a certified submission whose `acc` accepts nothing: `V` accepts
-  only proofs of `2^64` bytes or more, whose length `acc`'s word bound rejects (V4-A11; v4 used
-  proofs above its former `2^20`-byte cap). Completeness is about `V` over a random oracle, not
-  about `acc` (V3-S2R-m1); the harness's check of the first step rejects such an entry, and no
+  only proofs of `2^64` bytes or more, whose length `acc`'s word bound rejects.
+  Completeness is about `V` over a random oracle, not
+  about `acc`; the harness's check of the first step rejects such an entry, and no
   runner can hold such a proof anyway.
 * `choice_certificate`: the witness-sending submission stays certified when its extractor
-  specification is a `Classical.choose` on tapes beyond the `Computes` domain (V3-S2R-m2).
+  specification is a `Classical.choose` on tapes beyond the `Computes` domain.
 -/
 import RecursionFast.Controls.Security
 import RecursionFast.Controls.Extractor
@@ -108,7 +108,7 @@ theorem size_rep (n : ℕ) : (rep n).size = 2 * n + 1 := by
 theorem big_program_no_certificate (S : Submission) (hp : S.ext.body = rep (2 ^ 19)) :
     ¬ Certificate S := fun h => absurd (size_rep _ ▸ hp ▸ h.cap.2.2.2.2) (by decide)
 
-/-! ## The key quantifier: no certified verifier trusts a signature (C-m1) -/
+/-! ## The key quantifier: no certified verifier trusts a signature -/
 
 /-- **A verifier that trusts `vk`-valid signatures is not certified** with an extractor that
 returns nothing: the certificate's `∀ vk` reaches the key of a known signer. -/
@@ -242,7 +242,7 @@ theorem big_complete (vk : Digest) :
     | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
     | leaf s n => exact (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
 
-/-- **A certified submission whose `acc` accepts nothing** (V3-S2R-m1). -/
+/-- **A certified submission whose `acc` accepts nothing**. -/
 theorem acc_rejects_all_certified : Certificate Sbig ∧ ∀ vk c p, Sbig.acc vk c p = false :=
   ⟨⟨big_secure, big_complete, big_computes, ⟨zero_le, zero_le, Nat.zero_le _,
     fun _ => Nat.le_add_right_of_le Nat.one_le_two_pow, by decide⟩⟩, acc_false⟩

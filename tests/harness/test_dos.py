@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The DoS column's bounds (RF-M1 (2), RF-m6, V4-A9; V4-A11: on the stream's last output, the
+"""The DoS column's bounds (on the stream's last output, the
 per-item cap `item_factor · v_ref`), with a stub badge.
 
   python3 tests/harness/test_dos.py
@@ -7,7 +7,7 @@ per-item cap `item_factor · v_ref`), with a stub badge.
 Only time and crashes fail the entry: an input slower than the per-item cap (`item_factor · v_ref`)
 fails it and is named and kept, also when the badge reports a check above `verify_s`; a column that
 does not finish within `total_s` fails it and names the input being checked; a crash of the checker
-fails it. An accepted input is recorded, not failed (V4-A9: malleability is not a failure). A column
+fails it. An accepted input is recorded, not failed (malleability is not a failure). A column
 within its bounds reports its worst input.
 """
 import os
@@ -72,7 +72,7 @@ def main():
     check(isinstance(r, str) and "crashed" in r and "input 5" in r, f"a crash of the checker fails the entry: {r[:160]}")
     r = outcome(StubBadge(accept=[3]))
     check(isinstance(r, dict) and r["accepted"] == 1 and r["accepted_inputs"] == ["dos/3.bin"],
-          f"an accepted input is recorded, not failed (V4-A9): {r if isinstance(r, str) else r['accepted_inputs']}")
+          f"an accepted input is recorded, not failed: {r if isinstance(r, str) else r['accepted_inputs']}")
     b = StubBadge({9: 2_000_000})
     r = outcome(b)
     check(isinstance(r, dict) and r["max_input"] == "dos/9.bin" and r["over_v_ref"] == 1 and r["accepted"] == 0

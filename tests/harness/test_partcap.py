@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A benchmark part that runs past `PART_S` after the prover's build has started is the entry's
-REJECT, never a missing part (review M-3 of stage F-ivc).
+REJECT, never a missing part.
 
   python3 tests/harness/test_partcap.py
 
@@ -29,6 +29,9 @@ def main():
         shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
     shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
     shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)
+    shutil.copy(os.path.join(ROOT, "tests", "service", "keccak_ref.c"), badge)
+    os.makedirs(os.path.join(badge, "rfh"))                # wots_ref's `from rfh import keccak`
+    shutil.copy(os.path.join(ROOT, "harness", "rfh", "keccak.py"), os.path.join(badge, "rfh"))
     entry = os.path.join(tmp, "entry")
     os.makedirs(os.path.join(entry, "prover"))
     c = os.path.join(tmp, "p.c")
@@ -42,7 +45,7 @@ def main():
     out = os.path.join(tmp, "result.json")
     a = SimpleNamespace(season=os.path.join(ROOT, "harness", "smoke.toml"), entry=entry, work=os.path.join(tmp, "work"),
                         out=out, parts=None, service=os.path.join(ROOT, "service", "target", "release", "rf-oracle"),
-                        bench=os.path.join(ROOT, "service", "target", "release", "rf-bench"), duel=None, role=None)
+                        bench=os.path.join(ROOT, "service", "target", "release", "rf-bench"))
     res = ev.bench_job(a, {"status": "ok", "badge_dir": badge})
     why = " ".join(res.get("reasons", []))
     ok = res.get("benchmark") == "fail" and res.get("verdict") == "REJECT" and "PART_S" in why and "prover setup" in why

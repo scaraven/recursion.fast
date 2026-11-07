@@ -1,0 +1,3 @@
+#!/bin/sh
+# The runner slots: their units, phases, VM ages, current and last jobs (rf-supervisor status).
+exec python3 -I /opt/rf-runner/supervisor/rf-supervisor status "$@"

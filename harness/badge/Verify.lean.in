@@ -8,14 +8,14 @@
   The check is `RFBadge.check`: the strict file parser, then `acc` of the entry's submission
   (through `accF`, proved equal). NS is the monotonic time of parsing the file's bytes and
   evaluating `acc`; the runner pins the process to one core, so NS bounds the check's CPU time
-  (`V_i` of the score, V4-A11; formerly `T_V`, V4-12). A malformed input line is a harness error
+  (`V_i` of the score). A malformed input line is a harness error
   (exit 2).
 -/
 import RFBadgeCommon
 
 open RecursionFast RFBadge
 
-/-- One check, timed (Q10). The check's input comes out of a reference read after the first clock
+/-- One check, timed. The check's input comes out of a reference read after the first clock
 reading, and its result goes into a reference before the second, so the computation is data-
 dependent on an effect inside the window and consumed by one inside it: no compiler pass can move
 it before or after (`tests/harness/timing/` shows the effect of each half). -/

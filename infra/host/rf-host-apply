@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Apply the runner host's run-time state from slots.json (root; idempotent; rf-host.service runs it
+at boot, host-setup.sh after an install).
+
+  rf-host-apply [--conf /opt/rf-runner/slots.json] [--show]
+
+1. IPv4 forwarding off: the VMs reach the internet only through the proxy on the host (squid,
+   host/proxy/); nothing is routed for them.
+2. One persistent tap per slot, owned by the slot's user, and one for image builds (rfrunner), each a routed /30:
+   the host is NET.1 (the proxy listens there), the VM NET.2; strict reverse-path filtering on
+   each; a bandwidth cap ("bandwidth": tbf towards the VM, an ingress policer from it).
+   KSM off (no page merging across VMs).
+3. CPU isolation: system.slice, user.slice and init.scope run on the host CPUs; unbound kernel
+   workqueues, every movable IRQ, kthreadd and every unbound kernel thread that allows it go to
+   the host CPUs (per-CPU kernel threads stay where the kernel binds them). rf.slice (the slots)
+   may use every CPU; each slot's unit narrows it (rf-slot@.service drop-ins written by
+   host-setup.sh). The hugepages of the slots with "hugepages" are reserved.
+4. Cache and memory-bandwidth partitioning ("resctrl", the kernel's allocation interface): the group `rf-other`
+   holds the non-bench CPUs with a small L3 share and a memory-bandwidth cap; the default group
+   (the bench CPUs) keeps the rest of the L3. Memory bandwidth is shared by every core, so without
+   this a memory-heavy job on the host or a light slot slows the bench VM (measured: 2x).
+5. The frequency policy ("freq"): the governor and EPP on every CPU; on the bench CPUs
+   scaling_min_freq and scaling_max_freq; on the others scaling_max_freq (null: the hardware maximum).
+   The host's pstate driver (EPP mode, kernel 6.8) has no boost switch: a scaling_max_freq at or
+   below the nominal frequency (acpi_cppc/nominal_freq) keeps the cores out of boost.
+--show prints the policy as applied, per CPU.
+"""
+import argparse
+import glob
+import json
+import os
+import pwd
+import subprocess
+import sys
+
+
+def sh(*cmd, check=True):
+    return subprocess.run(cmd, check=check, capture_output=True, text=True)
+
+
+def write(path, value):
+    try:
+        with open(path, "w") as f:
+            f.write(str(value))
+        return True
+    except OSError as e:
+        print(f"rf-host-apply: {path} <- {value}: {e.strerror}", file=sys.stderr)
+        return False
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def cpulist(cpus):
+    return ",".join(str(c) for c in sorted(cpus))
+
+
+def taps(conf):
+    """One tap per slot, owned by the slot's user (the build tap by rfrunner); a tap with another
+    owner is made again (only while no VM uses it: host-setup.sh stops the slots first)."""
+    links = [(s["tap"], s["net"], s["user"]) for s in conf["slots"].values()] + \
+        [(conf["build"]["tap"], conf["build"]["net"], "rfrunner")]
+    for tap, net, user in links:
+        uid = str(pwd.getpwnam(user).pw_uid)
+        if sh("ip", "link", "show", tap, check=False).returncode == 0 and read(f"/sys/class/net/{tap}/owner") != uid:
+            sh("ip", "link", "del", tap, check=False)
+        if sh("ip", "link", "show", tap, check=False).returncode != 0:
+            sh("ip", "tuntap", "add", "dev", tap, "mode", "tap", "user", user, "group", user)
+        addr = f"{net}.1/30"
+        if addr not in sh("ip", "-4", "-o", "addr", "show", "dev", tap).stdout:
+            sh("ip", "addr", "replace", addr, "dev", tap)
+        sh("ip", "link", "set", tap, "up")
+        write(f"/proc/sys/net/ipv4/conf/{tap}/rp_filter", 1)
+        bw = conf["bandwidth"]
+        sh("tc", "qdisc", "replace", "dev", tap, "root", "tbf", "rate", f"{bw['down_mbit']}mbit", "burst", "2mb",
+           "latency", "100ms")
+        sh("tc", "qdisc", "del", "dev", tap, "ingress", check=False)
+        sh("tc", "qdisc", "add", "dev", tap, "handle", "ffff:", "ingress")
+        sh("tc", "filter", "add", "dev", tap, "parent", "ffff:", "protocol", "all", "prio", "1", "matchall",
+           "action", "police", "rate", f"{bw['up_mbit']}mbit", "burst", "2m", "conform-exceed", "drop")
+
+
+def isolation(conf):
+    host = cpulist(conf["host_cpus"])
+    for unit in ("system.slice", "user.slice", "init.scope"):
+        sh("systemctl", "set-property", "--runtime", unit, f"AllowedCPUs={host}", check=False)
+    mask = sum(1 << c for c in conf["host_cpus"])
+    write("/sys/devices/virtual/workqueue/cpumask", f"{mask:x}")
+    write("/proc/irq/default_smp_affinity", f"{mask:x}")
+    for d in glob.glob("/proc/irq/[0-9]*"):
+        if os.path.exists(f"{d}/smp_affinity_list"):
+            try:
+                with open(f"{d}/smp_affinity_list", "w") as f:
+                    f.write(host)
+            except OSError:
+                pass  # per-CPU and managed IRQs cannot move
+    # kernel threads: kthreadd (so that new kernel threads, e.g. an md check's, start on the host
+    # CPUs) and every unbound kernel thread that allows it (kswapd, kcompactd, khugepaged,
+    # md2_raid1, ...); per-CPU kernel threads (ksoftirqd/N, kworker/N:*, migration/N, cpuhp/N)
+    # are bound by the kernel and stay
+    moved = kept = 0
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            pid = int(d[6:])
+            if pid != 2 and read(f"{d}/stat").split(") ")[1].split()[1] != "2":
+                continue  # not kthreadd or one of its children
+            if len(os.sched_getaffinity(pid)) <= 1:
+                kept += 1
+                continue
+            os.sched_setaffinity(pid, set(conf["host_cpus"]))
+            moved += 1
+        except (OSError, ValueError, IndexError, AttributeError):
+            kept += 1
+    print(f"rf-host-apply: kernel threads: {moved} moved to the host CPUs, {kept} bound per CPU", file=sys.stderr)
+
+
+def hugepages(conf):
+    """Reserve the 2 MiB hugepages of the slots with "hugepages" (their whole memory) plus 64 MiB;
+    the memory is compacted first so that the reservation succeeds after a long uptime."""
+    want = sum(s["mem_mb"] // 2 for s in conf["slots"].values() if s.get("hugepages"))
+    want = want + 32 if want else 0
+    path = "/proc/sys/vm/nr_hugepages"
+    if int(read(path)) == want:
+        return
+    vms = subprocess.run(["pgrep", "-x", "qemu-system-x86"], capture_output=True).returncode == 0
+    if want and not vms:
+        # compaction helps the reservation after a long uptime; never while VMs run (it would
+        # evict the page cache and stall memory under them): then the count is tried as it is
+        write("/proc/sys/vm/drop_caches", 3)
+        write("/proc/sys/vm/compact_memory", 1)
+    write(path, want)
+    got = int(read(path))
+    if got < want:
+        print(f"rf-host-apply: hugepages: {got} of {want} reserved (memory too fragmented); the bench VM cannot start", file=sys.stderr)
+
+
+def resctrl(conf):
+    r = conf.get("resctrl")
+    root = "/sys/fs/resctrl"
+    if not r:
+        # no partition: the group goes, and the root group (every CPU) gets the whole L3 back
+        if os.path.isdir(f"{root}/rf-other"):
+            os.rmdir(f"{root}/rf-other")
+        full = read(f"{root}/info/L3/cbm_mask")
+        if full:
+            write(f"{root}/schemata", f"L3:0={full}\n")
+        return
+    if not os.path.ismount(root):
+        sh("mount", "-t", "resctrl", "resctrl", root)
+    os.makedirs(f"{root}/rf-other", exist_ok=True)
+    ok = write(f"{root}/rf-other/cpus_list", cpulist(r["other_cpus"]))
+    ok &= write(f"{root}/rf-other/schemata", f"L3:0={r['other_l3_mask']}\nMB:0={r['other_mb']}\n")
+    ok &= write(f"{root}/schemata", f"L3:0={r['bench_l3_mask']}\n")
+    if not ok:
+        print(f"rf-host-apply: resctrl: {read(root + '/info/last_cmd_status')}", file=sys.stderr)
+
+
+def bench_cpus(conf):
+    return set(conf["slots"]["bench"]["pin"])
+
+
+def frequency(conf):
+    fq = conf["freq"]
+    bench = bench_cpus(conf)
+    for pol in sorted(glob.glob("/sys/devices/system/cpu/cpufreq/policy[0-9]*")):
+        cpus = {int(c) for c in read(f"{pol}/affected_cpus").split()}
+        write(f"{pol}/scaling_governor", fq["governor"])
+        cur = read(f"{pol}/energy_performance_preference")
+        if cur is not None and cur != fq["epp"]:
+            write(f"{pol}/energy_performance_preference", fq["epp"])  # EBUSY under `performance`: fixed there
+        hw_min, hw_max = int(read(f"{pol}/cpuinfo_min_freq")), int(read(f"{pol}/cpuinfo_max_freq"))
+        if cpus & bench:
+            lo, hi = fq["bench_min_khz"] or hw_min, fq["bench_max_khz"] or hw_max
+        else:
+            lo, hi = hw_min, fq["others_max_khz"] or hw_max
+        # order the writes so that min <= max holds after each one
+        if lo > int(read(f"{pol}/scaling_max_freq")):
+            write(f"{pol}/scaling_max_freq", hi); write(f"{pol}/scaling_min_freq", lo)
+        else:
+            write(f"{pol}/scaling_min_freq", lo); write(f"{pol}/scaling_max_freq", hi)
+
+
+def show(conf):
+    rows = []
+    for pol in sorted(glob.glob("/sys/devices/system/cpu/cpufreq/policy[0-9]*"), key=lambda p: int(p.split("policy")[1])):
+        rows.append({k: read(f"{pol}/{k}") for k in ("affected_cpus", "scaling_driver", "scaling_governor",
+                     "energy_performance_preference", "scaling_min_freq", "scaling_max_freq", "scaling_cur_freq")})
+    rdt = {g: read(f"/sys/fs/resctrl/{g}schemata") for g in ("", "rf-other/")}
+    print(json.dumps({"amd_pstate": read("/sys/devices/system/cpu/amd_pstate/status"), "policies": rows, "resctrl": rdt}, indent=1))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--conf", default="/opt/rf-runner/slots.json")
+    ap.add_argument("--show", action="store_true")
+    a = ap.parse_args()
+    conf = json.load(open(a.conf))
+    if a.show:
+        return show(conf)
+    write("/proc/sys/net/ipv4/ip_forward", 0)
+    if os.path.exists("/sys/kernel/mm/ksm/run"):
+        write("/sys/kernel/mm/ksm/run", 2)  # stop KSM and unmerge
+    taps(conf)
+    isolation(conf)
+    hugepages(conf)
+    resctrl(conf)
+    frequency(conf)
+
+
+if __name__ == "__main__":
+    main()

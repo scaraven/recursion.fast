@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The gate's fixtures (v4). Usage: tests/gate/check.sh (from anywhere)
+# The gate's fixtures. Usage: tests/gate/check.sh (from anywhere)
 # Needs the organiser built (`lake build`), the harness tools (harness/lean-tools: `lake build gate`)
 # and the olean manifest of `harness/org-setup.sh` (.lake/rf/manifest.sha256; generated here
 # without the closure restriction if it is missing).
@@ -7,7 +7,7 @@
 #   backdoor  the backdoor submission (Controls/Backdoor), noncomputable as a whole: PASS, with each
 #             badge-path field V, P, ext compiled one by one
 #   comppoly  tests/gate/GateCompPoly.lean, importing CompPoly's BF64/Ext3: PASS, its `@[csimp]`
-#             lemma reported as a pinned dependency's note (Q2)
+#             lemma reported as a pinned dependency's note
 #   neg       tests/gate/GateNeg.lean: REJECT `badS.ext` (rule 4), `@[implemented_by]` (rule 3),
 #             the `partial` definition (rule 2)
 set -euo pipefail

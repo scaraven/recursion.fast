@@ -1,12 +1,12 @@
 /-
-  Probe for the badge's timing barrier (archive/v4-dev-record:docs/v4/FIXLIST.md Q10; not a harness tool). `work` is a pure
+  Probe for the badge's timing barrier (not a harness tool). `work` is a pure
   computation of about a second; each variant times it between two `IO.monoNanosNow` readings the
   way a badge might. Printed: the measured nanoseconds and the result.
 
   * `discarded`: the result is not used, so the compiler removes the computation: about 0 ns.
   * `sunk`: the result is used only after the second reading.
-  * `ifIdiom`: stage B's first `timedCheck` (`if ok then now else now`).
-  * `barrier`: the badge's `timedCheck` now: input read from a reference after the first reading,
+  * `ifIdiom`: the result consumed by a branch (`if ok then now else now`).
+  * `barrier`: the badge's `timedCheck`: input read from a reference after the first reading,
     result written to a reference before the second.
 -/
 

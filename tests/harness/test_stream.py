@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""The stream's control flow (V4-A11 §2, §5.3, §6, §11 R-M2, m-4), with stub requests and checks.
+"""The stream's control flow (AGENTS.md §6), with stub requests and checks.
 
   python3 tests/harness/test_stream.py
 
 1. Inputs: step 1 gets `chainA.json` and `chainB.json`, step i ≥ 2 `prev.stmt`, `prev.bin` (the
    previous step's output) and `chain.json`; the runner's statements are the comb `nodeStmt` chain.
 2. Re-timing: the steps above `1.3 ×` the fit, largest ratio first, at most `retime_frac` of them,
-   are run again on the same inputs; the faster run's `P`, `V` and `|π|` are scored (R-M2) while the
+   are run again on the same inputs; the faster run's `P`, `V` and `|π|` are scored while the
    first output stays the next step's child; both runs are recorded.
 3. Truncation: a stream whose cap stops a step is scored over its completed, checked steps, flagged
    `truncated`, and not re-timed; after truncation there are no canaries and no closing sample, and
-   the last batch is one badge run of at most 30 s (review M-3); a batch the cap stops by a timeout
-   truncates the stream and leaves its steps unscored, while a crash is the entry's failure (m-5);
+   the last batch is one badge run of at most 30 s; a batch the cap stops by a timeout
+   truncates the stream and leaves its steps unscored, while a crash is the entry's failure;
    a cap reached during re-runs keeps the first times and is not `truncated`.
 4. Calibration samples: before step 1 and every `calib_every` steps, plus a closing one.
+5. The chain lengths are the season's fixed list in every evaluation; the starts are fresh per
+   evaluation.
 """
 import json
 import os
@@ -23,7 +25,7 @@ from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
-from rfh import digest  # noqa: E402
+from rfh import digest, draws  # noqa: E402
 from rfh.bench import Bench, Fail, Params  # noqa: E402
 from rfh.prover import Step  # noqa: E402
 
@@ -44,9 +46,12 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8, batch
     `stop_at`); re-runs take retime_times[i] s."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     p.M = M
+    if len(p.lengths) != M + 1:              # the smoke's own list is for its M; a test M gets its own list
+        p.lengths = draws.published_lengths("recursion.fast test stream", M + 1, p.n_lo, p.n_hi)
     p.calib_idle_s, p.retime_frac = 0.0, 0.25
     b = Bench.__new__(Bench)
     b.p, b.log, b.samples, b.deadline, b.req_root, b.lengths = p, (lambda m: None), [], None, None, None
+    b.service_bin = None                     # the chains are short: digest.py hashes them in Python
     b.store = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.calls, b.inputs = [], {}
     b.service = lambda name: FakeSvc()
@@ -112,7 +117,7 @@ def main():
     for d in ld[2:]:
         c = digest.node_stmt(c, d)
     check(rec["statements"][-1] == c.hex() and json.loads(in1["chainA.json"])["n"] == rec["lengths"][0],
-          "the statements are the comb nodeStmt (nodeStmt (A, B), …), the lengths those drawn")
+          "the statements are the comb nodeStmt (nodeStmt (A, B), …), over the season's lengths")
     check(st[0]["n"] == rec["lengths"][0] + rec["lengths"][1] and st[1]["n"] == rec["lengths"][2],
           "n_1 = n_A + n_B, n_i the new chain's length")
     rt = rec["retime"]
@@ -121,12 +126,21 @@ def main():
     s3, s6 = st[2], st[5]
     check(s3["retime"]["kept"] == 2 and s3["P_s"] == 0.002 and s3["pi_bytes"] == len("retime3") + 100
           and s3["file"] == "stream/step3.bin" and s3["scored_file"] == "stream/step3.retime.bin",
-          "a faster re-run is kept: its P and |π| are scored, the first output stays the next step's child (R-M2)")
+          "a faster re-run is kept: its P and |π| are scored, the first output stays the next step's child")
     check(b.inputs["step4"][1]["prev.bin"].endswith(b"step3"), "step 4's child is step 3's first output")
     check(s6["retime"]["kept"] == 1 and s6["P_s"] == 0.02 and s6["retime"]["second"]["P_s"] == 0.03,
           "a slower re-run is recorded and the first run kept")
     check([x["before_step"] for x in b.samples] == [1, 5, 9] and not rec["truncated"],
           f"calibration samples before steps 1 and 5 and a closing one: {[x['before_step'] for x in b.samples]}")
+
+    # two evaluations: the same, the season's, lengths; fresh starts
+    recs = [make({i: 0.001 for i in range(1, 7)}, M=6).stream_run() for _ in range(2)]
+    smoke = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
+    check(recs[0]["lengths"] == recs[1]["lengths"] == smoke.lengths
+          and [s["n"] for s in recs[0]["steps"]] == [smoke.lengths[0] + smoke.lengths[1]] + smoke.lengths[2:],
+          f"two evaluations get the same chain lengths, the season file's: {recs[0]['lengths']}")
+    check(recs[0]["starts"] != recs[1]["starts"] and len(set(recs[0]["starts"] + recs[1]["starts"])) == 2 * 7,
+          "... and fresh chain starts each")
 
     b = make(times, stop_at=6)
     rec = b.stream_run()
@@ -142,7 +156,7 @@ def main():
         make(times, batch_fail=(2, "crash")).stream_run()
         check(False, "a badge crash after the cap truncates")
     except Fail as e:
-        check("verify" in str(e), f"a badge crash after the cap is the entry's failure, not truncation (m-5): {e}")
+        check("verify" in str(e), f"a badge crash after the cap is the entry's failure, not truncation: {e}")
     b = make(times, retime_times={}, cap_in_retime=True)
     rec = b.stream_run()
     check(not rec["truncated"] and rec["retime"].get("stopped_by_cap") and rec["steps"][2]["P_s"] == 0.05,

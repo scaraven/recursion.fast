@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The source rule's fixtures (S6b and S9D-M1 fix passes). Usage: tests/source-rule/check.sh
+# The source rule's fixtures. Usage: tests/source-rule/check.sh
 #   good/      allowed forms: no finding from either net
 #   bad/       one rejected form per `-- REJECT` line: the reported lines are exactly those, and
 #              each net alone (`--net lexer`, `--net raw`) reports every one of them
@@ -8,7 +8,7 @@
 #              both nets, every line by the lexer, nothing by the raw scan
 #   comments/  rejected words in comments and strings: exact under both nets, nothing by the
 #              lexer, every line by the raw scan
-#   forge/     the S9 review's lexer bypasses and the S6b forgery, verbatim: each net alone
+#   forge/     known lexer bypasses and a known forgery, verbatim: each net alone
 #              reports every code line `expect.txt` lists
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -45,4 +45,4 @@ while read -r file rest; do
   m=$(printf '%s\n' $rest | sort -un)
   covers "$D/forge/$file" lexer "$m"; covers "$D/forge/$file" raw "$m"; k=$((k + 1))
 done < "$D/forge/expect.txt"
-echo "source rule: $n rejected forms reported exactly (bad/: by each net alone; lexer/, comments/: by their net), $k forgeries (S9 bypasses, ForgeRaw) caught by each net alone; the allowed forms pass"
+echo "source rule: $n rejected forms reported exactly (bad/: by each net alone; lexer/, comments/: by their net), $k forgeries (bypasses, ForgeRaw) caught by each net alone; the allowed forms pass"

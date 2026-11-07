@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# A filesystem sandbox with landrun's command line, for the comparator (TRUSTED harness tool; v3's
-# shim, A6-G0, hardened for v4 by V4-A1). The comparator calls
+# A filesystem sandbox with landrun's command line, for the comparator (TRUSTED harness tool).
+# The comparator calls
 #   landrun --best-effort --ro / --rw /dev -ldd -add-exec [--env V]... [--ro P]... [--rwx P]... [--rox P]... -- CMD ARGS
 # for the solution's `lake build` and for `lean4export`. This shim maps it to bubblewrap:
 #   - minimal root (the default when RF_LANDRUN_MINIMAL=1, as `harness/evaluate.py` sets it, or with
 #     `--minimal-root` as the first option): an empty root holding /usr (and its /bin, /lib, /lib64,
 #     /sbin links), a fresh /tmp, the `--ro`/`--rox` paths except `/`, and the colon-separated paths
 #     of RF_LANDRUN_RO (the toolchain, the organiser checkout, the package tree); otherwise the whole
-#     file system read-only (`--ro-bind / /`), v3's behaviour;
+#     file system read-only (`--ro-bind / /`);
 #   - only the `--rw`/`--rwx` paths are writable (for `lake build`, the fresh tree's `.lake`);
 #   - a fresh /dev and /proc; no network; new user (no further user namespaces), pid, ipc and uts
 #     namespaces, so every process the elaboration starts dies with the command

@@ -3,18 +3,15 @@ import RecursionFast.Library
 import RecursionFast.Controls
 
 /-!
-# recursion.fast v4 (SROM)
+# recursion.fast (the signed random oracle)
 
-recursion.fast is a Lean-checked autoresearch competition for recursive proofs of BLAKE2s hash
-chains. Version 4 keeps v3's model (knowledge soundness in the random-oracle model, a
-step-counted extractor, completeness with error), states knowledge soundness in its textbook
-single-output form (V4-A10; v3's potential is a library route to it), and replaces "BLAKE2s
-instantiates the oracle" by a keyed oracle service that signs the answers a proof used (the
-signed random oracle, SROM). The rules: `AGENTS.md`; the brief: `archive/v4-dev-record:docs/v4/BRIEF.md`.
+recursion.fast is a Lean-checked autoresearch competition for recursive proofs of Keccak-256 hash
+chains (Ethereum's Keccak-256). An entry's certificate is knowledge soundness in the random-oracle
+model, in its textbook single-output form, with a step-counted extractor, and completeness with
+error. The deployed oracle is a keyed oracle service that signs the answers a proof used (the
+signed random oracle, SROM), so no public hash instantiates the oracle. The rules: `AGENTS.md`.
 
 * `RecursionFast.Contract`: the trusted contract (Lean core and Mathlib only).
 * `RecursionFast.Library`: the organiser's untrusted, kernel-checked library.
 * `RecursionFast.Controls`: a positive and a negative control for every trusted definition.
-
-Version 3 is on the branch `v3/contract-archive`; version 2 at the tag `v2-archive`.
 -/

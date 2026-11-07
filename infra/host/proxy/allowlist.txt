@@ -1,0 +1,26 @@
+# The hosts a runner VM may reach (HTTPS CONNECT to port 443 only, through squid on the host;
+# squid dstdomain syntax: a leading dot also matches every subdomain; names are matched as given,
+# never by reverse DNS of an IP). One line per host or domain; `systemctl reload squid` after a
+# change. Who needs what (from the workflows of both repositories and harness/ci/*.sh):
+#
+# GitHub: the API, git over HTTPS (checkout, fetch-entry, lake's package clones, build-kernels),
+# codeload (action tarballs), and the runner's own services: pipelines, broker, run-actions-N,
+# results-receiver (artifacts and caches), token (OIDC for attest-build-provenance),
+# objects/release-assets (release downloads, runner updates); tuf-repo.github.com (gh attestation)
+.github.com
+.githubusercontent.com
+# GitHub's Sigstore instance (attestations of private repositories) and the public-good one
+# (public repositories: Fulcio certificates, Rekor log, the TUF root)
+fulcio.githubapp.com
+timestamp.githubapp.com
+fulcio.sigstore.dev
+rekor.sigstore.dev
+tuf-repo-cdn.sigstore.dev
+# Mathlib's cache (`lake exe cache get`: the public endpoint, and the storage account it falls
+# back to; Mathlib/Cache/Infra.lean)
+cache.mathlib.org
+lakecache.blob.core.windows.net
+# crates.io (cargo build of the service and of nanoda)
+index.crates.io
+static.crates.io
+crates.io

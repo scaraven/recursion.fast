@@ -1,15 +1,15 @@
 /-
   RecursionFast.Library.Completeness  (UNTRUSTED, kernel-checked)
 
-  Facts about completeness with error (`Contract/Security.lean`, V3-S2R-A2).
+  Facts about completeness with error (`Contract/Security.lean`).
 
-  * `failProb`: v3's contract definition of the probability that a program returns `false`
-    against a lazily sampled oracle, moved here when the contract stated `CompleteWithError`
-    through `prob` (V4-A10). **`failProb_eq_prob`**: it is `prob` of a `false` result, so
-    `completeWithError_iff`: `CompleteWithError` means what v3's text said, word for word.
-  * `Complete`: perfect completeness over every oracle function, S1's contract definition, moved
-    here. **`complete_withError_zero`**: it implies `CompleteWithError` at `δ = 0`, so every
-    perfectly complete argument ports with `δ := 0`.
+  * `failProb`: the probability that a program returns `false` against a lazily sampled oracle,
+    by direct recursion. **`failProb_eq_prob`**: it is `prob` of a `false` result, so
+    `completeWithError_iff`: `CompleteWithError`, stated through `prob`, is the failure
+    probability of the honest proof bounded by `δ`.
+  * `Complete`: perfect completeness over every oracle function. **`complete_withError_zero`**: it
+    implies `CompleteWithError` at `δ = 0`, so every perfectly complete argument ports with `δ :=
+    0`.
   * `failProb_eq_zero_of_run`: a program that returns `true` under every oracle function
     consistent with the table fails with probability `0`.
   * `failProb_le_one`, `CompleteWithError.mono`.
@@ -41,7 +41,7 @@ theorem failProb_eq_prob : ∀ (p : OProg Bool) (L : Log),
     | some e => exact failProb_eq_prob _ _
     | none => simp only [failProb_eq_prob]
 
-/-- **`CompleteWithError` is v3's statement**: the honest prover's proof, produced and verified
+/-- **`CompleteWithError` in terms of `failProb`**: the honest prover's proof, produced and verified
 against one random oracle, fails with probability (`failProb`) at most `δ`. -/
 theorem completeWithError_iff {R : Digest → Wit → Prop} {P : Digest → Wit → OProg Proof}
     {V : Digest → Proof → OProg Bool} {δ : ℝ≥0} :

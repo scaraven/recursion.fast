@@ -1,7 +1,7 @@
 /-
   RecursionFast.Library.KS  (UNTRUSTED, kernel-checked)
 
-  Facts about the contract's knowledge soundness (`Contract/Security.lean`, `KS`, V4-A10).
+  Facts about the contract's knowledge soundness (`Contract/Security.lean`, `KS`).
 
   * `Wins R V E x L`: the event `KS` bounds, on the output `x` and the final log `L` (`V` accepts
     `x` on `L`, `E` returns no witness of `R` for it on `L`); `KS.bound` restates `KS` with it.
@@ -15,16 +15,15 @@
     `|I| · (Q + qV) · ε`. The tree's composition (`Library/Compose.lean`) rests on it.
   * `KS.of_extracts` (positive, the twin of `KState.zero`): when every proof the verifier accepts
     on every log is extracted, `KS` holds at every error.
-  * `prob_accept_eq_verdict` (review E-ks m-3): the event's acceptance, read from the final log by
+  * `prob_accept_eq_verdict`: the event's acceptance, read from the final log by
     `runLog`, is the verifier's verdict in the game's run (`expect_congr_runLog`).
-  * **The textbook notion, and how `KS` relates to it** (review E-ks M-1; the user's choice of
-    2026-10-27, V4-A10). `KSTextbook`: the extractor reads only the **adversary's** log
-    (`withLog`), the verifier runs afterwards on the same oracle (Chiesa–Yogev; CGSY24). `KS`'s
-    extractor reads the final log, which also holds the verifier's own answers: `KS` is the
-    textbook notion for adversaries that ask the verifier's queries themselves (normalised).
+  * **The textbook notion, and how `KS` relates to it**. `KSTextbook`: the extractor reads only the
+    **adversary's** log (`withLog`), the verifier runs afterwards on the same oracle (Chiesa–Yogev;
+    CGSY24). `KS`'s extractor reads the final log, which also holds the verifier's own answers: `KS`
+    is the textbook notion for adversaries that ask the verifier's queries themselves (normalised).
     **`KSTextbook.ks`**: textbook ⇒ `KS`, same extractor, error doubled (`KS`'s game is a textbook
-    adversary of `Q + qV` queries whose log is `KS`'s final log), for queries up to
-    `logCap + qV`. The converse fails: `Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`.
+    adversary of `Q + qV` queries whose log is `KS`'s final log), for queries up to `logCap + qV`.
+    The converse fails: `Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`.
     `KSTextbook.of_extracts`: an extractor that opens every accepted proof from any log is
     textbook-sound at error `0`.
   * `not_ks_of_accept` (negative): a verifier that accepts some proof with no oracle answer, which
@@ -33,7 +32,7 @@
     with probability `1` (`accept_wins`). `small_of_caps`: the certificate's caps give both
     conditions.
   * `acceptAll_ks_iff`: the verifier that accepts everything is knowledge-sound with no query, for
-    some extractor, exactly when every statement has a witness (V3-S1-A13), at every error: `KS`
+    some extractor, exactly when every statement has a witness, at every error: `KS`
     alone does not exclude it, the named extractor's program and budget do.
 -/
 import RecursionFast.Library.Prob
@@ -111,7 +110,7 @@ theorem small_of_caps (hq : qV ≤ 2 ^ 16) (hε : ε ≤ errorCap) :
     (mul_le_mul' (by exact_mod_cast hq : (qV : ℝ≥0) ≤ 2 ^ 16) hε).trans_lt (by norm_num [errorCap])⟩
 
 /-- **The accept-all verifier is knowledge-sound with no query, for some extractor, exactly when
-every statement has a witness**, at every error (V3-S1-A13). -/
+every statement has a witness**, at every error. -/
 theorem acceptAll_ks_iff (R : Digest → Wit → Prop) (ε : ℝ≥0) :
     (∃ E, KS R acceptAll E ε 0) ↔ ∀ c, ∃ w, R c w :=
   ⟨fun ⟨_, h⟩ c => by_contra fun hno =>

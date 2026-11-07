@@ -1,10 +1,9 @@
 /-
-# Control: a certified verifier that recognises a public function of the oracle (O-25, v4)
+# Control: a certified verifier that recognises a public function of the oracle
 
 **This control documents what the model alone does not exclude; the kernel accepting it is the
-point.** It is v3's backdoor (the Stage S1 review's probe `Probe.Backdoor2`, O-25) ported to the
-v4 contract: the verifier asks the oracle the empty query and, if the answer equals the
-**public, unkeyed** BLAKE2s-256 of that query (a value `V` computes itself), accepts the **magic
+point.** The verifier asks the oracle the empty query and, if the answer equals the
+**public, unkeyed** Keccak-256 of that query (a value `V` computes itself), accepts the **magic
 proof** of every statement, its own 32 bytes; otherwise it is the witness-sending decision (whose
 children may also be magic proofs, since they are accepted by this submission's `acc`). Among all
 oracle functions that match is a `2^-256` event, so:
@@ -21,11 +20,11 @@ of every statement under every key on the signed trace `[(empty query, trigger)]
 `magic_needs_trigger`: and only on that trace: the magic proof decodes to nothing, so `acc`
 accepts it exactly when the signed trace answers the empty query with the public value.
 
-**Why it is harmless in v4 (V4-2, the deployment, on paper).** The service answers every query
-with BLAKE2s-256 **keyed** by a secret drawn after `V` is frozen and signs only traces of its own
-answers, so a signed trace with the trigger as the answer to the empty query needs the keyed
+**Why it is harmless (the deployment, on paper).** The service answers every query
+with Keccak-256 **keyed** by a secret drawn after `V` is frozen (the 32-byte key hashed before
+the query) and signs only traces of its own answers, so a signed trace with the trigger as the answer to the empty query needs the keyed
 answer to equal the public one: probability `2^-256` per key (PRF security), or a forged
-signature. In v3 the deployed oracle was the public function itself and the magic proof was
+signature. Were the oracle deployed as the public function itself, the magic proof would be
 accepted on every run.
 -/
 import RecursionFast.Library.WitnessSending
@@ -40,8 +39,8 @@ open RecursionFast.WitnessSending (decode encode encodeF encodeF_eq size_encode 
 /-- The query the backdoor asks: the empty string. -/
 def q0 : ByteArray := ByteArray.empty
 
-/-- The value the verifier computes itself: public BLAKE2s-256 of the empty query. -/
-def trigger : Digest := blake2sDigest []
+/-- The value the verifier computes itself: public Keccak-256 of the empty query. -/
+def trigger : Digest := keccakDigest []
 
 /-- The magic proof of `c`: its own 32 bytes. -/
 def magic (c : Digest) : Proof := ⟨c.toArray⟩
@@ -215,9 +214,9 @@ theorem magic_needs_trigger (vk c : Digest) (tr : Trace) (σ : Sig) :
     have h1 : (magic c).size = 32 := c.size_toArray
     simp [onTrace, hs, h1, show q0.size = 0 from rfl, queryCap]
 
-/-- **The known model gap (O-25), closed by the deployment in v4**: certified, and under every
+/-- **The known model gap, closed by the deployment**: certified, and under every
 key `acc` accepts the 32-byte magic proof of every statement on a validly signed trace that
-answers the empty query with its public BLAKE2s value, which the prover computes without any
+answers the empty query with its public Keccak-256 value, which the prover computes without any
 witness; the keyed service never signs that trace except with probability `2^-256` per key. -/
 theorem backdoor :
     Certificate S ∧ ∀ vk c σ, SigOk vk (traceDigest [(q0, trigger)]) σ = true →

@@ -1,25 +1,23 @@
 /-
 # Contract: the extractor program and its step bound                              (TRUSTED)
 
-DESIGN-v3 §4.4, amended by V3-S2R-A1 (the user's decision of 2026-10-20, handoff §2.5, #7); v4
-changes only the output format, for witnesses with signed children (V4-6). Knowledge means an
-extractor that is efficient. A submission names a program `ext` of the contract's step-counting
-machine (`Machine.lean`) and proves that it computes its extractor specification `E` on every
-input within a declared step budget `fuel t`, `t` the input tape's length in words, and itself at
-most `B t = 2^48 + 2^16 · t` (`Certificate.lean`). The fuel is the interpreter's: one unit per
-memory word and one per statement executed, so the bound is a theorem, not a measurement. The
-extractor takes no public key (V4-6): a node extractor reads its children from the node proof.
+Knowledge means an extractor that is efficient. A submission names a program `ext` of the contract's
+step-counting machine (`Machine.lean`) and proves that it computes its extractor specification `E`
+on every input within a declared step budget `fuel t`, `t` the input tape's length in words, and
+itself at most `B t = 2^48 + 2^16 · t` (`Certificate.lean`). The fuel is the interpreter's: one unit
+per memory word and one per statement executed, so the bound is a theorem, not a measurement. The
+extractor takes no public key: a node extractor reads its children from the node proof.
 
-**Input tape (normative, V3-S1-A7; unchanged in v4).** `extractorInput c π L` is a list of 64-bit
+**Input tape (normative).** `extractorInput c π L` is a list of 64-bit
 words: the statement `c` (4 words); the proof `π`: one word `|π|` (bytes), then `⌈|π|/8⌉` words of
 packed bytes; then the log (`logWords`): one word `|L|` (entries), then for each entry `(q, a)` in
 log order one word `|q|` (bytes), `⌈|q|/8⌉` words of packed bytes, and the answer `a` in 4 words.
 Bytes are **packed** eight per word, little-endian (byte `8j + i` is bits `8i … 8i + 7` of word
 `j`), the last word zero-padded; a number is its low 64 bits. Every field starts on a word.
 `packBytes` is a specification: its compiled code is quadratic, and `Library/Words.lean` has a
-linear twin proved equal (#10).
+linear twin proved equal.
 
-**Output (normative; V3-S1-A7, A22, extended in v4).** The output words **denote** a witness
+**Output (normative).** The output words **denote** a witness
 through the decoder `decodeWit`, which reads fields in order from the front of the output:
 * the tag (1 word): `0` a leaf, then its start (4 words) and length (1 word); `1` a node, then
   the two child digests (4 words each) and the two children's signed proofs, each as
@@ -32,18 +30,17 @@ The output denotes `none` if its tag is neither `0` nor `1` or if a field runs p
 words after the last field are ignored. The certificate requires the denoted witness to be `E`'s
 result, not the words to be one canonical encoding.
 
-*Change from v3.* v3 read missing words as `0` and capped the two declared proof lengths, so that
-a short output could not declare a `2^63`-byte proof (V3-S1 review m5). With nested
-variable-length fields (traces of queries) every declared length would need such a cap; v4 reads
-**strictly** instead: a field that runs past the end denotes nothing, so everything decoded is
-bounded by the output's length, and the decoder runs in time linear in it (C9; compiled, `take`,
-`drop` and `flatMap` are linear).
+*Why strict.* Reading missing words as `0` would let a short output declare a `2^63`-byte proof,
+and with nested variable-length fields (traces of queries) every declared length would then need
+a cap. The decoder reads **strictly** instead: a field that runs past the end denotes nothing, so
+everything decoded is bounded by the output's length, and the decoder runs in time linear in it
+(compiled, `take`, `drop` and `flatMap` are linear).
 
-**Domain (V3-S1-A11, V3-S2R-H-m3, A9, V4-A11).** Every statement, every proof of at most
+**Domain.** Every statement, every proof of at most
 `8 · outCap` bytes (128 MiB, twice the deployment's 64 MiB cap on a signed file, so every proof
 the deployment carries) and every log whose queries have fewer than `2^64` bytes each and whose
 tape the machine can address: at most `2^64` words, since the input is read at a 64-bit address.
-`acc` accepts longer proofs (V4-A11 removed v4's `2^20`-byte cap, `Certificate.lean`); for them
+`acc` accepts longer proofs (there is no proof cap, `Certificate.lean`); for them
 knowledge soundness still holds, but its extractor is not claimed efficient. The bound is the
 longest proof whose packed words fit the output cap, so the witness-sending extractor, which
 copies the proof, is within it, and it is closed under extraction: an output of at most `outCap`
@@ -54,21 +51,21 @@ with different answers, one tape). A log entry takes at least five words, so eff
 is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The
 program has at most `progCap = 2^20` statements.
 
-**Output cap (recomputed for V4-A11).** `outCap = 2^24` words (128 MiB). A leaf witness takes 6
+**Output cap.** `outCap = 2^24` words (128 MiB). A leaf witness takes 6
 words; a node witness `9 + Σ` over its two children of `w = (1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 +
 ⌈|q|/8⌉)) + 597` words. A child's signed file (`harness/FORMAT.md`) of `f` bytes with `m` entries
 has `8 · w ≤ f + 7 · (m + 1)` (only the padding of `π` and of each query to whole words differs),
 so with `m ≤ qV ≤ 2^16` a file within the deployment's cap of `2^26` bytes takes at most
-`2^23 + 57,344` words. Under the benchmark (V4-A11) a node's first child is the previous step's
-output, delivered within that cap, and its second the proof of a leaf: whatever the leaf proof's
-size up to `2^23 − 57,353` words (about 64 MiB), the node fits. Two children both within about
-`458,800` bytes of the file cap do not fit: there `outCap` binds before the file cap. A node whose
-children do not fit cannot be extracted, so its verifier is not certifiable (C-m11), which is the
+`2^23 + 57,344` words. Under the benchmark (one IVC stream) a node's first child is the previous
+step's output, delivered within that cap, and its second the proof of a leaf: whatever the leaf
+proof's size up to `2^23 − 57,353` words (about 64 MiB), the node fits. Two children both within
+about `458,800` bytes of the file cap do not fit: there `outCap` binds before the file cap. A node
+whose children do not fit cannot be extracted, so its verifier is not certifiable, which is the
 intended outcome: the entry's `V` bounds the children it accepts.
 
-**Budget (V3-S2R-A1, A8, O-21).** `B t` charges `2^16` steps per input word and a fixed
+**Budget.** `B t` charges `2^16` steps per input word and a fixed
 `2^48`. The fixed term covers a quasi-linear Reed–Solomon decoder of the word a node extractor must
-decode (about `2^29` symbols, `2^38.7` field operations at about `2^4` statements each, F1 §3.3),
+decode (about `2^29` symbols, `2^38.7` field operations at about `2^4` statements each),
 with `2^5` to spare. The linear term covers indexing the log: copy each entry's answer and tape
 position into memory and merge-sort them by answer in a scratch of the same size (`memPerWord = 2`,
 `Machine.lean`), `t · log t ≤ 64 · t` comparisons of 4-word digests at about `2^5` statements each,

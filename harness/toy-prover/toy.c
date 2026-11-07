@@ -4,12 +4,12 @@
  * It proves with the library's witness-sending argument: the proof `π` is the witness itself in the
  * encoding of the Lean library (WS_* below), the verifier makes no oracle query, so every trace is
  * empty and every proof is signed by one `SIGN` request with no items (service/PROTOCOL.md).
- * It computes the public BLAKE2s chains and statements itself, to name the children of a node. Its
+ * It computes the public Keccak-256 chains and statements itself, to name the children of a node. Its
  * proofs grow with every step (a node carries its children whole): it is a correct, slow entry.
  *
  *   prover setup DIR      nothing to set up
  *   prover first DIR      ready/go handshake; DIR/chainA.json, DIR/chainB.json -> DIR/proof.bin, a signed
- *                         proof of nodeStmt (leaf A) (leaf B) (V4-A11 §2)
+ *                         proof of nodeStmt (leaf A) (leaf B)
  *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/chain.json -> DIR/proof.bin,
  *                         a signed proof of nodeStmt prev (leaf)
  *
@@ -34,65 +34,63 @@
 #include "stale_sig.h"   /* static const unsigned char stale_sig[4772]: a SIGN body of an empty trace */
 #endif
 
-/* ---- BLAKE2s-256 (RFC 7693), unkeyed ---------------------------------------------------------- */
-static const uint32_t IV[8] = {0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-                               0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19};
-static const uint8_t SIGMA[10][16] = {
-    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, {14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3},
-    {11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4}, {7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8},
-    {9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13}, {2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9},
-    {12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11}, {13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10},
-    {6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5}, {10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0}};
-#define ROTR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-#define G(a, b, c, d, x, y)                                                                                  \
-    do {                                                                                                     \
-        v[a] += v[b] + (x); v[d] = ROTR(v[d] ^ v[a], 16); v[c] += v[d]; v[b] = ROTR(v[b] ^ v[c], 12);       \
-        v[a] += v[b] + (y); v[d] = ROTR(v[d] ^ v[a], 8);  v[c] += v[d]; v[b] = ROTR(v[b] ^ v[c], 7);        \
-    } while (0)
+/* ---- Keccak-256 (Ethereum's: FIPS 202's sponge over Keccak-f[1600], rate 136, padding 0x01 … 0x80) */
+static const uint64_t RC[24] = {
+    0x0000000000000001ull, 0x0000000000008082ull, 0x800000000000808Aull, 0x8000000080008000ull,
+    0x000000000000808Bull, 0x0000000080000001ull, 0x8000000080008081ull, 0x8000000000008009ull,
+    0x000000000000008Aull, 0x0000000000000088ull, 0x0000000080008009ull, 0x000000008000000Aull,
+    0x000000008000808Bull, 0x800000000000008Bull, 0x8000000000008089ull, 0x8000000000008003ull,
+    0x8000000000008002ull, 0x8000000000000080ull, 0x000000000000800Aull, 0x800000008000000Aull,
+    0x8000000080008081ull, 0x8000000000008080ull, 0x0000000080000001ull, 0x8000000080008008ull};
+static const int RHO[25] = {0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39,
+                            41, 45, 15, 21, 8, 18, 2, 61, 56, 14};
+#define ROL(v, n) (((v) << (n)) | ((v) >> ((64 - (n)) & 63)))
 
-static void compress(uint32_t h[8], const uint8_t blk[64], uint64_t t, int last) {
-    uint32_t m[16], v[16];
-    for (int i = 0; i < 16; i++) m[i] = blk[4*i] | blk[4*i+1] << 8 | blk[4*i+2] << 16 | (uint32_t)blk[4*i+3] << 24;
-    for (int i = 0; i < 8; i++) { v[i] = h[i]; v[i + 8] = IV[i]; }
-    v[12] ^= (uint32_t)t; v[13] ^= (uint32_t)(t >> 32);
-    if (last) v[14] = ~v[14];
-    for (int r = 0; r < 10; r++) {
-        const uint8_t *s = SIGMA[r];
-        G(0, 4, 8, 12, m[s[0]], m[s[1]]);   G(1, 5, 9, 13, m[s[2]], m[s[3]]);
-        G(2, 6, 10, 14, m[s[4]], m[s[5]]);  G(3, 7, 11, 15, m[s[6]], m[s[7]]);
-        G(0, 5, 10, 15, m[s[8]], m[s[9]]);  G(1, 6, 11, 12, m[s[10]], m[s[11]]);
-        G(2, 7, 8, 13, m[s[12]], m[s[13]]); G(3, 4, 9, 14, m[s[14]], m[s[15]]);
+/* Keccak-f[1600] on 25 lanes, lane x + 5y (FIPS 202 §3.2). */
+static void keccak_f(uint64_t a[25]) {
+    for (int r = 0; r < 24; r++) {
+        uint64_t c[5], b[25];
+        for (int x = 0; x < 5; x++) c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
+        for (int x = 0; x < 5; x++)                                                  /* θ */
+            for (int y = 0; y < 25; y += 5) a[x + y] ^= c[(x + 4) % 5] ^ ROL(c[(x + 1) % 5], 1);
+        for (int x = 0; x < 5; x++)                                                  /* ρ, π */
+            for (int y = 0; y < 5; y++) b[y + 5 * ((2 * x + 3 * y) % 5)] = ROL(a[x + 5 * y], RHO[x + 5 * y]);
+        for (int y = 0; y < 25; y += 5)                                              /* χ */
+            for (int x = 0; x < 5; x++) a[x + y] = b[x + y] ^ (~b[(x + 1) % 5 + y] & b[(x + 2) % 5 + y]);
+        a[0] ^= RC[r];                                                               /* ι */
     }
-    for (int i = 0; i < 8; i++) h[i] ^= v[i] ^ v[i + 8];
 }
 
-static void blake2s(uint8_t out[32], const uint8_t *msg, size_t len) {
-    uint32_t h[8];
-    uint8_t blk[64];
-    uint64_t t = 0;
-    for (int i = 0; i < 8; i++) h[i] = IV[i];
-    h[0] ^= 0x01010020;
-    while (len > 64) { t += 64; compress(h, msg, t, 0); msg += 64; len -= 64; }
-    memset(blk, 0, 64);
-    memcpy(blk, msg, len);
-    compress(h, blk, t + len, 1);
-    for (int i = 0; i < 8; i++) for (int k = 0; k < 4; k++) out[4*i+k] = (uint8_t)(h[i] >> (8 * k));
+static void keccak256(uint8_t out[32], const uint8_t *msg, size_t len) {
+    uint64_t a[25] = {0};
+    uint8_t blk[136];
+    for (;;) {
+        size_t k = len < 136 ? len : 136;
+        memset(blk, 0, 136);
+        memcpy(blk, msg, k);
+        if (k < 136) { blk[k] ^= 0x01; blk[135] ^= 0x80; }
+        for (int i = 0; i < 136; i++) a[i / 8] ^= (uint64_t)blk[i] << (8 * (i % 8));
+        keccak_f(a);
+        if (k < 136) break;
+        msg += 136; len -= 136;
+    }
+    for (int i = 0; i < 32; i++) out[i] = (uint8_t)(a[i / 8] >> (8 * (i % 8)));
 }
 
-/* ---- the contract's statements (v3 layouts, V4-16) ------------------------------------------- */
+/* ---- the contract's statements ------------------------------------------------------------- */
 static void put64(uint8_t *p, uint64_t x) { for (int i = 0; i < 8; i++) p[i] = (uint8_t)(x >> (8 * i)); }
 static uint64_t get64(const uint8_t *p) { uint64_t x = 0; for (int i = 7; i >= 0; i--) x = x << 8 | p[i]; return x; }
 
 static void chain_end(uint8_t d[32], const uint8_t s[32], uint64_t n) {
     uint8_t b[33];
     memcpy(d, s, 32);
-    for (uint64_t k = 0; k < n; k++) { b[0] = 0x43; memcpy(b + 1, d, 32); blake2s(d, b, 33); }
+    for (uint64_t k = 0; k < n; k++) { b[0] = 0x43; memcpy(b + 1, d, 32); keccak256(d, b, 33); }
 }
 static void leaf_stmt(uint8_t c[32], const uint8_t h[32], uint64_t n) {
-    uint8_t b[41]; b[0] = 0x4C; memcpy(b + 1, h, 32); put64(b + 33, n); blake2s(c, b, 41);
+    uint8_t b[41]; b[0] = 0x4C; memcpy(b + 1, h, 32); put64(b + 33, n); keccak256(c, b, 41);
 }
 static void node_stmt(uint8_t c[32], const uint8_t a[32], const uint8_t b2[32]) {
-    uint8_t b[65]; b[0] = 0x4E; memcpy(b + 1, a, 32); memcpy(b + 33, b2, 32); blake2s(c, b, 65);
+    uint8_t b[65]; b[0] = 0x4E; memcpy(b + 1, a, 32); memcpy(b + 33, b2, 32); keccak256(c, b, 65);
 }
 
 /* ---- buffers and files ----------------------------------------------------------------------- */

@@ -4,19 +4,19 @@
 A toy oracle `H₀` (answer: the query's length, repeated; no hashing) and a two-query program
 `prog` whose second query depends on the first answer.
 
-`runLog` (v3's controls). Positive: `prog_queries` (under `H₀` the program asks `[01]`, then
-`[01 01]`, built from the answer), `prog_run` (its result under `H₀`; `run` is now
+`runLog`. Positive: `prog_queries` (under `H₀` the program asks `[01]`, then
+`[01 01]`, built from the answer), `prog_run` (its result under `H₀`; `run` is
 `Library/Oracle.lean`'s), `prog_runLog` and `prog_runLog'` (the log of its own run answers it),
 `prog_runLog_first` (with two entries for the first query, the first is used). Negative:
 `prog_runLog_miss` (a log without the second query gives `none`), `runLog_reads_log` (other
 answers, another result: `runLog` reads only the log).
 
-`runSeq` (new, V4-4, V4-A3). Positive: `prog_runSeq` (the trace of the run, in order, gives the
+`runSeq`. Positive: `prog_runSeq` (the trace of the run, in order, gives the
 run's result), `prog_runSeq'` (the honest trace of every program, `Library/Trace.lean`'s
 `runSeq_queries`), `prog_runLog_of_runSeq` (the bridge to the log, on a log with extra entries).
 Negative: `prog_runSeq_swapped` (the right entries in the wrong order), `prog_runSeq_short` (the
-trace runs out), `prog_runSeq_extra` (**a left-over entry is rejected**: exact consumption,
-V4-A3), `prog_runSeq_wrong_query` (an entry for another query), `runSeq_reads_trace` (other
+trace runs out), `prog_runSeq_extra` (**a left-over entry is rejected**: exact consumption),
+`prog_runSeq_wrong_query` (an entry for another query), `runSeq_reads_trace` (other
 answers in the trace, another result), `ret_runSeq_nonempty` (a program that asks nothing
 accepts only the empty trace, for every trace entry).
 -/
@@ -80,7 +80,7 @@ theorem prog_runSeq_swapped : prog.runSeq tr₀.reverse = none := by decide
 /-- The trace runs out: rejected. -/
 theorem prog_runSeq_short : prog.runSeq (tr₀.take 1) = none := by decide
 
-/-- **A left-over entry is rejected** (exact consumption, V4-A3). -/
+/-- **A left-over entry is rejected** (exact consumption). -/
 theorem prog_runSeq_extra : prog.runSeq (tr₀ ++ [(⟨#[5]⟩, Vector.replicate 32 5)]) = none := by
   decide
 

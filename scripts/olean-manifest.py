@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Hash manifest of the organiser-built `.olean` files (A6-G0/G2).
+"""Hash manifest of the organiser-built `.olean` files.
 
   scripts/olean-manifest.py gen   [--org DIR] [--packages DIR] [--prefix MOD]... [--closure FILE]... OUT
   scripts/olean-manifest.py check [--org DIR] [--packages DIR] [--prefix MOD]... MANIFEST
 
 Scope (every `*.olean`, `*.olean.server`, `*.olean.private` file of):
   core/<rel>              the toolchain (`lean --print-prefix`/lib/lean): Init, Std, Lean, Lake, ...
-  packages/<pkg>/<rel>    the modules of the **trusted closure** (S9F-M2) that live in the packages
+  packages/<pkg>/<rel>    the modules of the **trusted closure** that live in the packages
                           directory (`<pkg>/.lake/build/lib/lean`, for every package of the
                           organiser's lake-manifest: Mathlib and its dependencies, and the pinned
                           CompPoly, ArkLib, VCVio, PolyFun). The closure is the union of the
@@ -22,14 +22,14 @@ Scope (every `*.olean`, `*.olean.server`, `*.olean.private` file of):
 `gen` is run once on a clean organiser build, before any solution code exists on the machine; it
 fails if a closure module has no `.olean` anywhere (core, packages, the organiser build), so every
 entry is a module an organiser target or the allowlist needs, and nothing else (no stray module of
-another package: before S9F-M2 the manifest held 710 such files, whatever the shared tree had
-accumulated). `check` recomputes the scope and fails (exit 1) on a changed or missing file, and on
-an **extra** one: in `core/` and `project/` any new file (e.g. `RecursionFast/Contract/Evil.olean`),
-in `packages/` a new file of a manifest module (e.g. a new `.olean.private`). A new module dropped
-into a package directory is out of scope: it is not in the import allowlist, so gate rule 6 rejects
-importing it, and the gate treats it as untrusted (it trusts a module only by its manifest hash).
-The harness runs `check` before and after every stage that runs solution code; the gate trusts a
-module iff its files hash to this manifest (`scripts/Gate.lean`, `--manifest`).
+another package, whatever a shared package tree has accumulated). `check` recomputes the scope and
+fails (exit 1) on a changed or missing file, and on an **extra** one: in `core/` and `project/` any
+new file (e.g. `RecursionFast/Contract/Evil.olean`), in `packages/` a new file of a manifest module
+(e.g. a new `.olean.private`). A new module dropped into a package directory is out of scope: it is
+not in the import allowlist, so gate rule 6 rejects importing it, and the gate treats it as
+untrusted (it trusts a module only by its manifest hash). The harness runs `check` before and after
+every stage that runs solution code; the gate trusts a module iff its files hash to this manifest
+(`harness/lean-tools/Gate.lean`, `--manifest`).
 """
 import argparse, json, os, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +38,7 @@ PINNED_PKGS = ["CompPoly", "Arklib", "VCVio", "PolyFun"]
 
 
 def manifest_packages(org):
-    """Every package of the organiser's lake-manifest (v4: read from the manifest, not a list)."""
+    """Every package of the organiser's lake-manifest (read from the manifest, not a list)."""
     mf = os.path.join(org, "lake-manifest.json")
     return [e["name"] for e in json.load(open(mf))["packages"]] if os.path.exists(mf) else []
 DEFAULT_PREFIXES = ["RecursionFast.Contract"]

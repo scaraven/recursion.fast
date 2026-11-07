@@ -1,51 +1,52 @@
 /-
-# Controls: the relation (`Contract/Relation.lean`) and acceptance (`Submission.acc`)    (V4)
+# Controls: the relation (`Contract/Relation.lean`) and acceptance (`Submission.acc`)
 
-Known answers are decided by the kernel (`decide +kernel`, about 2.5 s per BLAKE2s compression);
-each expected digest is the output of the `python3 -I` command in its docstring (`hashlib`,
-CPython 3, `blake2s`, `digest_size=32`). The start of every chain is `s0 = 00 01 … 1f`. Signed
+Known answers are decided by the kernel (`decide +kernel` on the word-level twins of
+`Library/Fast.lean`, proved equal to the contract's hashes); each expected digest is the output of
+the `python3 -I` command in its docstring, run from the repository root (`harness/rfh/keccak.py`,
+the runner's Keccak-256, itself checked against OpenSSL's `keccak-256`). The start of every chain is `s0 = 00 01 … 1f`. Signed
 children are built with the Lean reference signer (`Library/Signer.lean`) for **every** secret
 function `sk`, and their signatures are proved valid symbolically (`sigOk_sign`, no hash
-evaluated; V4-A7 (b), C-m12).
+evaluated).
 
 Positive:
-* `chain1_kat`, `chain2_kat`, `chain16_kat`, `leafStmt_kat`, `nodeStmt_kat`: v3's byte layouts.
+* `chain1_kat`, `chain2_kat`, `chain16_kat`, `leafStmt_kat`, `nodeStmt_kat`: the byte layouts.
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
   `pk sk`, a node digest of two leaf digests is in the relation with the two signed leaf proofs
   as its witness, for every secret function, two starts and lengths up to `chainCap`;
-  `node_of_two_leaves_ref` with the reference derivation of V4-A4.
+  `node_of_two_leaves_ref` with the reference derivation of the chain starts.
 * `leaf_at_chainCap`: a chain of exactly `chainCap` steps is in the relation.
 * `tags_separate`: the seven tags are distinct bytes, and each hash input of the contract starts
   with its own tag.
 
 Negative:
-* `wrong_end`, `leaf_over_chainCap` (every `acc`), as in v3.
+* `wrong_end`, `leaf_over_chainCap` (every `acc`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
 * **`child_other_key`**: a child signed under `pk sk` is rejected under every other key.
 * **`child_trace_nonempty`**: a witness-sending child carrying a trace, even a validly signed
-  one, is rejected (exact consumption, V4-A3).
+  one, is rejected (exact consumption).
 * **`acc_changed_answer`**: if `acc` accepts one proof on two different traces with one
   signature, the signature verifies on two different digests, or the two traces' encodings
   collide: a changed answer is never free.
 * `acc_query_at_cap` (positive): a signed one-entry trace whose query has exactly `queryCap`
   bytes is accepted under a verifier that asks it and declares `qV = 1` (exact consumption,
   trace length at `qV`, query cap, signature).
-* `acc_trace_over_qV`, `acc_two_entries_rejected` (RA-M2): every submission's `acc` rejects a
+* `acc_trace_over_qV`, `acc_two_entries_rejected`: every submission's `acc` rejects a
   trace longer than its `qV`; the instance at `qV + 1 = 2` entries.
 * `acc_over_word`, `acc_query_over_cap`: every submission's `acc` rejects a proof of `2^64`
-  bytes or more (its length does not fit a word, V4-A11) and a trace with a query above
+  bytes or more (its length does not fit a word) and a trace with a query above
   `queryCap`; `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
   proof of `9704 · 2^51 − 9656` bytes (its children within the word) that `acc` then rejects, so
   the word bound is what rejects it.
 
-What bounds a proof since V4-A11 (positive):
+What bounds a proof (positive):
 * `deep_accepted`: no cap below the word: `acc` accepts the witness-sending proof of a tree of
   `k` levels, `9704 · 2^k − 9656` bytes, for every `k ≤ 50`; `deep7_over_old_cap`: the 7-level
-  one, 1,232,456 bytes, above v4's former `2^20`-byte cap. What bounds a recursive entry's proofs
+  one, 1,232,456 bytes, above `2^20` bytes. What bounds a recursive entry's proofs
   is its own verifier; what bounds a deployed file is the runner's 64 MiB cap
   (`harness/season.toml`).
 -/
@@ -56,7 +57,7 @@ import RecursionFast.Controls.Signature
 
 namespace RecursionFast.Controls.Relation
 open RecursionFast RecursionFast.WitnessSending
-open RecursionFast.Controls.Blake2s (hex)
+open RecursionFast.Controls.Keccak (hex)
 
 /-- The digest written by a hex string. -/
 def ofHex (s : String) : Digest := Vector.ofFn fun i => (hex s).getD i 0
@@ -64,47 +65,48 @@ def ofHex (s : String) : Digest := Vector.ofFn fun i => (hex s).getD i 0
 /-- The chain start `00 01 … 1f`. -/
 def s0 : Digest := Vector.ofFn fun i => i.val.toUInt8
 
-/-! ## Known answers (v3) -/
+/-! ## Known answers -/
 
-/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'C'+bytes(range(32))).hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'C'+bytes(range(32))).hex())"` -/
 theorem chain1_kat : (chainEnd s0 1).toList =
-    hex "7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544" := by
+    hex "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97" := by
   rw [← chainEndF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import hashlib; H=lambda b: hashlib.blake2s(b'C'+b).digest();
-print(H(H(bytes(range(32)))).hex())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+H=lambda b: K(b'C'+b); print(H(H(bytes(range(32)))).hex())"` -/
 theorem chain2_kat : (chainEnd s0 2).toList =
-    hex "84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945" := by
+    hex "b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c" := by
   rw [← chainEndF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import hashlib; d=bytes(range(32))
-for _ in range(16): d=hashlib.blake2s(b'C'+d).digest()
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; d=bytes(range(32))
+for _ in range(16): d=K(b'C'+d)
 print(d.hex())"` -/
 theorem chain16_kat : (chainEnd s0 16).toList =
-    hex "a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d" := by
+    hex "00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617" := by
   rw [← chainEndF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import hashlib;
-h=bytes.fromhex('a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d');
-print(hashlib.blake2s(b'L'+h+(16).to_bytes(8,'little')).hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+h=bytes.fromhex('00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617');
+print(K(b'L'+h+(16).to_bytes(8,'little')).hex())"` -/
 theorem leafStmt_kat :
-    (leafStmt (ofHex "a71f6bd7ac08ab5936654a7904bd8feb7636e1f0eb556ae2619ba7c1be41e58d")
+    (leafStmt (ofHex "00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617")
       16).toList =
-      hex "c81156bc71500494780f6635d8533cb9e7b738f5c408ebadb58ceef477cd2b4b" := by
+      hex "4e27fc7ae3cb89e514c8902eca3caf4e80b197376b668788dbd85927511ced22" := by
   rw [← leafStmtF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import hashlib;
-a=bytes.fromhex('7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544');
-b=bytes.fromhex('84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945');
-print(hashlib.blake2s(b'N'+a+b).hexdigest())"` (the digests of `chain1_kat`, `chain2_kat`) -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+a=bytes.fromhex('db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97');
+b=bytes.fromhex('b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c');
+print(K(b'N'+a+b).hex())"` (the digests of `chain1_kat`, `chain2_kat`) -/
 theorem nodeStmt_kat :
-    (nodeStmt (ofHex "7b3746567b4e4fabc189813de4005675433183b47660560825d4741774350544")
-      (ofHex "84de040b23986f9880cc37aec1852359e17c164ac488dc81edf784cee0ae1945")).toList =
-      hex "23b28cbc4bf7d65abbf43ff39084438ba0fb080bdef09b9e4830b10deada1bab" := by
+    (nodeStmt (ofHex "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97")
+      (ofHex "b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c")).toList =
+      hex "314851ba95772530f7cab5dacff61ca36788fa45b50f663d9378bd1ebf6cf119" := by
   rw [← nodeStmtF_eq]
   decide +kernel
 
@@ -115,13 +117,13 @@ starts with its own tag (the chain step, the leaf and node statements, the trace
 WOTS chain step and leaf, the signature's Merkle node). -/
 theorem tags_separate (d h c₁ c₂ x : Digest) (n j i s : ℕ) (tr : Trace) (ends : List Digest) :
     [tagChain, tagLeaf, tagNode, tagTrace, tagWots, tagWotsLeaf, tagSigNode].Nodup ∧
-    chainStep d = blake2sDigest (tagChain :: d.toList) ∧
-    leafStmt h n = blake2sDigest (tagLeaf :: (h.toList ++ enc64 n)) ∧
-    nodeStmt c₁ c₂ = blake2sDigest (tagNode :: (c₁.toList ++ c₂.toList)) ∧
-    traceDigest tr = blake2sDigest (tagTrace :: traceBytes tr) ∧
-    wotsStep j i s x = blake2sDigest (tagWots :: (enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList)) ∧
-    wotsLeaf j ends = blake2sDigest (tagWotsLeaf :: (enc64 j ++ ends.flatMap Vector.toList)) ∧
-    sigNode c₁ c₂ = blake2sDigest (tagSigNode :: (c₁.toList ++ c₂.toList)) :=
+    chainStep d = keccakDigest (tagChain :: d.toList) ∧
+    leafStmt h n = keccakDigest (tagLeaf :: (h.toList ++ enc64 n)) ∧
+    nodeStmt c₁ c₂ = keccakDigest (tagNode :: (c₁.toList ++ c₂.toList)) ∧
+    traceDigest tr = keccakDigest (tagTrace :: traceBytes tr) ∧
+    wotsStep j i s x = keccakDigest (tagWots :: (enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList)) ∧
+    wotsLeaf j ends = keccakDigest (tagWotsLeaf :: (enc64 j ++ ends.flatMap Vector.toList)) ∧
+    sigNode c₁ c₂ = keccakDigest (tagSigNode :: (c₁.toList ++ c₂.toList)) :=
   ⟨by decide, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## Leaves -/
@@ -178,7 +180,7 @@ theorem acc_leafSigned (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sig
 /-! ## Nodes -/
 
 /-- **A node with two signed leaf children** is in the relation under the signer's key, for
-every secret function, starts and lengths up to `chainCap` (V4-A7 (b)). -/
+every secret function, starts and lengths up to `chainCap`. -/
 theorem node_of_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
     (h₁ : n₁ ≤ chainCap) (h₂ : n₂ ≤ chainCap) :
     Rel (submission.acc (Signer.pk sk))
@@ -187,7 +189,7 @@ theorem node_of_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n
         (leafSigned sk 0 s₁ n₁) (leafSigned sk 1 s₂ n₂)) :=
   ⟨rfl, acc_leafSigned sk (by decide) s₁ h₁, acc_leafSigned sk (by decide) s₂ h₂⟩
 
-/-- The node control with the reference derivation of V4-A4, for every seed. -/
+/-- The node control with the reference derivation of the chain starts, for every seed. -/
 theorem node_of_two_leaves_ref (seed : List UInt8) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
     (h₁ : n₁ ≤ chainCap) (h₂ : n₂ ≤ chainCap) :
     Rel (submission.acc (Signer.pk (Signer.chainStart seed)))
@@ -240,7 +242,7 @@ theorem child_other_key (sk : ℕ → ℕ → Digest) {vk : Digest} (hvk : vk �
   simpa [acc_eq, hs] using h.2.1
 
 /-- **A child carrying a trace is rejected** by the witness-sending `acc` (it asks no query, and
-the trace must be used up exactly, V4-A3), even with a valid signature on that trace. -/
+the trace must be used up exactly), even with a valid signature on that trace. -/
 theorem child_trace_nonempty (vk c₁ c₂ : Digest) (π : Proof) (e : ByteArray × Digest)
     (tr : Trace) (σ : Sig) (p₂ : Signed) :
     ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ ⟨π, e :: tr, σ⟩ p₂) := fun h => by
@@ -298,7 +300,7 @@ theorem acc_query_at_cap (sk : ℕ → ℕ → Digest) (a c : Digest) {π : Proo
   rw [Submission.acc, decide_eq_true hπ]
   simp [oneQuery, hq, Signer.sigOk_sign sk 0 (by decide), OProg.runSeq]
 
-/-- **Over the trace-length cap** (RA-M2): every submission's `acc` rejects a trace with more
+/-- **Over the trace-length cap**: every submission's `acc` rejects a trace with more
 than `qV` entries, whatever its signature. -/
 theorem acc_trace_over_qV (S : Submission) (vk c : Digest) (p : Signed) (h : S.qV < p.tr.length) :
     S.acc vk c p = false := by
@@ -378,7 +380,7 @@ theorem deepProof_check (sk : ℕ → ℕ → Digest) (k : ℕ) (hk : k ≤ 51) 
     exact check_encode (show Rel _ _ (.leaf s0 0) from ⟨Nat.zero_le _, rfl⟩)
   | succ k ih => exact deepProof_check_succ sk (ih (by omega)) (deepProof_word sk (by omega))
 
-/-- **No cap below the word** (V4-A11): `acc` accepts the signed witness-sending proof of a tree
+/-- **No cap below the word**: `acc` accepts the signed witness-sending proof of a tree
 of `k` levels, `9704 · 2^k − 9656` bytes, for every `k ≤ 50`. -/
 theorem deep_accepted (sk : ℕ → ℕ → Digest) {k : ℕ} (hk : k ≤ 50) :
     submission.acc (Signer.pk sk) (deepStmt k) (deepSigned sk k) = true ∧
@@ -386,7 +388,7 @@ theorem deep_accepted (sk : ℕ → ℕ → Digest) {k : ℕ} (hk : k ≤ 50) :
   ⟨(acc_deepSigned sk (deepProof_word sk hk)).trans (deepProof_check sk k (by omega)),
     deepProof_size sk k⟩
 
-/-- **Above v4's former cap**: the 7-level proof has 1,232,456 bytes, more than `2^20`, and `acc`
+/-- **Above `2^20` bytes**: the 7-level proof has 1,232,456 bytes, more than `2^20`, and `acc`
 accepts it. -/
 theorem deep7_over_old_cap (sk : ℕ → ℕ → Digest) :
     submission.acc (Signer.pk sk) (deepStmt 7) (deepSigned sk 7) = true ∧

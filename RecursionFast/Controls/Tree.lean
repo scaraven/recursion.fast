@@ -1,5 +1,5 @@
 /-
-# Controls: the tree root (`Contract/Tree.lean`), positive and negative           (DESIGN-v3 §5.1)
+# Controls: the tree root (`Contract/Tree.lean`), positive and negative
 
 Positive, for every digests (by `rfl`, no hash is evaluated):
 * `treeRoot_one`, `treeRoot_two`, `treeRoot_four`: one digest is its own root; two and four
@@ -9,9 +9,9 @@ Positive, for every digests (by `rfl`, no hash is evaluated):
   up) and the empty list (the zero digest), which no benchmark run uses.
 * `treeRoot_recursive`: for every list, the root of two or more digests is the root of the level
   above (`Library/Tree.lean`, which also proves that `|cs|` levels suffice).
-Known answer (`decide +kernel`, 6 compressions): `treeRoot_kat`, the root of the four digests
-`00…00`, `01…01`, `02…02`, `03…03`, against `hashlib`: the runner's Python `treeRoot` is tested
-against this value (Stage S3).
+Known answer (`decide +kernel`, three permutations): `treeRoot_kat`, the root of the four digests
+`00…00`, `01…01`, `02…02`, `03…03`, against the runner's Python reference
+(`harness/rfh/keccak.py`); the runner's `treeRoot` is tested against this value.
 
 Negative: `treeRoot_order`: the order of the leaves matters (`[d₀, d₁]` and `[d₁, d₀]`).
 -/
@@ -20,7 +20,7 @@ import RecursionFast.Controls.Hex
 
 namespace RecursionFast.Controls.Tree
 open RecursionFast
-open RecursionFast.Controls.Blake2s (hex)
+open RecursionFast.Controls.Keccak (hex)
 
 theorem treeRoot_nil : treeRoot [] = Vector.replicate 32 0 := rfl
 
@@ -44,10 +44,11 @@ theorem treeRoot_recursive (a b : Digest) (cs : List Digest) :
 /-- The digest `i i … i`. -/
 def dd (i : UInt8) : Digest := Vector.replicate 32 i
 
-/-- `python3 -c "import hashlib; H=lambda b: hashlib.blake2s(b).digest(); d=[bytes([i])*32 for i
-in range(4)]; N=lambda a,b: H(b'N'+a+b); print(N(N(d[0],d[1]),N(d[2],d[3])).hex())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+d=[bytes([i])*32 for i in range(4)]; N=lambda a,b: K(b'N'+a+b)
+print(N(N(d[0],d[1]),N(d[2],d[3])).hex())"` -/
 theorem treeRoot_kat : (treeRoot [dd 0, dd 1, dd 2, dd 3]).toList =
-    hex "818de83143463644aad53721a9656a63e41fc22c09ce5c2569bef5b0239010c4" := by decide +kernel
+    hex "9c071ef72d22fc6a33bccbddb23d1cab04714caede2494a44949da613deeeac9" := by decide +kernel
 
 /-- **The order of the leaves matters.** -/
 theorem treeRoot_order : treeRoot [dd 0, dd 1] ≠ treeRoot [dd 1, dd 0] := by decide +kernel

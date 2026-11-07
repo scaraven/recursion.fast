@@ -1,5 +1,5 @@
 /-
-  The executable reference signer (V4-A4), for testing the service against the Lean signer.
+  The executable reference signer, for testing the service against the Lean signer.
 
     lake -f scripts/speed/lakefile.toml build signer
     .lake/build/bin/signer <seed-hex> <j> <message-hex>
@@ -8,7 +8,7 @@
   the 32-byte message (a trace digest). Output, one lowercase hex string per line: the public
   key `vk`, then the signature as `idx` (decimal), the 133 chain values and the 16 path digests,
   then `SigOk` of it (`true`). The chain starts are `Signer.chainStartF seed` (= the contract
-  derivation `BLAKE2s-256 keyed by seed of (0x53 ‖ enc64 j ‖ i)`, `chainStartF_eq`); the tree is
+  derivation `Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖ i)`, `chainStartF_eq`); the tree is
   `Signer.buildTree` (= `Signer.node`, `buildTree_get`); the signature `Signer.Tree.sign`
   (= `Signer.sign`, `Tree.sign_eq`). Building the tree takes one pass over the 2^16 keys.
 -/

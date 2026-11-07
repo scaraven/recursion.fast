@@ -1,11 +1,10 @@
 /-
   RecursionFast.Library.Security  (UNTRUSTED, kernel-checked)
 
-  **The knowledge state (`KState`), v3's contract form of knowledge soundness, now a library
-  route to the contract's `KS`** (V4-A10, the user's decision of 2026-10-27), and facts about it.
+  **The knowledge state (`KState`), a library route to the contract's `KS`**, and facts about it.
   A submitter may exhibit one as an intermediate step of a proof of `KS`: `KState.ks`
   (`Library/PaperTheorem.lean`) turns it into `KS` by Markov's inequality on the stopped
-  potential. The definition and its laws are v3's, unchanged.
+  potential.
 
   * **`KState`** with error `ε`: a potential `μ` on logs, a non-negative real measuring how close
     the log is to letting an accepted proof escape the extractor, with three laws:
@@ -19,18 +18,19 @@
     potential carries the partial product from answer to answer, where a set of bad answers per
     query would charge the largest conditional (`Controls/Potential.lean`, `twoLucky`). **Why the
     length guard**: a Merkle commitment is binding only up to collisions, and over logs of
-    unbounded length that charge exceeds every useful `ε` (V3-KS-A2;
-    `Controls/Potential.lean`, `collision_no_bool_kstate`).
+    unbounded length that charge exceeds every useful `ε` (`Controls/Potential.lean`,
+    `collision_no_bool_kstate`).
   * `card_digest`, `fintype_card_digest`: there are `2^256` digests, so the constant `2^256` in
     the `step` law is the number of answers, and `step` bounds their average.
-  * **Two guards are redundant** (V3-S2-KS review m3, its probe `Redundant.lean`, kernel-checked):
+  * **Two guards are redundant** (kernel-checked):
     `KState.final_unguarded` (a potential with `final` on logs of every length) and
     `KState.step_unstopped` (a potential with `step` without `μ L < 1`).
-  * **Boolean knowledge states** (the Stage S1 form, V3-KS-A3): `BoolKState` (a predicate `good`
+  * **Boolean knowledge states**: `BoolKState` (a predicate `good`
     on logs, a predicate `bad` on answers, the laws `empty`, `step`, `final`), `Bounded ε` (at most
     an `ε` fraction of bad answers for every log and query) and `BoundedBelow ε` (the same for
     logs of fewer than `logCap` entries). `KState.ofBool` embeds a `BoundedBelow ε` boolean state
-    as the potential `0` on good logs, `1` elsewhere; `Bounded.below` makes every S1 state one.
+    as the potential `0` on good logs, `1` elsewhere; `Bounded.below` makes every `Bounded ε` state
+    one.
   * **Building potentials**: `KState.zero` (potential `0` when every accepted proof is extracted
     on every log), `KState.mono` (a larger error), `step_of_hits` (a potential that rises by at
     most `1`, and only on a set `T` of at most `ε · 2^256` answers, satisfies `step`).
@@ -41,7 +41,7 @@
     empty log) and the extractor returns no witness of the relation for it on the empty log,
     there is no knowledge state at any error (the laws `empty` and `final`).
   * `acceptAll_kstate_iff`: the verifier that accepts everything has a knowledge state, for some
-    extractor, exactly when every statement has a witness (DESIGN-v3 §4.2, V3-S1-A13); its `KS`
+    extractor, exactly when every statement has a witness; its `KS`
     twin is `Library/KS.lean`'s `acceptAll_ks_iff`.
 -/
 import RecursionFast.Contract.Security
@@ -98,7 +98,7 @@ variable {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
 
 /-! ## Boolean knowledge states -/
 
-/-- **A boolean knowledge state** (the Stage S1 contract's form): a predicate `good` on query logs
+/-- **A boolean knowledge state**: a predicate `good` on query logs
 and a predicate `bad` on (log, fresh query, answer), with the laws `empty`, `step` and `final`. -/
 structure BoolKState (R : Digest → Wit → Prop) (V : Digest → Proof → OProg Bool)
     (E : Digest → Proof → Log → Option Wit) where
@@ -114,8 +114,7 @@ structure BoolKState (R : Digest → Wit → Prop) (V : Digest → Proof → OPr
   witness. -/
   final : ∀ L c π, good L → (V c π).runLog L = some true → ∃ w, E c π L = some w ∧ R c w
 
-/-- For every log and query, at most an `ε` fraction of the possible answers is bad (the Stage S1
-contract's bound). -/
+/-- For every log and query, at most an `ε` fraction of the possible answers is bad. -/
 def BoolKState.Bounded (k : BoolKState R V E) (ε : ℝ≥0) : Prop :=
   ∀ L q, (Nat.card {a // k.bad L q a} : ℝ≥0) ≤ ε * Nat.card Digest
 
@@ -205,7 +204,7 @@ def KState.mono {ε ε' : ℝ≥0} (k : KState R V E ε) (hε : ε ≤ ε') : KS
   step L q hlen hμ hq := (k.step L q hlen hμ hq).trans (by gcongr)
   final := k.final
 
-/-! ## Two guards are redundant (V3-S2-KS review m3; its probe `Redundant.lean`, adapted) -/
+/-! ## Two guards are redundant -/
 
 /-- **`final`'s length bound is redundant**: setting the potential to `1` above `logCap` gives a
 potential with the same `empty` and `step` whose `final` holds on logs of every length. -/
@@ -296,7 +295,7 @@ def acceptAll (_ : Digest) (_ : Proof) : OProg Bool := .ret true
 
 /-- **The accept-all verifier has a knowledge state, for some extractor, exactly when every
 statement has a witness**, at every error. So `KState` alone excludes it only through a
-witnessless statement, which no digest can be shown to be under `Rel` (V3-S1-A13). -/
+witnessless statement, which no digest can be shown to be under `Rel`. -/
 theorem acceptAll_kstate_iff (R : Digest → Wit → Prop) (ε : ℝ≥0) :
     (∃ E, Nonempty (KState R acceptAll E ε)) ↔ ∀ c, ∃ w, R c w :=
   ⟨fun ⟨_, ⟨k⟩⟩ c => (k.final [] c .empty (Nat.zero_le _) (k.empty ▸ one_pos)

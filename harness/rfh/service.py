@@ -86,7 +86,7 @@ class Service:
         return stats
 
     def refusals(self, limit=8):
-        """The service's logged refusals so far (Q13): its first refusal messages, from its stderr."""
+        """The service's logged refusals so far: its first refusal messages, from its stderr."""
         try:
             lines = open(self.stderr_path, errors="replace").read().splitlines()
         except OSError:

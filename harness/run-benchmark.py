@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The benchmark half of an evaluation (TRUSTED RUNTIME; V4-A11).
+"""The benchmark half of an evaluation (TRUSTED RUNTIME; AGENTS.md §6, §7).
 
   python3 -I harness/run-benchmark.py --season harness/season.toml --entry ENTRY --badge BADGE_DIR \
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
-      [--parts calibrate,stream,dos] [--provisional] [--lengths DUEL.json]
+      [--parts calibrate,stream,dos] [--provisional]
 
 ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
 `chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; the calibration
@@ -12,11 +12,13 @@ runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, i
 `setup_cap`); the calibration instance and the service calibration; the stream (its own service; every
 step a fresh process, every output checked, the statement canaries, interleaved `c_P` and `T_triv`
 samples, the re-timing); the DoS column on its last output; the score (`rfh.bench.score`). One stream
-per evaluation, no repeats (V4-A9, V4-A11). The per-step JSON lines go to WORK/stream.jsonl and into
+per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and into
 the result. The first failure ends the run with `benchmark: fail` and its reason; a truncated stream
-(its cap reached) is scored over its completed steps and flagged, never ranked. With `--lengths`,
-the stream's chain lengths are the duel's (`rfh.draws.duel`, drawn once for both entries by the
-trusted harness, outside every sandbox), not drawn here; the prover sees each one only in its request.
+(its cap reached) is scored over its completed steps and flagged, never ranked. A machine whose
+fingerprint is missing, unreadable or not the season's (AGENTS.md §6) ends the run before the
+prover's build with `benchmark: error`, and a `c_P` that drifted beyond the season's `c_P_drift`
+(AGENTS.md §6) ends the run with `benchmark: error`: the machine was not in its calibrated state,
+the organiser's failure, never a score change.
 """
 import argparse
 import glob
@@ -29,10 +31,20 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Bench, Fail, Params, build_calib, fs_free, machine, printable, score  # noqa: E402
+from rfh.bench import Bench, Fail, Params, build_calib, fingerprint_problem, fs_free, machine, printable, score  # noqa: E402
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream", "dos"]
+
+
+class Drift(Exception):
+    """The machine is not in the season's state: its fingerprint is missing, unreadable or another,
+    or its calibration drifted (AGENTS.md §6). An organiser ERROR, never the entry's verdict;
+    `kind` names it for the bot (`fingerprint`, `drift`)."""
+
+    def __init__(self, msg, kind):
+        super().__init__(msg)
+        self.kind = kind
 
 
 def sha256(path):
@@ -58,7 +70,6 @@ def main():
         ap.add_argument(a, required=True)
     ap.add_argument("--parts", default=",".join(ALL_PARTS))
     ap.add_argument("--provisional", action="store_true")
-    ap.add_argument("--lengths", help="a duel's draws (JSON with `lengths`): the stream's chain lengths")
     a = ap.parse_args()
     p = Params.load(a.season)
     parts = a.parts.split(",")
@@ -89,16 +100,22 @@ def main():
                     "prover_sources_sha256": h.hexdigest()}
 
     def save(stage):
-        """A checkpoint of the result (review M-3): if the part is killed at `PART_S`, `evaluate.py`
+        """A checkpoint of the result: if the part is killed at `PART_S`, `evaluate.py`
         reads the stage it reached."""
         res["stage"] = stage
         tmp = a.out + ".tmp"
         with open(tmp, "w") as f:
             json.dump(res, f, indent=1)
         os.replace(tmp, a.out)
-    log(f"recursion.fast v4 benchmark, season {p.name}, parts {parts}, machine {res['machine']['cpu_model']}")
+    log(f"recursion.fast benchmark, season {p.name}, parts {parts}, machine fingerprint {res['machine']['fingerprint']}")
     try:
         save("organiser setup")
+        m = res["machine"]
+        why = fingerprint_problem(m["fingerprint_status"], m["fingerprint"], p.fingerprint)
+        if why:      # before any entry code runs: the evaluation is not on the season's machine
+            raise Drift(f"organiser ERROR: the machine fingerprint is {why}"
+                        + (f" ({m['fingerprint_reason']})" if why != "mismatched" else
+                           f" (fingerprint {m['fingerprint']}, the season expects {p.fingerprint})"), "fingerprint")
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
         save("prover build")
         ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s)
@@ -124,17 +141,17 @@ def main():
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
-                      calib_bin=calib_bin, log=log, lengths=json.load(open(a.lengths))["lengths"] if a.lengths else None)
+                      calib_bin=calib_bin, log=log)
         if "calibrate" in parts:
             save("calibration")
             res["calibration"] = bench.calibrate()
-            log(f"calibration instance: {res['calibration']['triv_compressions']} compressions; "
+            log(f"calibration instance: {res['calibration']['triv_permutations']} permutations; "
                 f"service {res['calibration']['service']}")
         if "stream" in parts:
             save("stream")
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
-            log(f"c_P = {cal['c_P']:.4f}, T_triv = {cal['T_triv_ns'] / 1e6:.3f} ms, v_ref = {cal['v_ref_ns'] / 1e6:.3f} ms")
+            log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), T_triv = {cal['T_triv_ns'] / 1e6:.3f} ms, v_ref = {cal['v_ref_ns'] / 1e6:.3f} ms")
             res["score"] = score(p, res["stream"])
             with open(os.path.join(work, "stream.jsonl"), "w") as f:
                 for s in res["stream"]["steps"]:
@@ -143,6 +160,10 @@ def main():
                 f"M = {res['score']['M']}" + (", TRUNCATED" if res["stream"]["truncated"] else ""))
             if res["stream"]["truncated"]:
                 res["comparable"] = False
+            if not cal["c_P_ok"]:
+                raise Drift(f"organiser ERROR: c_P = {cal['c_P']:.4f} drifted by {cal['c_P_drift']:.4f} from the "
+                            f"season's ref_ns, beyond c_P_drift = {cal['c_P_drift_cap']}: the machine was not "
+                            "in its calibrated state; not the entry's failure, and never a score change", "drift")
         if "dos" in parts and "stream" in res:
             save("dos")
             st = res["stream"]
@@ -155,6 +176,10 @@ def main():
         if getattr(e, "rec", None) is not None:
             res["failed_run"] = e.rec
         log(f"FAIL: {e}")
+    except Drift as e:
+        res["benchmark"], res["organiser_error"] = "error", e.kind
+        res["reasons"].append(str(e))
+        log(f"ERROR: {e}")
     except Exception as e:  # a harness error is not the entry's failure: say so
         res["benchmark"] = "error"
         res["reasons"].append(f"harness error: {e!r}")

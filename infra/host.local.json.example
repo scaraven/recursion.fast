@@ -1,0 +1,20 @@
+{
+  "_comment": "Template of /etc/rf-runner/host.local.json, the host-only part of slots.json (root, 0600; never in the repository: its values are measured on this host). Write it before the first host-setup.sh (README), which checks it first and merges its top-level keys into the installed /opt/rf-runner/slots.json. As given here it is a safe start: the hardware's frequency range under the performance governor (0 = the hardware's limit) and no cache partition (resctrl null). Then measure and fill it: the frequencies with tests/freq-sweep.sh (README, 'The frequency policy'), the partition from /sys/fs/resctrl/info, in the shape of resctrl_example. A changed value changes the machine fingerprint (it is hashed as frequency_policy). Setting resctrl back to null after a partition removes the group and gives the whole L3 back to every CPU (rf-host-apply writes the full mask); the memory-bandwidth limit lived only in the removed group.",
+  "freq": {
+    "governor": "performance",
+    "epp": "performance",
+    "bench_min_khz": 0,
+    "bench_max_khz": 0,
+    "others_max_khz": 0,
+    "sustained_mhz": 0,
+    "_comment": "bench_min_khz = bench_max_khz: the highest fixed frequency (kHz) the bench CPUs hold under load (tests/freq-sweep.sh: turbostat Bzy_MHz at the setpoint with every other core loaded); others_max_khz: the other CPUs' cap, for power headroom (0 or null: the hardware maximum); sustained_mhz: the effective bench frequency measured at that setpoint (recorded in the fingerprint)."
+  },
+  "resctrl_example": {
+    "_comment": "The non-bench CPUs (the host's and the light slots') get a small share of the L3 (other_l3_mask, a contiguous bit mask of cache ways) and a memory-bandwidth cap (other_mb, in the MB schema's units, see /sys/fs/resctrl/info/MB); the bench CPUs keep the rest of the L3 (bench_l3_mask) and full bandwidth. null instead of this object disables the partition.",
+    "other_cpus": [],
+    "other_l3_mask": "",
+    "other_mb": 0,
+    "bench_l3_mask": ""
+  },
+  "resctrl": null
+}

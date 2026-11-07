@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`acc` on a synthetic 2^16-query trace, timed by the badge's own `verify` (C-m3; V4-A7 (d)).
+"""`acc` on a synthetic 2^16-query trace, timed by the badge's own `verify`.
 
   python3 tests/harness/accprobe/run.py         (from the repository root, after `lake build`)
 
@@ -7,7 +7,7 @@ Renders the badge (`harness/badge/Common.lean.in`, `Verify.lean.in`) around `Acc
 as its own Lake package in `.lake/rf/accprobe` (requiring the organiser by path), gets the service to sign the probe's
 2^16 queries (100 bytes each), writes the signed-proof file, and runs `verify` pinned to one core
 several times. It is also the core CI's test of the organiser's canaries on a non-empty trace
-(V4-A9, `tests/harness/canaries.py`): the probe's verifier accepts once it has asked its queries, so
+(`tests/harness/canaries.py`): the probe's verifier accepts once it has asked its queries, so
 every mutation that `acc` rejects (the file one byte longer or shorter, one answer or one query
 changed, an entry appended, a chain value or the index of the signature changed) is rejected by
 organiser code alone; each must be rejected, and the file itself accepted (exit 1 otherwise).

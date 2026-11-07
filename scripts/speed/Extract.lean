@@ -1,12 +1,12 @@
 /-
   The compiled extractor interpreter on the library's witness-sending entry (an organiser test, run
-  once per harness commit by the core CI; not trusted). V4-A9 removed the per-entry liveness check:
-  the extractor's correctness is the kernel-checked `Computes` (`WitnessSending.computes`). This
-  executable checks that Lean's compiled code for the contract's interpreter (`XProg.run`) agrees
-  with it on that entry: on a leaf proof, on a node proof over two signed children (one with a
-  trace entry) and on a proof one byte short, `ext` halts within the declared fuel with at most
-  `outCap` words, and its output denotes exactly the extractor specification's result `E`; on a
-  node proof cut short, that result is nothing.
+  once per harness commit by the core CI; not trusted). No evaluation runs an extractor liveness
+  check: the extractor's correctness is the kernel-checked `Computes` (`WitnessSending.computes`).
+  This executable checks that Lean's compiled code for the contract's interpreter (`XProg.run`)
+  agrees with it on that entry: on a leaf proof, on a node proof over two signed children (one with
+  a trace entry) and on a proof one byte short, `ext` halts within the declared fuel with at most
+  `outCap` words, and its output denotes exactly the extractor specification's result `E`; on a node
+  proof cut short, that result is nothing.
 
     lake -f scripts/speed/lakefile.toml build extract && .lake/build/bin/extract [seed]
 -/

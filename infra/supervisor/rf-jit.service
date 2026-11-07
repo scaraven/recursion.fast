@@ -1,0 +1,39 @@
+# The token broker: the only holder of the GitHub token (root's /etc/rf-runner/github-token, 0600,
+# handed over by systemd as a credential). Serves single just-in-time runner configs to the slot
+# supervisors (uid rfrunner, checked with SO_PEERCRED) on /run/rf-jit/jit.sock.
+[Unit]
+Description=recursion.fast runner token broker
+Documentation=file:/opt/rf-runner/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rfjit
+Group=rfjit
+LoadCredential=github-token:/etc/rf-runner/github-token
+ExecStart=/usr/bin/python3 -I /opt/rf-runner/supervisor/rf-jit
+# active (and the slots ordered after it may start) only once the socket exists
+ExecStartPost=/bin/sh -c 'for i in $(seq 100); do test -S /run/rf-jit/jit.sock && exit 0; sleep 0.2; done; exit 1'
+RuntimeDirectory=rf-jit
+RuntimeDirectoryMode=0755
+StateDirectory=rf-jit
+StateDirectoryMode=0700
+Restart=always
+RestartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
