@@ -27,10 +27,10 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
   with the evaluation VM's `gcc`, `as`, `ld` and static glibc. `.include` and `.incbin` see only the
   copied `.s` files and the toolchain (no other file of the machine). The result records the
   tool versions, every source's SHA-256 and the binary's SHA-256.
-- The target is a modern x86-64 server: x86-64-v3 (AVX2, BMI1/2, FMA, …) is
-  guaranteed; newer extensions such as AVX-512 or GFNI may be present: detect them at run time
-  (`cpuid`) and keep a portable fallback. The machine may change between seasons. A `SIGILL` fails
-  the run.
+- The machine is an AMD Ryzen 7 PRO 8700GE (Zen 4); the benchmark VM has 4 cores / 8 threads at
+  a fixed 3.65 GHz with the host CPU passed through: x86-64-v4 with AVX-512, GFNI, VAES,
+  VPCLMULQDQ and SHA-NI (the full list in `AGENTS.md` §6). The machine may change between seasons:
+  detect features at run time (`cpuid`) and keep a portable fallback. A `SIGILL` fails the run.
 
 ## 2. The sandbox (what the prover sees)
 

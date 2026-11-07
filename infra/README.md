@@ -36,7 +36,7 @@ The runners carry exactly these labels and no `self-hosted` label, so a bare
   leave power headroom (see *The frequency policy* below).
 - **Cache and memory bandwidth.** The non-bench CPUs get a small share of the L3's ways and a
   memory-bandwidth cap (`"resctrl"`).
-- **Host-only values.** `"freq"` and `"resctrl"` identify the processor, so they are not in the
+- **Host-only values.** `"freq"` and `"resctrl"` are measured on this host, so they are not in the
   repository. They live in `/etc/rf-runner/host.local.json` on the host (root, 0600; template
   `host.local.json.example`), and `host-setup.sh` merges them into the installed
   `/opt/rf-runner/slots.json`.
@@ -341,7 +341,7 @@ seed can appear in a public job log.
 
 The harness hashes the fields that define the machine: `cpu_model`, `vm_shape`,
 `frequency_policy` and `image_id`. `host_kernel` is recorded with each result but not hashed;
-`microcode` is neither hashed nor published (it would narrow the processor family). A season's
+`microcode` is neither hashed nor recorded in results. A season's
 results are comparable only while those hashed fields keep the values the season recorded.
 
 **Changing the microcode or the image means updating the season's fingerprint.** For this reason

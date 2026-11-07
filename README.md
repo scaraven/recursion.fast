@@ -25,17 +25,19 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
   key hashed before the query) that a service draws after the entry is frozen. The service also
   signs the answers each proof used, so a recursive verifier checks its children's signatures
   instead of evaluating the secret oracle.
-- **The benchmark** runs on the organiser's server, one throwaway VM per job: 96 steps; the first proves two fresh chains,
+- **The benchmark** runs on the organiser's server (an AMD Ryzen 7 PRO 8700GE, Zen 4; the benchmark
+  VM has 4 cores / 8 threads at a fixed 3.65 GHz, 16 GB, x86-64-v4 with AVX-512; the machine may
+  change between seasons, so keep a portable fallback), one throwaway VM per job: 96 steps; the first proves two fresh chains,
   and each after it the previous proof plus one fresh chain. The chain lengths, between `2^17` and
   `2^20` steps, are one fixed, published sequence (`harness/season.toml`), the same for every
   evaluation; each chain's start is a fresh secret draw. The score `S` is the
   prover's time per `2^18` Keccak permutations (chain steps) plus a charge for verifier time and
   proof size; lower is better. Results are signed with GitHub artifact attestations.
 - **Records.** A new record must be accepted, comparable (on the season's machine), attested, run at
-  the current rules commit, and beat the standing record's score by more than the margin (8 %,
-  measured on the evaluation machine as 3·√2 times the run-to-run spread of one entry's score with
-  the fixed chain lengths; it covers that noise only, since every evaluation runs the same chain
-  lengths).
+  the current rules commit, and beat the standing record's score by more than the margin (2 %, set
+  by the owner). One entry's score varies by about 1.75 % from run to run, so a near-copy of the
+  record can beat it by noise; byte copies and re-used record prover binaries are refused, and the
+  owner can retire a record won by noise.
 
 ## Read and take part
 

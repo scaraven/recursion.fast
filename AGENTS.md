@@ -235,14 +235,16 @@ statement and signed proof as the runner received them and one fresh chain, a si
   `c_P = median(calib) / ref_ns` is a health check of the machine, not part of the score: once
   `ref_ns` is measured, `|c_P − 1| > c_P_drift` makes the run an organiser ERROR (recorded with its
   reason). `T_triv` = the chain checker's median; `v_ref = T_triv / 10`, measured on the machine.
-- **The machine.** Every job of an evaluation runs on the organiser's server, in a throwaway VM
-  per job; the benchmark VM has 4 cores / 8 threads and 16 GB, on pinned cores at a fixed frequency
-  policy, one evaluation at a time. The target is a modern x86-64 server: x86-64-v3 guaranteed;
-  newer extensions such as AVX-512 or GFNI may be present: detect at run time and keep a portable
-  fallback. Neither the CPU model nor its flags are published; the result records a hash
-  of the machine's fingerprint (CPU model, VM shape, frequency policy, image id) and, unhashed, the
-  host kernel version. A benchmark whose fingerprint is missing, unreadable or not
-  the season's is an organiser ERROR, re-queued (§8). The machine may change between seasons (§12).
+- **The machine.** Every job of an evaluation runs on the organiser's server, an AMD Ryzen 7 PRO
+  8700GE (Zen 4, 8 cores / 16 threads), in a throwaway VM per job, one evaluation at a time. The
+  benchmark VM has 4 cores / 8 threads pinned at a fixed 3.65 GHz and 16 GB, with the host CPU
+  passed through. Its instruction set is
+  x86-64-v4 (AVX2, FMA, BMI1/2 and AVX-512 F, CD, BW, DQ, VL), plus ADX, AES-NI, SHA-NI, VAES, VPCLMULQDQ, GFNI and AVX-512 IFMA, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ and BF16. The machine may change between
+  seasons: detect features at run time (`cpuid`) and keep a portable fallback. The result records
+  a hash of the machine's fingerprint (CPU model, VM shape, frequency policy, image id) and,
+  unhashed, the host kernel version. A benchmark whose fingerprint is missing, unreadable or not
+  the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
+  it (§12).
 - **Throughput.** One evaluation at a time. With the core commit's caches in place, one evaluation
   holds the benchmark slot for about 100 minutes (the certificate and benchmark jobs, at most 50
   each, §9, plus a few minutes of the setup jobs' cache lookups; 110 with a second kernel); when the caches must first be built, as after a pin move, up to about three
@@ -304,7 +306,7 @@ ERROR). A stream that reaches
    are what the server wrote and prove nothing by themselves;
 3. `harness_commit` equals the core commit the submissions repository pins;
 4. no record stands at the pin, or `S < (1 − margin) · S_record`, with `S_record` the standing
-   record's own score at the pin and `margin = 0.08`;
+   record's own score at the pin and `margin = 0.02`;
 5. its prover binary's SHA-256 is not that of an earlier record (a resubmitted copy is `accepted`,
    never a record).
 
@@ -313,16 +315,17 @@ ERROR). A stream that reaches
 - **A pin move ports the record first.** When the pin moves while a record stands, the bot
   re-evaluates that record's retained commit at the new pin before any other entry; it keeps the
   crown if that is a comparable, attested ACCEPT. If it fails, no record stands.
-- **The margin (8 %) is measured** on the evaluation machine: it is 3·√2·σ, rounded up to a whole
-  percent, with σ the relative run-to-run spread of one entry's `S` (`S` and `S_record` are two
-  runs, so their difference spreads by √2·σ). Ten runs of one entry with the fixed chain lengths
-  gave σ = 1.75 %, so 3·√2·σ = 7.4 %. Those runs were at the smoke shape
-  ([`harness/smoke.toml`](harness/smoke.toml)), whose short chains make the per-step overhead
-  weigh more than at the season's shape; the margin may be re-derived from runs at the season's
-  shape, and the owner may change it between seasons, which changes this file. It covers the
-  machine's noise only: every evaluation runs the same chain lengths (§6), so they add no spread
-  between two runs.
-- The owner may retire a record (a near-copy that beat it by noise, say); then no record stands.
+- **The margin (2 %) is the owner's choice**, and it does not keep noise out. The relative
+  run-to-run spread of one entry's `S` on the evaluation machine with the fixed chain lengths is
+  σ ≈ 1.75 % (ten runs at the smoke shape, [`harness/smoke.toml`](harness/smoke.toml); mostly
+  per-step process overhead, which weighs more with the smoke's short chains, so likely smaller at
+  the season's shape). `S` and `S_record` are two runs, so two runs of one entry differ by about
+  √2·σ ≈ 2.5 %: a near-copy of the record can beat it by noise. (A margin that kept noise out would
+  be about 3·√2·σ ≈ 7.4 %.) Byte copies of an evaluated root and a record's prover binary are
+  refused (item 5 and the submissions repository's copy rule). The owner may change the margin
+  between seasons, which changes this file.
+- The owner may retire a record (a near-copy that beat it by noise, say) with the bot's `retire`;
+  then no record stands.
 
 The submissions repository's bot applies this rule to the attested results.
 
@@ -402,7 +405,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   job that is not one of the submissions repository's workflows on `main` (or this `evaluate.yml`
   called from them), so a fork's workflow never runs there; the bot's workflow lint is advisory.
   The runner's name and labels and the
-  machine fingerprint are what the server reports; the exact machine is not published.
+  machine fingerprint are what the server reports.
 - Not trusted: `RecursionFast/Library/`, `RecursionFast/Controls/`, every entry, every prover.
 
 ## 12. Known limitations
@@ -410,12 +413,12 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **One kernel.** Records are not cross-checked by a second kernel (nanoda reached 17.6–20.9 GB
   without finishing on the first entries). A Lean kernel bug, or a proof exploiting one, would stand.
 - **One machine.** Every record is measured on one machine, which an entry can overfit (its cache
-  sizes, its ISA extensions); the target stays general (§6). The machine may change between
+  sizes, its ISA extensions), and it is published (§6). The machine may change between
   seasons; records are then re-evaluated at the new pin by the port (§8).
-- **A near-copy of the record can still win**, but only by beating it by more than the margin
-  (8 %, §8). Noise alone does that in at most about 0.13 % of attempts, since the margin is at
-  least three standard deviations of the difference of two runs; the owner retires a record won
-  that way. The margin was measured at the smoke shape, not the season's (§8).
+- **A near-copy of the record can win by noise.** The margin (2 %, §8) is below the spread of the
+  difference of two runs of one entry (√2·σ ≈ 2.5 %, σ ≈ 1.75 % measured at the smoke shape), so a
+  near-copy that is no faster can still beat the record by more than 2 %. Byte copies and re-used
+  record prover binaries are refused, and the owner retires a record won that way.
 - **`c_P`'s drift is an organiser ERROR, not a score change**: `ref_ns` (316.2 ms) and
   `c_P_drift` (0.065: about four standard deviations of one `c_P` sample at the higher spread
   measured on the machine, 1.55 %, and far more of the median that is judged) are fixed
@@ -424,7 +427,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **Retiring a record leaves no record standing**: the record it beat is not restored, and that
   record's prover binary, like every record's, can never take the record again.
 - **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains
-  about 0.4–1.0 % at the score's base estimates, well below the record margin (8 %).
+  about 0.4–1.0 % at the score's base estimates, below the record margin (2 %).
 - **The score's constants** (`K`, `s_ref`, the power 3, the re-timing rule) come from a simulated
   loss study, not from measured entries.
 - **Crafted inputs are not tested.** The DoS column uses random mutations. Inputs assembled from
@@ -483,8 +486,9 @@ are indicative only, except where a bullet says "on the machine".
   `keccakF`, about 0.4 s for the word-level twin of `Library/KeccakFast.lean`); large case splits
   or `decide` over concrete words can exhaust the kernel cap. Prove symbolically.
 - **Assemble with binutils 2.42** (the evaluation VM's): GCC 15's `.base64` and newer directives do
-  not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. Only
-  x86-64-v3 is guaranteed: dispatch on `cpuid` with a portable fallback; a `SIGILL` fails the run.
+  not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. The
+  machine (§6) has AVX-512 and GFNI but may change between seasons: dispatch on `cpuid` with a
+  portable fallback; a `SIGILL` fails the run.
 - **Memory**: the 11 GiB cap counts `/tmp` and `/work` (a Spartan+Ligero leaf prover peaked at
   15.1 GiB at `n = 2^16`, 2.47 GiB after restructuring).
 - **Fiat–Shamir must bind the statement**: the canaries flip a statement bit and substitute other

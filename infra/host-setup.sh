@@ -165,7 +165,7 @@ echo "== 3. files in $RF"
 install -d -m 0755 "$RF" "$RF/host" "$RF/supervisor" "$RF/image" "$RF/image/guest" "$RF/tests"
 install -m 0644 "$SRC/README.md" "$SRC/job-allowlist.json" "$SRC/host.local.json.example" "$RF/"
 # slots.json as installed: the repository's layout plus the host-only values of
-# /etc/rf-runner/host.local.json ("freq", "resctrl": they identify the processor, so they are not in
+# /etc/rf-runner/host.local.json ("freq", "resctrl": they are measured on this host, so they are not in
 # the repository; template: host.local.json.example)
 chmod 0600 /etc/rf-runner/host.local.json
 python3 -I - "$SRC/slots.json" /etc/rf-runner/host.local.json "$RF/slots.json" <<'PY'

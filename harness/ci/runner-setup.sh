@@ -10,8 +10,8 @@
 #   3. lingering is enabled for the job's user, so that a systemd user manager exists and the sandbox
 #      can cap memory with transient scopes (`systemd-run --user --scope -p MemoryMax=…`); without
 #      it the sandbox falls back to an address-space limit and the result records `memcap: prlimit`.
-# It prints the runner's CPU count, memory and kernel for the log (never the CPU model: the job logs
-# are public, and the machine is not advertised as a target).
+# It prints the runner's CPU count, memory and kernel for the log (the machine itself is described
+# in AGENTS.md §6).
 set -euo pipefail
 echo "$(nproc) vCPU; $(free -g | awk '/Mem:/ {print $2}') GiB; kernel $(uname -r)"
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then

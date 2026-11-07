@@ -7,7 +7,7 @@
 # benchmark), the light ones on `rf-light` (`runs-on: rf-light`: plan, attest); the server registers
 # each runner with exactly that one label. One evaluation runs at a time (the caller's `rf-eval`
 # concurrency group; one `rf-bench` slot), on a fixed frequency policy and pinned cores (AGENTS.md
-# §6). No job prints the machine's CPU model.
+# §6, which describes the machine).
 #
 #   plan         the resolved core commit and the benchmark's parts; runs no entry code. Every later
 #                job checks out that commit, and the caches are keyed on it.

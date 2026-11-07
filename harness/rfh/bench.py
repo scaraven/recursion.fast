@@ -143,7 +143,7 @@ def chain_json(n, start):
 
 FP_HASHED = ("cpu_model", "vm_shape", "frequency_policy", "image_id")    # what comparability is about
 FP_RECORDED = ("host_kernel",)       # published in the result, never hashed (it changes on updates)
-# the file's other fields (`microcode`, which would narrow the processor family) are neither hashed nor recorded
+# the file's other fields (`microcode`) are neither hashed nor recorded in the result
 
 
 def fingerprint(path=None):
