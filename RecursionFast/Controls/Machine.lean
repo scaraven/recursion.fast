@@ -1,13 +1,12 @@
 /-
 # Controls: the extractor's machine (`Contract/Machine.lean`), positive and negative
 
-The step-counting word language of V3-S2R-A1 (it replaced v2's RISC-V machine and its controls,
-which are at `05fde28`).
+The step-counting word language of the contract's extractor machine.
 
 Positive:
 * `eval_kat`: known answers of the word operations, including the edge cases the docstring names
   (wrap-around, `x / 0 = 0`, `x % 0 = x`, shifts by the low 6 bits, the high words of the integer
-  and carry-less products: `clmulh` of `2^64 - 1` with itself is `0x5555…`, as v2's Zbc control).
+  and carry-less products: `clmulh` of `2^64 - 1` with itself is `0x5555…`, as RISC-V Zbc gives).
 * `straight_run`: a straight-line program's output, with exactly `mem + statements` fuel
   (`straight_exact`).
 * `bounds_run`: a read outside memory is `0`, a write outside it is lost, and an input read past
@@ -15,7 +14,7 @@ Positive:
 * `indirect_run`: `store` and `load` address memory through a cell.
 * `count_run`: the program that counts a cell down from `k` halts in exactly `2k + 7` steps, for
   every `k < 2^64`.
-* `poke_affine`: memory is affine in the tape (V3-S2R-A8): with `memPerWord = 4`, a cell named by
+* `poke_affine`: memory is affine in the tape: with `memPerWord = 4`, a cell named by
   an input word exists on an 8-word tape and keeps what is written to it.
 
 Negative:

@@ -1,22 +1,22 @@
 /-
   RecursionFast.Library.WitnessSending  (UNTRUSTED, kernel-checked)
 
-  **The witness-sending argument under v4** (DESIGN-v3 §7.3, V3-9; archive/v4-dev-record:docs/v4/BRIEF.md stage A): the
+  **The witness-sending argument**: the
   proof is the witness, the verifier decides the relation directly with no oracle query, and the
   extractor reads the witness off the proof. It is a complete `Certificate` (`certificate`, for
-  every public key), the core-side positive control that the v4 certificate is satisfiable, and
-  the argument of the smoke entry of stage B.
+  every public key), the core-side positive control that the certificate is satisfiable, and
+  the argument of the harness smoke's entry.
 
   * **Proof format.** `encode w` is the bytes of the extractor output words of `w` (`witWords`,
     `Library/Words.lean`), so a proof packs back to exactly the words that denote its witness
     (`decode_encode`). A node proof carries its two children's **signed proofs** (proof, trace,
     signature).
-  * **Verifier (strict, #10, V3-S2R-A5).** `check vk c π`: `π` is the canonical encoding of a leaf
+  * **Verifier (strict).** `check vk c π`: `π` is the canonical encoding of a leaf
     witness of at most `chainCap` steps (checked before the hash) whose chain ends at the
     statement's chain end, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
     children `acc vk` accepts: each child's proof length within a word, its trace within `qV = 0`
-    entries (RA-M2) and its queries within `queryCap`, its signature valid on its trace's digest,
-    and, since this verifier asks no query, its trace **empty** (exact consumption, V4-A3) and its
+    entries and its queries within `queryCap`, its signature valid on its trace's digest,
+    and, since this verifier asks no query, its trace **empty** (exact consumption) and its
     proof accepted by `check`, recursively. Canonical encodings for leaves and nodes make it
     reject appended and truncated bytes (`check_canonical`). It runs the linear-time decoder
     twins and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the
@@ -25,12 +25,12 @@
     (`fits_of_rel`: `acc` keeps each child's proof length within a word, empties the trace, and
     `SigOk` fixes the signature's counts), so perfect completeness needs no normalisation
     (`complete_perfect`); the certificate's completeness is at `δ = 0` through
-    `complete_withError_zero`, for every key. Since V4-A11 the relation's witnesses are unbounded
-    below the word: a node proof is longer than its children, so the verifier accepts proofs of
-    every size up to about `2^65` bytes (`Controls/Relation.lean`, `deep_accepted`), and the
-    prover copies whatever it is given.
-  * **Extractor.** `E c π L := decode π` (no key, V4-6), and the program `ext` (5 memory words,
-    21 statements, v3's unchanged) copies the proof's packed words from the input tape to the
+    `complete_withError_zero`, for every key. With no proof cap the relation's witnesses are
+    unbounded below the word: a node proof is longer than its children, so the verifier accepts
+    proofs of every size up to about `2^65` bytes (`Controls/Relation.lean`, `deep_accepted`), and
+    the prover copies whatever it is given.
+  * **Extractor.** `E c π L := decode π` (no key), and the program `ext` (5 memory words,
+    21 statements) copies the proof's packed words from the input tape to the
     output, 8 steps per word (`computes`), on the contract's domain of proofs up to `8 · outCap`
     bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
     `ws_output_beyond_domain`).
@@ -259,7 +259,7 @@ theorem complete (vk : Digest) :
       submission.δ :=
   complete_withError_zero (complete_perfect vk)
 
-/-! ## The extractor program (v3's, unchanged) -/
+/-! ## The extractor program -/
 
 /-- The loop's memory after `i` of `m` words: the next tape index, the end index, the loop
 condition, the last word read and the constant `1`. -/

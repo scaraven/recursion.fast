@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
-"""`harness/aggregate.py` requires exactly the planned benchmark part (RF-M1) and recomputes the score
-(V4-A11), and `--rank` ranks provisionally (R-M1).
+"""`harness/aggregate.py` requires exactly the planned benchmark part and recomputes the score,
+and `--rank` ranks provisionally.
 
   python3 tests/harness/test_aggregate.py
 
-Since V4-A11 the plan is one job (`split` and `single` both): its part gives ACCEPT, scored from the
+The plan is one job (`split` and `single` both): its part gives ACCEPT, scored from the
 stream's per-step records with `rfh.bench.score` (the S the runner wrote is ignored); the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
 gives REJECT; a rejected certificate gives REJECT; a truncated stream is ACCEPTed but not comparable.
 The ranking takes, per entry (not per binary), the median of its last three evaluations, a REJECT or a
-truncated run counting as its worst, and ranks only from three evaluations (review M-4).
-A duel (`--duel`, the record decided head-to-head on one runner) pairs the candidate with the
-incumbent: both scores in the result, the order, one CPU model; an incumbent certificate that is not
-`ok`, an incumbent harness error or missing part, or a pairing that does not hold (another duel's
-run, another draw of lengths, another runner) is ERROR; an incumbent REJECT or truncated stream is
-the incumbent's failure (`entry_failed`); the candidate's own REJECT stands. Without `--duel` the
-result has no duel field.
+truncated run counting as its worst, and ranks only from three evaluations.
+AGENTS.md §6: with a season that names a machine fingerprint, a benchmark on another machine, or with a
+missing or unreadable fingerprint, is an organiser ERROR whatever the entry did (the reason says
+which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts any machine. The score does not depend on `c_P` (AGENTS.md §6), and the result records the runner (AGENTS.md §8) and no CPU model. A stream whose chain lengths are
+not the season's fixed `[stream] lengths` (other values, one more or one fewer, none recorded) is an
+organiser ERROR named `lengths`, whatever the entry did; a rejected certificate stays REJECT. A
+season file whose `[stream] lengths` is malformed is named `lengths` by `--check-machine`,
+`--organiser-error` (whatever kind the workflow passed) and `--plan`.
 """
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AGG = os.path.join(ROOT, "harness", "aggregate.py")
@@ -30,22 +32,26 @@ PLAN = json.loads(subprocess.run([sys.executable, "-I", AGG, "--print-matrix", "
                                  text=True, check=True).stdout)
 
 
-def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, duel=None, lengths=None, runner="r1"):
+FP = "f" * 64
+LENGTHS = tomllib.load(open(SEASON, "rb"))["stream"]["lengths"]      # the smoke's fixed list
+
+
+def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP, c_P=1.0, fp_status=None,
+         lengths=LENGTHS):
     steps = [{"index": i, "n": 1 << 18, "P_s": P, "V_ns": 0, "pi_bytes": 0} for i in (1, 2)]
     r = {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
-         "harness": {"commit": commit}, "machine": {"cpu_model": "cpu", "runner_name": runner}, "prover": {"binary_sha256": "h"},
+         "harness": {"commit": commit}, "machine": {"fingerprint": fp, "fingerprint_status": fp_status or ("ok" if fp else "missing"),
+                                                     "fingerprint_reason": None if fp else "RF_MACHINE_FINGERPRINT is not set",
+                                                     "runner_name": "rf-bench-1",
+                                                     "runner_environment": "self-hosted",
+                                                     "runner_labels": ["rf-bench"]}, "prover": {"binary_sha256": "h"},
          "score": {"S": 999.0},
-         "stream": {"steps": steps, "truncated": truncated, "lengths": lengths or [16, 17, 18],
-                    "calibration": {"c_P": 1.0, "v_ref_ns": 177.8e6, "T_triv_ns": 1.778e9}}}
-    if duel:
-        r["duel"] = {"id": duel[0], "role": duel[1], "position": 0}
+         "stream": {"steps": steps, "truncated": truncated, "lengths": lengths,
+                    "calibration": {"c_P": c_P, "v_ref_ns": 177.8e6, "T_triv_ns": 1.778e9}}}
     return r
 
 
-DRAW = {"id": "d1", "order": ["incumbent", "candidate"], "M": 2, "lengths": [16, 17, 18]}
-
-
-def run(tmp, parts, cert_status="ok", plan="split", inc=None, inc_cert="ok", draw=DRAW):
+def run(tmp, parts, cert_status="ok", plan="split", season=SEASON):
     files = []
     for k, r in enumerate(parts):
         f = os.path.join(tmp, f"p{len(os.listdir(tmp))}-{k}.json")
@@ -54,19 +60,7 @@ def run(tmp, parts, cert_status="ok", plan="split", inc=None, inc_cert="ok", dra
     cert = os.path.join(tmp, f"cert-{len(os.listdir(tmp))}.json")
     json.dump({"status": cert_status, "reasons": [] if cert_status != "reject" else ["x"]}, open(cert, "w"))
     out = os.path.join(tmp, f"out-{len(os.listdir(tmp))}.json")
-    duel = []
-    if inc is not None:      # a duel: the incumbent's certificate (None: missing), parts and the draws
-        ic = os.path.join(tmp, f"inc-cert-{len(os.listdir(tmp))}.json")
-        if inc_cert is not None:
-            json.dump({"status": inc_cert, "reasons": []}, open(ic, "w"))
-        d = os.path.join(tmp, f"duel-{len(os.listdir(tmp))}.json")
-        json.dump(draw, open(d, "w"))
-        duel = ["--duel", d, "--incumbent-cert", ic, "--incumbent-sha", "b" * 40, "--incumbent-path", "submissions/rec"]
-        for k, r in enumerate(inc):
-            f = os.path.join(tmp, f"i{len(os.listdir(tmp))}-{k}.json")
-            json.dump(r, open(f, "w"))
-            duel += ["--incumbent-part", f]
-    subprocess.run([sys.executable, "-I", AGG, "--plan", plan, "--season", SEASON, "--cert", cert, "--out", out, *duel, *files],
+    subprocess.run([sys.executable, "-I", AGG, "--plan", plan, "--season", season, "--cert", cert, "--out", out, *files],
                    check=True, capture_output=True)
     return json.load(open(out))
 
@@ -87,7 +81,7 @@ def main():
         nonlocal fails
         print(("ok   " if ok else "FAIL ") + what)
         fails += not ok
-    holds(PLAN == ["all"], f"one benchmark job (V4-A11): {PLAN}")
+    holds(PLAN == ["all"], f"one benchmark job: {PLAN}")
     r = run(tmp, full)
     check(r, "ACCEPT", "the planned part")
     sc = r.get("score", {})
@@ -102,46 +96,88 @@ def main():
     check(run(tmp, [part("calibrate,stream,dos", benchmark="fail")]), "REJECT", "a failed part")
     check(run(tmp, full, cert_status="reject"), "REJECT", "a rejected certificate")
     check(run(tmp, [part("calibrate,stream,dos", truncated=True)]), "ACCEPT", "a truncated stream", comparable=False)
-    holds("duel" not in r and "incumbent" not in r, "without --duel the result has no duel field (today's result)")
+    holds("duel" not in r and "incumbent" not in r and "cpu_models" not in r and "mixed_cpu" not in r,
+          "no duel, incumbent or CPU-model field")
+    holds(r.get("runner") == {"name": "rf-bench-1", "environment": "self-hosted", "labels": ["rf-bench"]},
+          f"the runner is recorded: {r.get('runner')}")
+    holds(abs(run(tmp, [part("calibrate,stream,dos", c_P=1.7)])["score"]["S"] - 1.0) < 1e-9,
+          "c_P does not scale the score: c_P = 1.7 gives the same S = 1")
 
-    # the duel
+    # AGENTS.md §6: the season's machine fingerprint
+    fixed = os.path.join(tmp, "fixed.toml")
+    open(fixed, "w").write(open(SEASON).read().replace('fingerprint = "any"', f'fingerprint = "{FP}"'))
     A = "calibrate,stream,dos"
-    cand = lambda **k: [part(A, duel=("d1", "candidate"), P=1.0, **k)]  # noqa: E731
-    incu = lambda **k: [part(A, duel=("d1", "incumbent"), P=2.0, **k)]  # noqa: E731
-    d = run(tmp, cand(), inc=incu())
-    check(d, "ACCEPT", "a duel, both runs ACCEPTed")
-    ic = d.get("incumbent") or {}
-    holds(d.get("duel") is True and d.get("order") == DRAW["order"] and d.get("cpu_models") == ["cpu"]
-          and abs(d["score"]["S"] - 1.0) < 1e-9 and abs((ic.get("score") or {}).get("S", 0) - 2.0) < 1e-9
-          and ic.get("verdict") == "ACCEPT" and ic.get("comparable") is True and ic.get("entry_failed") is False
-          and ic.get("certificate_status") == "ok" and ic.get("sha") == "b" * 40 and ic.get("path") == "submissions/rec",
-          f"the duel's facts: both scores from the one job ({d['score']['S']}, {(ic.get('score') or {}).get('S')}), "
-          f"order {d.get('order')}, one CPU model, the incumbent's sha and path")
-    d = run(tmp, cand(), inc=incu(benchmark="fail"))
-    check(d, "ACCEPT", "the incumbent's benchmark REJECTed on this runner: the candidate stands")
-    holds(d["incumbent"]["verdict"] == "REJECT" and d["incumbent"]["entry_failed"] is True, "... and is entry_failed")
-    d = run(tmp, cand(), inc=incu(truncated=True))
-    holds(d["verdict"] == "ACCEPT" and d["incumbent"]["entry_failed"] is True and d["incumbent"]["comparable"] is False,
-          "a truncated incumbent stream is the incumbent's failure (entry_failed)")
-    for st in ("error", "reject", "provisional"):
-        d = run(tmp, cand(), inc=[], inc_cert=st)
-        check(d, "ERROR", f"the incumbent's certificate {st}: the organiser's failure, ERROR")
-        holds(d["incumbent"]["entry_failed"] is False, f"... never entry_failed ({st})")
-    check(run(tmp, cand(), inc=[], inc_cert=None), "ERROR", "the incumbent's certificate missing")
-    check(run(tmp, cand(), inc=incu(benchmark="error")), "ERROR", "the incumbent's benchmark had a harness error")
-    check(run(tmp, cand(), inc=[]), "ERROR", "the incumbent's part missing (RF-M1 for the incumbent)")
-    check(run(tmp, cand(), inc=incu() + incu()), "ERROR", "the incumbent's part duplicated")
-    check(run(tmp, cand(), inc=[part(A, duel=("d0", "incumbent"))]), "ERROR", "an incumbent part from another duel")
-    check(run(tmp, cand(), inc=[part(A, duel=("d1", "candidate"))]), "ERROR", "the candidate's part passed as the incumbent's")
-    check(run(tmp, [part(A)], inc=incu()), "ERROR", "a candidate part that is not this duel's")
-    check(run(tmp, cand(), inc=incu(lengths=[16, 17, 19])), "ERROR", "the incumbent ran other chain lengths")
-    check(run(tmp, cand(), inc=incu(runner="r2")), "ERROR", "the two runs on different runners")
-    check(run(tmp, cand(), inc=incu(commit="c" * 40)), "ERROR", "the two runs from different harness commits")
-    check(run(tmp, cand(), inc=incu(), draw={}), "ERROR", "the duel's draws missing")
-    d = run(tmp, [], cert_status="reject", inc=[])
-    check(d, "REJECT", "the candidate's certificate rejected (no benchmark): its REJECT stands")
-    holds(d["incumbent"]["benchmarked"] is False, "... and the incumbent was not benchmarked")
-    check(run(tmp, cand(benchmark="fail"), inc=[], inc_cert="error"), "REJECT", "the candidate's own REJECT stands over an organiser failure")
+    r = run(tmp, [part(A)], season=fixed)
+    check(r, "ACCEPT", "the season's fingerprint: comparable")
+    holds({k: r["machine"][k] for k in ("fingerprint", "expected", "matches")} == {"fingerprint": FP, "expected": FP, "matches": True},
+          f"... recorded: {r['machine']}")
+    holds("microcode" not in r["machine"], f"the microcode revision is not published: {r['machine']}")
+    for prt, why in ((part(A, fp="e" * 64), "mismatched (fingerprint " + "e" * 64), (part(A, fp=None), "missing (RF_MACHINE"),
+                     (part(A, fp=None, fp_status="unreadable"), "unreadable"),
+                     (part(A, benchmark="fail", fp="e" * 64), "mismatched")):
+        r = run(tmp, [prt], season=fixed)
+        check(r, "ERROR", f"fingerprint {why.split()[0]} (benchmark {prt['benchmark']}): the organiser's ERROR")
+        holds(any(f"machine fingerprint is {why}" in x for x in r["reasons"]), f"... the reason says which: {r['reasons'][-1:]}")
+    check(run(tmp, [], cert_status="reject", season=fixed), "REJECT", "a rejected certificate (no benchmark) stays REJECT")
+    # the named organiser errors (the bot exempts them from the quota and the fair order)
+    holds(run(tmp, [part(A, fp="e" * 64)], season=fixed).get("organiser_error") == "fingerprint", "a fingerprint ERROR is named")
+    drift = part(A, benchmark="error")
+    drift["organiser_error"] = "drift"
+    holds(run(tmp, [drift]).get("organiser_error") == "drift", "a drift ERROR is named")
+    cache = part(A, benchmark="error")
+    cache["organiser_error"] = "cache"
+    holds(run(tmp, [cache]).get("organiser_error") == "cache", "a cache ERROR is named")
+    holds(run(tmp, [part(A, benchmark="error")]).get("organiser_error") is None, "an unnamed harness ERROR is not named")
+    holds("organiser_error" not in run(tmp, full), "an ACCEPT names no organiser error")
+    out = os.path.join(tmp, "org-error.json")
+    subprocess.run([sys.executable, "-I", AGG, "--organiser-error", "setup", "--reason", "setup failure", "--season", SEASON,
+                    "--out", out, "--harness-commit", "a" * 40, "--job", "o/r/actions/runs/1/attempts/1"], check=True,
+                   capture_output=True)
+    o = json.load(open(out))
+    holds((o["verdict"], o["comparable"], o["organiser_error"], o["harness_commit"], o["job"]) ==
+          ("ERROR", False, "setup", "a" * 40, "o/r/actions/runs/1/attempts/1") and "setup failure" in o["reasons"][0],
+          f"--organiser-error writes a named ERROR result: {o['reasons']}")
+    cm = lambda env, season: subprocess.run([sys.executable, "-I", AGG, "--check-machine", "--season", season],  # noqa: E731
+                                            capture_output=True, text=True, check=True, env=env).stdout.strip()
+    noenv = {k: v for k, v in os.environ.items() if k != "RF_MACHINE_FINGERPRINT"}
+    holds(cm(noenv, SEASON) == "" and "is missing" in cm(noenv, fixed),
+          f"--check-machine: the smoke accepts any machine; a fixed season names a missing fingerprint: {cm(noenv, fixed)!r}")
+    check(run(tmp, [part(A, fp="e" * 64)]), "ACCEPT", "the smoke season (\"any\") accepts any fingerprint")
+    # the season's fixed chain lengths: a stream with others is the organiser's ERROR, never comparable
+    for ns, what in ((LENGTHS[:1] + [LENGTHS[1] + 1] + LENGTHS[2:], "one length changed"), (LENGTHS[:-1], "one fewer"),
+                     (LENGTHS + [16], "one more"), (None, "none recorded")):
+        for bench in ("pass", "fail"):
+            r = run(tmp, [part(A, benchmark=bench, lengths=ns)])
+            check(r, "ERROR", f"chain lengths not the season's ({what}; benchmark {bench}): the organiser's ERROR")
+            holds(r.get("organiser_error") == "lengths" and any("chain lengths are not the season's" in x for x in r["reasons"]),
+                  f"... named `lengths`, the reason says so: {r['reasons'][-1:]}")
+    check(run(tmp, [part(A, lengths=LENGTHS[:-1])], cert_status="reject"), "REJECT",
+          "a rejected certificate stays REJECT whatever the stream's lengths")
+    # a malformed [stream] lengths in the season file: named `lengths` in every mode, never a crash
+    smoke_text = open(SEASON).read()
+    for what, text in (("one value too few", smoke_text.replace("lengths = [16, 55, 20, 74, 22, 90, 20]",
+                                                                 "lengths = [16, 55, 20, 74, 22, 90]")),
+                       ("a value out of range", smoke_text.replace("lengths = [16, 55,", "lengths = [15, 55,")),
+                       ("no list", smoke_text.replace("lengths = [16, 55, 20, 74, 22, 90, 20]", ""))):
+        assert text != smoke_text
+        bad = os.path.join(tmp, f"bad-{len(os.listdir(tmp))}.toml")
+        open(bad, "w").write(text)
+        why = cm(noenv, bad)
+        holds(why.startswith("the season file's [stream] lengths is malformed"),
+              f"--check-machine names a season with {what} as the organiser's problem: {why!r}")
+        out = os.path.join(tmp, f"org-len-{len(os.listdir(tmp))}.json")
+        subprocess.run([sys.executable, "-I", AGG, "--organiser-error", "fingerprint", "--reason", why + " (checked in the setup job)",
+                        "--season", bad, "--out", out, "--harness-commit", "a" * 40], check=True, capture_output=True)
+        o = json.load(open(out))
+        holds(o["organiser_error"] == "lengths" and o["verdict"] == "ERROR" and o["reasons"][0].count("is malformed") == 1,
+              f"... and --organiser-error (passed `fingerprint` by the workflow) names it `lengths`: {o['reasons']}")
+        r = run(tmp, full, season=bad)
+        check(r, "ERROR", f"--plan with a season with {what}: the organiser's ERROR")
+        holds(r.get("organiser_error") == "lengths" and any("is malformed" in x for x in r["reasons"]),
+              f"... named `lengths`: {r['reasons'][-1:]}")
+    check(run(tmp, [part(A, fp=None)]), "ACCEPT", "... and none")
+    check(run(tmp, [part(A, fp=FP), part(A, fp="e" * 64)], season=fixed), "ERROR",
+          "two parts (a plan error first) with different fingerprints")
 
     def res(S, verdict="ACCEPT", when="t", e="e", comparable=None, binary=None):
         return {"verdict": verdict, "comparable": (verdict == "ACCEPT") if comparable is None else comparable,
@@ -164,7 +200,7 @@ def main():
           f"ranking per entry, though every run has its own binary: median of the last three (e: 1, 2, 9 → 2), a REJECT "
           f"as the worst (g: fail, 1.5, 1 → 1.5), ERROR not counted: {rows['e']}, {rows['g']}")
     holds(rows["t"]["median_S"] == "failed" and rows["t"]["not_scored"] == 2,
-          f"truncated (not comparable) runs count as infinite (review M-4: 5, trunc, trunc, 1 → failed): {rows['t']}")
+          f"truncated (not comparable) runs count as infinite (5, trunc, trunc, 1 → failed): {rows['t']}")
     holds(isinstance(rows["one"]["median_S"], str) and "unranked" in rows["one"]["median_S"],
           f"an entry with fewer than three evaluations is not ranked: {rows['one']}")
     print(f"{fails} failure(s)")

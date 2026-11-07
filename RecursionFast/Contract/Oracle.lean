@@ -1,7 +1,7 @@
 /-
 # Contract: query programs over one random oracle                                  (TRUSTED)
 
-DESIGN-v3 §3.1, V3-2; v4 adds `runSeq` (V4-4). The submitted verifier and prover are **query
+The submitted verifier and prover are **query
 programs**: computations that ask one oracle `ByteArray → Digest` and return a value. `OProg` is
 inductive, so every program terminates and asks finitely many queries. A program is read in three
 ways:
@@ -11,15 +11,14 @@ ways:
   of knowledge soundness;
 * against a **trace**, in order (`runSeq`): the `i`-th query is answered by the `i`-th entry,
   which must be for that query. This is how `acc` (`Certificate.lean`) runs a verifier on a signed
-  proof, and how a node circuit replays a child's signed trace: in one pass, with no lookup
-  (V4-4). The trace must be used up exactly (V4-A3): a signed trace is the verifier's queries and
+  proof, and how a node circuit replays a child's signed trace: in one pass, with no lookup.
+  The trace must be used up exactly: a signed trace is the verifier's queries and
   nothing else, so its length, and the work of hashing it, is the verifier's own (the module
   header of `Certificate.lean` says why that matters).
 `queries` lists the queries a program asks under an oracle function (the bounds `qV` and `Q` of
 `KS`), and `bind` runs one program after another against one oracle (completeness runs the prover,
-then the verifier, V3-S2R-A2; knowledge soundness the adversary, then the verifier, V4-A10).
-v3's `run` (the result under an oracle function) left the contract with `Vb`, its only trusted
-user; it is in `Library/Oracle.lean`.
+then the verifier; knowledge soundness the adversary, then the verifier). `run` (the result under
+an oracle function) is not part of the contract: it is in `Library/Oracle.lean`.
 -/
 import RecursionFast.Contract.Relation
 

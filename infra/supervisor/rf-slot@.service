@@ -1,0 +1,44 @@
+# One runner slot (%i = bench, light1, light2; see /opt/rf-runner/slots.json): loop { a just-in-time
+# runner config from the token broker (rf-jit.service; this unit never sees the token) -> a
+# copy-on-write VM of the golden image with it -> one job -> destroy }. The drop-ins host-setup.sh
+# writes set AllowedCPUs (the host CPUs for QEMU's own threads + the slot's pinned CPUs) and the
+# resource caps (MemoryMax = the VM's memory + 2 GiB, or 2 GiB for a slot on hugepages,
+# whose guest RAM the reserved pool bounds; TasksMax, LimitNOFILE).
+[Unit]
+Description=recursion.fast runner slot %i
+Documentation=file:/opt/rf-runner/README.md
+After=network-online.target rf-firewall.service rf-host.service rf-jit.service squid.service
+Wants=network-online.target squid.service
+# no VM without the packet filter, the host state and the broker
+Requires=rf-firewall.service rf-host.service rf-jit.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# each slot its own user (rfbench, rflight1, rflight2): its supervisor, its QEMU, its tap, its
+# run directory; the broker maps this uid to the slot. Group rfrunner: read the images, append to
+# the job log.
+User=rf%i
+Group=rf%i
+SupplementaryGroups=kvm rfrunner
+Slice=rf.slice
+ExecStart=/usr/bin/python3 -I /opt/rf-runner/supervisor/rf-supervisor run %i
+Restart=always
+RestartSec=60
+KillMode=mixed
+TimeoutStopSec=90
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/rf-runner/run/%i /var/lib/rf-runner/flags
+ProtectProc=invisible
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+TasksMax=512
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

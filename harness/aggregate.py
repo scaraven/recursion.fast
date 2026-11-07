@@ -5,25 +5,45 @@ entries provisionally.
   python3 -I harness/aggregate.py --print-matrix single                 the benchmark jobs' parts
   python3 -I harness/aggregate.py --plan single --season SEASON --cert CERT.json --out RESULT.json
                                   [--job URL] PART.json...
-  python3 -I harness/aggregate.py --plan single --season SEASON --cert CERT.json --out RESULT.json
-                                  --duel DUEL.json --incumbent-cert INC_CERT.json --incumbent-part INC_PART.json...
-                                  --incumbent-sha SHA --incumbent-path ROOT PART.json...     a duel (`pair`)
   python3 -I harness/aggregate.py --rank --out RANKING.json RESULT.json...
+  python3 -I harness/aggregate.py --check-machine --season SEASON        this machine's fingerprint
+                                  problem (one line, empty if none; the setup job's first step)
+  python3 -I harness/aggregate.py --organiser-error KIND --reason TEXT --season SEASON --out RESULT.json
+                                  --harness-commit SHA [--job URL]      the ERROR result of a run that
+                                  stopped on the organiser's side before any benchmark
 
-**The plan** (RF-M1). This file is the one definition of the benchmark jobs: `evaluate.yml` builds
+**Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine), `lengths`
+(the stream did not use the season's chain lengths, or the season file's `[stream] lengths` is
+malformed), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
+cache was missing). The bot exempts them from the author's quota and fair order; `harness` (the
+certificate job ended without a certificate) and an unnamed ERROR are not exempt.
+
+**The plan**. This file is the one definition of the benchmark jobs: `evaluate.yml` builds
 its matrix from `--print-matrix`, and the aggregation requires **exactly** that multiset of parts.
 Each part is identified by the `parts` its result JSON records. A missing, extra, duplicated or
 mismatched part, or parts that disagree on the season or the harness commit, make the verdict
 ERROR and the result not comparable, so a job lost to its time limit or to a runner failure never
-yields an ACCEPT. Since V4-A11 the benchmark is **one job**: the calibration, the one stream (with
+yields an ACCEPT. The benchmark is **one job**: the calibration, the one stream (with
 its interleaved samples and its re-timing) and the DoS column on the stream's last output (`split`
 is kept as a name for callers and is the same one job). The score is recomputed here from the
 stream's per-step records with `rfh.bench.score`, the definition the runner used. Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
-not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate (V4-15). A **truncated**
-stream (its cap reached, §6) is ACCEPTed with its score but never comparable (`comparable: false`).
+not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. The result is
+**comparable** iff it is ACCEPT and its stream was not truncated (its cap reached, AGENTS.md §8; a
+truncated stream is ACCEPTed with its score). A benchmark whose machine fingerprint
+(`machine.fingerprint`, `rfh.bench.fingerprint`) is missing, unreadable or not the season's
+`[machine] fingerprint` is an organiser ERROR, whatever the entry did (`"any"`: the smoke's, any
+machine); the reason says which. Likewise a stream whose chain lengths (`stream.lengths`) are not
+the season's fixed `[stream] lengths` is an organiser ERROR (`lengths`): its score is not comparable
+with any other evaluation's. A season file whose `[stream] lengths` is malformed (not `M + 1`
+integers in `[n_lo, n_hi]`) is named the same way in every mode: `--check-machine` prints it as the
+organiser's problem (so the setup job stops the evaluation), and `--organiser-error` and `--plan`
+then write an ERROR result named `lengths`, whatever kind the workflow passed, since a malformed
+list is the cause of anything else that stopped the run.
+The result also records the runner the benchmark ran on (`runner`: name, environment, labels), which
+`verify-record.sh` checks (AGENTS.md §8).
 
-**The provisional ranking** (V4-A11 §11 R-M1, review M-4; until the paired record of §7 exists):
+**The provisional ranking**:
 `--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
 binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
 three evaluations, by the median score of its last three (by `finished`), each REJECT,
@@ -40,11 +60,23 @@ import statistics
 import sys
 
 ALL_PARTS = "calibrate,stream,dos"
-# V4-A11: one benchmark job; `split` is the same one job (the name callers pass)
+# one benchmark job; `split` is the same one job (the name callers pass)
 PLANS = {"split": ["all"], "single": ["all"]}
+ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Params, score  # noqa: E402
+from rfh.bench import Params, fingerprint, fingerprint_problem, score  # noqa: E402
+
+
+def load_season(path):
+    """(Params, None) for a well-formed season file, or (Params unchecked, the defect) when its
+    `[stream] lengths` is malformed; any other defect of the file raises as before."""
+    try:
+        return Params.load(path), None
+    except ValueError as e:
+        if "[stream]" not in str(e):
+            raise
+        return Params.load(path, check=False), str(e)
 
 
 def main():
@@ -56,13 +88,41 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--job", default=None)
     ap.add_argument("--rank", action="store_true")
-    ap.add_argument("--duel", help="a duel's draws (evaluate.py draw-duel): pair the candidate with the incumbent")
-    ap.add_argument("--incumbent-cert")
-    ap.add_argument("--incumbent-part", action="append", default=[])
-    ap.add_argument("--incumbent-sha")
-    ap.add_argument("--incumbent-path")
+    ap.add_argument("--check-machine", action="store_true")
+    ap.add_argument("--organiser-error", choices=sorted(ORGANISER_ERRORS))
+    ap.add_argument("--reason", default="")
+    ap.add_argument("--harness-commit", default=None)
     ap.add_argument("parts", nargs="*")
     a = ap.parse_args()
+    if a.check_machine:
+        p, defect = load_season(a.season)
+        if defect:
+            print(f"the season file's [stream] lengths is malformed ({defect})")
+            return 0
+        fp = fingerprint()
+        why = fingerprint_problem(fp["status"], fp["hash"], p.fingerprint)
+        if why:
+            print(f"the machine fingerprint is {why} ("
+                  + (f"fingerprint {fp['hash']}, the season expects {p.fingerprint}" if why == "mismatched" else fp["reason"])
+                  + ")")
+        return 0
+    if a.organiser_error:
+        if not (a.season and a.out):
+            ap.error("--organiser-error needs --season and --out")
+        p, defect = load_season(a.season)
+        kind, reason = a.organiser_error, a.reason
+        if defect:
+            kind = "lengths"
+            if defect not in reason:          # the setup job's check already names it
+                reason = f"the season file's [stream] lengths is malformed ({defect}); {reason}"
+        res = {"schema": "recursion.fast/v4/result-1", "season": p.name,
+               "season_sha256": hashlib.sha256(open(a.season, "rb").read()).hexdigest(), "job": a.job,
+               "harness_commit": a.harness_commit, "verdict": "ERROR", "comparable": False, "truncated": False,
+               "organiser_error": kind, "parts": [], "stream": None,
+               "reasons": [f"organiser ERROR ({kind}): {reason}"[:600]]}
+        json.dump(res, open(a.out, "w"), indent=1)
+        print(f"VERDICT: ERROR (organiser: {kind})")
+        return 0
     if a.print_matrix:
         print(json.dumps(PLANS[a.print_matrix]))
         return 0
@@ -73,28 +133,19 @@ def main():
         return 0
     if not (a.plan and a.season and a.cert and a.out):
         ap.error("--plan, --season, --cert and --out are required")
-    p = Params.load(a.season)
+    p, defect = load_season(a.season)
     season_sha = hashlib.sha256(open(a.season, "rb").read()).hexdigest()
-    res = combine(p, a.plan, season_sha, a.job, json.load(open(a.cert)), [json.load(open(f)) for f in sorted(a.parts)])
-    if a.duel or a.incumbent_cert:
-        pair(res, p, a.plan, season_sha, [json.load(open(f)) for f in sorted(a.parts)],
-             load_or(a.incumbent_cert, {"status": "error", "reasons": ["the incumbent's certificate is missing"]}),
-             [json.load(open(f)) for f in sorted(a.incumbent_part)], load_or(a.duel, None), a.incumbent_sha, a.incumbent_path)
+    res = combine(p, a.plan, season_sha, a.job, json.load(open(a.cert)), [json.load(open(f)) for f in sorted(a.parts)],
+                  lengths_defect=defect)
     json.dump(res, open(a.out, "w"), indent=1)
-    print(f"VERDICT: {res['verdict']} ({len(res['parts'])} part(s), CPU {res['cpu_models']})"
-          + (f"; duel, incumbent {res['incumbent']['verdict']}" if res.get("duel") else ""))
+    print(f"VERDICT: {res['verdict']} ({len(res['parts'])} part(s), comparable {res['comparable']}, "
+          f"fingerprint {'matches' if res['machine']['matches'] else 'does not match'})")
     return 0
 
 
-def load_or(path, default):
-    try:
-        return json.load(open(path))
-    except (OSError, ValueError, TypeError):
-        return default
-
-
-def combine(p, plan, season_sha, job, cert, parts):
-    """One entry's result from its certificate and its benchmark parts: RF-M1, the verdict, the score."""
+def combine(p, plan, season_sha, job, cert, parts, lengths_defect=None):
+    """One entry's result from its certificate and its benchmark parts: the plan check, the verdict, the score.
+    `lengths_defect`: why the season file's `[stream] lengths` is malformed, if it is."""
     res = {"schema": "recursion.fast/v4/result-1", "season": p.name, "season_sha256": season_sha, "job": job,
            "certificate": {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels",
                                                      "second_kernel", "kernel_runs", "gate", "badge_sha256", "claim",
@@ -107,7 +158,7 @@ def combine(p, plan, season_sha, job, cert, parts):
                                                     "provisional")})
         res["stream"] = r.get("stream") or res["stream"]     # one run; the plan check rejects a second
         res["reasons"] += r.get("reasons", [])
-    # RF-M1: exactly the planned parts, one result each, from one season and one harness commit
+    # exactly the planned parts, one result each, from one season and one harness commit
     want = collections.Counter(ALL_PARTS if p == "all" else p for p in PLANS[plan])
     got = collections.Counter(",".join(r.get("parts") or []) for r in parts)
     plan_errors = []
@@ -120,8 +171,14 @@ def combine(p, plan, season_sha, job, cert, parts):
         plan_errors.append(f"parts from different harness commits {sorted(map(str, commits))} or seasons")
     res["plan"], res["harness_commit"] = plan, (commits.pop() if len(commits) == 1 else None)
     res["reasons"] += plan_errors
-    models = sorted({(r.get("machine") or {}).get("cpu_model") or "?" for r in parts})
-    res["cpu_models"], res["mixed_cpu"] = models, len(models) > 1
+    m = next(((r.get("machine") or {}) for r in parts), {})
+    fps = {(r.get("machine") or {}).get("fingerprint") for r in parts}
+    fp = fps.pop() if len(fps) == 1 else None
+    fp_why = fingerprint_problem(m.get("fingerprint_status"), fp, p.fingerprint) if parts else None
+    res["machine"] = {"fingerprint": fp, "expected": p.fingerprint, "matches": bool(parts) and fp_why is None,
+                      "host_kernel": m.get("host_kernel")}
+    res["runner"] = {"name": m.get("runner_name"), "environment": m.get("runner_environment"),
+                     "labels": m.get("runner_labels") or []}
     status = [r.get("benchmark") for r in parts]
     if cert.get("status") == "reject":
         verdict = "REJECT"
@@ -135,68 +192,41 @@ def combine(p, plan, season_sha, job, cert, parts):
         verdict = "REJECT"
     else:
         verdict = "ACCEPT" if cert.get("status") == "ok" else "PROVISIONAL"
+    if fp_why and cert.get("status") in ("ok", "provisional"):
+        # not the season's machine is the organiser's condition, never the entry's verdict
+        verdict = "ERROR"
+        why = (f"fingerprint {fp}, the season expects {p.fingerprint}" if fp_why == "mismatched"
+               else m.get("fingerprint_reason") or "no fingerprint recorded")
+        msg = f"organiser ERROR: the machine fingerprint is {fp_why} ({why})"
+        if not any("machine fingerprint" in str(x) for x in res["reasons"]):
+            res["reasons"].append(msg)
+    # the season's fixed chain lengths: a stream that used others is not comparable with any evaluation
+    got_ns = res["stream"].get("lengths") if isinstance(res["stream"], dict) else None
+    cert_ok = cert.get("status") in ("ok", "provisional")
+    len_why = cert_ok and (lengths_defect is not None or (res["stream"] is not None and got_ns != p.lengths))
+    if len_why and lengths_defect is not None:
+        verdict = "ERROR"
+        res["reasons"].append(f"organiser ERROR: the season file's [stream] lengths is malformed ({lengths_defect})")
+    elif len_why:
+        verdict = "ERROR"
+        if isinstance(got_ns, list):
+            first = next((k for k, (x, y) in enumerate(zip(got_ns, p.lengths)) if x != y), min(len(got_ns), len(p.lengths)))
+            what = f"{len(got_ns)} values recorded, {len(p.lengths)} expected, the first difference at index {first}"
+        else:
+            what = "no list recorded"
+        res["reasons"].append(f"organiser ERROR: the stream's chain lengths are not the season's [stream] lengths ({what})")
     res["verdict"] = verdict
+    if verdict == "ERROR":      # the named organiser error, if one is known (the bot exempts some)
+        kinds = [x.get("organiser_error") for x in [cert] + list(parts) if x.get("organiser_error") in ORGANISER_ERRORS]
+        res["organiser_error"] = "fingerprint" if fp_why else "lengths" if len_why else (kinds[0] if kinds else None)
     truncated = bool((res["stream"] or {}).get("truncated"))
     res["truncated"] = truncated
-    res["comparable"] = verdict == "ACCEPT" and not res["mixed_cpu"] and not plan_errors and not truncated
+    res["comparable"] = verdict == "ACCEPT" and not plan_errors and not truncated
     res["prover_sha256"] = next(((r.get("prover") or {}).get("binary_sha256") for r in parts if r.get("prover")), None)
     res["entry"] = next((r.get("entry") for r in parts if r.get("entry")), None)
     if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
         res["score"] = score(p, res["stream"])
     return res
-
-
-
-
-def pair(res, p, plan, season_sha, cand_parts, inc_cert, inc_parts, draw, sha, path):
-    """A duel (the record decided head-to-head on one runner): the incumbent's result from its own
-    certificate and parts, the pairing checks, and the facts the record rule needs, all in `res`
-    (the candidate's result). The pairing is RF-M1 for two entries: every candidate part is this
-    duel's candidate run and every incumbent part its incumbent run (the draw's identifier), each
-    entry has exactly the planned parts (`combine`), both streams ran the draw's chain lengths, on
-    one runner. The organiser's failure makes the result ERROR, unless the candidate failed on its
-    own (its REJECT stands): an incumbent certificate that is not `ok`, an incumbent benchmark with
-    a harness error or a missing part, a pairing that does not hold. The incumbent's own failure on
-    this runner is `entry_failed`: its benchmark REJECTed, or its stream truncated (not comparable)."""
-    inc = combine(p, plan, season_sha, None, inc_cert, inc_parts) if inc_cert.get("status") == "ok" else None
-    errs = []
-    did = (draw or {}).get("id")
-    if not did:
-        errs.append("the duel's draws are missing")
-    for role, rs in (("candidate", cand_parts), ("incumbent", inc_parts)):
-        if any((r.get("duel") or {}).get("role") != role or (r.get("duel") or {}).get("id") != did for r in rs):
-            errs.append(f"a {role} part is not this duel's {role} run")
-    for who, st in (("candidate", res.get("stream")), ("incumbent", (inc or {}).get("stream"))):
-        if st and draw and st.get("lengths") != draw.get("lengths"):
-            errs.append(f"the {who}'s stream did not run the duel's chain lengths")
-    if inc and inc_parts and cand_parts and inc["harness_commit"] != res["harness_commit"]:
-        errs.append("the two runs are from different harness commits or seasons")
-    runners = {(r.get("machine") or {}).get("runner_name") for r in cand_parts + inc_parts}
-    if len(runners) > 1:
-        errs.append(f"the two runs were on different runners {sorted(map(str, runners))}")
-    models = sorted({(r.get("machine") or {}).get("cpu_model") or "?" for r in cand_parts + inc_parts})
-    res["cpu_models"], res["mixed_cpu"] = models, len(models) > 1
-    res["duel"], res["duel_id"], res["order"] = True, did, (draw or {}).get("order")
-    ic = {"sha": sha, "path": path, "certificate_status": inc_cert.get("status"), "verdict": None, "comparable": False,
-          "truncated": None, "score": None, "entry_failed": False, "benchmarked": bool(inc_parts),
-          "reasons": list(inc_cert.get("reasons") or [])[:20]}
-    if inc:
-        ic.update(verdict=inc["verdict"], comparable=inc["comparable"], truncated=inc["truncated"], score=inc.get("score"),
-                  entry_failed=inc["verdict"] == "REJECT" or (inc["verdict"] == "ACCEPT" and inc["truncated"]),
-                  failure=("stream truncated (stream_s)" if inc["verdict"] == "ACCEPT" and inc["truncated"]
-                           else (inc["reasons"] or [None])[0] if inc["verdict"] == "REJECT" else None),
-                  reasons=inc["reasons"][:20], prover_sha256=inc["prover_sha256"], entry=inc["entry"],
-                  certificate=inc["certificate"], harness_commit=inc["harness_commit"], parts=inc["parts"],
-                  stream=inc["stream"])
-    res["incumbent"] = ic
-    if (errs or ic["certificate_status"] != "ok" or ic["verdict"] == "ERROR") and res["verdict"] != "REJECT":
-        why = errs or [f"the incumbent's certificate is {ic['certificate_status']}" if ic["certificate_status"] != "ok"
-                       else "the incumbent's benchmark had a harness error or a missing part"]
-        res["reasons"] += [f"duel (organiser side): {w}" for w in why]
-        res["verdict"] = "ERROR"
-        res.pop("score", None)
-    if res["verdict"] != "ACCEPT" or res["mixed_cpu"]:
-        res["comparable"] = False
 
 
 def entry_key(r):
@@ -208,7 +238,7 @@ def entry_key(r):
 
 
 def rank(results):
-    """The provisional ranking (R-M1, review M-4): per entry, the median of its last three
+    """The provisional ranking: per entry, the median of its last three
     evaluations' scores, each REJECT, PROVISIONAL, truncated or otherwise not comparable run counting
     as infinite (none of them can help); an entry is ranked only once it has at least three counted
     evaluations. ERROR results (the organiser's) are not counted."""
@@ -234,7 +264,7 @@ def rank(results):
     return {"schema": "recursion.fast/v4/ranking-2",
             "rule": "per entry (its name in the submissions repository), the median of its last three evaluations, "
                     "a REJECT, PROVISIONAL, truncated or not comparable run counting as infinite; ranked from three "
-                    "evaluations (R-M1, review M-4); provisional until the paired record (§7)", "entries": rows}
+                    "evaluations", "entries": rows}
 
 
 if __name__ == "__main__":

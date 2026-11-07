@@ -1,0 +1,9 @@
+# Additional hosts for the image build VM only (infra/image/build.sh; source 10.77.9.0/30), on
+# ports 80 and 443: the Ubuntu archive and security pockets (apt), Rust's distribution server
+# (rustup and the toolchain); GitHub releases (the runner, gh, elan, the Lean toolchain) are in
+# allowlist.txt.
+archive.ubuntu.com
+security.ubuntu.com
+static.rust-lang.org
+releases.lean-lang.org
+release.lean-lang.org

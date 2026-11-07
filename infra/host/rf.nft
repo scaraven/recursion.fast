@@ -1,0 +1,78 @@
+#!/usr/sbin/nft -f
+# The runner host's packet filter (loaded by rf-firewall.service; installed by host-setup.sh).
+#
+# Host inbound: established/related, loopback, ICMP/ICMPv6 and SSH (22); nothing else.
+# VMs (interfaces rf-tap-*, each a routed point-to-point link 10.77.N.0/30) have **no direct
+# internet**: nothing from a VM is forwarded (and the host does not forward at all:
+# net.ipv4.ip_forward = 0). A VM may only open TCP connections to the allowlisting proxy (squid,
+# host/proxy/) on its own tap's host address, port 3128, at most 50 new ones per second (burst
+# 500) and 256 open at once. A VM may send only from its own MAC and address (no spoofing); IPv6
+# from a VM is dropped. tc caps each tap's bandwidth (rf-host-apply).
+#
+# Only the table `inet rf_filter` is replaced; the `ip rf_nat` table of earlier versions is removed;
+# other tables are left alone.
+
+table inet rf_filter
+delete table inet rf_filter
+table ip rf_nat
+delete table ip rf_nat
+
+table inet rf_filter {
+  # each tap's VM: its MAC and address (keep equal to slots.json "tap", "mac", "net"; host-setup.sh checks)
+  set vm_src {
+    type ifname . ether_addr . ipv4_addr
+    elements = {
+      "rf-tap-bench" . 52:54:00:77:01:02 . 10.77.1.2,
+      "rf-tap-light1" . 52:54:00:77:02:02 . 10.77.2.2,
+      "rf-tap-light2" . 52:54:00:77:03:02 . 10.77.3.2,
+      "rf-tap-build" . 52:54:00:77:09:02 . 10.77.9.2
+    }
+  }
+  # each tap's proxy address (the host's end of the tap)
+  set vm_proxy {
+    type ifname . ipv4_addr
+    elements = {
+      "rf-tap-bench" . 10.77.1.1,
+      "rf-tap-light1" . 10.77.2.1,
+      "rf-tap-light2" . 10.77.3.1,
+      "rf-tap-build" . 10.77.9.1
+    }
+  }
+  set vm_rate { type ifname; size 64; flags dynamic, timeout; timeout 1m; }
+  set vm_conns { type ipv4_addr; size 64; flags dynamic; }
+
+  chain prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    iifname "rf-tap-*" meta nfproto ipv6 counter drop
+    iifname "rf-tap-*" iifname . ether saddr . ip saddr != @vm_src counter drop comment "spoofed source"
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iifname "rf-tap-*" jump from_vm
+    ct state established,related accept
+    ct state invalid drop
+    iif lo accept
+    meta l4proto { icmp, ipv6-icmp } accept
+    tcp dport 22 accept
+    counter
+  }
+
+  chain from_vm {
+    ct state established,related accept
+    ct state new tcp dport 3128 iifname . ip daddr @vm_proxy jump vm_new
+    counter reject with icmpx admin-prohibited
+  }
+
+  chain vm_new {
+    update @vm_rate { iifname limit rate over 50/second burst 500 packets } counter reject with tcp reset comment "rate"
+    add @vm_conns { ip saddr ct count over 256 } counter reject with tcp reset comment "concurrency"
+    accept
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    iifname "rf-tap-*" counter reject with icmpx admin-prohibited comment "no direct internet"
+    counter
+  }
+}

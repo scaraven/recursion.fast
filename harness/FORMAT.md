@@ -26,22 +26,25 @@ The file ends exactly after `path_15`. Its size is
 
 - **Strict.** A file that is not exactly one such encoding (a length running past the end,
   bytes after `path_15`) is not a signed proof: `verify` rejects it, whatever it contains.
-- **What `acc` then checks** (contract `Submission.acc`, V4-7, V4-A3, V4-A11): `|π| < 2^64` (its
-  length fits a word; V4-A11 removed v4's cap `proofCap = 2^20`);
+- **What `acc` then checks** (contract `Submission.acc`): `|π| < 2^64` (its
+  length fits a word; `acc` has no proof-size cap: `|π|` is priced by the score, and the runner bounds the file, below);
   every `|q_i| ≤ queryCap = 2^20`; `SigOk vk (traceDigest tr) σ`; and the verifier `V vk c π`,
   run with its `i`-th oracle query answered from the `i`-th trace entry (`OProg.runSeq`), asks
   exactly `q_0, …, q_{m−1}` in order, uses every entry, and returns `true`.
 - **The trace digest** is computed over the same bytes the file stores for the entries:
-  `traceDigest tr = BLAKE2s-256(0x54 ‖ item_0 ‖ … ‖ item_{m−1})` with
-  `item_i = u64 |q_i| ‖ q_i ‖ a_i` (`RecursionFast/Contract/Signature.lean`). A prover gets `(a_i)` and `σ` from one service
+  `traceDigest tr = Keccak-256(0x54 ‖ item_0 ‖ … ‖ item_{m−1})` with
+  `item_i = u64 |q_i| ‖ q_i ‖ a_i` (`RecursionFast/Contract/Signature.lean`). Keccak-256 is
+  Ethereum's (`RecursionFast/Contract/Hash/Keccak.lean`): the FIPS 202 sponge over Keccak-f[1600],
+  rate 136 bytes, 32-byte output, Keccak's original padding `0x01 … 0x80` (not SHA3-256's `0x06`).
+  A prover gets `(a_i)` and `σ` from one service
   `SIGN` request with `q_0, …, q_{m−1}` (`service/PROTOCOL.md` §2.2); the wire format carries the
   index as `u32`, the file as `u64`.
 - **The signature** is the contract's WOTS/Merkle signature (`Contract/Signature.lean`): `j < 2^16`, 133 chain
   values, 16 siblings; the file format fixes the two counts.
-- **The trace's length**: since the contract fix pass `ea2e8ab` (review RA-M2), `acc` also
-  requires `m ≤ qV` of the entry (right after the size cap); nothing in this format changes.
+- **The trace's length**: `acc` also requires `m ≤ qV` of the entry (right after the size cap);
+  nothing in this format changes.
 - **Size caps of the runner**: a file above `file_cap` (64 MiB, `harness/season.toml`) is not read;
-  it is the only bound on `π` the deployment has (V4-A11: `|π|` is priced by the score's `s_ref`, and
+  it is the only bound on `π` the deployment has (`|π|` is priced by the score's `s_ref`, and
   an entry's own verifier bounds the children it accepts). The trace is bounded by `qV ≤ 2^16`
   queries of at most `2^20` bytes each. The extractor's efficiency is claimed for proofs of up to
   `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
@@ -54,9 +57,9 @@ and every query zero-padded to a whole number of words. The library's witness-se
 node (`WitnessSending.encode`) carries its children in that word encoding, so a node prover
 re-encodes each child's file by padding `π` and the queries (`harness/toy-prover/toy.c`,
 `app_signed_words`). The file itself is not padded: the badge parses it at byte level
-(`harness/badge/Common.lean.in`, `parseSigned`) in linear time, about 30 ms for a 9.2 MB file
-(measured), where reading words through `packFast` and `Word = BitVec 64` costs
-about 0.4 µs per byte (`archive/v4-dev-record:docs/v4/stages/A-contract-RESULT.md` §4).
+(`harness/badge/Common.lean.in`, `parseSigned`) in linear time, about 30 ms for a 9.2 MB file,
+where reading words through `packFast` and `Word = BitVec 64` costs about 0.4 µs per byte (both
+measured).
 
 ## Statements and keys
 

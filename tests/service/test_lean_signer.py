@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The service's signatures against stage A's compiled Lean reference signer (V4-A4).
+"""The service's signatures against the compiled Lean reference signer
+(`scripts/speed/Signer.lean`).
 
   python3 tests/service/test_lean_signer.py SIGNER [RF_ORACLE]
 
@@ -7,7 +8,10 @@ SIGNER is `lake -f scripts/speed/lakefile.toml build signer`'s `.lake/build/bin/
 (`Library/SignerFast.lean`: `chainStartF` = the contract-side `chainStart`, the tree = `node`, the
 signature = `Signer.sign`, proved `SigOk`). The service runs with fixed test keys; its first two
 signatures (the empty trace, then a three-query trace) must equal, byte for byte, the Lean signer's
-signatures with the same seed and index on the same trace digests, and its `vk` the Lean `vk`.
+signatures with the same seed and index on the same trace digests, and its `vk` the Lean `vk`. Both
+sides hash with Keccak-256 (`service/PROTOCOL.md` §2.0: the chain starts `Keccak-256(seed ‖ 0x53 ‖
+enc64 j ‖ byte i)`, the tagged chain steps, leaves and nodes); the signer must be built from the same
+contract as the service.
 """
 import os
 import subprocess

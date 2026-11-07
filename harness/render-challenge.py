@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Render the v4 challenge stub with an entry's claim (TRUSTED harness tool; v3's renderer, the
-interim `scripts/render-challenge.py` of `v3/s2-interim-harness`, cut to the kinds v4's `Declared`
-needs).
+"""Render the challenge stub with an entry's claim (TRUSTED harness tool; it supports the kinds the
+contract's `Declared` needs).
 
   python3 -I harness/render-challenge.py harness/challenge/Challenge.lean.in claim.json OUT.lean
 

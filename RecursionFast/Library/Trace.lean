@@ -1,23 +1,23 @@
 /-
   RecursionFast.Library.Trace  (UNTRUSTED, kernel-checked)
 
-  Facts about running a program on a trace (`OProg.runSeq`, V4-4, V4-A3) and about the trace
+  Facts about running a program on a trace (`OProg.runSeq`) and about the trace
   digest (`Contract/Signature.lean`).
 
   * **The bridge to the log** (`runLog_of_runSeq`): if a program accepts on a trace, every entry
     of the trace is in the log `L`, and `L` is functional (no query with two answers), then the
-    program returns the same on `L`. This is the step of the composition argument (V4-8,
-    `Library/Compose.lean`, `Escape.wins`) from "the signed trace is genuine" to the verifier
+    program returns the same on `L`. This is the step of the composition argument
+    (`Library/Compose.lean`, `Escape.wins`) from "the signed trace is genuine" to the verifier
     accepting on the log, which is where knowledge soundness reads it.
   * `runSeq_queries`: the trace of a program's own run under an oracle `H` (its queries with `H`'s
     answers) answers the run: the honest trace the service signs.
   * `runSeq_ret`, `runSeq_ret_cons`: exact consumption, a returned program accepts only the empty
     trace. `runSeq_map_fst`, `runSeq_length_le`: an accepted trace consistent with an oracle is
     the program's query sequence under it, so a functional accepted trace has at most `qV`
-    entries (V4-A3's "the signed trace is the verifier's query sequence").
+    entries (the signed trace is the verifier's query sequence).
   * **Injectivity of the trace digest's encoding** (`traceBytes_inj`): two traces whose queries
     are shorter than `2^64` bytes (so every trace `acc` accepts, `queryCap`) with the same bytes
-    are equal. So equal digests of two different accepted traces are a BLAKE2s collision
+    are equal. So equal digests of two different accepted traces are a Keccak-256 collision
     (`traceDigest_eq`), which `Collision` records as data.
 -/
 import RecursionFast.Library.Words
@@ -25,7 +25,7 @@ import RecursionFast.Library.Oracle
 
 namespace RecursionFast
 
-/-- A BLAKE2s-256 collision: two different byte strings with one digest. -/
+/-- A Keccak-256 collision: two different byte strings with one digest. -/
 structure Collision where
   /-- The first byte string. -/
   x : List UInt8
@@ -34,7 +34,7 @@ structure Collision where
   /-- They differ. -/
   ne : x ≠ y
   /-- Their digests are equal. -/
-  eq : blake2sDigest x = blake2sDigest y
+  eq : keccakDigest x = keccakDigest y
 
 /-- A log is functional: no query has two answers in it (true of every log of an oracle). -/
 def Log.Functional (L : Log) : Prop := ∀ e ∈ L, ∀ e' ∈ L, e.1 = e'.1 → e.2 = e'.2
@@ -140,7 +140,7 @@ theorem traceBytes_inj : ∀ {tr tr' : Trace}, (∀ e ∈ tr, e.1.size < 2 ^ 64)
       (fun e he => h' e (List.mem_cons_of_mem _ he)) heq]
 
 /-- Equal digests of different strings are a collision. -/
-def Collision.of {x y : List UInt8} (hne : x ≠ y) (heq : blake2sDigest x = blake2sDigest y) :
+def Collision.of {x y : List UInt8} (hne : x ≠ y) (heq : keccakDigest x = keccakDigest y) :
     Collision := ⟨x, y, hne, heq⟩
 
 /-- **Equal trace digests**: the traces are equal, or their bytes collide. -/

@@ -1,5 +1,5 @@
 /-
-# Gate fixture: an entry that imports CompPoly's binary field (archive/v4-dev-record:docs/v4/FIXLIST.md Q2)
+# Gate fixture: an entry that imports CompPoly's binary field
 
 CompPoly's `BF64`/`Ext3` closure is organiser-built and pinned in the manifest
 (`harness/org-setup.sh`), so the gate reports its `@[csimp]` lemma (`CompPoly.Fields.Extension.

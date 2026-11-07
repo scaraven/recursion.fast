@@ -1,5 +1,5 @@
 /-
-  RecursionFast.Library.Tree  (UNTRUSTED, kernel-checked; unchanged from v3)
+  RecursionFast.Library.Tree  (UNTRUSTED, kernel-checked)
 
   Facts about the tree root (`Contract/Tree.lean`) that justify its docstring.
 

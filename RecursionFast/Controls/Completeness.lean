@@ -1,5 +1,5 @@
 /-
-# Controls: completeness with error (`Contract/Security.lean`, V3-S2R-A2), positive and negative
+# Controls: completeness with error (`Contract/Security.lean`), positive and negative
 
 `CompleteWithError` (stated through the contract's `prob`) and `completenessCap = 2^-40`, computed
 with the library's `failProb` (`completeWithError_iff`: the same statement). The answers are
@@ -9,9 +9,9 @@ digests, so exactly half are good (`sum_bad`).
 Positive:
 * `grind_exact`: a verifier that accepts the proof `z i` iff the answer to the query `z i` is good,
   with a prover that tries the nonces `0, …, k − 1` and falls back to nonce `0` (already tried,
-  bad), fails with probability **exactly** `2^-k` for every `k ≥ 1` (review H-m1: the fallback is
+  bad), fails with probability **exactly** `2^-k` for every `k ≥ 1` (the fallback is
   what makes it exact). `grind40_complete`: at `k = 40` it is complete at the cap. This is
-  proof-of-work grinding, which `Complete ∀ H` excluded.
+  proof-of-work grinding, which perfect completeness (`Complete`) excludes.
 * `fixed_complete_half`: a verifier that accepts iff the answer to one fixed query is good is
   complete at `δ = 1/2`, with every prover.
 * The embedding `Complete → CompleteWithError 0` is `Library/Completeness.lean`'s
@@ -26,7 +26,7 @@ Negative:
 * Rejecting everything is complete at no `δ < 1` (`Controls/Security.lean`,
   `rejectAll_not_complete`).
 
-**The measure itself (`prob`, V4-A10).** Positive, `prob_askGood`: a fresh answer is uniform, so
+**The measure itself (`prob`).** Positive, `prob_askGood`: a fresh answer is uniform, so
 a program that asks one query and returns whether its answer is good returns `false` with
 probability exactly `1/2`. Negative, `prob_askTwice`: a repeated query is answered from the table,
 so a program that asks one query twice and returns whether the two answers differ returns `true`

@@ -1,8 +1,8 @@
 /-
-# Controls: the potential against the boolean form, and the length guard (V3-KS-A1, A2, A4, A6)
+# Controls: the potential against the boolean form, and the length guard
 
-**About the library's potential (`KState`, `Library/Security.lean`), which since V4-A10 is a route
-to the contract's `KS`, not part of it.** Each `KS` statement below is proved through the bridge
+**About the library's potential (`KState`, `Library/Security.lean`), which is a route to the
+contract's `KS`, not part of it.** Each `KS` statement below is proved through the bridge
 `KState.ks` (`Library/PaperTheorem.lean`), so these are also positive controls of `KS` for
 verifiers certified through a potential. The negatives are about the boolean form and the guard
 of the potential's `step` law; the contract's `logCap` is the same number.
@@ -10,7 +10,7 @@ of the potential's `step` law; the contract's `logCap` is the same number.
 Two toy verifiers whose random-oracle error is far below `errorCap`, for the empty relation (so
 the extractor must never be needed: every accepted proof must be priced into the potential).
 
-**`twoLucky` (a challenge spread over two answers; F1 §2, ADV-M3).** `V` asks two fixed queries
+**`twoLucky` (a challenge spread over two answers).** `V` asks two fixed queries
 and accepts iff both answers are *lucky*: their first 12 bytes are zero (`2^160` of the `2^256`
 digests). Its error is `2^-96 · 2^-96 = 2^-192`.
 * `twoLucky_kstate` (positive): a potential at `ε = 2^-192`: the probability that `V` accepts
@@ -18,44 +18,40 @@ digests). Its error is `2^-96 · 2^-96 = 2^-192`.
   while neither is answered. The first answer raises the average by `2^-192`, the second not at
   all (a martingale). So `KS` holds at its error `2^-192` with `qV = 2` (`twoLucky_ks_exact`), and
   at the cap (`twoLucky_ks`).
-* `twoLucky_bool_ge`, `twoLucky_no_bool_kstate` (negative): every boolean state (the Stage S1
-  form) has at least `2^160` bad answers to one of the two queries, so `ε ≥ 2^-96`, and none is
-  bounded at `errorCap`, **even on short logs** (`BoundedBelow`): the length guard does not help;
-  the potential does.
+* `twoLucky_bool_ge`, `twoLucky_no_bool_kstate` (negative): every boolean state has at least `2^160`
+  bad answers to one of the two queries, so `ε ≥ 2^-96`, and none is bounded at `errorCap`, **even
+  on short logs** (`BoundedBelow`): the length guard does not help; the potential does.
 
-**`Vcol` (collision resistance: the binding half of a Merkle commitment; F1 §1, ADV-M2).** `V`
+**`Vcol` (collision resistance: the binding half of a Merkle commitment).** `V`
 accepts a proof naming two distinct queries with equal answers. Its error is at most
 `(Q + 2)^2 / 2^257`.
 * `collision_no_bool_kstate` (negative): no boolean state is bounded at `errorCap` over logs of
-  every length: the probe's induction builds a good log of `2^128 + 1` distinct answers, every one
+  every length: the induction builds a good log of `2^128 + 1` distinct answers, every one
   of which is then bad for the next query, more than the `2^128` bad answers `errorCap = 2^-128`
-  allows (V4-A9's cap `2^-120` needed `2^136 + 1`).
+  allows.
 * `colBool_below`, `colState` (positive): with the length guard, the boolean state "the answers
   so far are distinct" is bounded at `2^-160` on logs of fewer than `logCap = 2^96` entries, so
   it embeds as a potential and `KS` holds at the cap (`collision_ks`).
 So the guard is what lets the binding of a commitment be charged at all.
 
-**`V24` (the value of the guard; V3-S2-KS review M1, its probe `Truncated.lean`).** `V` accepts a
+**`V24` (the value of the guard).** `V` accepts a
 proof naming two distinct queries whose answers agree on their first 24 bytes: a birthday search
 succeeds after about `2^96` queries.
 * `v24_no_bool_kstate` (negative): under `logCap = 2^96` no boolean state is bounded at
   `errorCap`, even on short logs: `2^64 + 1` answers with distinct prefixes leave more than
-  `2^128` bad answers for the next query (at V4-A9's `2^-120`, `2^72 + 1` answers and `2^136`). Under
-  the first value of the guard, `2^64`, the review proved one exists (`Probe.v24_ks`): a
-  96-bit-secure verifier certified at v3's 128-bit cap.
+  `2^128` bad answers for the next query. Under a guard of `2^64` a bounded state exists
+  (paper), so a 96-bit-secure verifier would be certified at a 128-bit cap: hence
+  `logCap = 2^96`.
 * `bool24_below`, `v24_ks` (positive): its natural state is bounded at `2^-96` within the guard.
 Not shown: that no *potential* of `V24` exists at `errorCap` under `2^96` (the boolean negative
 is what is kernel-checked).
 
-**Simplified from the F1 proposal (V3-KS-A4).** F1 §4.6 proposed `merkleToy` (§1.2: dangling
-Fiat–Shamir transcripts over one committed word, then a hit on one of `2^128 + 1` roots). `Vcol`
-is its collision half, kernel-checked by the ADV1 probe (`collision_not_capped`) and ported here;
-the dangling-target half is the same counting argument over a longer log and is not built. Not
-shown either: that a *potential* (not only a boolean state) needs the guard at `errorCap` (review
-m1). For `Vcol` itself it does not quite: without the guard a potential is borderline feasible at
-exactly v3's cap `2^-128` (F1 §4.1, third row; the review's estimate).
-The candidate control is a 31-byte comparison (F1 §4.1 with `Δ ≥ 2`, the review's `V31`), a paper
-argument, not built.
+**What is not built.** A Merkle toy verifier (dangling Fiat–Shamir transcripts over one committed
+word, then a hit on one of `2^128 + 1` roots) has `Vcol` as its collision half; its
+dangling-target half is the same counting argument over a longer log and is not built. Not shown
+either: that a *potential* (not only a boolean state) needs the guard at `errorCap`. For `Vcol`
+itself it does not quite: without the guard a potential is borderline feasible at exactly
+`2^-128` (estimate). The candidate control is a 31-byte comparison, a paper argument, not built.
 -/
 import RecursionFast.Library.PaperTheorem
 import Mathlib.Logic.Equiv.Fin.Basic
@@ -327,7 +323,7 @@ theorem all_bad (f : ℕ → Digest) (N : ℕ) (hg : ks.good (logOf f N)) (i : �
   exact hR w hw
 
 /-- **No boolean state whose bad sets have at most `K` answers** with `2K < 2^256`, over logs of
-every length (the ADV1 probe). -/
+every length. -/
 theorem collision_no_bound (K : ℕ) (hK : ∀ L q, Nat.card {a // ks.bad L q a} ≤ K)
     (h2 : 2 * K < 2 ^ 256) : False := by
   have hcard : Nat.card Digest = 2 ^ 256 := card_digest
@@ -453,7 +449,7 @@ noncomputable def colState : KState (fun _ _ => False) Vcol (fun _ _ _ => none) 
 theorem collision_ks : KS (fun _ _ => False) Vcol (fun _ _ _ => none) errorCap 2 :=
   colState.ks fun _ _ _ => le_rfl
 
-/-! ## `V24`: a 24-byte comparison, and the value of `logCap` (V3-S2-KS review M1) -/
+/-! ## `V24`: a 24-byte comparison, and the value of `logCap` -/
 
 /-- A digest as its first 24 bytes and its last 8. -/
 def split : Digest ≃ (Fin 24 → Fin 256) × (Fin 8 → Fin 256) :=
@@ -487,8 +483,7 @@ theorem runLog_V24 {L : Log} {c : Digest} {π : Proof} (h : (V24 c π).runLog L 
       refine ⟨e₁, List.mem_of_find?_eq_some h1, e₂, List.mem_of_find?_eq_some h2, ?_, h.2⟩
       rw [q1, q2]; exact fun he => h.1 (z_inj he)
 
-/-- The boolean state "the answers so far differ on their first 24 bytes" (the review's probe
-`Truncated.lean`). -/
+/-- The boolean state "the answers so far differ on their first 24 bytes". -/
 def bool24 : BoolKState (fun _ _ => False) V24 (fun _ _ _ => none) where
   good L := (L.map (trunc ∘ Prod.snd)).Nodup
   bad L _ a := trunc a ∈ L.map (trunc ∘ Prod.snd)
@@ -621,8 +616,7 @@ theorem v24_no_bound (K M : ℕ)
 
 /-- **Under `logCap = 2^96`, `V24` has no boolean state at the cap**: a log of `2^64 + 1`
 answers with distinct 24-byte prefixes, well within the guard, leaves more than `2^128` bad
-answers for the next query. (Under `logCap = 2^64` and v3's cap it had one: the review's
-`v24_ks`.) -/
+answers for the next query. (Under `logCap = 2^64` and a `2^-128` cap it would have one.) -/
 theorem v24_no_bool_kstate : ¬ ks.BoundedBelow errorCap := by
   intro hb
   refine v24_no_bound hR ks (2 ^ 64) (2 ^ 128) (fun L q hL => ?_) (by norm_num) (by norm_num)

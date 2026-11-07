@@ -1,7 +1,6 @@
-# recursion.fast v4 (SROM): the default target `RecursionFast` builds the trusted contract
+# recursion.fast (the signed random oracle): the default target `RecursionFast` builds the trusted contract
 # (RecursionFast/Contract), the organiser's library and the controls (RecursionFast.lean imports
-# all three); AGENTS.md states the rules. The development record is on the branch
-# `archive/v4-dev-record`. The v3 contract and harness tools are on the branch `v3/contract-archive`; v2 is at the tag `v2-archive`.
+# all three); AGENTS.md states the rules.
 name = "RecursionFast"
 defaultTargets = ["RecursionFast"]
 
@@ -10,7 +9,7 @@ autoImplicit = false
 relaxedAutoImplicit = false
 
 # The [[require]] blocks below and lake-manifest.json are kept unchanged on purpose: they are the
-# pinned toolchain for the next design (Lean v4.34.1, Mathlib v4.34.1, CompPoly 572f997, ArkLib
+# pinned toolchain (Lean v4.34.1, Mathlib v4.34.1, CompPoly 572f997, ArkLib
 # 7653a90, VCVio a4232d0, PolyFun 41d3b21). Changing them would need `lake update`, which must
 # never run against the shared, prebuilt package tree that .lake/packages points to. Nothing
 # imports them yet.

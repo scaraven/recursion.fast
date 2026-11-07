@@ -1,17 +1,17 @@
 /-
   RecursionFast.Library.Signer  (UNTRUSTED, kernel-checked)
 
-  **The Lean reference signer** of the contract's signature (`Contract/Signature.lean`, V4-3,
-  V4-A4), and the theorem that its signatures pass `SigOk` (`sigOk_sign`). It is the
-  specification the service is tested against, derivation included (V4-A4).
+  **The Lean reference signer** of the contract's signature (`Contract/Signature.lean`),
+  and the theorem that its signatures pass `SigOk` (`sigOk_sign`). It is the
+  specification the service is tested against, derivation included.
 
   * **Secret chain starts.** `sign`, `pk` and `authPath` take any function `sk : ℕ → ℕ → Digest`
     (key index, chain index) of secret chain starts, and the theorem holds for every one. The
-    reference derivation (V4-A4) is `chainStart seed j i = BLAKE2s-256 keyed by seed of
-    (0x53 ‖ enc64 j ‖ byte i)` (tag `S`, `tagSecret`), with a 32-byte signing seed drawn
+    reference derivation is `chainStart seed j i = Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖
+    byte i)` (tag `S`, `tagSecret`; `service/PROTOCOL.md`), with a 32-byte signing seed drawn
     independently of the oracle's key. That independence, not the tag, separates the chain
     starts from the oracle's answers: oracle queries are untagged, so `0x53 ‖ …` is itself a
-    legal query, answered under the other key (V4-A4 as corrected by stage D).
+    legal query, answered under the other key.
   * **One-time key `j`.** Chain `i` runs from `sk j i` (position 0) to its end at position 3
     (`pubEnds`); the key's leaf hashes the 133 ends (`wotsLeaf`).
   * **The key tree** (`node t k`, level `t`, index `k`; level 0 the leaves) has height 16; the
@@ -22,8 +22,8 @@
   * `sigOk_sign`: for every `sk`, `j < 2^16` and `m`, `SigOk (pk sk) m (sign sk j m) = true`.
     Proved symbolically from the chain's additivity (`wotsChain_add`), the digits being at most 3
     (`wotsDigits_le`, `wotsDigits_length`) and the path's climb (`sigRoot_authPath`); no hash is
-    evaluated (kernel BLAKE2s costs about 2.4 s per compression; one check is about 300).
-  * **The checksum's domination** (`wotsDigits_dominates`, RA-m1): for two different messages,
+    evaluated (one check is about 250 Keccak permutations).
+  * **The checksum's domination** (`wotsDigits_dominates`): for two different messages,
     some WOTS digit of the second is below the first's (from `msgDigits_inj` and the checksum
     falling when message digits rise), so a signature cannot be walked forward along its chains
     into a signature of another message. Kernel-checked, no hash.
@@ -35,14 +35,13 @@ import RecursionFast.Library.Trace
 namespace RecursionFast.Signer
 open RecursionFast
 
-/-- Domain tag of a secret chain start's derivation input (`S`, V4-A4). -/
+/-- Domain tag of a secret chain start's derivation input (`S`). -/
 def tagSecret : UInt8 := 0x53
 
-/-- **The reference secret chain start** of chain `i` of one-time key `j`: BLAKE2s-256 keyed by
-the signing seed (32 bytes) of `tagSecret ‖ enc64 j ‖ i`. -/
+/-- **The reference secret chain start** of chain `i` of one-time key `j`: Keccak-256 of the
+signing seed (32 bytes), then `tagSecret ‖ enc64 j ‖ i`. -/
 def chainStart (seed : List UInt8) (j i : ℕ) : Digest :=
-  ⟨(blake2s seed 32 (tagSecret :: enc64 j ++ [i.toUInt8])).toArray, by
-    simp [blake2s, List.map_const']⟩
+  keccakDigest (seed ++ tagSecret :: enc64 j ++ [i.toUInt8])
 
 variable (sk : ℕ → ℕ → Digest)
 
@@ -96,7 +95,7 @@ theorem wotsDigits_le (m : Digest) : ∀ d ∈ wotsDigits m, d ≤ 3 := by
   simp only [wotsDigits, msgDigits, List.mem_append, List.mem_flatMap, List.mem_map] at hd
   rcases hd with ⟨_, _, _, _, rfl⟩ | ⟨_, _, rfl⟩ <;> omega
 
-/-! ## The checksum (RA-m1) -/
+/-! ## The checksum -/
 
 /-- Four base-4 digits, low first, as a byte. -/
 private def ofDigits4 : List ℕ → List UInt8

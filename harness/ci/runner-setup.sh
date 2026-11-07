@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Prepares a GitHub-hosted ubuntu-24.04 runner for the sandbox (TRUSTED; CI only, uses sudo; never
-# run it on the development VM). It changes three system settings of the throw-away runner:
+# Prepares a throw-away Ubuntu 24.04 runner (the organiser's evaluation VM, or a GitHub-hosted one in
+# the core's CI) for the sandbox (TRUSTED; CI only, uses sudo; never run it on a workstation).
+# It changes three system settings of the runner:
 #   1. Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
 #      (kernel.apparmor_restrict_unprivileged_userns = 1), which stops bubblewrap: the sysctl is set
-#      to 0 for this job (C-m7 (f), V4-A6). The sandbox itself then refuses further user namespaces
+#      to 0 for this job. The sandbox itself then refuses further user namespaces
 #      inside (`--disable-userns`), so only the harness creates them.
 #   2. bubblewrap is installed if missing.
 #   3. lingering is enabled for the job's user, so that a systemd user manager exists and the sandbox
 #      can cap memory with transient scopes (`systemd-run --user --scope -p MemoryMax=…`); without
 #      it the sandbox falls back to an address-space limit and the result records `memcap: prlimit`.
-# It prints the runner's facts (image, CPU, memory, kernel) for the log.
+# It prints the runner's CPU count, memory and kernel for the log (never the CPU model: the job logs
+# are public, and the machine is not advertised as a target).
 set -euo pipefail
-echo "image: ${ImageOS:-?} ${ImageVersion:-?}; $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2); $(nproc) vCPU; $(free -g | awk '/Mem:/ {print $2}') GiB; kernel $(uname -r)"
+echo "$(nproc) vCPU; $(free -g | awk '/Mem:/ {print $2}') GiB; kernel $(uname -r)"
 if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
   sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 fi

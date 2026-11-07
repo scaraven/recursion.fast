@@ -1,23 +1,22 @@
 /-
-# Controls: the library's strict witness-sending verifier under v4 (#10, V3-S2R-A5)
+# Controls: the library's strict witness-sending verifier
 
-v3's canaries (the S2a entry's `BaselineV3Controls.lean`), restated for the v4 verifier
-`check vk c π` and its node proofs with signed children. Kernel-checked; no proof here evaluates
-BLAKE2s. Where v3 checked one concrete proof by kernel evaluation, v4 states the canary for
-every proof and every key.
+Canaries for the verifier `check vk c π` and its node proofs with signed children.
+Kernel-checked; no proof here evaluates Keccak-256. Each canary is stated for every proof and
+every key, not checked on one concrete proof by kernel evaluation.
 
 Format (positive): `encode_leaf_kat` (the bytes of a leaf proof), `decode_leaf_kat`,
 `encode_node_kat` (a node proof is the bytes of `Controls/Extractor.lean`'s `nodeKatWords`).
 Verifier (negative), for every key and statement:
 * `size_mod_eight`: an accepted proof has a multiple of 8 bytes; so **one appended byte**
   (`appended_byte_rejected`) and **one removed byte** (`truncated_rejected`) are rejected, on
-  every honest proof (the canaries of DESIGN-v3 §6.3 step 7);
+  every honest proof;
 * `appended_rejected`: anything appended to an accepted proof is rejected (decoding ignores
   trailing words, the canonical-encoding check does not);
 * `bad_tag_rejected` (an unknown tag word), `leaf_over_chainCap_rejected` (a chain longer than
   `chainCap`, before any hash), `stmt_unique` (a proof is accepted under at most one statement:
   the flipped-bit and swapped-child canaries), `node_children_word` (an accepted node's children's
-  proof lengths fit a word, V4-A11: no lower cap), `node_children_untraced` (an accepted node's
+  proof lengths fit a word: no lower cap), `node_children_untraced` (an accepted node's
   children carry empty traces).
 Verifier (positive): `leaf_zero_accepted`, `check_iff` (the library's characterisation).
 Linear-time code: `decodeF_eq`, `encodeF_eq` (the twins equal the specifications for every

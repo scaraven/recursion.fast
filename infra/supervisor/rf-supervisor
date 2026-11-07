@@ -1,0 +1,768 @@
+#!/usr/bin/env python3
+"""The runner host's supervisor (user `rfrunner`; stdlib only). Layout: /opt/rf-runner/slots.json.
+
+  rf-supervisor run SLOT                 the slot's loop (rf-slot@SLOT.service)
+  rf-supervisor test SLOT SCRIPT [--tar FILE] [--timeout S] [--out FILE]
+                                         one VM of the slot without GitHub: the guest runs SCRIPT as
+                                         `runner` (FILE unpacked in its home) and powers off; prints
+                                         the script's output
+  rf-supervisor host-fingerprint SLOT    the host's half of the machine fingerprint (JSON)
+  rf-supervisor status                   = rf-status
+
+The loop, per slot: a just-in-time runner config from the token broker (rf-jit, which alone
+holds the GitHub token; name rf-SLOT-UUID, the slot's labels) -> a qcow2 overlay of the current
+golden image -> a seed ISO (label `cidata`: meta-data, user-data, network-config, rf-host.json =
+the host's facts, rf-proxy = the proxy URL, rf-jitconfig) -> QEMU/KVM (seccomp sandbox, no memory
+merging) paused, every vCPU thread pinned to its host CPU, QEMU's own threads on the host CPUs,
+then started -> the guest's rf-job runs `run.sh --jitconfig` (one job) and powers off -> the
+runner registration (through the broker), the overlay and the seed are deleted -> again.
+
+The guest writes the runner's output to its third serial port (runner.log here), from which the
+supervisor reads the phases ("Listening for Jobs", "Running job: NAME", "Job NAME completed with
+result: R"; guest text is reduced to printable ASCII before it is logged or stored). Limits: no
+listener within boot_limit_s, or no job within idle_limit_s -> the VM is recycled; a job running
+past the slot's hard_limit_s, a serial log over 256 MiB, an overlay over the slot's disk_limit_gb,
+or less than free_floor_gb free under /var/lib/rf-runner -> the VM is killed. Drain: while
+/var/lib/rf-runner/drain exists no VM is started and a VM without a job is stopped. Bench first:
+while the bench VM runs a job (run/bench-busy), the light slots take no new job (a running light
+job finishes; an idle light VM is stopped). Broker and GitHub errors, and VMs whose runner never
+connects, back off exponentially (30 s .. 30 min, jittered). Every VM's facts (runner, image,
+sha256 of rf-host.json, job, start, end, reason) are appended to the slot's run/SLOT/jobs.log
+(append-only). State for rf-status: /var/lib/rf-runner/run/SLOT/state.json.
+"""
+import argparse
+import calendar
+import fcntl
+import json
+import os
+import random
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import hashlib
+import uuid
+
+CONF = os.environ.get("RF_CONF", "/opt/rf-runner/slots.json")
+LIB = os.environ.get("RF_LIB", "/var/lib/rf-runner")
+BROKER = "/run/rf-jit/jit.sock"
+HISTORY = 30
+RESULTS = {"Succeeded", "Failed", "Canceled", "Cancelled", "Abandoned", "Skipped"}
+QEMU_SANDBOX = "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny"
+STOP = False
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def conf():
+    """slots.json, with the values the loop's arithmetic depends on checked: a bad value stops the
+    supervisor with its reason (systemd restarts it after RestartSec) instead of failing every VM."""
+    c = json.load(open(CONF))
+    pos = lambda v: not isinstance(v, bool) and isinstance(v, (int, float)) and v > 0  # noqa: E731
+    for k in ("policy_record_s", "boot_limit_s", "idle_limit_s", "free_floor_gb"):
+        if not pos(c.get(k)):
+            raise SystemExit(f"rf-supervisor: {CONF}: {k} must be a positive number, not {c.get(k)!r}")
+    for name, s in c.get("slots", {}).items():
+        for k in ("hard_limit_s", "disk_limit_gb", "mem_mb"):
+            if not pos(s.get(k)):
+                raise SystemExit(f"rf-supervisor: {CONF}: slots.{name}.{k} must be a positive number, not {s.get(k)!r}")
+        if not (isinstance(s.get("pin"), list) and s["pin"] and all(isinstance(x, int) and not isinstance(x, bool) for x in s["pin"])):
+            raise SystemExit(f"rf-supervisor: {CONF}: slots.{name}.pin must be a non-empty list of CPU numbers")
+    return c
+
+
+def now():
+    """Wall-clock time: for the records (ISO timestamps)."""
+    return time.time()
+
+
+def mono():
+    """Monotonic time: for every deadline (a step of the wall clock does not fire a limit)."""
+    return time.monotonic()
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)) if t else None
+
+
+# ---------------------------------------------------------------- the token broker
+
+class BrokerError(Exception):
+    pass
+
+
+def broker(req):
+    """One request to rf-jit (/run/rf-jit/jit.sock); the reply, or BrokerError."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+            c.settimeout(90)
+            c.connect(BROKER)
+            c.sendall(json.dumps(req).encode() + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = c.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+        r = json.loads(data)
+    except (OSError, ValueError) as e:
+        raise BrokerError(f"broker unreachable: {e}") from None
+    if not r.get("ok"):
+        raise BrokerError(r.get("error", "refused"))
+    return r
+
+
+def clean(text, n=200):
+    """Guest text, reduced to printable ASCII (no control sequences reach a terminal), at most n."""
+    return "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in str(text))[:n]
+
+
+# ---------------------------------------------------------------- the host fingerprint
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def cpuinfo_field(name):
+    for line in open("/proc/cpuinfo"):
+        k, _, v = line.partition(":")
+        if k.strip() == name:
+            return v.strip()
+    return None
+
+
+def freq_policy(cpus):
+    per = {}
+    for c in cpus:
+        p = f"/sys/devices/system/cpu/cpu{c}/cpufreq"
+        per[c] = {"driver": read(f"{p}/scaling_driver"), "amd_pstate": read("/sys/devices/system/cpu/amd_pstate/status"),
+                  "governor": read(f"{p}/scaling_governor"), "epp": read(f"{p}/energy_performance_preference"),
+                  "min_khz": read(f"{p}/scaling_min_freq"), "max_khz": read(f"{p}/scaling_max_freq"),
+                  "nominal_mhz": read(f"/sys/devices/system/cpu/cpu{c}/acpi_cppc/nominal_freq"),
+                  "boost": read("/sys/devices/system/cpu/cpufreq/boost") or read(f"{p}/boost")}
+    vals = list(per.values())
+    return vals[0] if all(v == vals[0] for v in vals) else {"non_uniform": {str(k): v for k, v in per.items()}}
+
+
+def image_paths():
+    img = os.path.realpath(os.path.join(LIB, "images", "current.qcow2"))
+    if not os.path.exists(img):
+        raise SystemExit(f"rf-supervisor: no golden image ({LIB}/images/current.qcow2); run infra/image/build.sh")
+    with open(img + ".sha256") as f:
+        return img, f.read().split()[0]
+
+
+def host_fingerprint(c, slot, image_id):
+    s = c["slots"][slot]
+    t = s["topology"]
+    qemu = subprocess.run(["qemu-system-x86_64", "--version"], capture_output=True, text=True).stdout.splitlines()[0]
+    return {
+        "cpu_model": cpuinfo_field("model name"),
+        "cpu_signature": f"{cpuinfo_field('cpu family')}/{cpuinfo_field('model')}/{cpuinfo_field('stepping')}",
+        "microcode": cpuinfo_field("microcode"),
+        "host_kernel": os.uname().release,
+        "smt": read("/sys/devices/system/cpu/smt/active"),
+        # the bench's performance policy: the pinned CPUs' frequency policy and the L3 / memory-
+        # bandwidth partition (rf-host-apply), both of which change its timings
+        # sustained_mhz: the effective frequency measured under load when the policy was chosen
+        # (slots.json "freq", infra/tests/freq-sweep.sh); a constant, so the fingerprint is stable
+        "freq_policy": {**freq_policy(s["pin"]), "sustained_mhz": c["freq"].get("sustained_mhz") if s.get("bench") else None,
+                        "memory": "hugetlb 2M, preallocated" if s.get("hugepages") else "anonymous (THP madvise)",
+                        "resctrl": {"own": read("/sys/fs/resctrl/schemata"), "others": read("/sys/fs/resctrl/rf-other/schemata"),
+                                    "others_cpus": read("/sys/fs/resctrl/rf-other/cpus_list")}},
+        "qemu": qemu,
+        "vm": {"slot": slot, "vcpus": len(s["pin"]), "topology": f"{t['sockets']}s{t['cores']}c{t['threads']}t",
+               "mem_mb": s["mem_mb"], "pinned_host_cpus": s["pin"], "cpu": "host"},
+        "image_id": image_id,
+    }
+
+
+# ---------------------------------------------------------------- the VM
+
+def seed_iso(path, slot, c, files):
+    s = c["slots"][slot]
+    net = s["net"]
+    d = tempfile.mkdtemp(prefix="seed-", dir=os.path.dirname(path))
+    try:
+        iid = f"rf-{slot}-{uuid.uuid4()}"
+        with open(f"{d}/meta-data", "w") as f:
+            f.write(f"instance-id: {iid}\nlocal-hostname: rf-{slot}\n")
+        with open(f"{d}/user-data", "w") as f:
+            # the image carries the behaviour (rf-job.service) and has no SSH server; no default user
+            f.write("#cloud-config\nusers: []\n")
+        with open(f"{d}/network-config", "w") as f:
+            f.write(json.dumps({"version": 2, "ethernets": {"eth0": {
+                "match": {"macaddress": s["mac"]}, "set-name": "eth0", "dhcp4": False, "dhcp6": False,
+                # no DNS servers: a VM resolves nothing itself; the proxy resolves its CONNECT targets
+                "addresses": [f"{net}.2/30"], "routes": [{"to": "default", "via": f"{net}.1"}]}}}))
+        for name, content in files.items():
+            mode = "wb" if isinstance(content, bytes) else "w"
+            with open(f"{d}/{name}", mode) as f:
+                f.write(content)
+            os.chmod(f"{d}/{name}", 0o600)
+        subprocess.run(["genisoimage", "-quiet", "-output", path, "-volid", "cidata", "-joliet", "-rock",
+                        *sorted(os.listdir(d))], cwd=d, check=True)
+        os.chmod(path, 0o600)
+        return iid
+    finally:
+        shutil.rmtree(d)
+
+
+class QMP:
+    def __init__(self, path, timeout=60):
+        end = now() + timeout
+        while True:
+            try:
+                self.s = socket.socket(socket.AF_UNIX)
+                self.s.connect(path)
+                break
+            except OSError:
+                self.s.close()
+                if now() > end:
+                    raise
+                time.sleep(0.2)
+        self.f = self.s.makefile("rw")
+        self._read()
+        self.cmd("qmp_capabilities")
+
+    def _read(self):
+        while True:
+            line = self.f.readline()
+            if not line:
+                raise OSError("QMP closed")
+            m = json.loads(line)
+            if "event" not in m:
+                return m
+
+    def cmd(self, name, **args):
+        self.f.write(json.dumps({"execute": name, "arguments": args} if args else {"execute": name}) + "\n")
+        self.f.flush()
+        r = self._read()
+        if "error" in r:
+            raise OSError(f"QMP {name}: {r['error']}")
+        return r.get("return")
+
+    def close(self):
+        try:
+            self.s.close()
+        except OSError:
+            pass
+
+
+JOB_RE = re.compile(r"Running job: (.*)$")
+DONE_RE = re.compile(r"Job (.*) completed with result: (\w+)")
+
+
+class VM:
+    """One VM of a slot: create, boot pinned, watch, destroy."""
+
+    def __init__(self, c, slot, files, rundir):
+        self.c, self.slot, self.s = c, slot, c["slots"][slot]
+        self.rundir = rundir
+        self.files = files
+        self.proc = None
+        self.boot = self.listening = self.job_start = None            # wall clock, for the records
+        self.boot_m = self.job_start_m = None                           # monotonic, for the deadlines
+        self.seen_hooks = self.seen_text = 0                            # journaled so far (poll_and_emit)
+        self.job_journaled = False
+        self.job = self.result = None
+        self.iid = None
+        self.hooks, self.refused, self.guest_text = [], None, []
+        self.mem = {}
+        self.pos = {}
+
+    def start(self, image):
+        r = self.rundir
+        os.makedirs(r, mode=0o700, exist_ok=True)
+        for f in ("disk.qcow2", "seed.iso", "qmp.sock", "job.log", "runner.log", "console.log"):
+            if os.path.exists(f"{r}/{f}"):
+                os.unlink(f"{r}/{f}")
+        subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", image, f"{r}/disk.qcow2"], check=True)
+        self.iid = seed_iso(f"{r}/seed.iso", self.slot, self.c, self.files)
+        t, s = self.s["topology"], self.s
+        n = len(s["pin"])
+        cmd = ["qemu-system-x86_64", "-name", f"rf-{self.slot},debug-threads=on", "-machine", "q35,accel=kvm,mem-merge=off",
+               "-sandbox", QEMU_SANDBOX,
+               "-cpu", "host,topoext=on", "-smp", f"{n},sockets={t['sockets']},cores={t['cores']},threads={t['threads']}",
+               "-m", f"{s['mem_mb']}M", *(["-object", f"memory-backend-memfd,id=ram,size={s['mem_mb']}M,hugetlb=on,"
+                                           "hugetlbsize=2M,prealloc=on", "-machine", "memory-backend=ram"]
+                                          if s.get("hugepages") else []),
+               "-nodefaults", "-display", "none", "-no-user-config", "-S",
+               "-drive", f"file={r}/disk.qcow2,if=virtio,format=qcow2,cache=none,aio=native,discard=unmap",
+               "-drive", f"file={r}/seed.iso,if=virtio,format=raw,readonly=on,cache=none",
+               "-netdev", f"tap,id=n0,ifname={s['tap']},script=no,downscript=no",
+               "-device", f"virtio-net-pci,netdev=n0,mac={s['mac']}",
+               "-device", "virtio-rng-pci",
+               "-chardev", f"file,id=con,path={r}/console.log", "-serial", "chardev:con",
+               "-chardev", f"file,id=job,path={r}/job.log", "-serial", "chardev:job",          # ttyS1: rf-job, the hook
+               "-chardev", f"file,id=run,path={r}/runner.log", "-serial", "chardev:run",       # ttyS2: the runner
+               "-qmp", f"unix:{r}/qmp.sock,server=on,wait=off", "-no-reboot"]
+        host = set(self.c["host_cpus"])
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, preexec_fn=lambda: os.sched_setaffinity(0, host))
+        try:
+            q = QMP(f"{r}/qmp.sock")
+            cpus = q.cmd("query-cpus-fast")
+            if len(cpus) != n:
+                raise OSError(f"{len(cpus)} vCPUs, expected {n}")
+            for cpu in cpus:
+                os.sched_setaffinity(cpu["thread-id"], {s["pin"][cpu["cpu-index"]]})
+            q.cmd("cont")
+            q.close()
+        except Exception:
+            self.kill()
+            raise
+        self.boot, self.boot_m = now(), mono()
+
+    def _read(self, name):
+        """The complete new lines of one serial log (a partial last line waits for its end)."""
+        try:
+            with open(f"{self.rundir}/{name}", "rb") as f:
+                f.seek(self.pos.get(name, 0))
+                data = f.read(1 << 20)
+        except FileNotFoundError:
+            return []
+        cut = data.rfind(b"\n") + 1
+        self.pos[name] = self.pos.get(name, 0) + cut
+        return data[:cut].decode(errors="replace").splitlines()
+
+    def poll_log(self):
+        """New lines of the two guest ports, each parsed for what only it may carry:
+        - runner.log (ttyS2): the runner's own output: the phases ("Listening for Jobs", "Running
+          job: NAME", "Job NAME completed with result: R"). NAME is the job's display name, which
+          a workflow chooses: whatever it contains (a newline, an RF-HOOK line) stays on this
+          port and is never read as a policy record;
+        - job.log (ttyS1): rf-job's lines (root) and the job-started hook's RF-HOOK record. Before
+          the hook nothing but rf-job writes there; the first RF-HOOK record is the policy's.
+        Returns the lines, the runner's prefixed with "[runner] "."""
+        out = []
+        for line in self._read("runner.log"):
+            out.append("[runner] " + line)
+            if "Listening for Jobs" in line and not self.listening:
+                self.listening = now()
+            m = JOB_RE.search(line)
+            if m and not self.job_start:
+                self.job_start, self.job_start_m, self.job = now(), mono(), clean(m.group(1).strip(), 120)
+            m = DONE_RE.search(line)
+            if m:  # informational: the guest prints it, so it is never trusted
+                self.result = m.group(2) if m.group(2) in RESULTS else "unknown"
+        for line in self._read("job.log"):
+            out.append(line)
+            if line.startswith("RF-HOOK "):  # the job-started hook's decision (guest text: cleaned)
+                try:
+                    h = json.loads(line[8:])
+                    h = {clean(k, 40): clean(v, 200) for k, v in h.items()} if isinstance(h, dict) else {}
+                except Exception:  # noqa: BLE001 - any parse failure (ValueError, RecursionError on deep nesting, ...)
+                    h = {"unparsed": clean(line[8:], 300)}
+                if self.hooks:
+                    # the hook runs once, before any step of the VM's one job: a later record was
+                    # written by the job itself (/dev/ttyS1 is the group runner's), so it is kept
+                    # as guest text and decides nothing
+                    self.guest_text.append(h)
+                    continue
+                self.hooks.append(h)
+                if h.get("decision") != "allowed":
+                    self.refused = h  # a refusal (or an unreadable decision): the VM is dead
+        return out
+
+    def size(self, name):
+        try:
+            return os.path.getsize(f"{self.rundir}/{name}")
+        except OSError:
+            return 0
+
+    def alive(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def check_record(self, bound_s):
+        """The no-record rule: a job has started (the runner's `Running job:`) but no policy record
+        came within bound_s. The hook runs before any step, right after the runner has fetched the
+        job's action archives through the proxy (seconds; bound_s is a generous multiple), so a
+        missing record means the hook crashed, hung or could not report: the VM is treated as
+        refused (ended, and the slot backs off). An image without the hook is guarded by the image
+        manifest, not by this rule."""
+        if self.job_start_m and not self.hooks and not self.refused and mono() - self.job_start_m > bound_s:
+            self.refused = {"decision": "refused", "reason": f"no policy record within {bound_s} s of the job's start"}
+        return self.refused
+
+    def sample_memory(self):
+        """QEMU's peak resident memory (VmHWM: its own memory; the guest RAM on hugepages is not
+        in it) and its hugetlb pages, sampled while it runs; the maxima are kept."""
+        try:
+            for line in open(f"/proc/{self.proc.pid}/status"):
+                k, _, v = line.partition(":")
+                if k in ("VmHWM", "HugetlbPages"):
+                    kb = int(v.split()[0])
+                    self.mem[k] = max(self.mem.get(k, 0), kb)
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def kill(self):
+        if self.alive():
+            self.proc.kill()
+            try:
+                self.proc.wait(30)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def destroy(self):
+        self.kill()
+        shutil.rmtree(self.rundir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- state for rf-status
+
+def slot_dir(slot):
+    """The slot's own directory (its user's, 0700): lock, state.json, the VM's files."""
+    return os.path.join(LIB, "run", slot)
+
+
+def state_path(slot):
+    return os.path.join(slot_dir(slot), "state.json")
+
+
+_saved = {}
+
+
+def save_state(slot, st):
+    text = json.dumps(st, indent=1)
+    if _saved.get(slot) == text:
+        return
+    tmp = state_path(slot) + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, state_path(slot))
+    _saved[slot] = text
+
+
+def load_state(slot):
+    try:
+        return json.load(open(state_path(slot)))
+    except (OSError, ValueError):
+        return {"slot": slot, "history": []}
+
+
+def slot_lock(slot):
+    fd = os.open(os.path.join(slot_dir(slot), "lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(f"rf-supervisor: slot {slot} is in use (its unit or a test holds the lock)")
+    return fd
+
+
+def drained():
+    return os.path.exists(os.path.join(LIB, "drain"))
+
+
+BUSY = os.path.join(LIB, "flags", "bench-busy")  # the bench user's directory, readable by all
+
+
+def bench_busy(c):
+    """The bench VM runs a job (the light slots take no new one). A flag older than the bench's
+    hard limit plus an hour is stale (a crashed bench supervisor) and ignored."""
+    if not c.get("pause_light_during_bench"):
+        return False
+    try:
+        return now() - os.path.getmtime(BUSY) < c["slots"]["bench"]["hard_limit_s"] + 3600
+    except OSError:
+        return False
+
+
+def set_busy(on):
+    if on:
+        with open(BUSY, "w") as f:
+            f.write(f"{os.getpid()}\n")
+    elif os.path.exists(BUSY):
+        os.unlink(BUSY)
+
+
+def cgroup_value(name):
+    """A value of this process's cgroup (cgroup v2), or None."""
+    try:
+        path = open("/proc/self/cgroup").read().strip().split("::", 1)[1]
+        v = open(f"/sys/fs/cgroup{path}/{name}").read().strip()
+        return int(v) if v.isdigit() else v
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def journal(rec):
+    """One line of the slot's job log, run/SLOT/jobs.log (the slot user's 0700 directory; the file
+    append-only, chattr +a, set by host-setup.sh), and the same line in the systemd journal, which
+    records the writing unit and uid, so that no slot can write another slot's record."""
+    line = json.dumps(rec, sort_keys=True)
+    log("JOB " + line)
+    try:
+        with open(os.path.join(slot_dir(rec["slot"]), "jobs.log"), "a") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        log(f"jobs.log: {e}")
+
+
+# ---------------------------------------------------------------- run: the slot's loop
+
+def sleep(s):
+    end = mono() + s
+    while not STOP and mono() < end:
+        time.sleep(min(5, max(0.0, end - mono())))
+
+
+def poll_and_emit(vm, rec, slot, bench):
+    """Read the guest's ports and journal what is new: the job's start (and, on the bench, the
+    flag that pauses the light slots), the policy record, later guest text. The counters live on
+    the VM, so no event is lost whichever call reads it."""
+    for line in vm.poll_log():
+        if JOB_RE.search(line) or DONE_RE.search(line):
+            log(f"[{slot}] guest: {clean(line.strip())}")
+    if vm.job_start and not vm.job_journaled:
+        vm.job_journaled = True
+        if bench:
+            set_busy(True)
+        journal({**rec, "event": "job-start", "job": vm.job, "job_started": iso(vm.job_start)})
+    for h in vm.hooks[vm.seen_hooks:]:
+        log(f"[{slot}] job policy: {h.get('decision')} ({h.get('reason')}; actor {h.get('github_actor')})")
+        journal({**rec, "event": "job-policy", **{f"hook_{k}": v for k, v in h.items()}})
+    vm.seen_hooks = len(vm.hooks)
+    for h in vm.guest_text[vm.seen_text:]:
+        journal({**rec, "event": "guest-text", "text": h})
+    vm.seen_text = len(vm.guest_text)
+
+
+def watch(vm, c, st, slot, rec):
+    """Wait for the VM to end; enforce the limits. Returns the reason it ended."""
+    s = c["slots"][slot]
+    bench = slot == "bench"
+    while True:
+        poll_and_emit(vm, rec, slot, bench)
+        if vm.check_record(c["policy_record_s"]):
+            # the guest powers itself off on a refusal; the host does not rely on it
+            return "refused by the job policy" + ("" if vm.hooks else " (no policy record)")
+        st.update(listening=iso(vm.listening), job=vm.job, job_started=iso(vm.job_start),
+                  phase="job" if vm.job_start else ("listening" if vm.listening else "booting"))
+        save_state(slot, st)
+        vm.sample_memory()
+        if not vm.alive():
+            return "powered off"
+        t = mono()
+        if STOP:
+            return "supervisor stopped"
+        if max(vm.size("job.log"), vm.size("runner.log"), vm.size("console.log")) > (256 << 20):
+            return "a serial log over 256 MiB"
+        if vm.size("disk.qcow2") > s["disk_limit_gb"] << 30:
+            return f"overlay over {s['disk_limit_gb']} GB"
+        if shutil.disk_usage(LIB).free < c["free_floor_gb"] << 30:
+            return f"less than {c['free_floor_gb']} GB free on the host"
+        if vm.job_start:
+            if t - vm.job_start_m > s["hard_limit_s"]:
+                return f"hard limit ({s['hard_limit_s']} s) reached"
+        else:
+            if not vm.listening and t - vm.boot_m > c["boot_limit_s"]:
+                return f"no listener within {c['boot_limit_s']} s"
+            if t - vm.boot_m > c["idle_limit_s"]:
+                return f"idle for {c['idle_limit_s']} s"
+            if drained():
+                return "drain"
+            if not bench and bench_busy(c):
+                poll_and_emit(vm, rec, slot, bench)  # a job that has just started keeps its VM (the pause race)
+                if not vm.job_start:
+                    return "paused: the bench VM runs a job"
+        time.sleep(5)
+
+
+def cmd_run(slot):
+    c = conf()
+    if slot not in c["slots"]:
+        raise SystemExit(f"rf-supervisor: unknown slot {slot}")
+    _lock = slot_lock(slot)
+    bench = slot == "bench"
+    if bench:
+        set_busy(False)  # a flag left by a crash
+    st = load_state(slot)
+    st.update(slot=slot, pid=os.getpid(), supervisor_started=iso(now()), phase="starting")
+    save_state(slot, st)
+    fails = 0
+
+    def backoff(what, err):
+        nonlocal fails
+        fails += 1
+        d = min(1800, 30 * 2 ** (fails - 1)) * random.uniform(0.8, 1.2)
+        log(f"[{slot}] {what}: {clean(err)}; retry in {d:.0f} s")
+        st.update(phase="backoff", last_error=f"{iso(now())} {what}: {clean(err)}")
+        save_state(slot, st)
+        sleep(d)
+
+    while not STOP:
+        if drained() or (not bench and bench_busy(c)):
+            st.update(phase="drained" if drained() else "paused (bench job)", runner=None, vm_started=None,
+                      job=None, job_started=None)
+            save_state(slot, st)
+            sleep(15)
+            continue
+        try:
+            image, image_id = image_paths()
+            hostfacts = host_fingerprint(c, slot, image_id)
+            hostfp = json.dumps(hostfacts, indent=1) + "\n"
+        except Exception as e:  # noqa: BLE001 - an organiser problem; keep the loop alive
+            backoff("image", e)
+            continue
+        try:
+            r = broker({"op": "jitconfig", "slot": slot})
+        except BrokerError as e:
+            backoff("jitconfig", e)
+            continue
+        rid, name = r["id"], r["name"]
+        proxy = f"http://{c['slots'][slot]['net']}.1:{c['proxy_port']}"
+        vm = VM(c, slot, {"rf-jitconfig": r["jit"], "rf-host.json": hostfp, "rf-proxy": proxy + "\n"},
+                os.path.join(slot_dir(slot), "vm"))
+        del r
+        rec = {"slot": slot, "runner": name, "runner_id": rid, "image_id": image_id, "qemu": hostfacts.get("qemu"),
+               "host_kernel": hostfacts.get("host_kernel"), "microcode": hostfacts.get("microcode"),
+               "host_json_sha256": hashlib.sha256(hostfp.encode()).hexdigest()}
+        st.update(runner=name, runner_id=rid, image_id=image_id, vm_started=None, job=None, job_started=None,
+                  phase="booting")
+        save_state(slot, st)
+        reason = None
+        try:
+            vm.start(image)
+            rec["vm"] = vm.iid
+            st["vm_started"] = iso(vm.boot)
+            log(f"[{slot}] VM up: runner {name} (id {rid}), image {image_id[:12]}")
+            reason = watch(vm, c, st, slot, rec)
+        except Exception as e:  # noqa: BLE001
+            reason = f"VM failed: {e}"
+        finally:
+            try:
+                vm.poll_log()   # the last lines; a failure here must not skip the cleanup below
+            except Exception as e:  # noqa: BLE001
+                log(f"[{slot}] reading the VM's last lines failed: {type(e).__name__}")
+            vm.destroy()
+            if bench:
+                set_busy(False)
+        try:
+            gone = broker({"op": "delete", "id": rid})["status"]
+        except BrokerError as e:
+            gone = f"not deleted ({e})"
+        ended = now()
+        log(f"[{slot}] VM ended: {reason}; job {vm.job!r} result {vm.result}; runner {gone}")
+        journal({**rec, "event": "end", "vm_started": iso(vm.boot), "listening": iso(vm.listening), "job": vm.job,
+                 "job_started": iso(vm.job_start), "ended": iso(ended), "result": vm.result, "reason": reason,
+                 # the memory, per VM: QEMU's peak resident set and hugetlb pages, and the slot
+                 # cgroup's peak since the supervisor started (against its MemoryMax)
+                 "qemu_vmhwm_kb": vm.mem.get("VmHWM"), "qemu_hugetlb_kb": vm.mem.get("HugetlbPages"),
+                 "slot_memory_peak_bytes": cgroup_value("memory.peak"),
+                 "slot_memory_max": cgroup_value("memory.max")})
+        st["history"] = ([{"runner": name, "vm_started": iso(vm.boot), "ended": iso(ended), "job": vm.job,
+                           "job_started": iso(vm.job_start), "result": vm.result, "reason": reason}]
+                         + st.get("history", []))[:HISTORY]
+        st.update(phase="recycling", runner=None, vm_started=None, job=None, job_started=None)
+        save_state(slot, st)
+        if vm.refused:
+            # a refused job (or one without a policy record) costs its slot a registration: refusals
+            # back off like failures (at most 240 s, 288 s with the jitter), so that a burst of them
+            # cannot exhaust the broker's hourly allowance
+            fails = min(fails, 3)
+            backoff(f"job refused by the job policy (actor {vm.refused.get('github_actor') or '?'}, "
+                    f"workflow {vm.refused.get('github_workflow_ref') or '?'})", vm.refused.get("reason"))
+        elif vm.job_start or reason in ("drain", "paused: the bench VM runs a job", "supervisor stopped"):
+            fails = 0
+        elif vm.listening is None or vm.boot_m is None or mono() - vm.boot_m < 300:
+            # the runner never connected (a refused runner version, a GitHub outage), or the VM died early
+            backoff("VM ended without a job" + ("" if vm.listening else " and its runner never connected"), reason)
+    st.update(phase="stopped", pid=None)
+    save_state(slot, st)
+
+
+# ---------------------------------------------------------------- test: one VM without GitHub
+
+def cmd_test(slot, script, tar, timeout, out):
+    c = conf()
+    _lock = slot_lock(slot)
+    image, image_id = image_paths()
+    files = {"rf-host.json": json.dumps(host_fingerprint(c, slot, image_id), indent=1) + "\n",
+             "rf-proxy": f"http://{c['slots'][slot]['net']}.1:{c['proxy_port']}\n",
+             "rf-test.sh": open(script).read()}
+    if tar:
+        files["rf-test.tar"] = open(tar, "rb").read()
+    vm = VM(c, slot, files, os.path.join(slot_dir(slot), "test-vm"))
+    sink = open(out, "w") if out else sys.stdout
+    try:
+        vm.start(image)
+        log(f"[test {slot}] VM up, image {image_id[:12]}")
+        while vm.alive() and mono() - vm.boot_m < timeout and not STOP and not vm.check_record(c["policy_record_s"]):
+            for line in vm.poll_log():
+                print(line, file=sink, flush=True)
+            time.sleep(1)
+        alive = vm.alive()
+        for line in vm.poll_log():
+            print(line, file=sink, flush=True)
+        if vm.refused:
+            how = "killed by the host" if alive else "powered itself off"
+            print(f"RF-TEST: refused by the job policy ({vm.refused.get('reason')}); the VM {how}", file=sink, flush=True)
+        elif alive:
+            log(f"[test {slot}] timeout ({timeout} s): killed")
+            print("RF-TEST: TIMEOUT", file=sink, flush=True)
+    finally:
+        vm.destroy()
+
+
+# ---------------------------------------------------------------- status
+
+def fmt_age(t):
+    if not t:
+        return "-"
+    s = int(now() - calendar.timegm(time.strptime(t, "%Y-%m-%dT%H:%M:%SZ")))
+    return f"{s // 3600}h{s % 3600 // 60:02d}m" if s >= 3600 else f"{s // 60}m{s % 60:02d}s"
+
+
+def cmd_status(n_hist):
+    c = conf()
+    print(f"drain: {'ON' if drained() else 'off'}   bench job running (light paused): {'yes' if bench_busy(c) else 'no'}   image: {os.path.basename(os.path.realpath(os.path.join(LIB, 'images', 'current.qcow2')))}")
+    for slot in c["slots"]:
+        st = load_state(slot)
+        unit = subprocess.run(["systemctl", "is-active", f"rf-slot@{slot}"], capture_output=True, text=True).stdout.strip()
+        en = subprocess.run(["systemctl", "is-enabled", f"rf-slot@{slot}"], capture_output=True, text=True).stdout.strip()
+        print(f"\n{slot:7} unit {unit}/{en}  phase {st.get('phase', '-')}  runner {st.get('runner') or '-'}  "
+              f"VM age {fmt_age(st.get('vm_started'))}  job {clean(st.get('job') or '-', 60)} ({fmt_age(st.get('job_started'))})")
+        if st.get("last_error"):
+            print(f"        last error: {clean(st['last_error'], 160)}")
+        for h in st.get("history", [])[:n_hist]:
+            print(f"        {h['ended']}  {clean(h.get('result') or '-', 10):10} {clean(h.get('job') or '(no job)', 40):40} {clean(h['reason'], 80)}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run"); r.add_argument("slot")
+    t = sub.add_parser("test"); t.add_argument("slot"); t.add_argument("script")
+    t.add_argument("--tar"); t.add_argument("--timeout", type=int, default=1800); t.add_argument("--out")
+    f = sub.add_parser("host-fingerprint"); f.add_argument("slot")
+    s = sub.add_parser("status"); s.add_argument("-n", type=int, default=5)
+    a = ap.parse_args()
+
+    def stop(*_):
+        global STOP
+        STOP = True
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    if a.cmd == "run":
+        cmd_run(a.slot)
+    elif a.cmd == "test":
+        cmd_test(a.slot, a.script, a.tar, a.timeout, a.out)
+    elif a.cmd == "host-fingerprint":
+        print(json.dumps(host_fingerprint(conf(), a.slot, image_paths()[1]), indent=1))
+    else:
+        cmd_status(a.n)
+
+
+if __name__ == "__main__":
+    main()

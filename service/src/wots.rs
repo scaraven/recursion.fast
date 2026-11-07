@@ -1,20 +1,23 @@
 //! The contract-fixed signature (`RecursionFast/Contract/Signature.lean`, normative byte layouts): Winternitz one-time
 //! signatures with `w = 4` (base-4 digits), `ℓ = 133` chains, under a Merkle tree of height 16,
-//! all hashes BLAKE2s-256. `vk` is the Merkle root; the signer is stateful and signs at most
+//! all hashes Keccak-256. `vk` is the Merkle root; the signer is stateful and signs at most
 //! `2^16` messages, each with the next one-time key.
 //!
 //! * digits of a 32-byte message `m`: `d[4i + t] = (m[i] >> 2t) & 3` for byte `i < 32`, `t < 4`;
 //!   checksum `C = Σ (3 − d_i)` over those 128; `d[128 + t] = (C >> 2t) & 3` for `t < 5`.
-//! * chain step `F(j, i, s, x) = BLAKE2s-256(0x57 ‖ enc64 j ‖ byte i ‖ byte s ‖ x)` (43 bytes).
-//! * secret chain start `sk_i` of key `j`: keyed BLAKE2s-256 under the signing seed of
-//!   `0x53 ‖ enc64 j ‖ byte i` (V4-A4: tag `S`; the seed is drawn independently of the PRF key, and
-//!   the tag keeps every derivation input distinct from the first byte of the other tagged inputs).
+//! * chain step `F(j, i, s, x) = Keccak-256(0x57 ‖ enc64 j ‖ byte i ‖ byte s ‖ x)` (43 bytes, one
+//!   permutation).
+//! * secret chain start `sk_i` of key `j`: `Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖ byte i)` (42 bytes, one
+//!   permutation; the 32-byte seed is drawn independently of the PRF key, and that independence, not
+//!   the tag, separates the chain starts from the oracle's answers: tag `S` is a domain
+//!   separator kept for clarity and layout stability).
 //! * signature of `m` with key `j`: `ots[i] = F` for `s = 0 … d_i − 1` applied to `sk_i`.
-//! * leaf `j`: `BLAKE2s-256(0x4B ‖ enc64 j ‖ end_0 ‖ … ‖ end_132)`, `end_i` the chain's step 3.
-//! * Merkle node `BLAKE2s-256(0x4D ‖ left ‖ right)`; `path[t]` is the sibling at level `t`, and
+//! * leaf `j`: `Keccak-256(0x4B ‖ enc64 j ‖ end_0 ‖ … ‖ end_132)` (4,265 bytes, 32 permutations),
+//!   `end_i` the chain's step 3.
+//! * Merkle node `Keccak-256(0x4D ‖ left ‖ right)` (65 bytes); `path[t]` is the sibling at level `t`, and
 //!   the current value is the left child iff bit `t` of `j` is 0.
 
-use crate::blake2s::{self, hash, hash_many, init, Digest, Keyed};
+use crate::keccak::{self, hash, Digest, Keyed};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 /// Number of WOTS chains.
@@ -23,7 +26,7 @@ pub const LEN: usize = 133;
 pub const HEIGHT: usize = 16;
 /// Number of one-time keys.
 pub const NKEYS: usize = 1 << HEIGHT;
-/// Domain tags (V4-16): WOTS chain step, WOTS leaf, Merkle node.
+/// Domain tags: WOTS chain step, WOTS leaf, Merkle node.
 pub const TAG_W: u8 = 0x57;
 pub const TAG_K: u8 = 0x4B;
 pub const TAG_M: u8 = 0x4D;
@@ -78,10 +81,10 @@ pub fn f_msg(j: u64, i: u8, s: u8, x: &Digest) -> [u8; 43] {
     b
 }
 
-/// Domain tag of a chain-start derivation (V4-A4, `S`).
+/// Domain tag of a chain-start derivation (`S`).
 pub const TAG_S: u8 = 0x53;
 
-/// The 10-byte message `0x53 ‖ enc64 j ‖ byte i` whose keyed hash under the seed is `sk_i` of key `j`.
+/// The 10-byte message `0x53 ‖ enc64 j ‖ byte i`: `sk_i` of key `j` is `Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖ byte i)`.
 fn sk_msg(j: u64, i: u8) -> [u8; 10] {
     let mut b = [0u8; 10];
     b[0] = TAG_S;
@@ -99,20 +102,11 @@ pub fn node_msg(l: &Digest, r: &Digest) -> [u8; 65] {
     b
 }
 
-/// Apply `F(j, i, s, ·)` to `x[i]` for every chain with `from[i] ≤ s < to[i]`, vectorised across
-/// chains.
+/// Apply `F(j, i, s, ·)` to `x[i]` for every chain `i` and step `from[i] ≤ s < to[i]`.
 fn advance(j: u64, x: &mut [Digest; LEN], from: &[u8; LEN], to: &[u8; LEN]) {
-    for s in 0..3u8 {
-        let idx: Vec<usize> = (0..LEN).filter(|&i| from[i] <= s && s < to[i]).collect();
-        if idx.is_empty() {
-            continue;
-        }
-        let msgs: Vec<[u8; 43]> = idx.iter().map(|&i| f_msg(j, i as u8, s, &x[i])).collect();
-        let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
-        let mut out = vec![[0u8; 32]; idx.len()];
-        hash_many(&init(0), 0, &refs, &mut out);
-        for (k, &i) in idx.iter().enumerate() {
-            x[i] = out[k];
+    for i in 0..LEN {
+        for s in from[i]..to[i] {
+            x[i] = hash(&f_msg(j, i as u8, s, &x[i]));
         }
     }
 }
@@ -183,13 +177,15 @@ impl Signer {
         let mut levels = vec![leaves];
         for _ in 0..HEIGHT {
             let prev = levels.last().unwrap();
-            let msgs: Vec<[u8; 65]> = prev.chunks(2).map(|p| node_msg(&p[0], &p[1])).collect();
-            let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
-            let mut next = vec![[0u8; 32]; msgs.len()];
+            let mut next = vec![[0u8; 32]; prev.len() / 2];
             let per = next.len().div_ceil(threads.max(1)).max(64);
             std::thread::scope(|sc| {
-                for (r, o) in refs.chunks(per).zip(next.chunks_mut(per)) {
-                    sc.spawn(move || hash_many(&init(0), 0, r, o));
+                for (p, o) in prev.chunks(2 * per).zip(next.chunks_mut(per)) {
+                    sc.spawn(move || {
+                        for (pair, n) in p.chunks(2).zip(o.iter_mut()) {
+                            *n = hash(&node_msg(&pair[0], &pair[1]));
+                        }
+                    });
                 }
             });
             levels.push(next);
@@ -209,16 +205,12 @@ impl Signer {
 
     /// The secret chain starts of key `j`.
     fn sks(&self, j: u64) -> [Digest; LEN] {
-        let msgs: Vec<[u8; 10]> = (0..LEN).map(|i| sk_msg(j, i as u8)).collect();
-        let refs: Vec<&[u8]> = msgs.iter().map(|m| m.as_slice()).collect();
-        let mut out = [[0u8; 32]; LEN];
-        self.seed.eval_many(&refs, &mut out);
-        out
+        core::array::from_fn(|i| self.seed.eval(&sk_msg(j, i as u8)))
     }
 
     /// Sign `m` with the next one-time key; refuses once all `2^16` are used. The index is taken
     /// by one atomic read-modify-write before anything is computed, so no two signatures share a
-    /// key and an index is never reused, whatever happens to the request afterwards (V4-A4).
+    /// key and an index is never reused, whatever happens to the request afterwards.
     pub fn sign(&self, m: &Digest) -> Result<Sig, Exhausted> {
         let idx = self
             .next
@@ -238,20 +230,16 @@ impl Signer {
     }
 }
 
-/// Leaves `j0 … j0 + out.len() − 1`. The chains of all these keys advance together, so that each
-/// step is one batch of hashes, vectorised across chains.
+/// Leaves `j0 … j0 + out.len() − 1`: for each key, its 133 chain starts advanced to step 3, then the
+/// leaf hash. The chain values are secret until hashed into the leaf; they are wiped after use.
 fn compute_leaves(seed: &Keyed, j0: u64, out: &mut [Digest]) {
-    let key = |c: usize| (j0 + (c / LEN) as u64, (c % LEN) as u8);
-    let sk: Vec<[u8; 10]> = (0..out.len() * LEN).map(|c| sk_msg(key(c).0, key(c).1)).collect();
-    let mut x = vec![[0u8; 32]; sk.len()];
-    seed.eval_many(&sk.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), &mut x);
-    for s in 0..3 {
-        let msgs: Vec<[u8; 43]> = x.iter().enumerate().map(|(c, x)| f_msg(key(c).0, key(c).1, s, x)).collect();
-        hash_many(&init(0), 0, &msgs.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), &mut x);
+    for (k, leaf) in out.iter_mut().enumerate() {
+        let j = j0 + k as u64;
+        let mut x: [Digest; LEN] = core::array::from_fn(|i| seed.eval(&sk_msg(j, i as u8)));
+        advance(j, &mut x, &[0; LEN], &[3; LEN]);
+        *leaf = hash(&leaf_msg(j, &x));
+        keccak::wipe(&mut x);
     }
-    let leaves: Vec<Vec<u8>> = x.chunks(LEN).enumerate().map(|(k, e)| leaf_msg(j0 + k as u64, e.try_into().unwrap())).collect();
-    hash_many(&init(0), 0, &leaves.iter().map(|m| m.as_slice()).collect::<Vec<_>>(), out);
-    blake2s::wipe(&mut x);
 }
 
 #[cfg(test)]

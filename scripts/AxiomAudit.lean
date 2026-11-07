@@ -1,15 +1,15 @@
 /-
-# Axiom audit of every organiser declaration (A4-F3; v4 stage A)
+# Axiom audit of every organiser declaration
 
   lake env lean --run scripts/AxiomAudit.lean      (interpreted; a `[[lean_exe]]` may wrap it)
 
-Imports the contract, library and controls of v4 (`RecursionFast.Contract`, `.Library`,
+Imports the contract, library and controls (`RecursionFast.Contract`, `.Library`,
 `.Controls`), and for **every** constant declared in a `RecursionFast.*` module computes the
 axioms of its dependency closure (`#print axioms` for all of them at once, memoised). Fails unless
 every one is within `propext`, `Classical.choice`, `Quot.sound`; so it also fails on
 `sorryAx`, `Lean.ofReduceBool`, `Lean.ofReduceNat` and `Lean.trustCompiler`. Prints per-module
 counts and the number of theorems that use no axiom at all. (A harness tool, not a built
-target; its `partial` traversal is v3's.)
+target; its traversal is `partial`.)
 -/
 import Lean
 

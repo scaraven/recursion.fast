@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The keyword sweep of the source rule (S9D-M1 fix pass).
+"""The keyword sweep of the source rule.
 
   python3 -I tests/source-rule/sweep.py SOURCE_RULE.py TOKENS.txt REVIEWED.txt
 

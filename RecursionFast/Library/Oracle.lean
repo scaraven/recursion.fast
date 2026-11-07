@@ -3,16 +3,15 @@
 
   Query programs (`Contract/Oracle.lean`) run against a full oracle function.
 
-  * `OProg.run H p`: the result of `p` when the oracle is the function `H`. It was v3's contract
-    definition, used there by the instantiated verifier `Vb` only; v4's contract runs a verifier
-    on a trace (`runSeq`) and on a log (`runLog`), and `run` serves the library: perfect
+  * `OProg.run H p`: the result of `p` when the oracle is the function `H`. The contract runs a
+    verifier on a trace (`runSeq`) and on a log (`runLog`); `run` serves the library: perfect
     completeness (`Library/Completeness.lean`) and the facts below.
   * `runLog_eq_run`: a log that agrees with the oracle `H` and contains every query a program asks
     under `H` makes `runLog` return the program's result under `H`: the verifier's decision read
     from the query log, as `KS` reads it, is the verifier actually run against the oracle.
   * `runLog_queries`: the log of a program's own run is such a log.
   * `run_bind`, `OProg.queries_bind`, `OProg.bind_assoc` (both `protected`): a composed program's
-    result and queries under `H` (completeness, V3-S2R-A2; the knowledge-soundness game, V4-A10).
+    result and queries under `H` (completeness; the knowledge-soundness game).
   * `Consistent H L`: the oracle function `H` agrees with the table `L` (moved from
     `Library/Completeness.lean`); `exists_consistent`, `consistent_append`,
     `consistent_append_self`: a lazily sampled run, extended by a fresh answer, stays consistent

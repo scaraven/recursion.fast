@@ -8,7 +8,7 @@
 #      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
 #   4. build, once and outside any sandbox, what Lake links into every badge executable: the
 #      compiled objects of every module of the organiser's import closure, of `Mathlib.Tactic`'s
-#      (what entries import for their proofs; review D-trim m-1) and the external C libraries of the
+#      (what entries import for their proofs) and the external C libraries of the
 #      package tree (a throw-away executable that imports `RecursionFast`, the CompPoly roots and
 #      `RF_BADGE_OBJECTS`, default `Mathlib.Tactic`), so that a badge build in the sandbox compiles
 #      only the modules an entry adds beyond these, within its cap (`badge_s`);
@@ -17,17 +17,17 @@
 #
 #   harness/org-setup.sh ORG          (ORG: the organiser checkout, e.g. the repository root)
 # Logs: ORG/logs/org-setup/ (gitignored). Every step under `timeout`; the timeouts of steps 1–4 sum
-# to 18 min, the evaluation's `setup` job's bound for this script (V4-A9; measured on a runner with
-# the package tree cached: 237 s, CI run 39966237935; step 4's `Mathlib.Tactic` objects 221 s on 4
-# cores of the development VM, `logs/trim-fix/objects-mathlib-tactic-4cores.log`).
+# to 18 min, the evaluation's `setup` job's bound for this script (measured on a GitHub-hosted
+# runner with the package tree cached: 237 s; step 4's `Mathlib.Tactic` objects 221 s on 4 cores of
+# an organiser workstation).
 set -euo pipefail
 ORG=$(cd "${1:?usage: org-setup.sh ORG}" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 LOG=$ORG/logs/org-setup; mkdir -p "$LOG" "$ORG/.lake/rf"
 # The organiser's roots: an entry may import any module of their import closure (gate rule 6).
-# CompPoly's binary field `BF64`/`Ext3` and its byte codec are organiser-built and pinned (v3
-# precedent 09668b5, archive/v4-dev-record:docs/v4/FIXLIST.md Q2): their modules are in the manifest as pinned, so the gate reports
-# their `@[csimp]` lemma instead of rejecting it as an untrusted one.
+# CompPoly's binary field `BF64`/`Ext3` and its byte codec are organiser-built and pinned: their
+# modules are in the manifest as pinned, so the gate reports their `@[csimp]` lemma instead of
+# rejecting it as an untrusted one.
 COMPPOLY=CompPoly.Fields.Binary.BF64.Ext3,CompPoly.Fields.Binary.BF64.Bytes
 ROOTS=${RF_ORG_ROOTS:-Mathlib,RecursionFast.Contract,RecursionFast.Library,RecursionFast.Controls,$COMPPOLY}
 TARGETS=${RF_ORG_TARGETS:-RecursionFast +${COMPPOLY//,/ +}}

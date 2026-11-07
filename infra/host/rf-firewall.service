@@ -1,0 +1,16 @@
+[Unit]
+Description=recursion.fast runner host: packet filter (inbound SSH only; VM egress policy)
+Documentation=file:/opt/rf-runner/README.md
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /opt/rf-runner/host/rf.nft
+ExecStop=-/usr/sbin/nft delete table inet rf_filter
+
+[Install]
+WantedBy=multi-user.target

@@ -1,11 +1,11 @@
 /-
-`TokenSweep`: the token table of the allowed import closure (S9D-M1 fix pass; a test tool, not
+`TokenSweep`: the token table of the allowed import closure (a test tool, not
 part of the badge path or the gate).
 
   (cd ORG && lake env lean --run SCRIPTS/TokenSweep.lean LIST...)   # ORG: the organiser package
 
-Imports every module named in the LIST files (one per line: `import-allowlist.txt` and
-`import-frontend.txt`, so every module a submission may import, transitively) and prints the
+Imports every module named in the LIST files (one per line: the import allowlist
+`.lake/rf/allowlist.txt`, so every module a submission may import, transitively) and prints the
 parser token table, one token per line, sorted. `tests/source-rule/sweep.py` then requires every
 keyword-like token to be rejected by `scripts/source-rule.py` or listed in
 `tests/source-rule/reviewed-tokens.txt`, so a toolchain or Mathlib bump that adds a keyword fails

@@ -1,11 +1,9 @@
 /-
 # Contract: knowledge soundness and completeness in the random-oracle model        (TRUSTED)
 
-DESIGN-v3 §4, V3-3, V3-4, as amended by V3-KS-A1 … A7, V4-A9 (the caps' values) and **V4-A10**
-(the user's decision of 2026-10-27): knowledge soundness is the textbook single-output notion for
-adversaries that ask the verifier's queries themselves (its extractor reads the final log, the
-verifier's answers included), and v3's potential (`KState`) is an untrusted library route to it
-(`Library/Security.lean`).
+Knowledge soundness is the textbook single-output notion for adversaries that ask the verifier's
+queries themselves (its extractor reads the final log, the verifier's answers included), and a
+potential (`KState`) is an untrusted library route to it (`Library/Security.lean`).
 `Certificate.lean` requires both definitions for the verifier and prover under **every** public
 key. Mathlib only; no probability monad and no adversary type: an adversary is a query program,
 and the uniform average over the `2^256` digests (a sum over `Digest`) is the only measure.
@@ -24,21 +22,20 @@ adversary wins when `V` accepts `(c, π)` with its answers read from the final q
 says: `V` asks at most `qV` queries on every input and oracle function, and every adversary with
 `Q + qV ≤ logCap` wins with probability at most `(Q + qV) · ε`. Acceptance read from the final
 log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_verdict`).
-* **The extractor reads the final log, the verifier's own answers included** (review E-ks M-1;
-  the user's choice of 2026-10-27, option B). The textbook definition (Chiesa–Yogev; CGSY24) gives
-  it the adversary's log only. So `KS` is textbook knowledge soundness for *normalised*
-  adversaries, those that ask the verifier's queries themselves, and the two coincide on them.
-  Textbook ⇒ `KS`, with the same extractor and the error at most doubled: the adversary followed
-  by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV) · ε ≤ 2 (Q + qV) · ε`
-  (`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: a verifier that accepts when its own
-  fresh answer, masked, is the statement's witness is certified at error `0` with an extractor
+* **The extractor reads the final log, the verifier's own answers included**. The textbook
+  definition (Chiesa–Yogev; CGSY24) gives it the adversary's log only. So `KS` is textbook knowledge
+  soundness for *normalised* adversaries, those that ask the verifier's queries themselves, and the
+  two coincide on them. Textbook ⇒ `KS`, with the same extractor and the error at most doubled: the
+  adversary followed by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV) · ε ≤ 2 (Q
+  + qV) · ε` (`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: a verifier that accepts when its
+  own fresh answer, masked, is the statement's witness is certified at error `0` with an extractor
   that reads that answer, against about `2^-112` textbook for every efficient extractor
   (`Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`; the efficient bound on paper). The
   deployment needs no more: every prover in it is normalised, since the verifier reads only the
   signed trace and the prover asked the service for every answer in it; and in the tree's
-  composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`).
-  Option A, an extractor that reads only the adversary's log, was rejected: it breaks the
-  potential's bridge and every potential-based proof, and is stronger than the deployment needs.
+  composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`). An
+  extractor that reads only the adversary's log is not used: it would break the potential's bridge
+  and every potential-based proof, and is stronger than the deployment needs.
 * *The adversary* is computationally unbounded, bounded only in queries, and deterministic. A
   randomised adversary is an average of deterministic ones, and the bound carries over because
   `E` does not depend on the adversary (paper). It chooses the statement after its queries. Its
@@ -55,18 +52,18 @@ log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_ve
   `logCap · 2^-t` per query, so at `logCap = 2^96` events of at least `224` bits are chargeable
   at `errorCap` (birthday cost `2^112`), a full digest costs `2^-160`, and an honest Merkle
   verifier comparing at most `2^15` digests per query about `2^-145`. At the caps the bound is
-  `2^96 · 2^-128 = 2^-32` at `2^96` queries and `2^-64` at `2^64` (V3-KS-A6). Nothing is claimed
+  `2^96 · 2^-128 = 2^-32` at `2^96` queries and `2^-64` at `2^64`. Nothing is claimed
   for `Q + qV > logCap`, and a `qV` above `logCap` makes `KS` vacuous (`Controls/Security.lean`,
-  `acceptAll_ks_above_logCap`). No conjunct excludes it here, by decision (review E-ks m-1):
+  `acceptAll_ks_above_logCap`). No conjunct excludes it here, by design:
   `Certificate`'s cap `qV ≤ 2^16 < logCap` does.
 * **The extractor is efficient (`Computes`, `Extractor.lean`) only for tapes of at most `2^64`
-  words, about `2^61` log entries, and proofs of at most 128 MiB** (V3-S2R-m2, V4-A11): beyond
+  words, about `2^61` log entries, and proofs of at most 128 MiB**: beyond
   that `E` is unconstrained and may be a non-constructive choice (`Controls/Certificate.lean`,
   `choice_certificate`), so between about `2^61` entries and `logCap`, and for longer proofs, the
   bound is a soundness-type statement, not knowledge.
 
-**The potential is a library route, not a rule (V4-A10).** A submitter proves `KS` by any
-correct argument. One route, v3's contract form, is a knowledge state (`Library/Security.lean`,
+**The potential is a library route, not a rule.** A submitter proves `KS` by any
+correct argument. One route is a knowledge state (`Library/Security.lean`,
 `KState`): a potential on logs that starts at `0`, rises by at most `ε` on average per fresh
 answer, and below `1` makes every accepted proof extractable. `KState.ks`
 (`Library/PaperTheorem.lean`) turns it into `KS` by Markov's inequality on the stopped potential;
@@ -74,39 +71,39 @@ it prices a challenge spread over several answers (the query phase of a hash-bas
 product of their conditionals (`Controls/Potential.lean`, `twoLucky`). The certificate does not
 name it.
 
-**What this file does not exclude (V3-S1-A13, A23).** `KS` alone excludes little: a verifier
+**What this file does not exclude.** `KS` alone excludes little: a verifier
 that accepts everything is knowledge-sound, for some extractor, exactly when every statement has
 a witness, which no digest can be shown to lack (`Library/KS.lean`, `acceptAll_ks_iff`). The
 knowledge content of a certificate is `KS` **with the named extractor**, which `Extractor.lean`
-requires a program of the contract's machine to compute within a step budget (decision Q1,
-V3-S2R-A1). Nor does anything here constrain how `V` behaves on one particular oracle function:
-a `V` that recognises a public function it can compute and accepts a magic proof when the oracle
-agrees with it is certified (`Controls/Backdoor.lean`, v3's O-25). In v4 the deployment, not this
-file, excludes it: the deployed oracle is keyed by a secret drawn after `V` is frozen (V4-2), so
-no such function is the deployed one except with negligible probability.
+requires a program of the contract's machine to compute within a step budget. Nor does anything here
+constrain how `V` behaves on one particular oracle function: a `V` that recognises a public function
+it can compute and accepts a magic proof when the oracle agrees with it is certified
+(`Controls/Backdoor.lean`). The deployment, not this file, excludes it: the deployed oracle is keyed
+by a secret drawn after `V` is frozen, so no such function is the deployed one except with
+negligible probability.
 
-**Completeness (`CompleteWithError`, V3-S2R-A2, O-23; the user's decision of 2026-10-20).** On
+**Completeness (`CompleteWithError`).** On
 every statement and witness of the relation, the honest prover's proof, produced and then verified
 against one **uniformly random** oracle (`prob`), is rejected with probability at most `δ`, a
 declared number at most `completenessCap = 2^-40` (`Certificate.lean`). The verifier sees the
 answers the prover saw. This admits grinding and challenge-dependent exceptional cases, which
-perfect completeness over every oracle function (S1's `Complete`, now `Library/Completeness.lean`)
-forbids; `Complete` implies `CompleteWithError` at `δ = 0`. v3's `failProb` is `prob` of a
+perfect completeness over every oracle function (`Complete`, in `Library/Completeness.lean`)
+forbids; `Complete` implies `CompleteWithError` at `δ = 0`. The library's `failProb` is `prob` of a
 `false` result (`Library/Completeness.lean`, `failProb_eq_prob`, `completeWithError_iff`). Nothing
-here says that an honest proof verifies under the one deployed oracle (keyed BLAKE2s, V4-2); the
-harness's concrete checks of `acc` do (DESIGN-v3 §5.4, V3-S2R-H-M4).
+here says that an honest proof verifies under the one deployed oracle (keyed Keccak-256); the
+harness's concrete checks of `acc` do.
 
-**Why `2^-40` (V4-A9, the user's decision of 2026-10-26; v3 had `2^-128`).** A completeness
-failure is no security event: it costs only its entrant, as one rejected proof and a failed run.
-An evaluation's prover makes about 640 proofs (the tree's 127, the stream's 513), so at `2^-40`
-each a run fails this way with probability about `2^-30.7`. Grinding to difficulty `2^g` meets
+**Why `2^-40`.** A completeness failure is no security event: it costs only its entrant, as one
+rejected proof and a failed run. An evaluation's prover makes at most about 106 proofs (the
+stream's 96 steps and at most 10 % re-runs), so at `2^-40` each a run fails this way with
+probability about `2^-33`. Grinding to difficulty `2^g` meets
 the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2^-128`).
 
-**Why `errorCap = 2^-128` (V4-A13, the user's decision of 2026-11-02; V4-A9 had `2^-120`, v3
-`2^-128`).** 128 bits per fresh query. A design over GF(2^128) no longer fits as it stands (a
-degree-2 sumcheck round costs `2^-127`, FB-9): it must draw its challenges from a larger field or
-repeat. Composing the tree from single-output knowledge soundness takes a union bound over the
-extracted proofs, about `513 · 2^30 · 2^-128 ≈ 2^-89` at `2^30` queries (archive/v4-dev-record:docs/DESIGN-v4-srom.md §2.4).
+**Why `errorCap = 2^-128`.** 128 bits per fresh query. A design over GF(2^128) does not fit as it
+stands (a degree-2 sumcheck round costs `2^-127`): it must draw its challenges from a larger field
+or repeat. Composing the stream from single-output knowledge soundness takes a union bound over
+the extracted proofs: for the at most about 106 proofs of one evaluation at `2^30` queries,
+about `106 · 2^30 · 2^-128 ≈ 2^-91`.
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs

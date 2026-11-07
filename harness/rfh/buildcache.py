@@ -27,9 +27,10 @@ certificate was checked on exactly those bytes (its kernel replay covered every 
 entry's comparator replays every declaration of the oleans again from an empty environment. The
 kernel never reads `.c`: a restored module's `.c`, which the badge is compiled from, is trusted as
 the record's run produced it, bound to the record by the attested manifest hash (the input
-`expect`). What a cache adds is O-12's residual one step removed: compiled code (or an olean differing from its source) that
-elaboration-time code in the record's build could have forged, which the source rule guards in
-the record's run as it guards this entry's. The result records the restored modules.
+`expect`). What a cache adds is the source rule's residual risk, one step removed: compiled code (or
+an olean differing from its source) that elaboration-time code in the record's build could have
+forged, which the source rule guards in the record's run as it guards this entry's. The result
+records the restored modules.
 """
 import hashlib
 import json
@@ -88,7 +89,7 @@ def export(tree, files, out, core_commit):
     for f in files:
         m = f[:-len(".lean")]
         if not (eligible(m) and _regular(os.path.join(build, "lib", "lean", f"{m}.olean"))):
-            continue        # not built: outside Solution's import closure (Q7)
+            continue        # not built: outside Solution's import closure
         rec = {}
         for rel in outputs(m):
             p = os.path.join(build, rel)
@@ -158,7 +159,7 @@ def restore(src, tree, files, core_commit, key=None, expect=None):
 
 def prune(tree, restored):
     """Remove the restored modules the build did not visit, so that the tree holds exactly
-    Solution's import closure (Q7). Lake writes `M.olean.hash` for every module of the build,
+    Solution's import closure. Lake writes `M.olean.hash` for every module of the build,
     up to date or rebuilt, and restored modules come without one. Returns the removed modules."""
     build = os.path.join(tree, ".lake", "build")
     unused = [m for m in restored if not os.path.exists(os.path.join(build, "lib", "lean", f"{m}.olean.hash"))]

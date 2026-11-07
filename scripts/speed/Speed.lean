@@ -1,6 +1,6 @@
 /-
-  Speed probe of the badge path (stage A): the contract's reference functions against the
-  library's word-level twins (`Library/Blake2sFast.lean`, `Library/Fast.lean`), compiled.
+  Speed probe of the badge path: the contract's reference functions against the
+  library's word-level twins (`Library/KeccakFast.lean`, `Library/Fast.lean`), compiled.
 
     lake -f scripts/speed/lakefile.toml build speed && .lake/build/bin/speed [seed]
 
@@ -31,24 +31,25 @@ def main (args : List String) : IO Unit := do
   -- the hash
   let m64 := (Array.range 20000).map (msg 64)
   let b64 := m64.map fun m => (⟨m.toArray⟩ : ByteArray)
-  bench "blake2s256 (reference) 64 B, 1 compression" m64 1 fun m => (blake2s256 m).headD 0 == 1
-  bench "digestB (twin) 64 B, 1 compression" b64 1 fun m => (Blake2s.digestB m)[0] == 1
-  let blocks := (Array.range 100000).map fun i =>
-    (Vector.ofFn fun j => (i + j.val + seed).toUInt32 : Vector UInt32 16)
-  bench "compress (reference)" blocks 1 fun b => (Blake2s.compress Blake2s.iv b 64 0 0)[0] == 1
-  bench "compressF (twin)" blocks 1 fun b => (Blake2s.compressF Blake2s.iv b 64 0 0)[0] == 1
+  bench "keccak256 (reference) 64 B, 1 permutation" m64 1 fun m => (keccak256 m).headD 0 == 1
+  bench "digestB (twin) 64 B, 1 permutation" b64 1 fun m => (Keccak.digestB m)[0] == 1
+  let states := (Array.range 100000).map fun i =>
+    (Vector.ofFn fun j => (i * 25 + j.val + seed).toUInt64 : Keccak.State)
+  bench "keccakF (reference)" states 1 fun a => (Keccak.keccakF a)[0] == 1
+  let statesF := states.map Keccak.S25.ofVec
+  bench "keccakFF (twin)" statesF 1 fun a => (Keccak.keccakFF a).a0 == 1
   let m1M := (Array.range 3).map (msg 1048576)
   let b1M := m1M.map fun m => (⟨m.toArray⟩ : ByteArray)
-  bench "blake2s256 (reference) 1 MiB" m1M 16384 fun m => (blake2s256 m).headD 0 == 1
-  bench "digestB (twin) 1 MiB" b1M 16384 fun m => (Blake2s.digestB m)[0] == 1
+  bench "keccak256 (reference) 1 MiB" m1M 7711 fun m => (keccak256 m).headD 0 == 1
+  bench "digestB (twin) 1 MiB" b1M 7711 fun m => (Keccak.digestB m)[0] == 1
   let xs := (Array.range 20000).map dig
   bench "wotsStep (reference), 43 B" xs 1 fun x => (wotsStep 5 7 1 x)[0] == 1
   bench "wotsStepF (twin), 43 B" xs 1 fun x => (wotsStepF 5 7 1 x)[0] == 1
-  -- trace digests: 2^16 queries of 100 bytes (about 1.6 * 2^16 compressions)
+  -- trace digests: 2^16 queries of 100 bytes (about 2^16 · 140 / 136 permutations)
   let big (i : Nat) : Trace := (List.range 65536).map fun k =>
     (⟨((List.range 100).map fun j => (i + k + j).toUInt8).toArray⟩, dig (i + k))
   let trs := (Array.range 2).map big
-  let units := (1 + 65536 * 140) / 64
+  let units := (1 + 65536 * 140) / 136 + 1
   bench "traceDigest (reference), 2^16 x 100 B" trs units fun tr => (traceDigest tr)[0] == 1
   bench "traceDigestF (twin), 2^16 x 100 B" trs units fun tr => (traceDigestF tr)[0] == 1
   -- the reference signer: one tree
@@ -59,10 +60,10 @@ def main (args : List String) : IO Unit := do
   IO.println s!"vk {vk.toList.take 4}"
   let t1 ← IO.monoNanosNow
   IO.println
-    s!"buildTree (fast signer, 2^16 keys, about 48M compressions): {(t1 - t0) / 1000000} ms"
+    s!"buildTree (fast signer, 2^16 keys, about 37M permutations): {(t1 - t0) / 1000000} ms"
   let sigs := (Array.range 200).map fun i => (dig i, Signer.Tree.sign sk T (i % 65536) (dig i))
-  bench "SigOk (reference), valid signature" (sigs.extract 0 20) 300 fun p => SigOk vk p.1 p.2
-  bench "SigOkF (twin), valid signature" sigs 300 fun p => SigOkF vk p.1 p.2
+  bench "SigOk (reference), valid signature" (sigs.extract 0 20) 250 fun p => SigOk vk p.1 p.2
+  bench "SigOkF (twin), valid signature" sigs 250 fun p => SigOkF vk p.1 p.2
   -- acc on a witness-sending root over two signed leaves of 2^10 steps
   let s₁ := dig 1
   let s₂ := dig 2
