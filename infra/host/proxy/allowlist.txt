@@ -9,6 +9,9 @@
 # objects/release-assets (release downloads, runner updates); tuf-repo.github.com (gh attestation)
 .github.com
 .githubusercontent.com
+# GitHub's attestation bundle storage: `gh attestation verify` fetches each attestation's
+# bundle_url from this storage account (the bot's provenance check)
+tmaproduction.blob.core.windows.net
 # GitHub's Sigstore instance (attestations of private repositories) and the public-good one
 # (public repositories: Fulcio certificates, Rekor log, the TUF root)
 fulcio.githubapp.com
