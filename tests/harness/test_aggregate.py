@@ -119,7 +119,7 @@ def main():
         check(r, "ERROR", f"fingerprint {why.split()[0]} (benchmark {prt['benchmark']}): the organiser's ERROR")
         holds(any(f"machine fingerprint is {why}" in x for x in r["reasons"]), f"... the reason says which: {r['reasons'][-1:]}")
     check(run(tmp, [], cert_status="reject", season=fixed), "REJECT", "a rejected certificate (no benchmark) stays REJECT")
-    # the named organiser errors (the bot exempts them from the quota and the fair order)
+    # the named organiser errors (they never count against the author in the bot's fair order)
     holds(run(tmp, [part(A, fp="e" * 64)], season=fixed).get("organiser_error") == "fingerprint", "a fingerprint ERROR is named")
     drift = part(A, benchmark="error")
     drift["organiser_error"] = "drift"

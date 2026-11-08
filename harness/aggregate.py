@@ -15,8 +15,8 @@ entries provisionally.
 **Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine), `lengths`
 (the stream did not use the season's chain lengths, or the season file's `[stream] lengths` is
 malformed), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
-cache was missing). The bot exempts them from the author's quota and fair order; `harness` (the
-certificate job ended without a certificate) and an unnamed ERROR are not exempt.
+cache was missing). They never count against the author in the bot's fair order; `harness` (the
+certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one.
 
 **The plan**. This file is the one definition of the benchmark jobs: `evaluate.yml` builds
 its matrix from `--print-matrix`, and the aggregation requires **exactly** that multiset of parts.
@@ -216,7 +216,7 @@ def combine(p, plan, season_sha, job, cert, parts, lengths_defect=None):
             what = "no list recorded"
         res["reasons"].append(f"organiser ERROR: the stream's chain lengths are not the season's [stream] lengths ({what})")
     res["verdict"] = verdict
-    if verdict == "ERROR":      # the named organiser error, if one is known (the bot exempts some)
+    if verdict == "ERROR":      # the named organiser error, if one is known (the bot never counts these against the author)
         kinds = [x.get("organiser_error") for x in [cert] + list(parts) if x.get("organiser_error") in ORGANISER_ERRORS]
         res["organiser_error"] = "fingerprint" if fp_why else "lengths" if len_why else (kinds[0] if kinds else None)
     truncated = bool((res["stream"] or {}).get("truncated"))
