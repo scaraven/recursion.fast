@@ -248,8 +248,8 @@ statement and signed proof as the runner received them and one fresh chain, a si
 - **Throughput.** One evaluation at a time. With the core commit's caches in place, one evaluation
   holds the benchmark slot for about 100 minutes (the certificate and benchmark jobs, at most 50
   each, §9, plus a few minutes of the setup jobs' cache lookups; 110 with a second kernel); when the caches must first be built, as after a pin move, up to about three
-  hours. A full queue with warm caches completes about a dozen or more evaluations a day; an author
-  starts at most 3 evaluations in any 24 hours (§15).
+  hours. A full queue with warm caches completes about a dozen or more evaluations a day; there is no
+  cap per author (§15).
 
 ## 7. The score
 
@@ -286,7 +286,7 @@ is scored.
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
 | REJECT | the entry failed a rule or a cap; the result names the reason |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose chain lengths are not the season's or a malformed `[stream] lengths`, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint and the well-formedness of the season's lengths are checked first, in the setup job, and the stream's lengths against the season's at aggregation; a fingerprint or chain-lengths failure uses up no attempt (a retry at the same pin cannot clear it). Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9 says when; one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose chain lengths are not the season's or a malformed `[stream] lengths`, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint and the well-formedness of the season's lengths are checked first, in the setup job, and the stream's lengths against the season's at aggregation; a fingerprint or chain-lengths failure uses up no attempt (a retry at the same pin cannot clear it). Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
 
 A result is **comparable** iff it is ACCEPT, its stream was not truncated and the job plan matched
 (an ACCEPT is always on the season's machine and with the season's chain lengths: anything else is
@@ -545,7 +545,7 @@ nothing else; include a `NOTES.md` (idea, result, what failed and why, what to t
 requests are never merged: a bot evaluates each with the core's attested `evaluate.yml` at the pin,
 publishes every verdict, and copies a new record's root to `main` (§8). The queue is round-robin by
 author: the author whose last evaluation started earliest goes next, and a new push supersedes the
-PR's queued entry and goes to the back. An author starts at most 3 evaluations in any 24 hours;
-further entries wait in their place. Re-submitting does not re-roll a record: an unchanged root is
+PR's queued entry and goes to the back. There is no cap per author: one author's entries run back to back
+when nobody else is waiting. Re-submitting does not re-roll a record: an unchanged root is
 refused, and a prover binary of an earlier record never takes it. That repository's `AGENTS.md`
 gives the submission procedure.
