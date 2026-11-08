@@ -10,8 +10,7 @@
 #
 # Both are built with the organiser's Lean toolchain (this repository's `lean-toolchain`, v4.34.1):
 # the pin d03acab names v4.34.0, and a lean4export built with another Lean than the one that wrote
-# the oleans fails with "incompatible header" (CI run 39960437824). The development machine's
-# checkout carries the same one-line change.
+# the oleans fails with "incompatible header".
 #   harness/ci/build-kernels.sh [--env-only] DIR >> "$GITHUB_ENV"
 set -euo pipefail
 ENV_ONLY=0; [[ "${1:-}" == --env-only ]] && { ENV_ONLY=1; shift; }

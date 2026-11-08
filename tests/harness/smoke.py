@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of 4 to 8 steps, chains of 16 to 128).
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 6 steps with the smoke's own fixed chain lengths
+in [16, 128]).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
   python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
@@ -13,24 +14,24 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    interleaved samples, its statement canaries on π_1, π_2 and π_M and its re-timing, the DoS column
    on π_M, the score) with the compiled `accF` badge: verdict ACCEPT; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
-   only, V4-A9) on the first and the last step's outputs through the same badge: the files
+   only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
 2. five deliberately broken provers, built from the same C source with one option each, through
    the stream with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
    compiled into the binary): each REJECT, the first step's output rejected by `acc`; a query above
-   the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal (Q13); unbounded allocation
-   under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory (Q14);
-3. the same entry with `certified := sorry`: PROVISIONAL (V4-15), not comparable;
+   the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal; unbounded allocation
+   under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory;
+3. the same entry with `certified := sorry`: PROVISIONAL, not comparable;
 4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built;
-5. the entry's module that `Solution` does not import is never built (Q7), and a Lean-kernel run
-   over a 400 MiB budget is its own outcome, PROVISIONAL, not a failed certificate (Q12).
+5. the entry's module that `Solution` does not import is never built, and a Lean-kernel run
+   over a 400 MiB budget is its own outcome, PROVISIONAL, not a failed certificate.
 With `--mock`: steps 1 and 2 with the Python stand-in badge (`tests/harness/mock_badge/`), which
-tests the runner without Lean, and 6. two duels through `evaluate.py draw-duel` and `bench --duel`
-(the record decided head-to-head on one runner): the honest toy prover against itself (both
-ACCEPT, the same drawn chain lengths, fresh starts and keys per run, the drawn order) and against
-the `BROKEN_CHAIN` prover as the incumbent (the incumbent's REJECT is `entry_failed`), each paired by
-`aggregate.py --duel`.
+tests the runner without Lean, and 6. one evaluation through `evaluate.py bench` and
+`aggregate.py` with a machine fingerprint file (`RF_MACHINE_FINGERPRINT`, AGENTS.md §6): ACCEPT, the
+fingerprint's hash recorded and no CPU model or flags; comparable under a season naming that hash,
+an organiser ERROR under one naming another, which also stops `run-benchmark.py` before the
+prover's build.
 """
 import argparse
 import json
@@ -39,15 +40,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
+import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 sys.path.insert(0, HERE)
 from rfh.checks import Badge  # noqa: E402
-from rfh import slate  # noqa: E402
-from rfh.sandbox import memcap, memcap_method  # noqa: E402
+from rfh.bench import fingerprint  # noqa: E402
+from rfh.sandbox import memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 from canaries import organiser_canaries  # noqa: E402
 
@@ -81,7 +82,7 @@ def broken(tmp, flag, extra_header=None):
             f.write(extra_header)
     s, raw = os.path.join(d, "prover.s"), os.path.join(d, "raw.s")
     subprocess.run(["gcc", "-S", "-O2", f"-D{flag}", "-I", d, "-o", raw, os.path.join(TOY, "toy.c")], check=True)
-    # as the committed honest prover: accepted by the reference image's binutils 2.42 (RF-M2)
+    # as the committed honest prover: accepted by the reference image's binutils 2.42
     subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "tools", "asm-compat.py"), raw, s], check=True)
     return entry_from(s, os.path.join(tmp, f"entry-{flag}"))
 
@@ -94,9 +95,9 @@ def load(path):
         return {}
 
 
-def evaluate(*args):
+def evaluate(*args, env=None):
     p = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "evaluate.py"), *args],
-                       capture_output=True, text=True, timeout=7200)
+                       capture_output=True, text=True, timeout=7200, env=env)
     print(p.stdout[-2500:], p.stderr[-1500:], sep="\n", flush=True)
 
 
@@ -116,7 +117,7 @@ def ws_entry(tmp, name, prover_s, solution_patch=None):
 
 
 def organiser_check(badge_dir, work, r):
-    """The organiser's canaries (V4-A9: core CI only) on the honest run's first and last stream
+    """The organiser's canaries (core CI only) on the honest run's first and last stream
     outputs, through the entry's compiled badge: (number of mutations, the answers that were wrong);
     each file must be accepted and each mutation rejected."""
     store = os.path.join(work, "store")
@@ -176,8 +177,8 @@ def main():
     # what each broken prover's rejection must say
     expect = {"BROKEN_CHAIN": "step 1 rejected by acc", "BROKEN_UNSIGNED": "step 1 rejected by acc",
               "BROKEN_STALE": "step 1 rejected by acc",
-              "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # Q13
-              # Q14; under the prlimit fallback an allocation fails instead and the prover exits 1
+              "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # named
+              # the cgroup kills it; under the prlimit fallback the allocation fails, exit 1
               "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "step1: exit 1"}
     lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
     open(lowmem, "w").write(open(os.path.join(ROOT, "harness", "smoke.toml")).read().replace('prover = "11G"', 'prover = "256M"'))
@@ -191,6 +192,9 @@ def main():
             shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
         shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
         shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)
+        shutil.copy(os.path.join(ROOT, "tests", "service", "keccak_ref.c"), badge)
+        os.makedirs(os.path.join(badge, "rfh"))                # wots_ref's `from rfh import keccak`
+        shutil.copy(os.path.join(ROOT, "harness", "rfh", "keccak.py"), os.path.join(badge, "rfh"))
         honest = entry_from(honest_s, os.path.join(tmp, "entry-honest"))
         r = run_bench(honest, badge, os.path.join(tmp, "work-honest"), os.path.join(tmp, "result-honest.json"))
         check(r["benchmark"] == "pass", f"honest toy prover: {r['benchmark']} {r['reasons']}")
@@ -199,71 +203,48 @@ def main():
             results[flag] = run_bench(e, badge, os.path.join(tmp, f"work-{flag}"), os.path.join(tmp, f"result-{flag}.json"),
                                       "calibrate,stream", season_of(flag))
 
-        def debris(token):
-            """What a first run killed at PART_S can leave: an orphan carrying its token, an
-            orphaned service in its scope whose stdin an orphan holds open, a tmpfs request directory."""
-            env = dict(os.environ, RF_RUN_TOKEN=token)
-            wrap = " ".join(memcap("2G", f"rf-svc-{token}-stream")) if memcap_method() == "systemd" else ""
-            sock = tempfile.mkdtemp(dir=tmp)
-            for cmd in (["sleep", "600"], ["sh", "-c", f"cd '{sock}' && sleep 600 | exec {wrap} '{SERVICE}' --socket s"]):
-                subprocess.Popen(cmd, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            d = tempfile.mkdtemp(prefix=f"rf-req-{token}-", dir="/dev/shm")
-            open(os.path.join(d, "chain.json"), "wb").write(b"x" * (1 << 20))
-            time.sleep(1.0)
-
-        def duel(name, incumbent, inc_ok, dirty=False):
-            """6. a duel: one draw, both runs in its order, paired by the aggregation; with `dirty`,
-            the first run's leftovers are planted before the second starts, which must clean them."""
+        def single():
+            """6. one evaluation, its part aggregated, with a machine fingerprint (AGENTS.md §6)."""
             smoke = os.path.join(ROOT, "harness", "smoke.toml")
-            cj = os.path.join(tmp, f"cert-{name}.json")
+            cj = os.path.join(tmp, "cert-single.json")
             json.dump({"status": "ok", "reasons": [], "badge_dir": badge}, open(cj, "w"))
-            dj = os.path.join(tmp, f"{name}.json")
-            evaluate("draw-duel", "--season", smoke, "--out", dj)
-            draw = load(dj)
-            out = {}
-            for k, role in enumerate(draw["order"]):
-                if dirty and k == 1:
-                    debris(f"{draw['id']}-{draw['order'][0]}")
-                out[role] = os.path.join(tmp, f"{name}-{role}.json")
-                evaluate("bench", "--entry", honest if role == "candidate" else incumbent, "--cert", cj, "--work",
-                         os.path.join(tmp, f"work-{name}-{role}"), "--out", out[role], "--season", smoke,
-                         "--duel", dj, "--role", role)
-            second = load(out[draw["order"][1]]).get("duel") or {}
-            sb = second.get("slate_before") or {}
-            ca = (load(out[draw["order"][0]]).get("duel") or {}).get("cleanup_after") or {}
-            clean = {"processes": 0, "shm": 0, "work": 0}
-            check(sb.get("left") == clean and ca.get("left") == clean and slate.empty(slate.leftovers(draw["id"]))
-                  and (not dirty or (sb["found"]["processes"] >= 3 and sb["found"]["shm"] == 1)),
-                  f"{name}: the second run started on a clean slate (found {sb.get('found')}, "
-                  f"{sb.get('found_processes')}; the first run's cleanup {ca.get('found')})")
-            rc, ri = load(out["candidate"]), load(out["incumbent"])
-            sc, si = rc.get("stream") or {}, ri.get("stream") or {}
-            check(rc.get("benchmark") == "pass" and sc.get("lengths") == draw["lengths"]
-                  and (si.get("lengths") == draw["lengths"] or not inc_ok),
-                  f"{name}: both streams ran the draw's chain lengths {draw['lengths']}")
-            if inc_ok:
-                check(sc.get("starts") != si.get("starts") and sc.get("vk") != si.get("vk"),
-                      f"{name}: fresh chain starts and service keys per run")
-            check([rc.get("duel", {}).get("role"), ri.get("duel", {}).get("role")] == ["candidate", "incumbent"]
-                  and rc["duel"]["position"] == draw["order"].index("candidate"), f"{name}: roles and order {draw['order']}")
-            agg = os.path.join(tmp, f"{name}-result.json")
-            subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"), "--plan", "single",
-                            "--season", smoke, "--cert", cj, "--out", agg, "--duel", dj, "--incumbent-cert", cj,
-                            "--incumbent-sha", "0" * 40, "--incumbent-path", "submissions/x", "--incumbent-part", out["incumbent"],
-                            out["candidate"]], check=True, capture_output=True)
-            g = load(agg)
-            ic = g.get("incumbent") or {}
-            want = ("ACCEPT", False) if inc_ok else ("REJECT", True)
-            check(g.get("verdict") == "ACCEPT" and g.get("duel") is True and g.get("order") == draw["order"]
-                  and len(g.get("cpu_models") or []) == 1 and (ic.get("verdict"), ic.get("entry_failed")) == want
-                  and ((ic.get("score") or {}).get("S") is not None) == inc_ok,
-                  f"{name}: aggregated {g.get('verdict')}, candidate S {(g.get('score') or {}).get('S')}, incumbent "
-                  f"{ic.get('verdict')} S {(ic.get('score') or {}).get('S')}, entry_failed {ic.get('entry_failed')}")
-        step("duel (honest against itself)", lambda: duel("duel-honest", entry_from(honest_s, os.path.join(tmp, "entry-inc")), True))
-        step("duel (the incumbent broken)", lambda: duel("duel-broken", dict(broken_entries)["BROKEN_CHAIN"], False))
-        step("duel (the first run leaves debris)", lambda: duel("duel-dirty", entry_from(honest_s, os.path.join(tmp, "entry-inc2")),
-                                                               True, dirty=True))
+            fpf = os.path.join(tmp, "fingerprint.json")
+            json.dump({"cpu_model": "smoke", "vm_shape": {"vcpus": 4, "memory": "16G"}, "frequency_policy": "smoke",
+                       "image_id": "smoke", "host_kernel": "smoke-kernel", "microcode": "0x0"}, open(fpf, "w"))
+            fp = fingerprint(fpf)["hash"]
+            env = dict(os.environ, RF_MACHINE_FINGERPRINT=fpf, RUNNER_NAME="rf-bench-smoke",
+                       RF_RUNNER_ENVIRONMENT="self-hosted", RF_RUNNER_LABELS="rf-bench")
+            out = os.path.join(tmp, "single-part.json")
+            evaluate("bench", "--entry", honest, "--cert", cj, "--work", os.path.join(tmp, "work-single"), "--out", out,
+                     "--season", smoke, env=env)
+            m = load(out).get("machine") or {}
+            check(load(out).get("verdict") == "ACCEPT" and m.get("fingerprint") == fp and len(fp or "") == 64
+                  and "cpu_model" not in m and "simd" not in m and "microcode" not in m and m.get("host_kernel") == "smoke-kernel"
+                  and m.get("runner_labels") == ["rf-bench"],
+                  f"one evaluation: {load(out).get('verdict')}, the fingerprint's hash {m.get('fingerprint')} and host kernel "
+                  f"recorded (no microcode), no CPU model or flags, the runner {m.get('runner_name')} {m.get('runner_labels')}")
+            seasons = {}
+            for name, want_fp in (("same", fp), ("other", "e" * 64)):
+                seasons[name] = os.path.join(tmp, f"smoke-{name}.toml")
+                open(seasons[name], "w").write(open(smoke).read().replace('fingerprint = "any"', f'fingerprint = "{want_fp}"'))
+            for name, verdict in (("same", "ACCEPT"), ("other", "ERROR")):
+                agg = os.path.join(tmp, f"single-{name}.json")
+                subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"), "--plan", "single",
+                                "--season", seasons[name], "--cert", cj, "--out", agg, out], check=True, capture_output=True)
+                g = load(agg)
+                check(g.get("verdict") == verdict and g.get("comparable") is (verdict == "ACCEPT")
+                      and (g.get("runner") or {}).get("name") == "rf-bench-smoke"
+                      and (verdict == "ACCEPT" or any("fingerprint is mismatched" in r for r in g.get("reasons", []))),
+                      f"aggregated under a season naming the {name} fingerprint: {g.get('verdict')}, comparable "
+                      f"{g.get('comparable')}, {(g.get('reasons') or [''])[-1][:90]}")
+            early = os.path.join(tmp, "single-early.json")
+            evaluate("bench", "--entry", honest, "--cert", cj, "--work", os.path.join(tmp, "work-early"), "--out", early,
+                     "--season", seasons["other"], env=env)
+            e = load(early)
+            check(e.get("benchmark") == "error" and "prover" not in e and any("fingerprint is mismatched" in r for r in e.get("reasons", [])),
+                  f"on another machine the run stops before the prover's build, an organiser ERROR: {e.get('benchmark')}, "
+                  f"{(e.get('reasons') or [''])[0][:90]}")
+        step("one evaluation with a machine fingerprint", single)
     else:
         if not a.org:
             raise SystemExit("smoke: --org ORG or --mock")
@@ -279,7 +260,7 @@ def main():
         check(cj.get("status") == "ok", f"witness-sending entry certified: {cj.get('status')} {cj.get('reasons')} "
                                         f"kernels {cj.get('kernels')}")
         check("Solution" in (cj.get("built_modules") or []) and "RfSmokeUnused" not in (cj.get("built_modules") or []),
-              f"an entry module Solution does not import is never built (Q7): built {cj.get('built_modules')}")
+              f"an entry module Solution does not import is never built: built {cj.get('built_modules')}")
         steps_s = {k: cj.get(k) for k in ("build_s", "comparator_s", "gate_s", "badge_s")}
         lean_peak = ((cj.get("kernel_runs") or {}).get("lean") or {}).get("peak_bytes")
         check(all(isinstance(v, (int, float)) for v in steps_s.values())
@@ -308,7 +289,7 @@ def main():
         else:
             check(False, f"the benchmarks need a certified entry; skipped (certificate {cj.get('status')})")
 
-        def over_budget():   # Q12: a kernel over its memory budget is its own outcome, never a failed certificate
+        def over_budget():   # a kernel over its memory budget is its own outcome, never a failed certificate
             oc = os.path.join(tmp, "cert-overbudget.json")
             evaluate("cert", "--entry", entry, "--org", a.org, "--work", os.path.join(tmp, "cert-overbudget"), "--out", oc,
                      "--cert-mem", "400M")
@@ -319,7 +300,7 @@ def main():
                       f"the Lean kernel over a 400M budget: {ob.get('status')}, {ob.get('provisional_reasons')}")
             else:      # an address-space limit cannot tell a kernel over budget from a failure
                 check(ob.get("status") not in ("ok", None), f"the Lean kernel over a 400M address-space limit is not certified: {ob.get('status')}")
-        step("Q12", over_budget)
+        step("kernel over budget", over_budget)
 
         def provisional():   # 3. the same entry, its certificate left open
             pe = ws_entry(tmp, "entry-provisional", honest_s, [(
@@ -343,7 +324,7 @@ def main():
         step("source rule", source_rule)
 
     r = results.get("honest", {})
-    # RF-M1: the aggregation of this evaluation's one part ACCEPTs (or matches the certificate),
+    # the aggregation of this evaluation's one part ACCEPTs (or matches the certificate),
     # and with the part dropped it is ERROR, never ACCEPT
     cert_file = cert if not a.mock else os.path.join(tmp, "cert-mock.json")
     if a.mock:
@@ -357,15 +338,18 @@ def main():
         whole = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-whole.json"))
         dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
         check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
-              f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')} (RF-M1)")
+              f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')}")
     step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
         sc, st = r["score"], r["stream"]
         check(all(k in sc for k in ("S", "P_bar", "V_bar", "c_P", "v_ref_ns", "M", "marginal", "fit")) and sc["M"] == st["M"]
-              and 4 <= st["M_drawn"] <= 8 and not st["truncated"],
+              and not st["truncated"],
               f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, V̄ {sc.get('V_bar')}, M {sc.get('M')} of {st.get('M_drawn')}")
-        check(all(16 <= n <= 128 for n in st["lengths"]) and len(st["lengths"]) == st["M_drawn"] + 1,
-              f"chain lengths drawn per step: {st['lengths']}")
+        smoke_stream = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]
+        fixed = smoke_stream["lengths"]
+        check(st["M_drawn"] == smoke_stream["M"] and len(fixed) == smoke_stream["M"] + 1 and st["lengths"] == fixed,
+              f"the stream ran the smoke's M = {smoke_stream['M']} steps over its fixed list of M + 1 = {len(fixed)} "
+              f"lengths: {st['lengths']}")
         check(all(all(k in s for k in ("P_s", "V_ns", "V_runs_ns", "pi_bytes", "x", "startup_s", "kill_s")) for s in st["steps"]),
               f"every step records P, V (both runs), |π|, x, start-up and kill latency: {sorted(st['steps'][0])}")
         check(st["canaries"] >= 4, f"statement canaries on π_1, π_2, π_M rejected: {st['canaries']}")

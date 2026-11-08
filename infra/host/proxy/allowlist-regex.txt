@@ -1,0 +1,3 @@
+# Hosts matched by pattern (squid dstdom_regex, case-insensitive; anchored).
+# The Actions artifact and cache blob storage accounts (results-receiver hands out SAS URLs on these)
+^productionresultssa[0-9]+\.blob\.core\.windows\.net$

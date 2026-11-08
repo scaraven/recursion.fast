@@ -1,0 +1,68 @@
+#!/bin/bash
+# The guest's one task per boot (root; rf-job.service; installed by infra/image/provision.sh).
+# It mounts the seed (the read-only ISO labelled `cidata` the host built for this VM), copies the
+# host's fingerprint to /run/rf/host.json, writes the machine fingerprint (rf-fingerprint) to
+# /run/rf/fingerprint.json (RF_MACHINE_FINGERPRINT for the jobs), sets the proxy the seed names
+# (rf-proxy) for every process, and then either
+#   - rf-jitconfig present: runs the GitHub Actions runner for exactly one job
+#     (`run.sh --jitconfig`, an ephemeral just-in-time runner), or
+#   - rf-test.sh present (rf-supervisor test, no GitHub): runs it as `runner`;
+# and powers the VM off. Two serial ports carry what the host reads:
+#   ttyS1 (the host's job.log): this script's own lines and the job-started hook's RF-HOOK record.
+#     Nothing else writes here before the hook, so the first RF-HOOK record is the policy's;
+#   ttyS2 (runner.log): the runner's output, with the phases the host reads ("Running job: NAME"
+#     etc.). NAME is a workflow's choice: whatever it holds stays on this port, which the host
+#     never reads for a policy record.
+set -u
+exec > /dev/ttyS1 2>&1
+echo "rf-job: boot at $(date -u +%FT%TZ), kernel $(uname -r)"
+cloud-init status --wait >/dev/null 2>&1 || echo "rf-job: cloud-init reported an error"
+seed=/run/rf/seed
+mkdir -p "$seed" && chmod 0700 /run/rf/seed
+dev=$(blkid -L cidata) && mount -o ro "$dev" "$seed" || { echo "rf-job: no seed"; systemctl poweroff; exit 1; }
+install -m 0444 "$seed/rf-host.json" /run/rf/host.json 2>/dev/null || echo "rf-job: the seed has no host fingerprint"
+# the slot type for the job policy (rf-job-policy.py): bench or light
+python3 -I -c 'import json,sys; s=json.load(open(sys.argv[1]))["vm"]["slot"]; print("bench" if s == "bench" else "light")' \
+  /run/rf/host.json > /run/rf/slot-type 2>/dev/null && chmod 0444 /run/rf/slot-type || echo "rf-job: no slot type"
+# the job-started hook reports its decision on the job serial port without sudo
+chgrp runner /dev/ttyS1 && chmod 0620 /dev/ttyS1
+# the machine fingerprint for the jobs (RF_MACHINE_FINGERPRINT in the runner's .env); stable per
+# machine configuration: nothing in it changes from one boot to the next
+rf-fingerprint > /run/rf/fingerprint.json.tmp && chmod 0444 /run/rf/fingerprint.json.tmp \
+  && mv /run/rf/fingerprint.json.tmp /run/rf/fingerprint.json || echo "rf-job: no machine fingerprint"
+# the proxy (the VM's only way out; the seed names it): for every process (/etc/environment), the
+# runner and its jobs (the runner's .env), and the job or test started here
+proxy=$(tr -dc 'a-z0-9:/.' < "$seed/rf-proxy" 2>/dev/null)
+PROXY_ENV=()
+if [[ -n "$proxy" ]]; then
+  PROXY_ENV=("http_proxy=$proxy" "https_proxy=$proxy" "HTTP_PROXY=$proxy" "HTTPS_PROXY=$proxy"
+             "no_proxy=localhost,127.0.0.1,::1" "NO_PROXY=localhost,127.0.0.1,::1")
+  printf '%s\n' "${PROXY_ENV[@]}" >> /etc/environment
+  printf '%s\n' "${PROXY_ENV[@]}" >> /home/runner/actions-runner/.env
+else
+  echo "rf-job: the seed names no proxy; the VM has no way out"
+fi
+ENV=(env -i HOME=/home/runner USER=runner LOGNAME=runner SHELL=/bin/bash LANG=C.UTF-8 RF_MACHINE_FINGERPRINT=/run/rf/fingerprint.json
+     "${PROXY_ENV[@]}"
+     PATH=/home/runner/.elan/bin:/home/runner/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
+if [[ -f "$seed/rf-jitconfig" ]]; then
+  jit=$(cat "$seed/rf-jitconfig")
+  umount "$seed"
+  cd /home/runner/actions-runner
+  runuser -u runner -- "${ENV[@]}" ./run.sh --jitconfig "$jit" > /dev/ttyS2 2>&1
+  echo "rf-job: run.sh exited $?"
+elif [[ -f "$seed/rf-test.sh" ]]; then
+  install -o runner -g runner -m 0755 "$seed/rf-test.sh" /home/runner/rf-test.sh
+  # the seed is root-only: root opens the tarball, `runner` unpacks it
+  if [[ -f "$seed/rf-test.tar" ]]; then runuser -u runner -- tar -xf - -C /home/runner < "$seed/rf-test.tar"; fi
+  umount "$seed"
+  cd /home/runner
+  # fd 3: the runner's port, so that a test can play the runner (tests/hostile-name.sh)
+  runuser -u runner -- "${ENV[@]}" bash /home/runner/rf-test.sh 3> /dev/ttyS2
+  echo "RF-TEST: exit $?"
+else
+  umount "$seed"
+  echo "rf-job: the seed has neither rf-jitconfig nor rf-test.sh"
+fi
+sync
+systemctl poweroff

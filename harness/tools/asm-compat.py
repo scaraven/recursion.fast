@@ -16,8 +16,7 @@ rejects; this filter rewrites or drops them and changes nothing else:
   rejects, and they carry absolute host paths;
 * a `.incbin` or `.include` directive is an error (the harness's build sees only the `.s` files).
 
-The LLVM rules are the baseline team's `submissions/spartan-srom/prover/sanitize-asm.py`
-(recursion.fast-submissions, branch `v4/flock-baseline`), merged here with the GCC rule.
+The LLVM rules come from a submitted entry's assembly sanitizer, merged here with the GCC rule.
 """
 import base64
 import re

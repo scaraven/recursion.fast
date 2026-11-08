@@ -14,11 +14,11 @@
 5. the memory cap kills a prover above it and not one below it;
 6. the handshake: a request whose prover never prints `ready` times out (`ready_s`), and one that
    prints `done` is stopped there;
-7. the clock stops when the sandbox is dead (V4-A11 §5.1, the flock `seed_pipe` pattern): a prover
+7. the clock stops when the sandbox is dead (`harness/PROVER.md` §3): a prover
    that prints `done` and keeps writing `proof.bin` from a thread, or from a forked child, has none
    of its late bytes read; one that closes stdout without `done` and leaves a child computing is
    charged until every process is dead; no process survives any request;
-8. R-M1: a prover that makes /work unusable (an input's name taken by a directory, or /work made
+8. a prover that makes /work unusable (an input's name taken by a directory, or /work made
    unreadable) is the entry's failure with that reason, never a harness error.
 """
 import os
@@ -104,7 +104,7 @@ def main():
     check(len(c.query([b"still alive"])[0]) == 32, "the service answers after the prover's garbage")
     c.close()
 
-    # 6.-8. the handshake, the clock, R-M1
+    # 6.-8. the handshake, the clock, an unusable /work
     def req(prog_s, kind="step", step=5, inputs=None, work_cap=None):
         d = os.path.join(tmp, f"req-{kind}-{time.monotonic_ns()}")
         os.makedirs(os.path.join(d, "bin"))
@@ -126,10 +126,10 @@ def main():
           f"the done line stops the clock once the sandbox is dead ({r.status}, P {r.seconds:.4f} s, kill {r.kill_s:.4f} s, {r.proof!r})")
     r = req(HS + 'int main(){hs();sleep(100);}\n', step=2)
     check(r.status == "timeout", f"a request over step_s times out ({r.status})")
-    # review m-4: the late writer stamps CLOCK_MONOTONIC (the runner's clock) into proof.bin every
-    # millisecond, before and after `done`; under the V4-A11 order every stamp is at or before the
-    # time the clock stopped (the death of the sandbox), under v4's order (the clock stopped at
-    # `done`, the kill after it) the stamps written between `done` and the kill would be later
+    # the late writer stamps CLOCK_MONOTONIC (the runner's clock) into proof.bin every
+    # millisecond, before and after `done`; with the clock stopped at the death of the sandbox every
+    # stamp is at or before that time, whereas a clock stopped at `done` with the kill after it
+    # would let the stamps written between `done` and the kill be later
     late = (HS + 'static void*w(void*a){int fd=*(int*)a;struct timespec t;for(;;){clock_gettime(CLOCK_MONOTONIC,&t);'
             'long long ns=t.tv_sec*1000000000LL+t.tv_nsec;write(fd,&ns,8);usleep(1000);}return 0;}\n'
             'int main(){hs();static int fd;fd=open("proof.bin",O_WRONLY|O_CREAT|O_TRUNC,0644);'
@@ -160,15 +160,15 @@ def main():
           f"never exist ({r.status}, P {r.seconds:.3f} s)")
     check(not survivors("/prover/prover"), "no request process survives")
     r = req(HS.replace('puts("ready")', 'mkdir("chain.json",0755);puts("ready")') + 'int main(){hs();sleep(100);}\n')
-    check("made /work unusable" in r.status, f"R-M1: an input's name taken by a directory is the entry's failure: {r.status}")
+    check("made /work unusable" in r.status, f"an input's name taken by a directory is the entry's failure: {r.status}")
     r = req(HS + 'int main(){hs();FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);chmod(".",0);'
             'puts("done");fflush(stdout);sleep(100);}\n')
     check("made /work unusable" in r.status or "cannot open" in r.status or "Permission" in r.status,
-          f"R-M1: /work made unreadable is the entry's failure: {r.status}")
+          f"/work made unreadable is the entry's failure: {r.status}")
     r = req(HS + 'int main(){hs();FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);int g=open("big",O_WRONLY|O_CREAT,0644);'
             'ftruncate(g,1LL<<40);close(g);puts("done");fflush(stdout);sleep(100);}\n', work_cap=1 << 30)
     check(r.status != "ok" and "work_cap" in r.status,
-          f"review M-1/M-2: a 1 TiB sparse file in /work counts at its size, above work_cap: {r.status}")
+          f"a 1 TiB sparse file in /work counts at its size, above work_cap: {r.status}")
     r = req(HS + 'int main(){hs();FILE*f=fopen("proof.bin","w");fputs("P",f);fclose(f);mkdir("d",0700);'
             'FILE*h=fopen("d/x","w");fputs("x",h);fclose(h);chmod("d",0);puts("done");fflush(stdout);sleep(100);}\n',
             work_cap=1 << 30)
@@ -176,7 +176,7 @@ def main():
           f"a mode-000 subdirectory is made accessible and measured ({r.status}, {r.work_bytes} bytes)")
     r = req('int main(){_exit(0);}\n')
     check(r.status.startswith("no ready line") or "ended before" in r.status,
-          f"review m-1: a prover that exits at once is the entry's failure, never a harness error: {r.status}")
+          f"a prover that exits at once is the entry's failure, never a harness error: {r.status}")
     from rfh.prover import remove_tree, tree_bytes
     t = os.path.join(tmp, "locked")
     os.makedirs(os.path.join(t, "a", "b"))
@@ -186,7 +186,7 @@ def main():
     os.chmod(os.path.join(t, "a", "b"), 0)
     os.chmod(os.path.join(t, "a"), 0)
     nb = tree_bytes(t)
-    check(nb >= 1 << 40, f"review M-2: tree_bytes counts a sparse file at its size, through mode-000 directories: {nb}")
+    check(nb >= 1 << 40, f"tree_bytes counts a sparse file at its size, through mode-000 directories: {nb}")
     check(remove_tree(t), "a locked tree is removed (made accessible first)")
     svc.stop()
 

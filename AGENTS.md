@@ -11,20 +11,13 @@ season file [`harness/season.toml`](harness/season.toml) and the normative inter
 [`service/PROTOCOL.md`](service/PROTOCOL.md); (3) this file. Where two disagree, the higher one is
 what is checked, and the disagreement is a bug to report.
 
-Identifiers such as `V4-A11`, `C-m4` or `RF-M1` in code comments and the interface documents refer
-to the development record on the branch `archive/v4-dev-record`. Documents cited there by name:
-BRIEF is `docs/v4/BRIEF.md`, "design" is `docs/DESIGN-v4-srom.md`, DESIGN-v3 is
-`docs/v3-design-agent-written-ROM-SNARK-verifier-…md`, FIXLIST is `docs/v4/FIXLIST.md`, and a stage
-RESULT is under `docs/v4/stages/`, all on that branch. The v2 identifiers in the harness's Lean
-tools and source rule (`S6b-M3`, `S7-M1`, `S9D-M1`, …) refer to v2's record at the tag `v2-archive`.
-
 ## 1. What is contested
 
-The fastest **recursive prover for BLAKE2s hash chains** whose soundness is proved in Lean. An
+The fastest **recursive prover for Keccak-256 hash chains** whose soundness is proved in Lean. An
 entry is a hash-based non-interactive argument for one relation over 32-byte digests: a leaf digest
-commits to a BLAKE2s chain from a secret start, a node digest to two accepted children. The
+commits to a Keccak-256 chain from a secret start, a node digest to two accepted children. The
 benchmark is incrementally verifiable computation: the prover extends one running proof by one
-fresh chain per step, 96 steps, and the score charges its time per compression, its verifier's
+fresh chain per step, 96 steps, and the score charges its time per permutation, its verifier's
 time and its proof's size. Soundness is not measured: it is a kernel-checked theorem, knowledge
 soundness in the random-oracle model, and the oracle is deployed as a secret-keyed service that
 signs the answers each proof used (the signed random oracle, §5).
@@ -66,7 +59,11 @@ verbatim. The comparator checks that the theorem proved is exactly the rendered 
 the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors 0 and not
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
-`prover/prover.s`.
+`prover/prover.s`. It passes the certificate and runs through the benchmark at the smoke's shape
+([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed: its `V`
+re-checks every chain of the stream so far, so its check time grows with the stream's history and
+exceeds `verify_s` from about step 32 on the evaluation machine (with the caps lifted it would also
+exceed `stream_s` and the DoS column's caps).
 
 ## 3. The relation and acceptance
 
@@ -81,8 +78,11 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   ([`#L54-L55`](RecursionFast/Contract/Relation.lean#L54-L55)), or
   `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`.
 - **Byte layouts** (normative; the contract, the service and the runner hash the same bytes):
-  `chainStep d = BLAKE2s-256(0x43 ‖ d)`, `leafStmt h n = BLAKE2s-256(0x4C ‖ h ‖ enc64 n)`,
-  `nodeStmt c₁ c₂ = BLAKE2s-256(0x4E ‖ c₁ ‖ c₂)`, `enc64` = 8 bytes little-endian
+  `chainStep d = Keccak-256(0x43 ‖ d)`, `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)`,
+  `nodeStmt c₁ c₂ = Keccak-256(0x4E ‖ c₁ ‖ c₂)`, `enc64` = 8 bytes little-endian; Keccak-256 is
+  Ethereum's: FIPS 202's sponge over `Keccak-f[1600]`, rate 136 bytes, padding `0x01 … 0x80` (not
+  SHA3-256's `0x06`), 32-byte output ([`Hash/Keccak.lean`](RecursionFast/Contract/Hash/Keccak.lean));
+  a chain step is 33 bytes, one permutation
   ([`Relation.lean#L61-L95`](RecursionFast/Contract/Relation.lean#L61-L95)); the trace digest and
   the signature ([`Signature.lean#L18-L33`](RecursionFast/Contract/Signature.lean#L18-L33)).
 - **Acceptance** `Submission.acc S vk c p`
@@ -153,9 +153,9 @@ kernel-checked) offers routes and parts: a potential on logs, `KState`, with its
 `KSTextbook.ks` (textbook soundness implies `KS` at twice the error,
 [`Library/KS.lean`](RecursionFast/Library/KS.lean)); the witness-sending entry
 ([`Library/WitnessSending.lean`](RecursionFast/Library/WitnessSending.lean)); and word-level twins
-of BLAKE2s and `SigOk` proved equal to the contract's
+of Keccak-256 and `SigOk` proved equal to the contract's
 ([`Library/Fast.lean`](RecursionFast/Library/Fast.lean),
-[`Library/Blake2sFast.lean`](RecursionFast/Library/Blake2sFast.lean)).
+[`Library/KeccakFast.lean`](RecursionFast/Library/KeccakFast.lean)).
 
 **A node witness must fit `outCap`.** A child's signed file of `f` bytes with `m` trace entries
 takes at most `(f + 7(m + 1))/8` words of output; with the previous step's output within the 64 MiB
@@ -165,8 +165,8 @@ not fit ([`Extractor.lean#L57-L67`](RecursionFast/Contract/Extractor.lean#L57-L6
 
 ## 5. The deployment: the signed random oracle
 
-*Intuition.* The theorem is for a random oracle. In the run, the oracle is BLAKE2s-256 keyed by a
-secret drawn after the entry is frozen, so no verifier can recognise it, and the service that holds
+*Intuition.* The theorem is for a random oracle. In the run, the oracle is Keccak-256 of a secret
+32-byte key, drawn after the entry is frozen, followed by the query, so no verifier can recognise it, and the service that holds
 the key signs the trace of answers each proof used, so a node can check its children without the
 key.
 
@@ -193,18 +193,25 @@ key.
 
 ## 6. The benchmark
 
-A stream is `M = 96` steps, pure IVC, under one service lifetime, on a GitHub-hosted
-`ubuntu-24.04` runner (4 vCPU, 16 GB). An evaluation runs one stream, or, once a record exists, two
-on the same runner: the candidate's and the incumbent's (the duel, §8). Step 1, `prover first`: a signed proof of
+A stream is `M = 96` steps, pure IVC, under one service lifetime, on the organiser's machine
+(below). An evaluation runs one stream. Step 1, `prover first`: a signed proof of
 `nodeStmt (leaf A) (leaf B)` for two fresh chains. Step `i ≥ 2`, `prover step`: given the previous
 statement and signed proof as the runner received them and one fresh chain, a signed proof of
 `nodeStmt prev (leaf C)`. The interface, the handshake and the files are in
 [`harness/PROVER.md`](harness/PROVER.md) §3 and [`harness/FORMAT.md`](harness/FORMAT.md).
 
-- **Draws** (OS CSPRNG, fresh per evaluation, published after the run): every chain length i.i.d.
-  with density `∝ 1/n²` on `[2^17, 2^20]` (equal expected work per octave), 32-byte starts. A step
-  learns its length when its inputs arrive. `M` is a published constant. The two streams of a duel
-  get the same drawn lengths.
+- **Chain lengths and starts.** The chain lengths are one fixed, published sequence, `[stream]
+  lengths` in [`harness/season.toml`](harness/season.toml): `M + 1 = 97` values in `[2^17, 2^20]`
+  (step 1's two chains, then one per step), the same for every evaluation and every entry. It was
+  derived once, from public SHA-256 values through the inverse CDF of the density `∝ 1/n²` (equal
+  expected work per octave); the file states the derivation. The chain starts (32 bytes each) are
+  fresh secret draws per evaluation from the OS CSPRNG; a step learns its chain's start only when
+  its inputs arrive. The service's keys and the DoS inputs are also fresh per evaluation. After
+  the run the result publishes the starts, the leaf digests and statements over them, the
+  lengths and the run's public key `vk`; the keys are never written or published, and the DoS
+  inputs are not published (the result names only the slowest one and at most five accepted ones). `M` is a
+  published constant. The owner may change the sequence between seasons, so tuning a prover to
+  these exact lengths is not a lasting gain.
 - **What is timed.** `P_i`: from just before the inputs are renamed into `/work` (a constant-time
   rename) to the death of the last process of the sandbox. Start-up to the `ready` line is untimed (capped by `ready_s`).
 - **Checks.** Every output is checked with the compiled `acc` against the runner's statement,
@@ -223,20 +230,36 @@ statement and signed proof as the runner received them and one fresh chain, a si
 - **Calibration.** Before step 1, every 8 steps, and once at the end if the last sample is at least
   4 steps old and 30 s of `stream_s` remain; always with no entry process alive:
   three runs of the organiser's prover-shaped workload `calib`
-  ([`harness/tools/calib.c`](harness/tools/calib.c): carry-less multiplication, AVX2 BLAKE2s, a
-  memory sweep on every CPU) and the organiser's chain checker on `2^24` compressions.
-  `c_P = median(calib) / ref_ns`, clamped to `[0.5, 2]`; `T_triv` = the chain checker's median;
-  `v_ref = T_triv / 10` (about 178 ms on a runner).
+  ([`harness/tools/calib.c`](harness/tools/calib.c), portable C: interleaved Keccak-256 chains and a
+  memory sweep on every CPU) and the organiser's chain checker on `2^24` permutations.
+  `c_P = median(calib) / ref_ns` is a health check of the machine, not part of the score: once
+  `ref_ns` is measured, `|c_P − 1| > c_P_drift` makes the run an organiser ERROR (recorded with its
+  reason). `T_triv` = the chain checker's median; `v_ref = T_triv / 10`, measured on the machine.
+- **The machine.** Every job of an evaluation runs on the organiser's server, an AMD Ryzen 7 PRO
+  8700GE (Zen 4, 8 cores / 16 threads), in a throwaway VM per job, one evaluation at a time. The
+  benchmark VM has 4 cores / 8 threads pinned at a fixed 3.65 GHz and 16 GB, with the host CPU
+  passed through. Its instruction set is
+  x86-64-v4 (AVX2, FMA, BMI1/2 and AVX-512 F, CD, BW, DQ, VL), plus ADX, AES-NI, SHA-NI, VAES, VPCLMULQDQ, GFNI and AVX-512 IFMA, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ and BF16. The machine may change between
+  seasons: detect features at run time (`cpuid`) and keep a portable fallback. The result records
+  a hash of the machine's fingerprint (CPU model, VM shape, frequency policy, image id) and,
+  unhashed, the host kernel version. A benchmark whose fingerprint is missing, unreadable or not
+  the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
+  it (§12).
+- **Throughput.** One evaluation at a time. With the core commit's caches in place, one evaluation
+  holds the benchmark slot for about 100 minutes (the certificate and benchmark jobs, at most 50
+  each, §9, plus a few minutes of the setup jobs' cache lookups; 110 with a second kernel); when the caches must first be built, as after a pin move, up to about three
+  hours. A full queue with warm caches completes about a dozen or more evaluations a day; an author
+  starts at most 3 evaluations in any 24 hours (§15).
 
 ## 7. The score
 
 ```
-S  = P̄ + V̄                                              seconds per 2^18-compression step; lower is better
-P̄  = (n_ref / c_P) · ( Σ_i n_i · (P_i / n_i)^3 / Σ_i n_i )^(1/3)
+S  = P̄ + V̄                                              seconds per 2^18-permutation step; lower is better
+P̄  = n_ref · ( Σ_i n_i · (P_i / n_i)^3 / Σ_i n_i )^(1/3)
 V̄  = κ · (1/M) · Σ_i max(x_i, x_i^3),        x_i = V_i / v_ref + |π_i| / s_ref
 ```
 
-`P̄` is a work-weighted cubic mean of the prover's time per compression, so work moved into a few
+`P̄` is a work-weighted cubic mean of the prover's time per permutation, so work moved into a few
 steps costs more than it saves. `V̄` charges verifier time and proof size linearly below the knee
 `x = 1` and cubically above it. Computed by `score` in [`harness/rfh/bench.py`](harness/rfh/bench.py)
 and recomputed by [`harness/aggregate.py`](harness/aggregate.py). Constants, from
@@ -245,13 +268,12 @@ and recomputed by [`harness/aggregate.py`](harness/aggregate.py). Constants, fro
 | Symbol | Value | Meaning |
 |---|---|---|
 | `M` | 96 | stream steps, the same for every entry |
-| `n_i` | drawn | compressions newly given in step `i` (step 1: `nA + nB`) |
-| `n_ref` | `2^18` | `P̄` is per this many compressions |
-| `c_P` | measured, clamped `[0.5, 2]` | the job's CPU relative to `ref_ns` |
-| `ref_ns` | 200 ms, **provisional** | `calib`'s time (32 rounds) on the reference runner; a placeholder, results say `c_P_provisional` |
-| `v_ref` | `T_triv / R`, `R = 10`, measured | the verifier knee: a tenth of the trivial check of `2^24` compressions |
+| `n_i` | fixed | permutations (chain steps) newly given in step `i` (step 1: `nA + nB`), from the season's `[stream] lengths` (§6) |
+| `n_ref` | `2^18` | `P̄` is per this many permutations |
+| `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
+| `v_ref` | `T_triv / R`, `R = 10`, measured | the verifier knee: a tenth of the trivial check of `2^24` permutations |
 | `s_ref` | 2 MiB | the proof-size knee; `|π_i|` counts the bytes of `π` only, not the trace or signature |
-| `κ` | 0.2667 s | `K · v0`, `K = 1.5`, `v0 = 177.8 ms`: seconds per unit of `max(x, x³)` |
+| `κ` | 0.9893 s | `K · v0`, `K = 1.5`, `v0 = 659.5 ms` (`v_ref` measured on the machine): seconds per unit of `max(x, x³)` |
 
 Every result also publishes the per-step records (`stream.jsonl`), the fit, `P̄` per octave, the
 marginal values at the entry's own point, the largest `x_i` and a batching indicator. None of these
@@ -264,50 +286,46 @@ is scored.
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
 | REJECT | the entry failed a rule or a cap; the result names the reason |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part); requeued once |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose chain lengths are not the season's or a malformed `[stream] lengths`, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint and the well-formedness of the season's lengths are checked first, in the setup job, and the stream's lengths against the season's at aggregation; a fingerprint or chain-lengths failure uses up no attempt (a retry at the same pin cannot clear it). Organiser errors in a row, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count toward the author's quota |
 
-A result is **comparable** iff it is ACCEPT, its stream was not truncated, all its parts ran on one
-CPU model and the job plan matched. A stream that reaches `stream_s` is scored over its completed
-steps, flagged `truncated` and not comparable.
+A result is **comparable** iff it is ACCEPT, its stream was not truncated and the job plan matched
+(an ACCEPT is always on the season's machine and with the season's chain lengths: anything else is
+ERROR). A stream that reaches
+`stream_s` is scored over its completed steps, flagged `truncated` and not comparable.
 
-**The record rule: a head-to-head duel, confirmed.** Scores from different runners are not
-comparable: the same entry scored 29.05 and 34.20 on two CPU models. So once a record exists, every
-evaluation is a **duel**: the core workflow certifies the candidate and re-certifies the incumbent
-record at the same pin, then one benchmark job on one runner runs both streams back to back, in an
-order drawn at random, each with its own work directory, service lifetime and keys, on the same
-drawn chain lengths (fresh starts per run), and reports both scores. The candidate **wins the
-duel** iff all of:
+**The record rule.** A result is a new record iff all of:
 
 1. its verdict is ACCEPT and `comparable: true`;
 2. its attestation verifies ([`harness/verify-record.sh`](harness/verify-record.sh); its
    `--provenance-only` mode checks this for any verdict): signed by
-   `scaraven/recursion.fast/.github/workflows/evaluate.yml` on a GitHub-hosted runner, and the
-   signer's commit equals the result's `harness_commit`;
+   `scaraven/recursion.fast/.github/workflows/evaluate.yml` in `scaraven/recursion.fast-submissions`
+   on a self-hosted runner, that is a runner registered to the submissions repository, which only
+   the owner's server can register; and the signer's commit equals the result's `harness_commit`.
+   The runner name (`rf-…`) and label (`rf-bench`; the server's runners carry exactly one label,
+   `rf-bench` or `rf-light`) the result records are checked for consistency, but they
+   are what the server wrote and prove nothing by themselves;
 3. `harness_commit` equals the core commit the submissions repository pins;
-4. `S_cand ≤ 0.97 × S_inc`, both measured in that one job;
+4. no record stands at the pin, or `S < (1 − margin) · S_record`, with `S_record` the standing
+   record's own score at the pin and `margin = 0.02`;
 5. its prover binary's SHA-256 is not that of an earlier record (a resubmitted copy is `accepted`,
    never a record).
 
-**One win is not a record**, because the noise of one runner can hand a duel to a copy. A candidate
-that wins is `confirming`: one more duel of the same commit against the same incumbent runs before
-any other entry, on whatever runner it gets. It becomes the record iff it wins that duel too, and its
-credited gain is the smaller of the two. If it loses, it is `accepted` and both duels are shown.
-
-- **The incumbent fails on the duel's runner** (`incumbent.entry_failed`: its REJECT or truncated
-  stream): not a win and not a loss. The candidate is evaluated once more (a confirming candidate
-  keeps its first win), then `accepted`; a record whose own run fails in two duels is `retired`, and
-  there is then no standing record.
-- **Organiser-side failures** (the incumbent's certificate not `ok`, a broken pairing): ERROR,
-  re-queued once (a confirming candidate keeps its win).
 - **Records are per pin**: the standing record is the newest, not retired, record evaluated at the
-  pinned core commit. With none (the first record, after a retirement, or after a pin move), the
-  first result meeting items 1–3 and 5 is the record, unpaired and with no confirmation.
+  pinned core commit. With none, the first result meeting items 1–3 and 5 is the record.
 - **A pin move ports the record first.** When the pin moves while a record stands, the bot
-  re-evaluates that record's retained commit at the new pin before any other entry, unpaired; it
-  keeps the crown if that is a comparable, attested ACCEPT. If it fails, no record stands and the
-  queue proceeds.
-- **The threshold (3 %) and the number of duel wins (2) are not yet calibrated** (§12); the owner
-  may change either, which changes this file.
+  re-evaluates that record's retained commit at the new pin before any other entry; it keeps the
+  crown if that is a comparable, attested ACCEPT. If it fails, no record stands.
+- **The margin (2 %) is the owner's choice**, and it does not keep noise out. The relative
+  run-to-run spread of one entry's `S` on the evaluation machine with the fixed chain lengths is
+  σ ≈ 1.75 % (ten runs at the smoke shape, [`harness/smoke.toml`](harness/smoke.toml); mostly
+  per-step process overhead, which weighs more with the smoke's short chains, so likely smaller at
+  the season's shape). `S` and `S_record` are two runs, so two runs of one entry differ by about
+  √2·σ ≈ 2.5 %: a near-copy of the record can beat it by noise. (A margin that kept noise out would
+  be about 3·√2·σ ≈ 7.4 %.) Byte copies of an evaluated root and a record's prover binary are
+  refused (item 5 and the submissions repository's copy rule). The owner may change the margin
+  between seasons, which changes this file.
+- The owner may retire a record (a near-copy that beat it by noise, say) with the bot's `retire`;
+  then no record stands.
 
 The submissions repository's bot applies this rule to the attested results.
 
@@ -321,7 +339,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | entry root: files; bytes; any one file | 2,048; 512 MiB; 128 MiB |
 | `lean/`: files, bytes; `prover/`: files, bytes; `claim.json` | 1,024, 32 MiB; 256, 256 MiB; 64 KiB |
 | rendering the challenge; the source rule | 30 s; 120 s |
-| entry's `lake build` (challenge and `Solution`'s import closure); the incumbent's in a duel | 1,200 s; 3,600 s |
+| entry's `lake build` (challenge and `Solution`'s import closure) | 1,200 s |
 | kernel replay (comparator, Lean kernel), memory | 600 s (a breach: PROVISIONAL), 14 GiB |
 | gate; badge build | 120 s; 180 s |
 | prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB, `2^20` entries |
@@ -331,8 +349,8 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 11 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
-| GitHub jobs: certificate; incumbent certificate (with nanoda) | 50 min; 90 min (60; 100) |
-| GitHub jobs: benchmark, a duel's; setup, setup-tools; plan, attest | 50 min, 100 min; 30 min; 10 min |
+| jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 50 min; 30 min; 10 min |
+| the benchmark VM; evaluations at a time; evaluations started per author per 24 h | 4 cores / 8 threads, 16 GB; 1; 3 |
 
 ## 10. Hard rules for the Lean side
 
@@ -363,7 +381,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 
 ## 11. What is trusted
 
-- **The contract**: 10 Lean files, 349 code lines at this commit (`scripts/loc.py`; CI enforces at
+- **The contract**: 10 Lean files, 328 code lines at this commit (`scripts/loc.py`; CI enforces at
   most 500), Lean core and Mathlib only, no theorem.
 - **One kernel**: Lean v4.34.1's, replayed by the comparator (`leanprover/comparator` at `d03acab`
   with lean4export `076e8e5`, pinned and built by
@@ -372,41 +390,49 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **The record build cache**: a certificate job may seed its build from the record's attested build
   (bound by its manifest's hash): only entry modules whose source is byte-identical are reused,
   never the challenge, and the kernel still replays every proof. A candidate's build stays under
-  `build_s`, so a slow build may fit only when the cache hits; the incumbent's re-certification
-  must not depend on it and has `incumbent_build_s = 3 × build_s`.
-- **BLAKE2s** (RFC 7693): collision resistance on the seven tagged domains, one-wayness of the
-  chain step, and keyed BLAKE2s-256 as a PRF. The signature's unforgeability follows from these
+  `build_s`, so a slow build may fit only when the cache hits.
+- **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
+  on the seven tagged domains, one-wayness of the chain step, and `Keccak-256(k ‖ ·)` with a secret
+  32-byte key `k` as a PRF. The signature's unforgeability follows from these
   (on paper).
 - **The badge**: the code Lean's compiler emits for `acc`, built from the same build the kernel
   checked; and the harness tools (gate, source rule, manifest, renderer, sandbox).
 - **The runner and the service**, tested, not proved ([`tests/`](tests/), [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-- **The machine**: a GitHub-hosted runner of the recorded image running
-  [`evaluate.yml`](.github/workflows/evaluate.yml) at the recorded commit, GitHub's artifact
-  attestations, and the Actions cache that carries the organiser's environment between jobs.
+- **The machine**: the trust anchor is the organiser's server, which runs every job of
+  [`evaluate.yml`](.github/workflows/evaluate.yml) in a throwaway VM. GitHub attests the workflow
+  and the commit (artifact attestations; a third party can verify only these), and the Actions
+  cache carries the organiser's environment between jobs. The server's runner image refuses any
+  job that is not one of the submissions repository's workflows on `main` (or this `evaluate.yml`
+  called from them), so a fork's workflow never runs there; the bot's workflow lint is advisory.
+  The runner's name and labels and the
+  machine fingerprint are what the server reports.
 - Not trusted: `RecursionFast/Library/`, `RecursionFast/Controls/`, every entry, every prover.
 
 ## 12. Known limitations
 
 - **One kernel.** Records are not cross-checked by a second kernel (nanoda reached 17.6–20.9 GB
   without finishing on the first entries). A Lean kernel bug, or a proof exploiting one, would stand.
-- **Runners vary, so only a duel decides.** AMD EPYC 7763, 9V45, 9V74 and Intel Xeon 8370C, 8573C
-  were all seen (29.05 against 34.20 for one entry, §8); `c_P` and `v_ref` normalise for the CPU
-  only partly, so a published `S` is not comparable across evaluations.
-- **The 3 % threshold is not yet calibrated** at the season shape on GitHub runners. Back to back on
-  one machine at the smoke shape, the same prover differed by 2.5–9 %, so a copy of the record can
-  win one duel by noise; the confirmation duel makes it win two. The owner will calibrate both with
-  self-duels (a record dueled against itself) and may raise them. Order effects (thermal state, page
-  cache) are randomised by the drawn order, not removed. A near-copy that wins both duels stands
-  until the owner retires it.
-- **`ref_ns` is a placeholder** (200 ms). `P̄` is consistent within one pin but not yet anchored
-  to a measured reference runner; measuring it moves every `P̄`.
+- **One machine.** Every record is measured on one machine, which an entry can overfit (its cache
+  sizes, its ISA extensions), and it is published (§6). The machine may change between
+  seasons; records are then re-evaluated at the new pin by the port (§8).
+- **A near-copy of the record can win by noise.** The margin (2 %, §8) is below the spread of the
+  difference of two runs of one entry (√2·σ ≈ 2.5 %, σ ≈ 1.75 % measured at the smoke shape), so a
+  near-copy that is no faster can still beat the record by more than 2 %. Byte copies and re-used
+  record prover binaries are refused, and the owner retires a record won that way.
+- **`c_P`'s drift is an organiser ERROR, not a score change**: `ref_ns` (316.2 ms) and
+  `c_P_drift` (0.065: about four standard deviations of one `c_P` sample at the higher spread
+  measured on the machine, 1.55 %, and far more of the median that is judged) are fixed
+  per season, and neither moves `S`. The drift is judged on all the stream's samples, so a drifting
+  machine costs a full benchmark job before its ERROR.
+- **Retiring a record leaves no record standing**: the record it beat is not restored, and that
+  record's prover binary, like every record's, can never take the record again.
 - **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains
-  about 0.4–1.0 % at the score's base estimates, below the 3 % record threshold.
+  about 0.4–1.0 % at the score's base estimates, below the record margin (2 %).
 - **The score's constants** (`K`, `s_ref`, the power 3, the re-timing rule) come from a simulated
   loss study, not from measured entries.
 - **Crafted inputs are not tested.** The DoS column uses random mutations. Inputs assembled from
-  published parts (for example a deep chain of nodes over public signed leaves) took a v4 entry's
-  `acc` 68–183 s before its authors bounded it; the rules bound only what the column measures.
+  published parts (for example a deep chain of nodes over public signed leaves) took an earlier
+  entry's `acc` 68–183 s before its authors bounded it; the rules bound only what the column measures.
 - **The service is trusted runtime**: a bug that signs a wrong answer, reuses an index or exposes
   the key would be accept-all.
 - **On paper, not in the kernel**: unforgeability of the signature, the PRF step from the random
@@ -424,18 +450,19 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 
 ## 13. Consequences that bit real entries
 
-From the first two certified v4 entries (`spartan-srom`, `flock-recursive`) and the organiser's
-toy prover.
+From the first two certified entries (`spartan-srom`, `flock-recursive`) and the organiser's toy
+prover. Their timings were measured on GitHub-hosted runners with a different chain hash, so they
+are indicative only, except where a bullet says "on the machine".
 
 - **`V̄` dominated the first recursive entry**: `S = 29.05` with `P̄ = 4.52` and `V̄ = 24.52`.
   Above the knee the verifier term grows cubically; size `V` and `|π|` before the prover.
 - **Your verifier's start-up is on the stream clock.** Each check batch, canary and re-run check
   starts a badge process, about 29 per stream; one entry's `V` took 11.7 s to initialise on a
   runner, so 1 s of start-up costs about 30 s of `stream_s`.
-- **The DoS per-input cap (`10 × v_ref`, about 1.8–2.1 s) binds a heavy `V`**, including on random
+- **The DoS per-input cap (`10 × v_ref`, 6.6 s on the machine) binds a heavy `V`**, including on random
   `π` under a genuine trace and signature (`SigOk` passes, your `V` runs on garbage). Reject
   malformed proofs early; bound what a proof can make `V` recompute (a clear leaf of `2^20` steps
-  costs 0.3–0.6 s).
+  costs about 0.4 s for the organiser's chain checker on the machine).
 - **The certificate build is tight**: a 199-module entry used 968–984 s of the 1,200 s cap on a
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
@@ -455,11 +482,13 @@ toy prover.
   real literal fails the badge build. Write them as casts from `ℚ≥0`.
 - **Compiled `ByteArray.data` copies the array**: a parser reading through it is quadratic (88 s on
   539 KB). Read in place (`b[i]`, `ByteArray.get!`) or use the library's twins.
-- **The kernel is slow on evaluation** (BLAKE2s: about 2.4 s per compression); large case splits
+- **The kernel is slow on evaluation** (Keccak-256: about 11 s per permutation for the contract's
+  `keccakF`, about 0.4 s for the word-level twin of `Library/KeccakFast.lean`); large case splits
   or `decide` over concrete words can exhaust the kernel cap. Prove symbolically.
-- **Assemble with binutils 2.42** (the runner image's): GCC 15's `.base64` and newer directives do
-  not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. No
-  AVX-512 or GFNI is guaranteed: dispatch on `cpuid`; a `SIGILL` fails the run.
+- **Assemble with binutils 2.42** (the evaluation VM's): GCC 15's `.base64` and newer directives do
+  not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. The
+  machine (§6) has AVX-512 and GFNI but may change between seasons: dispatch on `cpuid` with a
+  portable fallback; a `SIGILL` fails the run.
 - **Memory**: the 11 GiB cap counts `/tmp` and `/work` (a Spartan+Ligero leaf prover peaked at
   15.1 GiB at `n = 2^16`, 2.47 GiB after restructuring).
 - **Fiat–Shamir must bind the statement**: the canaries flip a statement bit and substitute other
@@ -478,7 +507,7 @@ lake build                  # the contract, library and controls
 The harness on an entry needs Linux x86-64, `bubblewrap` with unprivileged user namespaces (on
 Ubuntu 24.04: `sysctl kernel.apparmor_restrict_unprivileged_userns=0`), a systemd user manager for
 the memory caps (without one the sandbox falls back to `prlimit`), Rust (pinned by
-`service/rust-toolchain.toml`) and the runner's GCC and binutils:
+`service/rust-toolchain.toml`) and the evaluation VM's GCC 13.3 and binutils 2.42:
 
 ```sh
 harness/org-setup.sh "$PWD"                                     # organiser build, tools, allowlist, manifest, service
@@ -488,8 +517,23 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 ```
 
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
-small shape (6 steps, chains of 16 to 128); `harness/season.toml` is the real one. Set
-`RF_HARNESS_COMMIT` when the checkout is not a git checkout. `harness/ci/build-kernels.sh` holds the
+small shape (6 steps, chains of 16 to 128); `harness/season.toml` is the real one, and it runs only
+on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an organiser ERROR
+before the prover is built, and its `c_P` drift check would too. To run the season's shape on your
+own machine, generate a local copy and pass it to `--season`:
+
+```sh
+python3 -I harness/local-season.py > /tmp/season-local.toml   # fingerprint "any", ref_provisional true, DoS item cap verify_s
+python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
+  --work /tmp/rf-work-season --out result-season.json --season /tmp/season-local.toml
+```
+
+Every shape and every other cap is then the season's; only those three lines and the season's
+name differ (as in the smoke), and your machine's speed is not the evaluation machine's. The
+witness-sending example of §2 REJECTs at this shape: on the evaluation machine its check exceeds
+`verify_s` from about step 32, which is expected and not a harness fault.
+
+Set `RF_HARNESS_COMMIT` when the checkout is not a git checkout. `harness/ci/build-kernels.sh` holds the
 kernels' pins; [`scripts/tools.env`](scripts/tools.env) sets the variables from `RF_KERNELS` instead.
 
 ## 15. Submitting
@@ -499,9 +543,9 @@ Open a pull request in
 that changes files under exactly one `submissions/<root>/` (root name `[a-z][a-z0-9-]{0,39}`) and
 nothing else; include a `NOTES.md` (idea, result, what failed and why, what to try next). Pull
 requests are never merged: a bot evaluates each with the core's attested `evaluate.yml` at the pin,
-publishes every verdict, and copies a new record's root to `main`. Once a record exists, every
-evaluation is a duel against it, and a win is confirmed by a second duel (§8). The queue is
-round-robin by author: the author whose last evaluation started earliest goes next, and a new push
-supersedes the PR's queued entry and goes to the back. Re-submitting does not re-roll a record: an
-unchanged root is refused, a prover binary of an earlier record never takes it, and each attempt
-must win two duels by 3 %. That repository's `AGENTS.md` gives the submission procedure.
+publishes every verdict, and copies a new record's root to `main` (§8). The queue is round-robin by
+author: the author whose last evaluation started earliest goes next, and a new push supersedes the
+PR's queued entry and goes to the back. An author starts at most 3 evaluations in any 24 hours;
+further entries wait in their place. Re-submitting does not re-roll a record: an unchanged root is
+refused, and a prover binary of an earlier record never takes it. That repository's `AGENTS.md`
+gives the submission procedure.

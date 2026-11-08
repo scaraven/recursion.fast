@@ -1,8 +1,8 @@
 /-
-# Controls: the extractor program and output format (`Contract/Extractor.lean`)    (§4.4; V4-6)
+# Controls: the extractor program and output format (`Contract/Extractor.lean`)
 
-Programs of the contract's step-counting machine (V3-S2R-A1). Fuel is a function of the input
-tape's length (V3-S1-A21), and the budget is `B t = 2^48 + 2^16 · t`.
+Programs of the contract's step-counting machine. Fuel is a function of the input
+tape's length, and the budget is `B t = 2^48 + 2^16 · t`.
 
 Positive:
 * `ws_computes`: the witness-sending program (`Library/WitnessSending.lean`, 21 statements) computes
@@ -10,14 +10,14 @@ Positive:
   proof it halts in exactly 26 steps (5 memory words, 21 statements).
 * `halt_computes`: the one-statement program computes the extractor that returns no witness, in
   1 step.
-* **The domain is closed under extraction** (V4-A11): `decodeWit_children_size`: both children of
+* **The domain is closed under extraction**: `decodeWit_children_size`: both children of
   a node witness that `o` output words denote have proofs of at most `8 · |o|` bytes;
   `child_in_domain`: so a child extracted within `outCap` words is within `Computes`'s domain, and
   from a deployed proof every proof of the extraction tree is.
 * Format known answers (for the runner's Python twins; the expected words are those of the
-  module header's format): `extractorInput_kat` (v3's: a 3-byte proof and a log of one 9-byte
+  module header's format): `extractorInput_kat` (a 3-byte proof and a log of one 9-byte
   query: padding, length words, answer), `wordBytes_layout` and `wordBytes_kat` (a word's bytes,
-  little-endian), `decodeWit_leaf_kat`, and for v4's node with two signed
+  little-endian), `decodeWit_leaf_kat`, and for a node with two signed
   children `decodeWit_node_kat`, `witWords_node_kat` (`nodeKatWords`: two proofs, a one-entry and
   an empty trace, two signatures), `decodeWit_trailing` (words after the fields are ignored).
 
@@ -28,17 +28,17 @@ Negative:
 * `spin_computes_nothing`: a program that never halts computes no extractor at any fuel.
 * `toolong_not_computes`: a program that outputs `2^24 + 1` words computes no extractor (the output
   cap).
-* `ws_output_beyond_domain` (V4-A11): the domain's proof bound `8 · outCap` is tight for the
+* `ws_output_beyond_domain`: the domain's proof bound `8 · outCap` is tight for the
   witness-sending program: on every proof longer than it (and below `2^60` bytes) the program
   outputs more than `outCap` words, so without the bound the witness-sending entry, whose
   verifier accepts proofs of every size below the word, would compute no extractor.
 * `enum_no_computes`: **a program that enumerates `2^64 − 1` candidates computes no extractor within
   the budget**, whatever its specification and declared fuel (on a 6-word tape `B` is about
   `2^48`, and the count needs `2^65` steps, `Controls/Machine.lean`, `count_short`).
-* Malformed outputs denote nothing (strict reading, v4): `decodeWit_bad_tag`, `decodeWit_empty`,
-  `decodeWit_short_leaf` (a missing word is no longer read as `0`), `decodeWit_long_proof` (V3-S1
-  review m5: a 10-word output declaring a `2^63`-byte proof), **`decodeWit_long_trace`** (a trace
-  declaring `2^63` entries, V4-A7 (c)), `decodeWit_short_sig` (a signature one digest short).
+* Malformed outputs denote nothing (strict reading): `decodeWit_bad_tag`, `decodeWit_empty`,
+  `decodeWit_short_leaf` (a missing word is not read as `0`), `decodeWit_long_proof` (a 10-word
+  output declaring a `2^63`-byte proof), **`decodeWit_long_trace`** (a trace declaring `2^63`
+  entries), `decodeWit_short_sig` (a signature one digest short).
 -/
 import RecursionFast.Library.WitnessSending
 import RecursionFast.Controls.Machine
@@ -244,15 +244,15 @@ theorem decodeWit_bad_tag : decodeWit [2, 0, 0, 0, 0, 0] = none := by decide +ke
 /-- The empty output. -/
 theorem decodeWit_empty : decodeWit [] = none := rfl
 
-/-- **Strict reading**: a leaf without its length word denotes nothing (v3 read it as `0`). -/
+/-- **Strict reading**: a leaf without its length word denotes nothing (it is not read as `0`). -/
 theorem decodeWit_short_leaf : decodeWit [0, 1, 1, 1, 1] = none := by decide +kernel
 
-/-- **A declared length beyond the output** (V3-S1 review m5): ten words cannot denote a
+/-- **A declared length beyond the output**: ten words cannot denote a
 `2^63`-byte proof. -/
 theorem decodeWit_long_proof :
     decodeWit ([1] ++ dw 2 ++ dw 3 ++ [2 ^ 63]) = none := by decide +kernel
 
-/-- **A malformed trace length** (V4-A7 (c)): the first child's trace declares `2^63` entries
+/-- **A malformed trace length**: the first child's trace declares `2^63` entries
 and the output ends long before. -/
 theorem decodeWit_long_trace :
     decodeWit ([1] ++ dw 2 ++ dw 3 ++ [3, 0xccbbaa] ++ [2 ^ 63] ++ [9, 0x0807060504030201, 9] ++
@@ -266,7 +266,7 @@ theorem decodeWit_short_sig : decodeWit (nodeKatWords.dropLast) = none := by dec
 theorem decodeWit_trailing : decodeWit (nodeKatWords ++ [7, 7]) = some nodeKat :=
   witWords_node_kat ▸ congrArg (Prod.fst <$> ·) (readWit_witWords nodeKat nodeKat_fits [7, 7])
 
-/-! ## The domain is closed under extraction (V4-A11) -/
+/-! ## The domain is closed under extraction -/
 
 /-- A reader that consumes only from the front leaves a suffix no longer than its input. -/
 private theorem readBytes_len {n : ℕ} {o o' : List Word} {b : List UInt8}
@@ -331,7 +331,7 @@ private theorem readSigned_pi {o o' : List Word} {s : Signed} (h : readSigned.ru
   obtain ⟨⟨π, o₆⟩, h₆, ⟨tr, o₇⟩, -, ⟨σ, o₈⟩, -, ⟨⟩⟩ := h
   exact (readString_len h₆).1
 
-/-- **The domain is closed under extraction** (V4-A11): both children of a node witness that an
+/-- **The domain is closed under extraction**: both children of a node witness that an
 output of `o` words denotes have proofs of at most `8 · o.length` bytes, so a child extracted
 within `outCap` words is within `Computes`'s domain of `8 · outCap` bytes (`child_in_domain`). -/
 theorem decodeWit_children_size {o : List Word} {c₁ c₂ : Digest} {p₁ p₂ : Signed}

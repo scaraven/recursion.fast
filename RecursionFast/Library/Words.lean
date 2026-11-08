@@ -16,10 +16,10 @@
     `readBytes_packBytes`, `readString_bytesWords`, `readDigest_packBytes`, `readList_flatMap`,
     `readTrace_logWords`, `readSig_sigWords`, `readSigned_signedWords`). `witWords` is the encoder
     an extractor program implements; the contract needs only the decoder.
-  * **Linear-time twins** (#10, from v3). The compiled code of the contract's `packBytes` is
+  * **Linear-time twins.** The compiled code of the contract's `packBytes` is
     quadratic in the length (a list re-read from its start for every word). `packFast` and
     `witWordsF` compute the same functions in linear time (`packFast_eq`, `witWordsF_eq`); a
-    verifier runs them, and its proofs rewrite them back. The v4 decoder `decodeWit` is linear by
+    verifier runs them, and its proofs rewrite them back. The decoder `decodeWit` is linear by
     itself (strict reading with `take`, `drop`, `flatMap`).
 -/
 import RecursionFast.Contract.Extractor

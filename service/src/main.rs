@@ -2,11 +2,12 @@
 //! wire format `PROTOCOL.md`).
 //!
 //!   rf-oracle --socket PATH [--threads N]
+//!   rf-oracle --leaves [--threads N]
 //!
 //! At start it draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed from
 //! `getrandom`, generates the `2^16` one-time keys and the Merkle tree (`vk` its root), binds the
 //! Unix socket PATH, and prints `vk <hex>`, `keygen_ms <ms>` and `ready` on stdout. It serves one
-//! thread per connection: `QUERY` (a batch of byte strings → `PRF_k` of each, keyed BLAKE2s-256),
+//! thread per connection: `QUERY` (a batch of byte strings → `PRF_k(q) = Keccak-256(k ‖ q)` of each),
 //! `SIGN` (a batch of byte strings → their answers, computed here, and a signature on the trace
 //! digest with the next one-time key; refused after `2^16`), `VK`. It exits when its stdin reaches
 //! end of file (the runner closes it): it then takes the key lock, overwrites the keys, prints
@@ -16,14 +17,19 @@
 //!
 //! `--insecure-test-keys PRFKEY_HEX SEED_HEX` replaces the random keys by given ones and prints
 //! `INSECURE` on stdout. It exists for the known-answer tests only (`tests/service/`) and is
-//! compiled only with the non-default cargo feature `insecure-test-keys` (RB-m5): the release
+//! compiled only with the non-default cargo feature `insecure-test-keys`: the release
 //! binary the runner uses, whose hash every result records, rejects the option. The runner also
 //! refuses a service that prints `INSECURE`.
+//!
+//! `--leaves` is the runner's chain hasher and holds no secret: it draws no key and opens no socket.
+//! It reads lines `<start: 64 lowercase hex> <n: decimal>` from stdin until end of file and writes,
+//! for each, one line `leafStmt (chainEnd start n) n` (64 lowercase hex) to stdout, in input order,
+//! computed on N threads; a malformed line is reported on stderr and the exit code is 2.
 
-use rf_oracle::blake2s::{self, Digest, Keyed};
+use rf_oracle::keccak::{self, Keyed};
 use rf_oracle::proto::*;
 use rf_oracle::wots::Signer;
-use rf_oracle::trace_digest;
+use rf_oracle::{leaf_digests, parse_leaf_line, trace_digest};
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -38,7 +44,7 @@ extern "C" {
 }
 
 /// Fill `b` with 32 bytes from the kernel's CSPRNG (`getrandom`, else `/dev/urandom`), in place, so
-/// that no copy of a key is left on the stack (RF-m22).
+/// that no copy of a key is left on the stack.
 fn random32(b: &mut [u8; 32]) {
     let mut got = 0usize;
     while got < 32 {
@@ -83,25 +89,8 @@ fn unhex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// `out[i] = PRF_k(qs[i])`, eight at a time; queries are grouped by block count first when their
-/// sizes differ, so that the eight lanes of one compression run the same number of blocks.
-fn answers(prf: &Keyed, qs: &[&[u8]], out: &mut [Digest]) {
-    let nb = |q: &[u8]| q.len().div_ceil(64);
-    if qs.len() < 16 || qs.iter().all(|q| nb(q) == nb(qs[0])) {
-        return prf.eval_many(qs, out);
-    }
-    let mut order: Vec<u32> = (0..qs.len() as u32).collect();
-    order.sort_unstable_by_key(|&i| nb(qs[i as usize]));
-    let sorted: Vec<&[u8]> = order.iter().map(|&i| qs[i as usize]).collect();
-    let mut tmp = vec![[0u8; 32]; qs.len()];
-    prf.eval_many(&sorted, &mut tmp);
-    for (k, &i) in order.iter().enumerate() {
-        out[i as usize] = tmp[k];
-    }
-}
-
 /// An error response; the connection is closed after it.
-/// Refusals so far; the first `REFUSALS_LOGGED` are written to stderr (Q13: the runner puts them in
+/// Refusals so far; the first `REFUSALS_LOGGED` are written to stderr (the runner puts them in
 /// the result, so a prover's failure on a cap is visible).
 static REFUSALS: AtomicU64 = AtomicU64::new(0);
 const REFUSALS_LOGGED: u64 = 32;
@@ -170,7 +159,7 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
             // the answers are computed in place, after room for the header
             resp.resize(16 + 32 * qs.len(), 0);
             let (ans, _) = resp[16..].as_chunks_mut::<32>();
-            answers(&keys.prf, &qs, ans);
+            keys.prf.eval_many(&qs, ans);
             let sig = if op == OP_SIGN {
                 match keys.signer.sign(&trace_digest(&qs, ans)) {
                     Ok(s) => Some(s),
@@ -219,12 +208,42 @@ fn shutdown(st: &State) -> ! {
 
 fn usage() -> ! {
     eprintln!("usage: rf-oracle --socket PATH [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX (test builds only)]");
+    eprintln!("       rf-oracle --leaves [--threads N]");
     std::process::exit(2)
+}
+
+/// `rf-oracle --leaves`: read every line of stdin, then write the leaf digests in input order.
+fn leaves_mode(threads: usize) -> ! {
+    let mut input = String::new();
+    if let Err(e) = io::stdin().read_to_string(&mut input) {
+        eprintln!("rf-oracle --leaves: cannot read stdin: {e}");
+        std::process::exit(2)
+    }
+    let mut jobs = Vec::new();
+    for (k, line) in input.split_terminator('\n').enumerate() {
+        match parse_leaf_line(line) {
+            Some(job) => jobs.push(job),
+            None => {
+                eprintln!("rf-oracle --leaves: line {}: expected `<64 lowercase hex> <decimal>`, got {line:?}", k + 1);
+                std::process::exit(2)
+            }
+        }
+    }
+    let mut out = String::with_capacity(65 * jobs.len());
+    for d in leaf_digests(&jobs, threads) {
+        out.push_str(&hex(&d));
+        out.push('\n');
+    }
+    let mut so = io::stdout().lock();
+    if so.write_all(out.as_bytes()).and_then(|_| so.flush()).is_err() {
+        std::process::exit(1)
+    }
+    std::process::exit(0)
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut socket, mut threads) = (None, None);
+    let (mut socket, mut threads, mut leaves) = (None, None, false);
     #[allow(unused_mut)]
     let mut test: Option<([u8; 32], [u8; 32])> = None;
     let mut i = 0;
@@ -232,6 +251,11 @@ fn main() {
         match args[i].as_str() {
             "--socket" if i + 1 < args.len() => socket = Some(args[i + 1].clone()),
             "--threads" if i + 1 < args.len() => threads = args[i + 1].parse::<usize>().ok(),
+            "--leaves" => {
+                leaves = true;
+                i += 1;
+                continue;
+            }
             #[cfg(feature = "insecure-test-keys")]
             "--insecure-test-keys" if i + 2 < args.len() => {
                 test = Some((unhex32(&args[i + 1]).unwrap_or_else(|| usage()), unhex32(&args[i + 2]).unwrap_or_else(|| usage())));
@@ -241,13 +265,19 @@ fn main() {
         }
         i += 2;
     }
+    let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
+    if leaves {
+        if socket.is_some() || test.is_some() {
+            usage()
+        }
+        leaves_mode(threads)
+    }
     let Some(socket) = socket else { usage() };
     // PR_SET_DUMPABLE = 4: no ptrace attach and no /proc/PID/mem for processes of the same uid.
     if unsafe { prctl(4, 0u64, 0u64, 0u64, 0u64) } != 0 {
         eprintln!("rf-oracle: prctl(PR_SET_DUMPABLE, 0) failed");
         std::process::exit(1);
     }
-    let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     let (mut prf_key, mut seed) = match test {
         Some((k, s)) => {
             println!("INSECURE fixed test keys");
@@ -264,8 +294,8 @@ fn main() {
     let signer = Signer::keygen(&seed, threads);
     let keygen_ms = t0.elapsed().as_secs_f64() * 1e3;
     let prf = Keyed::new(&prf_key);
-    blake2s::wipe(&mut prf_key);
-    blake2s::wipe(&mut seed);
+    keccak::wipe(&mut prf_key);
+    keccak::wipe(&mut seed);
     let listener = UnixListener::bind(&socket).unwrap_or_else(|e| {
         eprintln!("rf-oracle: cannot bind {socket}: {e}");
         std::process::exit(1)
@@ -283,7 +313,7 @@ fn main() {
     }));
     println!("vk {}", hex(&vk));
     println!("keygen_ms {keygen_ms:.1}");
-    println!("simd {}", if blake2s::has_avx2() { "avx2" } else { "scalar" });
+    println!("simd scalar");
     println!("ready");
     let _ = io::stdout().flush();
     std::thread::spawn(move || {
@@ -301,7 +331,7 @@ fn main() {
             continue;
         }
         std::thread::spawn(move || {
-            // the slot is released when the thread ends, by return or by panic (RF-m22)
+            // the slot is released when the thread ends, by return or by panic
             struct Slot(&'static AtomicUsize);
             impl Drop for Slot {
                 fn drop(&mut self) {

@@ -2,7 +2,7 @@
 """`evaluate.py cert`'s handling of entry data with the organiser side stubbed (a fake Org, a stub
 comparator and gate, no badge build) and the one build a real Lake run (the repository's Lean
 toolchain, core only, no package tree). Checks:
-  * the record cache: restore before the build, prune before the binding (Q7), export
+  * the record cache: restore before the build, prune before the binding, export
     only for status `ok`, the `record_cache` and `entry_build` fields;
   * the entry caps (`[entry]`): a breach is the entry's REJECT, before the source rule;
     a source rule or a renderer past its timeout is the entry's REJECT, not an ERROR.
@@ -109,11 +109,11 @@ def msha(d):
     return ev.buildcache._sha(p) if d and os.path.isfile(p) else None
 
 
-def cert(name, src, seed=None, export=True, expect="manifest", incumbent=False):
+def cert(name, src, seed=None, export=True, expect="manifest"):
     a = types.SimpleNamespace(org=CORE, season=os.path.join(CORE, "harness/season.toml"), work=os.path.join(WORK, f"w-{name}"),
                               entry=entry(name, src), out=os.path.join(WORK, f"{name}.json"), nanoda=False,
                               cert_mem="4G", nanoda_mem="4G", record_cache=seed, record_cache_key="rf-record-build-x-pr1" if seed else None,
-                              record_manifest_sha256=msha(seed) if expect == "manifest" else expect, incumbent=incumbent,
+                              record_manifest_sha256=msha(seed) if expect == "manifest" else expect,
                               export_build=os.path.join(WORK, f"export-{name}") if export else None)
     ev.cert_job(a)
     return json.load(open(a.out)), a
@@ -132,7 +132,7 @@ rc = r2.get("record_cache") or {}
 check(r2["status"] == "ok", f"next: status {r2['status']} {r2['reasons']}")
 check(rc.get("restored") == ["Bar", "Foo"] and rc.get("unused") == ["Bar"] and rc.get("key") == "rf-record-build-x-pr1",
       f"next: record_cache {rc}")
-check(r2["built_modules"] == ["Challenge", "Foo", "Solution"], f"next: built_modules (Q7) {r2['built_modules']}")
+check(r2["built_modules"] == ["Challenge", "Foo", "Solution"], f"next: built_modules {r2['built_modules']}")
 log = open(os.path.join(a2.work, "build.log")).read()
 check("Built Foo" not in log and "Built Solution" in log, "next: Foo reused, Solution built")
 
@@ -143,9 +143,6 @@ check(r3["status"] == "reject" and "entry_build" not in r3 and not os.path.exist
 r5, a5 = cert("unbound", s2, seed=a1.export_build, expect="0" * 64, export=False)
 check(r5["status"] == "ok" and r5["record_cache"]["restored"] == [] and "attested" in r5["record_cache"].get("note", ""),
       f"a cache whose manifest is not the attested record's restores nothing: {r5.get('record_cache')}")
-r6, a6 = cert("incumbent", SRC, seed=a1.export_build, export=False, incumbent=True)
-check(r6["status"] == "ok" and r6["build_cap"] == "incumbent_build_s" and r2["build_cap"] == "build_s",
-      f"the incumbent's build cap is incumbent_build_s, a candidate's build_s ({r6.get('build_cap')}, {r2.get('build_cap')})")
 r4, a4 = cert("noseed", SRC, export=False)
 check(r4["status"] == "ok" and "record_cache" not in r4 and "entry_build" not in r4, "without the flags: as before")
 
@@ -164,7 +161,7 @@ def cert_with(name, src, season, extra=None):
         open(os.path.join(e, rel), "wb").write(data)
     a = types.SimpleNamespace(org=CORE, season=season, work=os.path.join(WORK, f"w-{name}"), entry=e,
                               out=os.path.join(WORK, f"{name}.json"), nanoda=False, cert_mem="4G", nanoda_mem="4G",
-                              record_cache=None, record_cache_key=None, record_manifest_sha256=None, incumbent=False,
+                              record_cache=None, record_cache_key=None, record_manifest_sha256=None,
                               export_build=None)
     ev.cert_job(a)
     return json.load(open(a.out))

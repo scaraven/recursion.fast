@@ -84,10 +84,13 @@ fn main() {
             let calls: u64 = res.iter().map(|r| r.0).sum();
             let reqs: u64 = res.iter().map(|r| r.1).sum();
             let el = res.iter().map(|r| r.2).fold(0.0, f64::max);
+            // permutations per call: the keyed hash of a query (SIGN also signs; not counted)
+            let perms = rf_oracle::keccak::permutations(32 + size) as f64;
             println!(
-                "mode={mode} threads={threads} batch={batch} size={size} requests_per_s={:.0} calls_per_s={:.0} MB_per_s={:.1} us_per_request={:.2}",
+                "mode={mode} threads={threads} batch={batch} size={size} requests_per_s={:.0} calls_per_s={:.0} permutations_per_s={:.0} MB_per_s={:.1} us_per_request={:.2}",
                 reqs as f64 / el,
                 calls as f64 / el,
+                calls as f64 * perms / el,
                 calls as f64 * size as f64 / el / 1e6,
                 el * 1e6 * threads as f64 / reqs as f64
             );
@@ -96,7 +99,7 @@ fn main() {
             // in-process hashing speed (no socket): rf-bench - local BATCH SIZE
             let batch: usize = arg(&a, 3);
             let size: usize = arg(&a, 4);
-            let kd = rf_oracle::blake2s::Keyed::new(&[9u8; 32]);
+            let kd = rf_oracle::keccak::Keyed::new(&[9u8; 32]);
             let data: Vec<Vec<u8>> = (0..batch).map(|i| (0..size).map(|k| (i * 31 + k * 7) as u8).collect()).collect();
             let refs: Vec<&[u8]> = data.iter().map(|d| d.as_slice()).collect();
             let mut out = vec![[0u8; 32]; batch];
@@ -107,12 +110,11 @@ fn main() {
                 reps += 1;
             }
             let el = t0.elapsed().as_secs_f64();
-            let blocks = (size.div_ceil(64).max(1) * batch) as f64 * reps as f64;
+            let perms = (rf_oracle::keccak::permutations(32 + size) * batch) as f64 * reps as f64;
             println!(
-                "mode=local batch={batch} size={size} simd={} ns_per_query={:.1} ns_per_block={:.1}",
-                rf_oracle::blake2s::has_avx2(),
+                "mode=local batch={batch} size={size} ns_per_query={:.1} ns_per_permutation={:.1}",
                 el * 1e9 / (reps as f64 * batch as f64),
-                el * 1e9 / blocks
+                el * 1e9 / perms
             );
         }
         "check" => {

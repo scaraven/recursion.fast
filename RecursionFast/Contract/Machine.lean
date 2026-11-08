@@ -1,23 +1,21 @@
 /-
 # Contract: the extractor's machine, a step-counting word language                (TRUSTED)
 
-**Unchanged in v4** (V4-1). The user's decision of 2026-10-20 (handoff §2.5, issue #7; ledger
-V3-S2R-A1) replaces the RISC-V image and the vendored Rv64 model. The extractor is a **program of
-this machine**: a statement tree over 64-bit words, given as data. Its meaning is the interpreter
-`XStmt.exec` below, which consumes one unit of fuel for every statement it executes, so a proved
-fuel bound is a proved step bound (`Extractor.lean`).
+The extractor is a **program of this machine**: a statement tree over 64-bit words, given as data.
+Its meaning is the interpreter `XStmt.exec` below, which consumes one unit of fuel for every
+statement it executes, so a proved fuel bound is a proved step bound (`Extractor.lean`).
 
-**Why the shape is what it is (the review `V3-S2R-handoff-review.md`).**
-* **Deep, not shallow (H-M1).** The syntax has no function-typed field. A program cannot run Lean
+**Why the shape is what it is.**
+* **Deep, not shallow.** The syntax has no function-typed field. A program cannot run Lean
   code of its own: the only computation a program causes is the interpreter's, one statement per
   step. (A monad whose bind takes a Lean continuation would let that continuation compute for
   free.)
-* **Three-address code (H-M2).** An operation reads two memory cells and writes one, a branch or a
+* **Three-address code.** An operation reads two memory cells and writes one, a branch or a
   loop tests one cell, and no statement contains a sub-expression. Each step is a bounded amount
   of word-RAM work: one `XOp` (one instruction on the reference machine; `clmul`/`clmulh` are
-  `pclmulqdq` or Zbc, V3-1), one memory or input access, one output word, or one push or pop of the
+  `pclmulqdq` or RISC-V Zbc), one memory or input access, one output word, or one push or pop of the
   statement stack.
-* **Memory is charged (H-m5) and affine in the input (V3-S2R-A8).** A program declares
+* **Memory is charged and affine in the input.** A program declares
   `mem + memPerWord · t` zero-initialised words on a tape of `t` words, two numbers given as data,
   and `run` charges one step per word before the first statement, so steps bound memory. Memory
   that grows with the tape lets an extractor index the log it reads (`Extractor.lean`'s budget),
@@ -28,8 +26,7 @@ outside it is `0` and a write outside it is lost. The input tape `I` is read-onl
 end is `0`). The output is a list of words, appended to. A stack holds the statements still to
 run. The run halts when the stack is empty, and returns the output.
 
-`clmul` (the carry-less product, v2's Zbc semantics) is unchanged from the RISC-V machine. `Word`
-was the vendored model's notation for `BitVec 64` and is defined here.
+`clmul` is the carry-less product, with RISC-V Zbc's semantics. `Word` is `BitVec 64`.
 -/
 
 namespace RecursionFast

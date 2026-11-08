@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""The harness's source rule (S6b-M3, S9D-M1; TRUSTED harness tool, interim until O-12).
+"""The harness's source rule (TRUSTED harness tool; an interim guard, see the last paragraph).
 
   python3 -I scripts/source-rule.py [--net lexer|raw|both] DIR
 
 Scans every `.lean` file under DIR (the submission-owned sources the harness copied into a fresh
 tree) before anything is built, and rejects (exit 1, one line per finding) every use of what
 elaboration-time code needs. A metaprogram run while a module is elaborated (`run_meta`, `#eval`,
-…) leaves no declaration, so the gate cannot see it; the S7-M1 forgery and its raw variant
-(`probes/s6b/gate/ForgeRaw.lean`: `persistentEnvExtensionsRef` + `unsafeCast` under Mathlib-only
-imports) are such code. Two independent nets, both binding (`--net` selects one, for the tests):
+…) leaves no declaration, so the gate cannot see it; a known forgery and its raw variant
+(`tests/source-rule/forge/ForgeRaw.lean`: `persistentEnvExtensionsRef` + `unsafeCast` under
+Mathlib-only imports) are such code. Two independent nets, both binding (`--net` selects one, for
+the tests):
 
 1. **A lexer that follows Lean's** (`Lean.Parser.Basic`'s token functions), on code tokens only:
    `--` and nested `/- -/` comments; string literals with their escapes; raw strings only for `r`,
@@ -50,14 +51,15 @@ Rejected (the words and forms; a word is a whole word, so the Library's `run_mon
     `Elab`, `interpreter`, `bootstrap`, `trace.compiler`);
   `import Lean…`, `import Lake…` (also gate rule 6), `import Qq…`, `open Lean…` and `open Qq…`.
 The word list was checked against the token table of the allowed import closure (Lean v4.34.1,
-Mathlib and its packages, Clean; `scripts/TokenSweep.lean`, CI step 3: every keyword token is
-either rejected here or listed as reviewed in `tests/source-rule/reviewed-tokens.txt`) and, for the
-non-reserved and scoped keywords the table does not hold (`run_tac`, Qq's `by_elabq`), against the
-packages' syntax declarations.
-`tests/source-rule/check.sh` holds one fixture per rejected form, the S9 review's lexer bypasses
-(each must be caught by each net alone), and a file of allowed forms. Notation, `deriving`,
-`attribute [simp]`, `@[inline]`/`@[specialize]`/`@[elab_as_elim]`, tactics and `#check` are fine.
-This raises the bar; it is not a proof that no elaboration-time code runs (O-12 is the sound fix).
+Mathlib and its packages, Clean; `harness/lean-tools/TokenSweep.lean`, a CI step: every keyword
+token is either rejected here or listed as reviewed in `tests/source-rule/reviewed-tokens.txt`) and,
+for the non-reserved and scoped keywords the table does not hold (`run_tac`, Qq's `by_elabq`),
+against the packages' syntax declarations. `tests/source-rule/check.sh` holds one fixture per
+rejected form, the known lexer bypasses (each must be caught by each net alone), and a file of
+allowed forms. Notation, `deriving`, `attribute [simp]`,
+`@[inline]`/`@[specialize]`/`@[elab_as_elim]`, tactics and `#check` are fine. This raises the bar;
+it is not a proof that no elaboration-time code runs (the sound fix would be badge executables
+regenerated from kernel terms).
 """
 import bisect, os, re, sys
 

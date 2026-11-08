@@ -1,33 +1,33 @@
-# recursion.fast v4: the CI smoke shape (V4-A11: M from 4 to 8, chains of 16 to 128 steps). Same keys
+# recursion.fast: the CI smoke shape (a short stream, chains of 16 to 128 steps). Same keys
 # as season.toml.
 name = "smoke"
 
 [score]
 K = 1.5
 kappa = 0.2667
-n_ref = 262144
+n_ref = 262144    # 2^18 permutations
 s_ref = 2097152
 R = 10
 
-[certificate]     # the certificate job's Lean steps (V4-A9), as in the season
+[certificate]     # the certificate job's Lean steps, as in the season
 build_s = 600
 kernel_s = 600
 gate_s = 120
 badge_s = 180
-incumbent_build_s = 1800  # 3 × build_s: a duel's incumbent, certified before under build_s, re-derived
-                          # here whether or not the record cache hit; never a candidate's cap
 render_s = 30     # the challenge rendered from claim.json (≤ claim_bytes)
-source_rule_s = 120   # the source rule on lean/ (≤ lean_bytes; 8.9 MB took 10 s on the development VM)
+source_rule_s = 120   # the source rule on lean/ (≤ lean_bytes; 8.9 MB took 10 s on an organiser
+                      # workstation)
 
 [entry]           # the entry root as data, checked before the source rule (so a huge unused file
-                  # cannot force a timeout); a breach is the entry's REJECT. flock-recursive
-                  # (v4/flock-submit): lean/ 263 files, 8.9 MB, largest 145 kB; prover/ 44 files,
+                  # cannot force a timeout); a breach is the entry's REJECT. A large recursive
+                  # entry measured: lean/ 263 files, 8.9 MB, largest 145 kB; prover/ 44 files,
                   # 58.6 MB, prover.s 35.1 MB; the whole root 67.5 MB
 files = 2048              # every regular file of the root
 bytes = 536870912         # 512 MiB, the whole root
 file_bytes = 134217728    # 128 MiB, any one file
 lean_files = 1024         # lean/ (all files, any depth)
-lean_bytes = 33554432     # 32 MiB: the source rule's input (8.9 MB took 10 s on the development VM)
+lean_bytes = 33554432     # 32 MiB: the source rule's input (8.9 MB took 10 s on an organiser
+                          # workstation)
 prover_files = 256        # prover/
 prover_bytes = 268435456  # 256 MiB
 claim_bytes = 65536       # claim.json, the renderer's input
@@ -41,7 +41,10 @@ step_s = 60
 stream_s = 300
 check_every = 2
 retime_factor = 1.3
-retime_frac = 0.25    # at least one re-run is allowed at M = 4
+retime_frac = 0.25    # one re-run is allowed at M = 6
+# the smoke's own fixed lengths, derived as the season's (harness/season.toml) with the label
+# "recursion.fast smoke chain lengths" on [16, 128]; M + 1 values
+lengths = [16, 55, 20, 74, 22, 90, 20]
 
 [calibration]
 every = 4
@@ -49,8 +52,8 @@ idle_s = 0.2
 rounds = 2
 runs_per_sample = 3
 ref_ns = 50000000
-ref_provisional = true
-clamp = [0.5, 2.0]
+ref_provisional = true   # the smoke runs on any machine: c_P's drift is recorded, never enforced
+c_P_drift = 0.05
 triv_chains = 4
 triv_n = 16
 v_ref_ms = 177.8      # the smoke fixes v_ref (the trivial check at n = 16 takes microseconds)
@@ -74,3 +77,6 @@ build_s = 120
 prover = "11G"
 service = "2G"
 badge = "4G"
+
+[machine]
+fingerprint = "any"   # the smoke accepts any machine

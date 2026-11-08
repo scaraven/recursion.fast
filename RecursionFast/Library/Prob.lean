@@ -1,8 +1,8 @@
 /-
   RecursionFast.Library.Prob  (UNTRUSTED, kernel-checked)
 
-  **The calculus of the contract's lazy-sampling probability `prob`** (`Contract/Security.lean`,
-  V4-A10), on which the paper theorem and the tree's composition rest.
+  **The calculus of the contract's lazy-sampling probability `prob`** (`Contract/Security.lean`),
+  on which the paper theorem and the tree's composition rest.
 
   * `expect F p L`: the expectation of `F x L'` over the end `(x, L')` of the run of `p` from the
     table `L`, the oracle lazily sampled as in `prob`; `prob_eq_expect`: `prob` is the

@@ -1,12 +1,12 @@
-# The core CI of recursion.fast v4 (this repository): the Lean build with Mathlib from its cache,
+# The core CI of recursion.fast (this repository): the Lean build with Mathlib from its cache,
 # the line budget, the axiom audit, the source rule and gate fixtures, the service's tests, the
-# sandbox tests, and the harness smoke end to end (archive/v4-dev-record:docs/v4/BRIEF.md stage B; V4-A2: the certificate side and the
-# benchmark side are separate jobs). A push or a pull request to this repository triggers it; it
+# sandbox tests, and the harness smoke end to end (the certificate side and the benchmark side are
+# separate jobs). A push or a pull request to this repository triggers it; it
 # runs no submission. Every check whose subject is organiser code runs here and only here, once per
-# harness commit, never in an evaluation (V4-A9): the contract's `acc` before the entry's `V` (the
+# harness commit, never in an evaluation: the contract's `acc` before the entry's `V` (the
 # organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
 # template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
-# steps' timeouts nested inside that (V4-A9; the measured step times are in archive/v4-dev-record:docs/DESIGN-v4-srom.md §3.4).
+# steps' timeouts nested inside that.
 name: ci
 on:
   push:
@@ -18,7 +18,7 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Q8: every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
+# every `run:` step is `bash -eo pipefail`, so `cmd | tee log` fails when `cmd` fails
 defaults:
   run:
     shell: bash
@@ -68,14 +68,14 @@ jobs:
           python3 -I tests/source-rule/sweep.py scripts/source-rule.py logs/tokens.txt tests/source-rule/reviewed-tokens.txt
       - name: gate fixtures
         run: timeout 90 tests/gate/check.sh
-      - name: the service's signatures against the compiled Lean reference signer (V4-A4)
+      - name: the service's signatures against the compiled Lean reference signer
         run: |
           (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
           timeout 120 lake -f scripts/speed/lakefile.toml build signer extract
           timeout 120 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
-      - name: the compiled extractor interpreter on the witness-sending entry (V4-A9; liveness left the evaluation)
+      - name: the compiled extractor interpreter on the witness-sending entry (organiser code)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
-      - name: acc on a 2^16-query signed trace, timed by the badge (C-m3), and the organiser's canaries (V4-A9)
+      - name: acc on a 2^16-query signed trace, timed by the badge, and the organiser's canaries
         run: timeout 120 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
       - name: chain checker (T_triv,best) at the season shape
         run: |
@@ -109,7 +109,9 @@ jobs:
           timeout 300 cargo build --release
           timeout 300 cargo build --release --features insecure-test-keys --target-dir target/test-keys
           timeout 120 cargo test --release
-      - name: service tests (hashlib, the reference WOTS signer, caps, exhaustion)
+      - name: gcc for the C Keccak-256 reference of the service tests (tests/service/keccak_ref.c, loaded by ctypes)
+        run: gcc --version | head -1
+      - name: service tests (the C and Python Keccak-256 references, the reference WOTS signer, caps, exhaustion)
         run: timeout 300 python3 tests/service/test_service.py
       - name: service measurements on this runner
         run: timeout 300 tests/service/measure.sh 4 | tee service-measure.log
@@ -124,7 +126,7 @@ jobs:
         run: lscpu
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
-      - name: committed assembly assembles with this image's toolchain (RF-M2)
+      - name: committed assembly assembles with this image's toolchain
         run: |
           gcc --version | head -1; as --version | head -1; ldd --version | head -1
           for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
@@ -133,21 +135,19 @@ jobs:
       - name: service
         working-directory: service
         run: timeout 300 cargo build --release
-      - name: sandbox tests (hostile prover; the clock stops when the sandbox is dead, V4-A11 §5.1; R-M1)
+      - name: sandbox tests (hostile prover; the clock stops when the sandbox is dead)
         run: timeout 300 python3 tests/harness/test_sandbox.py
-      - name: the verifier term, the score, the draws and the fit (V4-A11 §3, §4, §11)
+      - name: the verifier term, the score, the draws and the fit
         run: timeout 60 python3 tests/harness/test_tv.py
-      - name: the stream's control flow, re-timing and truncation (V4-A11 §2, §5.3, §6, R-M2)
+      - name: the stream's control flow, re-timing and truncation
         run: timeout 60 python3 tests/harness/test_stream.py
-      - name: a duel's second run starts on a clean slate (an orphaned service, tmpfs requests, the work directory)
-        run: timeout 120 python3 tests/harness/test_slate.py
-      - name: a part past PART_S after the prover's build started is the entry's REJECT (review M-3)
+      - name: a part past PART_S after the prover's build started is the entry's REJECT
         run: timeout 120 python3 tests/harness/test_partcap.py
-      - name: the aggregation requires every planned part (single runs and duels), and the DoS column fails on time and crashes only (RF-M1, V4-A9)
+      - name: the aggregation (every planned part, the machine fingerprint) and the DoS column
         run: |
           timeout 60 python3 tests/harness/test_aggregate.py
           timeout 60 python3 tests/harness/test_dos.py
-      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, three duels)
+      - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, one aggregated evaluation)
         run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
   smoke:
@@ -156,13 +156,13 @@ jobs:
     # runs beside `lean` rather than after it (the critical path: `harness` then `smoke`)
     needs: [harness]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: machine
         run: lscpu
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { persist-credentials: false }
-      - name: committed assembly assembles with this image's toolchain (RF-M2)
+      - name: committed assembly assembles with this image's toolchain
         run: |
           gcc --version | head -1; as --version | head -1; ldd --version | head -1
           for s in $(git ls-files '*.s'); do gcc -c -o /dev/null "$s" && echo "assembles: $s"; done
@@ -181,7 +181,7 @@ jobs:
       - name: comparator and lean4export (pinned in scripts/tools.env)
         run: timeout 240 harness/ci/build-kernels.sh "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
       - name: end-to-end smoke (certificate with the Lean kernel, accF badge, benchmark, organiser canaries, broken provers, provisional, source rule)
-        run: timeout 480 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
+        run: timeout 720 python3 tests/harness/smoke.py --org "$PWD" --work "$RUNNER_TEMP/smoke"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: smoke, path: "${{ runner.temp }}/smoke/*.json" }

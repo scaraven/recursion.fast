@@ -1,0 +1,5 @@
+[Unit]
+Description=recursion.fast runner slots (each slot unit narrows its CPUs)
+
+[Slice]
+AllowedCPUs=0-15

@@ -1,5 +1,5 @@
 /-
-  RecursionFast.Library.Machine  (UNTRUSTED, kernel-checked; unchanged from v3)
+  RecursionFast.Library.Machine  (UNTRUSTED, kernel-checked)
 
   Reasoning about programs of the contract's step-counting machine (`Contract/Machine.lean`).
 

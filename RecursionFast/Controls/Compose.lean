@@ -1,8 +1,8 @@
 /-
-# Controls: the composition walk and its probability (`Library/Compose.lean`, V4-8, V4-A10; RA-M1)
+# Controls: the composition walk and its probability (`Library/Compose.lean`)
 
-Negative (what the bare disjunction does not say). `forgery_trivial` is RA's probe P1, adapted
-to the capped `Forgery`: under the key of any known signer and for every log within `logCap`, a
+Negative (what the bare disjunction does not say). `forgery_trivial`, for
+the capped `Forgery`: under the key of any known signer and for every log within `logCap`, a
 `Forgery` exists with no other hypothesis (a signed one-entry trace whose answer to the empty
 query is not in the log, which exists since the log has fewer than `2^256` entries). So
 `compose_exists_free`: `compose_exists`'s conclusion holds for such a key with none of its
@@ -51,8 +51,8 @@ theorem fresh_answer (L : Log) (hlen : L.length ≤ logCap) :
   unfold logCap at hlen
   omega
 
-/-- **RA probe P1**: under the key of any known signer and for every log within `logCap`, a
-forgery against the log exists, with no other hypothesis. -/
+/-- **A forgery is free for a known signer**: under the key of any known signer and for every log
+within `logCap`, a forgery against the log exists, with no other hypothesis. -/
 theorem forgery_trivial (sk : ℕ → ℕ → Digest) (L : Log) (hlen : L.length ≤ logCap) :
     Nonempty (Forgery (Signer.pk sk) L) := by
   obtain ⟨a, ha⟩ := fresh_answer L hlen

@@ -1,13 +1,13 @@
 /-
-# Controls: a program that reads the log (`Contract/Extractor.lean`; V3-S2R review M2)
+# Controls: a program that reads the log (`Contract/Extractor.lean`)
 
-The handoff's log-indexing control (§2.5): a program of the contract's machine that finds a log
+The log-indexing control: a program of the contract's machine that finds a log
 entry **by its answer**, as an extractor finds a preimage, and computes that specification within
 `16 · t` steps, well inside the budget's linear term `2^16 · t`. It reads every part of the tape
 that a log-reading extractor needs: the statement, the proof's length word (to skip the proof),
 the number of entries, and for each entry the query's length word, from which it computes
 `⌈|q|/8⌉` without overflow to skip the query, and the 4-word answer, which it compares with the
-statement. The proof uses the domain's bound on query lengths (`Computes`, V3-S2R-A9): a length
+statement. The proof uses the domain's bound on query lengths (`Computes`): a length
 word is a number's low 64 bits, so without it no program could tell where an entry ends.
 
 * `findE c π L`: the leaf witness `(c, j)` for the first entry `j` whose answer is `c`, or none.

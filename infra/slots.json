@@ -1,0 +1,77 @@
+{
+  "_comment": "The runner host's layout, read by host/rf-host-apply, supervisor/rf-supervisor, supervisor/rf-jit and host-setup.sh. CPU numbers are this machine's (core i = CPUs i and i+8; see /sys/devices/system/cpu/cpu*/topology/thread_siblings_list). The values measured on this host (the fixed frequency policy \"freq\" and the cache and memory-bandwidth partition \"resctrl\") are not in the repository: host-setup.sh merges them from the host-only file /etc/rf-runner/host.local.json (template: host.local.json.example) into the installed /opt/rf-runner/slots.json. Each slot's tap, mac and net must equal the sets vm_src and vm_proxy in host/rf.nft and the http_port lines of host/proxy/squid.conf (host-setup.sh checks). Each slot runs as its own user (`user`: its supervisor, its QEMU, its tap, its run directory; the token broker maps the requesting uid to the slot). The bench VM's memory is backed by reserved 2 MiB hugepages (`hugepages`; rf-host-apply reserves them). Runner labels: a JIT runner gets exactly the labels listed (GitHub adds no self-hosted label), so a bare `runs-on: self-hosted` matches none of them. hard_limit_s bounds one VM's one job, counted from its start: the longest job on bench is the certificate (timeout-minutes 60 with nanoda, else 50; setup and setup-tools 30, benchmark 50), so bench is 60 + 30 minutes of margin for GitHub's cancellation and the job's cleanup = 5400 s; the longest light job is sync (30 minutes), so light is 3600 s. GitHub's own timeout ends a job first; the hard limit only frees a stuck VM.",
+  "repo": "scaraven/recursion.fast-submissions",
+  "runner_group_id": 1,
+  "host_cpus": [0, 1, 2, 8, 9, 10],
+  "proxy_port": 3128,
+  "bandwidth": {
+    "_comment": "per tap, tc (rf-host-apply): down = host to VM (tbf), up = VM to host (ingress police)",
+    "down_mbit": 500,
+    "up_mbit": 300
+  },
+  "pause_light_during_bench": true,
+  "idle_limit_s": 86400,
+  "boot_limit_s": 900,
+  "policy_record_s": 300,
+  "free_floor_gb": 40,
+  "slots": {
+    "bench": {
+      "user": "rfbench",
+      "labels": ["rf-bench"],
+      "topology": {
+        "sockets": 1,
+        "cores": 4,
+        "threads": 2
+      },
+      "pin": [4, 12, 5, 13, 6, 14, 7, 15],
+      "mem_mb": 16384,
+      "tap": "rf-tap-bench",
+      "net": "10.77.1",
+      "mac": "52:54:00:77:01:02",
+      "hard_limit_s": 5400,
+      "disk_limit_gb": 100,
+      "hugepages": true,
+      "bench": true
+    },
+    "light1": {
+      "user": "rflight1",
+      "labels": ["rf-light"],
+      "topology": {
+        "sockets": 1,
+        "cores": 1,
+        "threads": 1
+      },
+      "pin": [3],
+      "mem_mb": 4096,
+      "tap": "rf-tap-light1",
+      "net": "10.77.2",
+      "mac": "52:54:00:77:02:02",
+      "hard_limit_s": 3600,
+      "disk_limit_gb": 20
+    },
+    "light2": {
+      "user": "rflight2",
+      "labels": ["rf-light"],
+      "topology": {
+        "sockets": 1,
+        "cores": 1,
+        "threads": 1
+      },
+      "pin": [11],
+      "mem_mb": 4096,
+      "tap": "rf-tap-light2",
+      "net": "10.77.3",
+      "mac": "52:54:00:77:03:02",
+      "hard_limit_s": 3600,
+      "disk_limit_gb": 20
+    }
+  },
+  "build": {
+    "tap": "rf-tap-build",
+    "net": "10.77.9",
+    "mac": "52:54:00:77:09:02",
+    "vcpus": 6,
+    "mem_mb": 8192,
+    "disk_gb": 100
+  }
+}

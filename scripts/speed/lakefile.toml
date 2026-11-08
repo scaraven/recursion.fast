@@ -2,7 +2,7 @@
 # trusted). Run from the repository root:
 #   lake -f scripts/speed/lakefile.toml build speed && .lake/build/bin/speed
 # It is the main lakefile's library plus these executables, kept in its own configuration file so
-# that the repository's lakefile is unchanged (stage A may adjust only its [[lean_lib]] blocks).
+# that the repository's lakefile is unchanged.
 name = "RecursionFast"
 defaultTargets = ["speed"]
 

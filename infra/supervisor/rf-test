@@ -1,0 +1,9 @@
+#!/bin/sh
+# rf-test SLOT SCRIPT [--tar FILE] [--timeout S] [--out FILE]   (root)
+# `rf-supervisor test` as the slot's user (rf<SLOT>) in rf.slice, where the slot's CPUs are allowed
+# (a root shell's user.slice has only the host CPUs, so the vCPU threads could not be pinned from
+# there). SCRIPT and FILE must be readable by the group rfrunner. RF_CONF passes another slots.json.
+# RF_TEST_UNIT names the transient unit (so a caller can stop the VM: systemctl stop NAME).
+exec systemd-run --quiet --wait --pipe --collect ${RF_TEST_UNIT:+--unit="$RF_TEST_UNIT"} ${RF_CONF:+-E RF_CONF="$RF_CONF"} \
+  --slice=rf.slice -p User="rf$1" -p Group="rf$1" -p SupplementaryGroups="kvm rfrunner" -p AllowedCPUs=0-15 -p MemoryMax=20G -p TasksMax=512 \
+  /usr/bin/python3 -I /opt/rf-runner/supervisor/rf-supervisor test "$@"

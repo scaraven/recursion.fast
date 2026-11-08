@@ -1,14 +1,14 @@
 /-
   RecursionFast.Library.SignerFast  (UNTRUSTED, kernel-checked)
 
-  **The executable reference signer** (V4-A4: the service is tested against the Lean signer,
+  **The executable reference signer** (the service is tested against the Lean signer,
   derivation included). `Library/Signer.lean` defines the signer for proofs; computing its public
-  key with the contract's reference BLAKE2s (about 31 million compressions for `2^16` keys) takes
-  minutes, and `authPath` recomputes subtrees. This file computes the same values fast, each
+  key with the contract's reference Keccak-256 (about 37 million permutations for `2^16` keys)
+  takes too long, and `authPath` recomputes subtrees. This file computes the same values fast, each
   proved equal to the reference:
 
-  * `chainStartF seed j i` (the keyed BLAKE2s derivation through the word-level path,
-    `blake2sKeyedB`) `= Signer.chainStart seed j i` (`chainStartF_eq`);
+  * `chainStartF seed j i` (the derivation through the word-level path) `= Signer.chainStart
+    seed j i` (`chainStartF_eq`);
   * `Tree`, the key tree's levels as arrays, computed once (`buildTree`, `2^17 − 1` nodes), with
     `buildTree_get`: entry `k` of level `t` is `Signer.node sk t k`;
   * `Tree.pk` `= Signer.pk sk` and `Tree.sign` `= Signer.sign sk j m` (`Tree.pk_eq`,
@@ -23,32 +23,18 @@ import RecursionFast.Library.Signer
 import RecursionFast.Library.Fast
 
 namespace RecursionFast.Signer
-open RecursionFast Blake2s
+open RecursionFast Keccak
 
-/-! ## Keyed BLAKE2s through the byte-array path -/
-
-/-- BLAKE2s-256 keyed by `key` (`1 ≤ |key| ≤ 32`) of `msg`, through the byte-array path: the key
-block, zero-padded to 64 bytes, then the message. -/
-def blake2sKeyedB (key : List UInt8) (msg : List UInt8) : Digest :=
-  let b : ByteArray := ⟨(key ++ List.replicate (64 - key.length) 0 ++ msg).toArray⟩
-  outBytes (loopB b (iv.set 0 (iv[0] ^^^ (0x01010000 : UInt32) ^^^ key.length.toUInt32 <<< 8 ^^^
-    (32 : Nat).toUInt32)) 0 ((b.size - 1) / 64))
-
-theorem blake2sKeyedB_eq (key msg : List UInt8) (hk : key ≠ []) :
-    blake2sKeyedB key msg = ⟨(blake2s key 32 msg).toArray, by simp [blake2s, List.map_const']⟩ := by
-  have hkk : key.length ≠ 0 := by simpa using hk
-  simp only [blake2sKeyedB, blake2s, hkk, ↓reduceIte, outBytes_eq]
-  rw [loopB_eq _ _ _ 0 (by simp; omega), List.drop_zero]
-  simp [ByteArray.size]
+/-! ## The secret chain starts through the byte-array path -/
 
 /-- The reference chain start (`Signer.chainStart`) through the byte-array path. -/
 def chainStartF (seed : List UInt8) (j i : ℕ) : Digest :=
-  blake2sKeyedB seed (tagSecret :: enc64 j ++ [i.toUInt8])
+  digestB (pushAll ⟨seed.toArray⟩ (tagSecret :: enc64 j ++ [i.toUInt8]))
 
-theorem chainStartF_eq (seed : List UInt8) (hs : seed ≠ []) :
-    chainStartF seed = chainStart seed := by
+theorem chainStartF_eq (seed : List UInt8) : chainStartF seed = chainStart seed := by
   funext j i
-  rw [chainStartF, blake2sKeyedB_eq _ _ hs, chainStart]
+  rw [chainStartF, digestB_eq, pushAll_data, chainStart]
+  simp
 
 /-! ## The key tree, computed once -/
 

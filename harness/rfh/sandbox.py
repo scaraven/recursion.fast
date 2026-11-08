@@ -17,7 +17,7 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
   * `--die-with-parent` and a private pid namespace: when the sandbox's first process exits or the
     runner kills it, the kernel kills every process it started;
   * `oom_score_adj = 1000` (`choom`), so that under memory pressure the kernel kills the sandboxed
-    process before the service (V4-A5); optionally a CPU affinity (`taskset`, the pinned core of a
+    process before the service; optionally a CPU affinity (`taskset`, the pinned core of a
     `V_i` measurement).
 
 It needs no system user and changes no system setting. It needs unprivileged user namespaces for
@@ -159,7 +159,7 @@ class Sandbox:
     `hold=True` the command is held before `exec` until `release()` (bubblewrap's `--block-fd`);
     `wait_ready()` returns once the sandbox exists and `wait_exit()` when the command exits
     (`--json-status-fd`), so that a timer between them counts the measured program, not the
-    sandbox's set-up or tear-down. With `status=True` (V4-A11, §5.1) bubblewrap reports the pid of
+    sandbox's set-up or tear-down. With `status=True` bubblewrap reports the pid of
     the sandbox's first process (`child_pid`), the init of its pid namespace: `kill_tree()` kills
     every process of the sandbox and returns only when they are all dead (the namespace's init
     exits after the kernel has killed and reaped every other process in it, and its pidfd becomes

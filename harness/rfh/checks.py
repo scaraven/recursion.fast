@@ -1,4 +1,4 @@
-"""The checks of a run (TRUSTED RUNTIME). The one predicate is the compiled `acc` (V4-7), run by the
+"""The checks of a run (TRUSTED RUNTIME). The one predicate is the compiled `acc`, run by the
 badge executable `verify` that the harness renders and builds per entry; the runner only decides
 which (vk, statement, file) triples to ask about and what the answers must be.
 
@@ -14,7 +14,7 @@ Badge executables (`harness/badge/`, built by `evaluate.py`; the command-line co
 
 `verify` runs the entry's compiled verifier, so it runs in the sandbox, pinned to one core.
 
-Only checks about the entry are made here (V4-A9): a proof the entry produced, accepted for its
+Only checks about the entry are made here: a proof the entry produced, accepted for its
 statement, and the same proof rejected for another statement. Mutations that `acc` rejects before
 the entry's `V` runs (the file parser, the trace digest, the signature) test organiser code and run
 in the core CI (`tests/harness/canaries.py`).
@@ -69,7 +69,7 @@ class Badge:
     def verify(self, items, store, timeout=None, warm=False):
         """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns). With
         `warm`, the first item is checked once more before the timed ones and that result dropped,
-        so no timed item is the fresh process's first, coldest check (RF-m3). `timeout` bounds the
+        so no timed item is the fresh process's first, coldest check. `timeout` bounds the
         whole batch (default `verify_s` per item and 60 s); a batch that times out, crashes or has a
         check above `verify_s` raises `BadgeError`."""
         if not items:
@@ -110,7 +110,7 @@ class Badge:
 # ---- canaries -------------------------------------------------------------------------------------
 
 def canaries(stmt: bytes, others=()):
-    """The statement canaries (C15, v3 §8.3 step 7; V4-A11) of a proof accepted for `stmt`: the
+    """The statement canaries (AGENTS.md §6) of a proof accepted for `stmt`: the
     statements it must be rejected for, as (name, statement): `stmt` with its first bit flipped, and
     each (name, statement) of `others` that differs from `stmt` (in the stream: the statement of the
     leaf the next step adds, `next-leaf`, and the step's first child, `first-child`)."""
@@ -125,7 +125,7 @@ def dos_inputs(root_file: bytes, count: int, rnd: random.SystemRandom):
     """`count` random and mutated signed proofs for the DoS column, in turn: random bytes; random
     `π` with the target's trace and signature; the target's `π` with 1–8 bits flipped; the target's
     file with 1–8 bits flipped, cut to a random prefix in 30% of cases (no input extends the file).
-    The target is the stream's last output `π_M` (V4-A11); `rnd` draws from the OS CSPRNG."""
+    The target is the stream's last output `π_M`; `rnd` draws from the OS CSPRNG."""
     s = signed.parse(root_file)
     out = []
     for k in range(count):

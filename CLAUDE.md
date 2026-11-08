@@ -17,7 +17,9 @@ lake build            # the contract, the library and the controls
 
 Never run `lake update` or change the `[[require]]` blocks. Never run `lake exe cache get` against a
 shared, read-only package tree. Give every long or background build a `timeout`. Kernel evaluation
-of BLAKE2s costs about 2.4 s per compression: prove properties symbolically.
+of Keccak-256 costs about 11 s per permutation through the contract's `keccakF` and about 0.4 s
+through the word-level twin of `Library/KeccakFast.lean` (`keccakF_toVec`, `keccak256_eq_digestL`):
+evaluate through the twin, and prove properties symbolically.
 
 ## Hard rules for editing this repository
 

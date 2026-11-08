@@ -1,17 +1,17 @@
 /-
-# Controls: knowledge soundness and completeness (`Contract/Security.lean`) (DESIGN-v3 §4.2; V4-A10)
+# Controls: knowledge soundness and completeness (`Contract/Security.lean`)
 
-`KS` is the textbook single-output statement (V4-A10). The negatives below are proved against it
+`KS` is the textbook single-output statement. The negatives below are proved against it
 directly, each by exhibiting the adversary and its success probability; the positives either
 directly or through the library's potential and the bridge `KState.ks`. The potential's own
-controls (it against the Stage S1 boolean form, its length guard) are in
+controls (it against the boolean form, its length guard) are in
 `Controls/Potential.lean`; those of this file are kept at the end as library facts.
 
 **`KS`, positive:**
 * `ws_ks`, `ws_complete`: the witness-sending argument (`Library/WitnessSending.lean`) is
-  knowledge-sound at error `0` with no verifier query **under every public key** (v4: `Rel` of
-  its own `acc vk`), through the potential `0` (`ws_kstate_trivial`), and complete at error `0`
-  (V3-S2R-A2), through perfect completeness for every oracle and key (`ws_complete_perfect`,
+  knowledge-sound at error `0` with no verifier query **under every public key** (`Rel` of
+  its own `acc vk`), through the potential `0` (`ws_kstate_trivial`), and complete at error `0`,
+  through perfect completeness for every oracle and key (`ws_complete_perfect`,
   `Library/Completeness.lean`).
 * `rejectAll_ks`: the verifier that rejects everything is knowledge-sound (for every relation and
   extractor, at error `0`). That is correct, and is why completeness is required:
@@ -21,17 +21,17 @@ controls (it against the Stage S1 boolean form, its length guard) are in
   `queryThenAccept_ks_ge_one` it is the error that fails.
 
 **`KS`, negative:**
-* Accept-everything (V3-S1-A13): for the empty relation the adversary that asks nothing and
+* Accept-everything: for the empty relation the adversary that asks nothing and
   outputs `(0, ∅)` wins with probability exactly `1` (`acceptAll_wins`), so the accept-all
   verifier is knowledge-sound at no error with no query, whatever the extractor
   (`acceptAll_not_ks`); for the relation of every `acc` with the extractor that returns nothing,
   at no `qV ≤ logCap` with `qV · ε < 1` (`acceptAll_not_ks_none`). `acceptAll_ks_iff`
   (`Library/KS.lean`): it is knowledge-sound for some extractor exactly when every statement has a
   witness. **Not shown**: a digest without a witness in `Rel acc`; none can be exhibited for
-  BLAKE2s, and if `nodeStmt` is onto, the accept-all verifier is knowledge-sound with a
+  Keccak-256, and if `nodeStmt` is onto, the accept-all verifier is knowledge-sound with a
   non-constructive extractor. What excludes it is the named extractor with its program and budget
-  (`Controls/Certificate.lean`, `acceptAll_no_certificate`). The v4 analogue for a verifier that
-  trusts signatures is `Library/SigTrust.lean` (C-m1).
+  (`Controls/Certificate.lean`, `acceptAll_no_certificate`). The analogue for a verifier that
+  trusts signatures is `Library/SigTrust.lean`.
 * **The verifier's queries are charged** (`queryThenAccept_wins`, `queryThenAccept_ks_ge_one`):
   for the verifier that asks one query and accepts, and the empty relation, the adversary that
   asks nothing wins on every answer to the verifier's own query, with probability `1`; so `KS`
@@ -42,24 +42,23 @@ controls (it against the Stage S1 boolean form, its length guard) are in
 
 **What `KS` does not say** (`acceptAll_ks_above_logCap`): with `qV > logCap` no adversary is in
 range, so the accept-all verifier is knowledge-sound for the empty relation at every error. The
-certificate's cap `qV ≤ 2^16` excludes it (`Contract/Certificate.lean`; review E-ks m-1: no
-conjunct added).
+certificate's cap `qV ≤ 2^16` excludes it (`Contract/Certificate.lean`; `KS` has no conjunct
+for it).
 
-**What `KS` does not exclude: an extractor that reads the verifier's own answer** (review E-ks
-M-1; the user's option B, V4-A10). `KS`'s extractor reads the final log, which holds the
-verifier's answers too; the textbook extractor reads the adversary's log only
-(`Library/KS.lean`, `KSTextbook`). The review's probe: `Vlucky` asks the proof as its query and
-accepts when the masked answer (144 bits zeroed) is the statement's leaf start; `Elucky` reads that
-answer from the log. `lucky_ks`: `KS` at error `0` with one query, for the relation of every
-`acc`. `lucky_not_textbook`: the same pair is textbook-sound at no `ε < 2^-112` (the adversary that
-asks nothing wins on `2^144` of the `2^256` answers, and the extractor sees an empty log); that
-every efficient extractor fails too is paper (two BLAKE2s inverted on 112 bits). Harmless in the
+**What `KS` does not exclude: an extractor that reads the verifier's own answer**. `KS`'s extractor
+reads the final log, which holds the verifier's answers too; the textbook extractor reads the
+adversary's log only (`Library/KS.lean`, `KSTextbook`). The example: `Vlucky` asks the proof as its
+query and accepts when the masked answer (144 bits zeroed) is the statement's leaf start; `Elucky`
+reads that answer from the log. `lucky_ks`: `KS` at error `0` with one query, for the relation of
+every `acc`. `lucky_not_textbook`: the same pair is textbook-sound at no `ε < 2^-112` (the adversary
+that asks nothing wins on `2^144` of the `2^256` answers, and the extractor sees an empty log); that
+every efficient extractor fails too is paper (two Keccak-256 inverted on 112 bits). Harmless in the
 deployment: every prover there is normalised (the verifier reads only the signed trace, whose every
 answer the prover obtained), and in the composition an extracted member's verifier asks nothing
 fresh (`KS.select`). Positive: `ws_textbook` (the witness-sending extractor ignores the log, so it
 is textbook-sound at `0`, and `KSTextbook.ks` gives back its `KS`).
 
-**The library's potential (`KState`)**, v3's controls kept as facts about the library tool:
+**The library's potential (`KState`)**, controls kept as facts about the library tool:
 `queryThenAccept_ge_one` and `ks1` (the `step` law charges the verifier's query; the error is
 what fails), `mono_control`, `acceptAll_no_kstate_empty`, `acceptAll_no_kstate_none`,
 `jumpAll_ge_one`, `badAll_not_capped`; the boolean form (`BoolKState`): `bool_bounded_ge_one`,
@@ -172,7 +171,7 @@ theorem queryThenAccept_ks_one (E : Digest → Proof → Log → Option Wit) :
     KS (fun _ _ => False) queryThenAccept E 1 1 :=
   ⟨fun _ _ _ => le_rfl, fun _ _ _ _ => (prob_le_one _ _ _).trans (by simp)⟩
 
-/-! ## What `KS` does not exclude: an extractor that reads the verifier's own answer (M-1) -/
+/-! ## What `KS` does not exclude: an extractor that reads the verifier's own answer -/
 
 /-- Zero the first 18 bytes (144 bits) of a digest. -/
 def mask (a : Digest) : Digest := Vector.ofFn fun i => if i.val < 18 then 0 else a[i]
@@ -187,7 +186,7 @@ def Elucky (_ : Digest) (π : Proof) (L : Log) : Option Wit :=
   (L.find? fun e => e.1 = π).map fun e => .leaf (mask e.2) 0
 
 /-- **`KS` at error `0`** with one verifier query, for the relation of every `acc`: on the final
-log the extractor reads the verifier's own answer, which is the witness (the review's probe). -/
+log the extractor reads the verifier's own answer, which is the witness. -/
 theorem lucky_ks (acc : Digest → Signed → Bool) : KS (Rel acc) Vlucky Elucky 0 1 := by
   refine KS.of_extracts (fun _ _ _ => le_rfl) ?_ 0
   intro L c π h
@@ -211,7 +210,7 @@ theorem fill_injective : Function.Injective fill := fun f f' h => funext fun i =
 and outputs the leaf statement of the zero digest wins whenever the verifier's fresh answer masks
 to zero (`2^144` of the `2^256` answers), and the extractor, reading only the adversary's empty
 log, returns nothing. (Every extractor that reads only `(c, π)` and that log must invert two
-BLAKE2s evaluations on 112 bits: paper.) -/
+Keccak-256 evaluations on 112 bits: paper.) -/
 theorem lucky_not_textbook (acc : Digest → Signed → Bool) {ε : ℝ≥0} {N : ℕ} (hN : 1 ≤ N)
     (h : KSTextbook (Rel acc) Vlucky Elucky ε 1 N) : (2 : ℝ≥0)⁻¹ ^ 112 ≤ ε := by
   set c₀ : Digest := leafStmt (chainEnd (Vector.replicate 32 0) 0) 0
@@ -254,7 +253,7 @@ theorem oneQuery_not_KS (R : Digest → Wit → Prop) (E : Digest → Proof → 
     (ε : ℝ≥0) : ¬ KS R queryThenAccept E ε 0 := fun h =>
   Nat.not_succ_le_zero 0 (h.1 (fun _ => Vector.replicate 32 0) (Vector.replicate 32 0) .empty)
 
-/-! ## The library's potential (`KState`): v3's controls, kept as library facts -/
+/-! ## The library's potential (`KState`): controls kept as library facts -/
 
 /-- A knowledge state at error `0` is one at the cap. -/
 theorem mono_control (vk : Digest) :
@@ -334,13 +333,13 @@ noncomputable def ks1 (E : Digest → Proof → Log → Option Wit) :
 
 /-! ### The boolean form (`BoolKState`, library) -/
 
-/-- S1's every-answer-bad state, as a boolean state of the reject-all verifier. -/
+/-- The every-answer-bad state, as a boolean state of the reject-all verifier. -/
 def badAllBool (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
     BoolKState R rejectAll E :=
   ⟨fun _ => True, fun _ _ _ => True, trivial, fun _ _ _ _ _ _ => trivial,
     fun _ _ _ _ h => nomatch h⟩
 
-/-- S1's `bounded_ge_one`, on `BoolKState`: every answer bad is bounded only at `ε ≥ 1`. -/
+/-- `bounded_ge_one` on `BoolKState`: every answer bad is bounded only at `ε ≥ 1`. -/
 theorem bool_bounded_ge_one {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}
     {E : Digest → Proof → Log → Option Wit} (k : BoolKState R V E) (hall : ∀ L q a, k.bad L q a)
     {ε : ℝ≥0} (h : k.Bounded ε) : 1 ≤ ε :=

@@ -1,44 +1,45 @@
-"""The random draws of one evaluation (TRUSTED RUNTIME; V4-A11 §3, as amended by §11).
+"""The chain lengths and the random draws of one evaluation (TRUSTED RUNTIME).
 
-Every draw comes from the operating system's CSPRNG (`secrets`, which reads `os.urandom`), fresh per
-evaluation, never from a seeded generator, never reused, and published only after the run with the
-realised values. Only the distributions are public. The number of steps `M` is not drawn: it is one
-published season constant, the same for every entry and evaluation (`season.toml`, the user's
-decision of 2026-10-29).
+**The chain lengths are not drawn per evaluation.** They are one fixed, published sequence, the
+season file's `[stream] lengths` (`M + 1` integers: chains 0 and 1 are step 1's two chains, chain
+`i ≥ 2` is step `i`'s), the same for every evaluation, every entry and every core commit until the
+owner changes it. The sequence was derived once, publicly and reproducibly, by `published_lengths`:
+the density proportional to `1/n²` on `[n_lo, n_hi]` (equal expected work per octave), sampled at
+uniforms that come from SHA-256 of a public label (no seed was chosen, no draw was discarded).
+`tests/harness/test_tv.py` re-derives it and checks that it equals the season file's list.
 
-* chain lengths i.i.d. with density proportional to `1/n²` on `[n_lo, n_hi]` (equal expected work
-  per octave), by inverse CDF `n = 1 / (1/n_lo − u·(1/n_lo − 1/n_hi))`, rounded (no stratification,
-  §11 simplification 2);
-* chain starts: 32 bytes each;
-* a duel (the record decided head-to-head on one runner): one set of chain lengths for both
-  entries' streams and the order in which they run, a fair coin. Each stream draws its own starts.
-
-A length goes through a float on its way to an integer (review m-10); the realised integers, which
-the result publishes (`stream.lengths`), are what the evaluation used.
+**The chain starts are drawn fresh per evaluation** (32 bytes each, here) from the operating
+system's CSPRNG (`secrets`, which reads `os.urandom`), never from a seeded generator, never reused,
+and published only after the run. The service's keys (never published) and the DoS inputs are
+likewise fresh per evaluation, drawn where they are used. The number of steps `M` is one published
+season constant.
 """
+import hashlib
 import secrets
 
 
-def uniform() -> float:
-    """A uniform draw in the open interval (0, 1), 53 bits."""
-    return (secrets.randbits(53) + 0.5) / (1 << 53)
-
-
 def length(n_lo: int, n_hi: int, u: float) -> int:
-    """The inverse CDF of the density proportional to `1/n²` on `[n_lo, n_hi]` at `u`, rounded."""
+    """The inverse CDF of the density proportional to `1/n²` on `[n_lo, n_hi]` at `u`, in doubles,
+    rounded to the nearest integer (a tie to the even one: Python's `round`) and clamped."""
     n = round(1.0 / (1.0 / n_lo - u * (1.0 / n_lo - 1.0 / n_hi)))
     return min(n_hi, max(n_lo, n))
 
 
-def lengths(count: int, n_lo: int, n_hi: int):
-    return [length(n_lo, n_hi, uniform()) for _ in range(count)]
+def published_uniform(label: str, k: int) -> float:
+    """The `k`-th public uniform of `label`: the first 8 bytes of SHA-256(UTF-8 `label` ‖ `k` as an
+    8-byte big-endian unsigned integer), read as a big-endian integer, its top 53 bits divided by
+    2^53. Every such value is a double exactly, in [0, 1)."""
+    h = hashlib.sha256(label.encode() + k.to_bytes(8, "big")).digest()
+    return (int.from_bytes(h[:8], "big") >> 11) / (1 << 53)
+
+
+def published_lengths(label: str, count: int, n_lo: int, n_hi: int):
+    """The published chain lengths of `label`: `length(n_lo, n_hi, published_uniform(label, k))` for
+    k = 0 … count − 1. Used once to write a season file's `[stream] lengths`, and by the test that
+    re-derives it; the runner reads the list from the season file."""
+    return [length(n_lo, n_hi, published_uniform(label, k)) for k in range(count)]
 
 
 def starts(count: int):
+    """Fresh chain starts, 32 bytes each, from the OS CSPRNG."""
     return [secrets.token_bytes(32) for _ in range(count)]
-
-
-def duel(M: int, n_lo: int, n_hi: int):
-    """The draws of a duel: an identifier, the order of the two runs, the `M + 1` chain lengths."""
-    order = ["candidate", "incumbent"] if secrets.randbits(1) else ["incumbent", "candidate"]
-    return {"id": secrets.token_hex(16), "order": order, "M": M, "lengths": lengths(M + 1, n_lo, n_hi)}

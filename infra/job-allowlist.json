@@ -1,0 +1,17 @@
+{
+  "_comment": "Which jobs a runner VM runs (the primary guard; enforced by image/guest/rf-job-started.sh before any step of a job, which powers the VM off on a refusal; built into the golden image, so a change here needs an image rebuild). A job runs only if its repository is `repository` and its workflow (GITHUB_WORKFLOW_REF; for a job of a reusable workflow this is the calling workflow) is `repository`/.github/workflows/<workflow>@`ref` with its event (GITHUB_EVENT_NAME) listed for that workflow under the VM's slot type (bench or light), and, for a push, GITHUB_REF is `ref`. The lists are what the submissions repository's workflows run on each slot type (bench: the evaluation's jobs; light: the bot's jobs and the evaluation's plan and attest). These values come from GitHub's job message to the runner, not from the repository's YAML.",
+  "repository": "scaraven/recursion.fast-submissions",
+  "ref": "refs/heads/main",
+  "slot_types": {
+    "bench": {
+      "evaluate-next.yml": ["schedule", "workflow_dispatch"]
+    },
+    "light": {
+      "evaluate-next.yml": ["schedule", "workflow_dispatch"],
+      "intake.yml": ["pull_request_target", "workflow_dispatch"],
+      "pages.yml": ["push", "workflow_dispatch"],
+      "pin-check.yml": ["push"],
+      "sync.yml": ["push", "schedule", "workflow_dispatch"]
+    }
+  }
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=recursion.fast: one job (or one test), then power off
+# not After=cloud-final.service: cloud-final is ordered after multi-user.target (a cycle);
+# rf-job waits for cloud-init itself
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/rf-job
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

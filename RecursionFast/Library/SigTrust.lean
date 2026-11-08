@@ -1,7 +1,8 @@
 /-
   RecursionFast.Library.SigTrust  (UNTRUSTED, kernel-checked)
 
-  **No certified verifier trusts a signature** (C-m1, V4-A7 (a); the reason for V4-1's `∀ vk`).
+  **No certified verifier trusts a signature** (the reason the certificate quantifies over
+  every `vk`).
 
   `Vsig vk c π` accepts, with no oracle query, a proof that carries a signature of the statement
   `c` valid under `vk`: the "trust the signer" verifier. For a key whose signer is known (every

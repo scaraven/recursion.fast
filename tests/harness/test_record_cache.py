@@ -8,7 +8,7 @@ A tree laid out like `evaluate.py`'s (`challenge/Challenge.lean`, `submission/*.
 built as "the record" and exported; later trees are seeded from the export and rebuilt. Checks: the
 export holds only built entry modules (never `Challenge`, no `.hash`); an unchanged entry rebuilds
 only `Challenge`; a changed module is not restored and its importers rebuild; a restored module the
-build does not visit is pruned (Q7); a file that does not match the manifest, a forged `Challenge`,
+build does not visit is pruned; a file that does not match the manifest, a forged `Challenge`,
 another core commit and garbage manifests restore nothing; a seeded build is byte-identical to a
 clean one.
 """
@@ -119,16 +119,16 @@ check(r["restored"] == ["Bar", "Solution"], f"changed Foo: restored {r['restored
 check(build(t) == ["Bar", "Challenge", "Foo", "Solution"], "changed Foo: Lake rebuilds its importers (trace)")
 check(buildcache.prune(t, r["restored"]) == [], "changed Foo: rebuilt modules are not pruned")
 
-# 4. Q7: a restored module Solution no longer imports is removed after the build
+# 4. a restored module Solution no longer imports is removed after the build
 s4 = dict(SRC, **{"Solution.lean": "import Foo\ntheorem sol : foo = 41 := rfl\n"})
 t = tree("q7", s4)
 r = restore(exp, t, sorted(s4), "c0ffee")
 built = build(t)
 unused = buildcache.prune(t, r["restored"])
 check(unused == ["Bar"] and oleans(t) == ["Challenge", "Foo", "Solution"],
-      f"Q7: built {built}, pruned {unused}, left {oleans(t)}")
+      f"pruned: built {built}, pruned {unused}, left {oleans(t)}")
 check(not any(f.startswith("Bar.") for d in ("lib/lean", "ir") for f in os.listdir(os.path.join(t, ".lake/build", d))),
-      "Q7: no file of the pruned module is left")
+      "no file of the pruned module is left")
 
 # 5. a cached file that does not match the manifest is not restored
 bad = os.path.join(WORK, "export-bad")

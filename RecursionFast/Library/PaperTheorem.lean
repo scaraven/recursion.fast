@@ -1,11 +1,9 @@
 /-
   RecursionFast.Library.PaperTheorem  (UNTRUSTED, kernel-checked)
 
-  **From a knowledge state to the contract's knowledge soundness** (DESIGN-v3 §4.5, V4-A10): the
-  bridge an entry that proves its security through a potential uses. From the V3-S2-KS review's
-  probe `logs/ks-review-probes/PaperTheorem.lean` (`Probe.paper`, in the submissions repository),
-  with the constant `2^256` of the amended `step` (V3-KS-A7); generalised in v4 from a syntactic
-  depth bound to the functional query bounds the contract states.
+  **From a knowledge state to the contract's knowledge soundness**: the bridge an entry that
+  proves its security through a potential uses. It counts queries by the functional query bounds
+  the contract states (not by a syntactic depth bound), with the constant `2^256` of `step`.
 
   * `pot`: the potential capped at `1` and stopped when it first reaches `1`, in expectation at
     the end of the run; `pot_le`: it rises by at most `ε` per query (a supermartingale, `step`);
@@ -154,7 +152,7 @@ end RecursionFast.PaperTheorem
 
 namespace RecursionFast
 
-/-- **The bridge from the potential to the contract** (V4-A10): a knowledge state with error `ε`,
+/-- **The bridge from the potential to the contract**: a knowledge state with error `ε`,
 for a verifier asking at most `qV` queries on every input and oracle, gives knowledge soundness
 `KS R V E ε qV`. -/
 theorem KState.ks {R : Digest → Wit → Prop} {V : Digest → Proof → OProg Bool}

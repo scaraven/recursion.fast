@@ -1,17 +1,18 @@
 """Building and running the untrusted prover (TRUSTED RUNTIME; `harness/PROVER.md` is the
 interface). Every step runs in `sandbox.Sandbox`.
 
-* `build`: `gcc -static -O2 -pthread *.s -o prover -lm` inside the sandbox (V4-A6: `.incbin` and
+* `build`: `gcc -static -O2 -pthread *.s -o prover -lm` inside the sandbox (`.incbin` and
   `.include` read only what the sandbox shows: the copied `.s` files and the toolchain), with the
   toolchain's versions and the binary's hash recorded.
 * `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
   read-only afterwards.
-* `request`: one `prover first /work` or `prover step /work` in a fresh process (V4-A11): the
+* `request`: one `prover first /work` or `prover step /work` in a fresh process: the
   process starts and prints `ready` (within `ready_s`, untimed); the runner writes the inputs to a
   staging directory the prover cannot see; the clock starts; the runner renames the inputs into
   /work and sends `go`; at the prover's `done` line, its stdout's end or its exit the runner kills
-  the whole sandbox and **stops the clock when every process of it is dead** (§5.1); then
-  `proof.bin` is read. A filesystem error in the request's directory is the entry's failure (R-M1).
+  the whole sandbox and **stops the clock when every process of it is dead** (`harness/PROVER.md`
+  §3); then `proof.bin` is read. A filesystem error in the request's directory is the entry's
+  failure.
 * `oneshot`: a program with no handshake, timed from exec to exit (the sandbox tests).
 """
 import glob
@@ -33,7 +34,7 @@ LOG_CAP = 1 << 16
 
 
 class Drain(threading.Thread):
-    """Reads a pipe to its end, keeping its first 16 KiB and its last 48 KiB (Q13: a refusal or a
+    """Reads a pipe to its end, keeping its first 16 KiB and its last 48 KiB (a refusal or a
     crash message is usually at the end), so that a prover cannot block on a full pipe or fill the
     runner's disk with output."""
 
@@ -68,7 +69,7 @@ class Drain(threading.Thread):
 
 
 def oom_status(sb, mem):
-    """The status of a sandbox the memory cgroup killed (Q14), or None."""
+    """The status of a sandbox the memory cgroup killed, or None."""
     oom, peak = sb.oom()
     if not oom:
         return None
@@ -76,15 +77,14 @@ def oom_status(sb, mem):
 
 
 def toolchain_versions():
-    """The build toolchain and the runner image, as recorded in every result (V4-A6)."""
+    """The build toolchain, as recorded in every result."""
     def first(cmd):
         try:
             return subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.splitlines()[0]
         except (OSError, IndexError, subprocess.TimeoutExpired):
             return None
     return {"gcc": first(["gcc", "--version"]), "as": first(["as", "--version"]), "ld": first(["ld", "--version"]),
-            "glibc": first(["ldd", "--version"]), "bwrap": first(["bwrap", "--version"]),
-            "image_os": os.environ.get("ImageOS"), "image_version": os.environ.get("ImageVersion")}
+            "glibc": first(["ldd", "--version"]), "bwrap": first(["bwrap", "--version"])}
 
 
 BUILD_ROOT = ("/usr", "/bin", "/lib", "/lib64", "/lib32", "/libx32", "/sbin", "/etc/alternatives",
@@ -156,7 +156,7 @@ class Run:
 
     def setup(self, timeout, size_cap=None):
         """`prover setup /setup` (untimed, no service, no instance); (ok, seconds, log). With
-        `size_cap`, a setup directory above it after the run fails the setup (R-M1, `setup_cap`)."""
+        `size_cap`, a setup directory above it after the run fails the setup (`setup_cap`)."""
         os.makedirs(self.setup_dir, exist_ok=True)
         sb = Sandbox([PROVER, "setup", "/setup"], self.binds(self.setup_dir, setup_rw=True)[:2],
                      self.mem, env=self.env(None), cwd="/setup", stdout=subprocess.PIPE,
@@ -179,7 +179,7 @@ class Run:
 
     def oneshot(self, mode, work, sock_dir, timeout):
         """`prover MODE /work` with no handshake, timed from exec to exit; (status, seconds, log).
-        The benchmark makes no such request since V4-A11; the sandbox tests run hostile programs
+        The benchmark makes no such request; the sandbox tests run hostile programs
         through it."""
         sb = Sandbox([PROVER, mode, "/work"], self.binds(work, sock_dir), self.mem, env=self.env(sock_dir),
                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, hold=True)
@@ -214,7 +214,7 @@ class Step:
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
             work_cap=None):
-    """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3; V4-A11 §5.1). `inputs`:
+    """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `inputs`:
     name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. `ready_s`
     (default `step_s`) bounds the start-up to `ready`, `step_s` the proving; `deadline` (a monotonic
     time, the stream's cap) bounds both. **The clock stops when the request's process tree is
@@ -224,7 +224,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     `proof.bin` read. So nothing the prover does after `done` is untimed, and no byte written after
     the clock stopped exists.
 
-    **Failures are the entry's by default** (R-M1, review M-1): once the sandbox is started, any
+    **Failures are the entry's by default**: once the sandbox is started, any
     exception (a staging write that fails because the prover filled the filesystem, a pid that
     vanished, a sandbox that does not die, an exit status that is not reported, an unreadable
     output) is the entry's failure with its reason, never a harness error. `/work` may hold at most
@@ -270,7 +270,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
         if w != "line":
             r.status = "no ready line" + ("" if w == "timeout" else f" (the prover ended: {w})")
             return r
-        # RB-m11: the inputs are written to a staging directory outside the sandbox before the clock
+        # the inputs are written to a staging directory outside the sandbox before the clock
         # starts, and only renamed into /work (constant time) once it runs
         stage = work.rstrip("/") + ".stage"
         os.makedirs(stage, exist_ok=True)
@@ -308,7 +308,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
                 r.status = f"exit {code}"
     except EntryFailure as e:
         r.status = str(e)
-    except Exception as e:  # noqa: BLE001 (R-M1: the default is the entry's failure)
+    except Exception as e:  # noqa: BLE001 (the default is the entry's failure)
         r.status = f"the request failed while the prover's sandbox existed ({type(e).__name__}: {e})"
     finally:
         try:
@@ -328,7 +328,7 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
                                 f"above work_cap = {work_cap}")
         except OutputError as e:
             r.status = oom_status(sb, run.mem) or str(e)
-        except Exception as e:  # noqa: BLE001 (R-M1: an unusable directory is the entry's failure)
+        except Exception as e:  # noqa: BLE001 (an unusable directory is the entry's failure)
             r.status = f"the prover made /work unusable (reading its outputs: {type(e).__name__}: {e})"
     return r
 
@@ -350,8 +350,8 @@ def make_accessible(path):
 
 
 def tree_bytes(path, max_entries=1 << 20):
-    """Bytes under `path`, each file counted at `max(size, allocated)` (a sparse file at its size;
-    review M-2), no link followed, after making the tree accessible; a tree the runner cannot walk,
+    """Bytes under `path`, each file counted at `max(size, allocated)` (a sparse file at its size),
+    no link followed, after making the tree accessible; a tree the runner cannot walk,
     or one of more than `max_entries` entries (which bounds the walk's time), counts as unbounded
     (the entry's failure where a cap applies)."""
     def fail(e):
@@ -384,8 +384,8 @@ def remove_tree(path):
 
 def tree_sha256(path, max_bytes, timeout):
     """A hash of a directory tree (relative paths, kinds and contents; links by their target, none
-    followed): the setup's hash in the result (§8). It reads at most `max_bytes` bytes and runs at
-    most `timeout` seconds (review M-2); past either it returns None."""
+    followed): the setup's hash in the result. It reads at most `max_bytes` bytes and runs at
+    most `timeout` seconds; past either it returns None."""
     h, read, t_end = hashlib.sha256(), 0, time.monotonic() + timeout
     for root, dirs, files in sorted(os.walk(path, followlinks=False)):
         dirs.sort()

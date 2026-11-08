@@ -1,0 +1,12 @@
+[Unit]
+Description=recursion.fast runner host: taps, CPU isolation, frequency policy
+Documentation=file:/opt/rf-runner/README.md
+After=network.target rf-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/rf-runner/host/rf-host-apply
+
+[Install]
+WantedBy=multi-user.target

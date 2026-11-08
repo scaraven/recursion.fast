@@ -1,13 +1,14 @@
 /-
-# Controls: the trace digest and the signature check (`Contract/Signature.lean`)   (V4-3)
+# Controls: the trace digest and the signature check (`Contract/Signature.lean`)
 
 Layout controls evaluate no hash (`decide`, `decide +kernel` on byte lists, or `rfl` on symbolic
 inputs); the hash known answers
-are decided by the kernel (`decide +kernel`, five compressions in all), each against the
-`python3 -I` command in its docstring (`hashlib.blake2s`, `digest_size=32`).
+are decided by the kernel (`decide +kernel` on the twins of `Library/Fast.lean`, five
+permutations in all), each against the `python3 -I` command in its docstring, run from the
+repository root (`harness/rfh/keccak.py`, checked against OpenSSL's `keccak-256`).
 
 **`traceDigest`.** Positive: `traceBytes_kat` (the entry layout `enc64 |q| ‖ q ‖ a`, no hash),
-`traceDigest_layout` (`tagTrace` first), `traceDigest_kat` (a one-entry trace against `hashlib`;
+`traceDigest_layout` (`tagTrace` first), `traceDigest_kat` (a one-entry trace against the Python reference;
 the service and the runner reproduce it), `traceDigest_empty_kat` (the empty trace, which every
 witness-sending child carries). Negative: `traceDigest_changed_answer` (one answer byte changed,
 another digest: a signature on one trace is not, without a collision, a signature on the
@@ -16,14 +17,14 @@ other), and for every pair of traces `traceBytes_inj` (`Library/Trace.lean`).
 **WOTS digits.** `wotsDigits_ff` (all `0xFF`: 128 digits `3`, checksum `0`), `wotsDigits_zero`
 (all `0x00`: checksum `384 = 0b01_10_00_00_00`, digits `0, 0, 0, 2, 1`, low first),
 `wotsDigits_order` (byte `0x1B` gives digits `3, 2, 1, 0`: low bits first), and the general
-facts `wotsDigits_length`, `wotsDigits_le` (`Library/Signer.lean`). Negative (RA-m1):
+facts `wotsDigits_length`, `wotsDigits_le` (`Library/Signer.lean`). Negative:
 **`wotsDigits_dominates`**, for two different messages some digit of the second is below the
 first's (the checksum property the contract's header claims), with the instance
 `wotsDigits_dominates_kat`.
 
 **Chain, leaf, node, root.** `wotsStep_layout` (`tagWots ‖ enc64 j ‖ i ‖ s ‖ x`, 43 bytes),
-`wotsStep_kat` (against `hashlib`), `wotsLeaf_length` (133 ends make 4,265 bytes),
-`sigNode_kat` (against `hashlib`), `sigRoot_bits` (index `2 = 0b10`: left at level 0, right at
+`wotsStep_kat` (against the Python reference), `wotsLeaf_length` (133 ends make 4,265 bytes),
+`sigNode_kat` (against the Python reference), `sigRoot_bits` (index `2 = 0b10`: left at level 0, right at
 level 1), `wotsChain_two` (two steps from position 1 are the steps of positions 1 and 2).
 
 **`SigOk`.** Positive: `sigOk_sign` for every secret function and key index below `2^16`, and
@@ -39,7 +40,7 @@ import RecursionFast.Controls.Hex
 
 namespace RecursionFast.Controls.Signature
 open RecursionFast
-open RecursionFast.Controls.Blake2s (hex)
+open RecursionFast.Controls.Keccak (hex)
 
 /-! ## The trace digest -/
 
@@ -53,22 +54,22 @@ theorem traceBytes_kat : traceBytes tr₁ =
     [3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3] ++ List.replicate 32 2 := by decide
 
 theorem traceDigest_layout (tr : Trace) :
-    traceDigest tr = blake2sDigest (tagTrace :: traceBytes tr) := rfl
+    traceDigest tr = keccakDigest (tagTrace :: traceBytes tr) := rfl
 
-/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'T'+(3).to_bytes(8,'little')
-+bytes([1,2,3])+bytes([2]*32)).hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'T'+(3).to_bytes(8,'little')+bytes([1,2,3])+bytes([2]*32)).hex())"` -/
 theorem traceDigest_kat : (traceDigest tr₁).toList =
-    hex "8a9bab6cd3b72537116ac1deb19be38c20598e1ecdd4ff9a3da4bb6153f9acc2" := by
+    hex "e5cc8a06d51540b2fc64a644b349a1cd55301b5ad68ed46d593161500463dbc8" := by
   rw [← traceDigestF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'T').hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; print(K(b'T').hex())"` -/
 theorem traceDigest_empty_kat : (traceDigest []).toList =
-    hex "5b09a6d58b2575e460bb840bd94533d1be58c8e4fabefdad16cad55e76b18920" := by
+    hex "846b7b6deb1cfa110d0ea7ec6162a7123b761785528db70cceed5143183b11fc" := by
   rw [← traceDigestF_eq]
   decide +kernel
 
-/-- **A changed answer changes the digest** (`hashlib`: `0fcc0ca2…0e69` for `tr₁'`). -/
+/-- **A changed answer changes the digest** (the Python reference: `4f21989f…655f` for `tr₁'`). -/
 theorem traceDigest_changed_answer : traceDigest tr₁' ≠ traceDigest tr₁ := by
   rw [← traceDigestF_eq, ← traceDigestF_eq]
   decide +kernel
@@ -91,7 +92,7 @@ example (m : Digest) : (wotsDigits m).length = wotsLen := Signer.wotsDigits_leng
 
 example (m : Digest) : ∀ d ∈ wotsDigits m, d ≤ 3 := Signer.wotsDigits_le m
 
-/-- **The checksum dominates** (RA-m1; the negative control of the digits and of `wotsEnds`):
+/-- **The checksum dominates** (the negative control of the digits and of `wotsEnds`):
 for two different messages some WOTS digit of the second is below the first's, so a signature
 of the first cannot be walked forward along its chains into a signature of the second. -/
 theorem wotsDigits_dominates {m m' : Digest} (h : m ≠ m') :
@@ -107,17 +108,17 @@ theorem wotsDigits_dominates_kat :
 /-! ## Chain, leaf, node, root -/
 
 theorem wotsStep_layout (j i s : ℕ) (x : Digest) :
-    wotsStep j i s x = blake2sDigest (tagWots :: enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList) ∧
+    wotsStep j i s x = keccakDigest (tagWots :: enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList) ∧
       (tagWots :: enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList).length = 43 := by
   simp [wotsStep, enc64]
 
 /-- The digest `00 01 … 1f`. -/
 def x₀ : Digest := Vector.ofFn fun i => i.val.toUInt8
 
-/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'W'+(5).to_bytes(8,'little')
-+bytes([7,1])+bytes(range(32))).hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'W'+(5).to_bytes(8,'little')+bytes([7,1])+bytes(range(32))).hex())"` -/
 theorem wotsStep_kat : (wotsStep 5 7 1 x₀).toList =
-    hex "d4c46d495c47284942f4723f7d28fc0f700c23dc6983b58bae5006bf6b4f39ea" := by
+    hex "1a7d5227832f47b3ecff235fee44681e654d1fa55527911eef592099e0db8b38" := by
   rw [← wotsStepF_eq]
   decide +kernel
 
@@ -129,10 +130,10 @@ theorem wotsLeaf_length (j : ℕ) (ends : List Digest) (h : ends.length = wotsLe
     (tagWotsLeaf :: enc64 j ++ ends.flatMap Vector.toList).length = 4265 := by
   simp [enc64, List.length_flatMap, h, wotsLen]
 
-/-- `python3 -I -c "import hashlib; print(hashlib.blake2s(b'M'+bytes([1]*32)+bytes([2]*32))
-.hexdigest())"` -/
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'M'+bytes([1]*32)+bytes([2]*32)).hex())"` -/
 theorem sigNode_kat : (sigNode (Vector.replicate 32 1) (Vector.replicate 32 2)).toList =
-    hex "1d65faf711ab261cb6b223748dc8a6c48cf605d75c3476b6fc4cce4345e46111" := by
+    hex "b7fdacb6bb0d118a5514041beaa6b0974e653d735e3066990cca82fecf9dbb09" := by
   rw [← sigNodeF_eq]
   decide +kernel
 
@@ -148,7 +149,7 @@ theorem sigRoot_one (x a : Digest) : sigRoot 1 x [a] = sigNode a x := rfl
 theorem sigOk_sign (sk : ℕ → ℕ → Digest) (j : ℕ) (hj : j < 2 ^ sigHeight) (m : Digest) :
     SigOk (Signer.pk sk) m (Signer.sign sk j m) = true := Signer.sigOk_sign sk j hj m
 
-/-- The positive control with the reference derivation (V4-A4), for every seed. -/
+/-- The positive control with the reference derivation of the chain starts, for every seed. -/
 theorem sigOk_sign_ref (seed : List UInt8) (j : ℕ) (hj : j < 2 ^ sigHeight) (m : Digest) :
     SigOk (Signer.pk (Signer.chainStart seed)) m (Signer.sign (Signer.chainStart seed) j m) =
       true := Signer.sigOk_sign _ j hj m

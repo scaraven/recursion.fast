@@ -1,12 +1,11 @@
 /-
   RecursionFast.Library.Fast  (UNTRUSTED, kernel-checked)
 
-  **The badge path at word level** (C9, C10, C-m3, V4-A7 (d)). The harness runs the compiled
-  `Submission.acc` on every proof under a CPU-time cap (V4-12); the contract's BLAKE2s is a
-  readable reference (about 5 µs per compression compiled, `logs/A-speed-*.log`). This file gives
-  twins of every hash on that path, each proved equal to the contract's function, built on the
-  word-level compression and the byte-array message path of `Library/Blake2sFast.lean` (about
-  0.4 µs per compression):
+  **The badge path at word level.** The harness runs the compiled
+  `Submission.acc` on every proof and times it; the contract's Keccak-256 is a
+  readable reference (`scripts/speed/Speed.lean` measures it). This file gives twins of every hash
+  on that path, each proved equal to the contract's function, built on the word-level permutation
+  and the byte-array sponge of `Library/KeccakFast.lean`:
 
   * `traceDigestF` (the trace's bytes built in a byte array) = `traceDigest`;
   * `wotsStepF`, `wotsChainF`, `wotsEndsF`, `wotsLeafF`, `sigNodeF`, `sigRootF`, `SigOkF` =
@@ -15,13 +14,13 @@
     recomputes chains, such as the witness-sending one, runs these);
   * **`Submission.accF`** = `Submission.acc` (`accF_eq`): the harness may run `accF` and the
     record is about `acc`.
-  Measured numbers are in `archive/v4-dev-record:docs/v4/stages/A-contract-RESULT.md`.
+  Measured numbers: `scripts/speed/Speed.lean`.
 -/
 import RecursionFast.Contract.Certificate
-import RecursionFast.Library.Blake2sFast
+import RecursionFast.Library.KeccakFast
 
 namespace RecursionFast
-open Blake2s
+open Keccak
 
 /-! ## Building byte arrays -/
 

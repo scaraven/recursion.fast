@@ -1,8 +1,9 @@
 """The benchmark of one entry (TRUSTED RUNTIME): the IVC stream, its checks and calibration, the
-re-timing, the DoS column and the score (V4-A11; the rules are in `AGENTS.md`). One stream per evaluation, with its own service lifetime;
-every request is a fresh sandboxed process; every check and every calibration sample runs while no
-entry process is alive. Every step the entry controls is capped by the season file, so an entry that
-is slow or hangs fails with the reason, inside its job's time limit (V4-A9).
+re-timing, the DoS column and the score (the rules are in `AGENTS.md` §6, §7). One stream per
+evaluation, with its own service lifetime; every request is a fresh sandboxed process; every check
+and every calibration sample runs while no entry process is alive. Every step the entry controls is
+capped by the season file, so an entry that is slow or hangs fails with the reason, inside its job's
+time limit.
 """
 import hashlib
 import json
@@ -35,8 +36,8 @@ class Fail(Exception):
 
 
 def printable(text, limit=1200):
-    """Untrusted text (a prover's output) as printable ASCII for a result and a public comment
-    (review m-6): every other character becomes `?`, backticks become `'`, and it is put in a code
+    """Untrusted text (a prover's output) as printable ASCII for a result and a public comment:
+    every other character becomes `?`, backticks become `'`, and it is put in a code
     span."""
     t = "".join(c if 32 <= ord(c) < 127 else "?" for c in text.replace("`", "'"))
     return "`" + t[-limit:] + "`"
@@ -57,6 +58,7 @@ class Params:
     M: int
     n_lo: int
     n_hi: int
+    lengths: list
     ready_s: float
     step_s: float
     stream_s: float
@@ -67,7 +69,7 @@ class Params:
     calib_idle_s: float
     calib_rounds: int
     calib_ref_ns: float
-    calib_clamp: tuple
+    calib_drift: float
     calib_runs: int
     calib_ref_provisional: bool
     triv_chains: int
@@ -87,12 +89,16 @@ class Params:
     mem_prover: str
     mem_service: str
     mem_badge: str
+    fingerprint: str
 
     @staticmethod
-    def load(path):
+    def load(path, check=True):
+        """The season file at `path`; with `check`, its `[stream] lengths` validated (a ValueError
+        naming the defect). `check=False` is for the aggregation alone, which names a malformed list
+        as the organiser's ERROR instead of failing."""
         t = tomllib.load(open(path, "rb"))
         g = lambda sec, k: t[sec][k]  # noqa: E731 (a KeyError names the missing parameter)
-        return Params(
+        p = Params(
             name=t["name"], K=float(g("score", "K")), kappa=float(g("score", "kappa")),
             n_ref=g("score", "n_ref"), s_ref=g("score", "s_ref"), R=float(g("score", "R")),
             M=g("stream", "M"),
@@ -101,7 +107,7 @@ class Params:
             retime_factor=float(g("stream", "retime_factor")), retime_frac=float(g("stream", "retime_frac")),
             calib_every=g("calibration", "every"), calib_idle_s=float(g("calibration", "idle_s")),
             calib_rounds=g("calibration", "rounds"), calib_ref_ns=float(g("calibration", "ref_ns")),
-            calib_clamp=tuple(g("calibration", "clamp")), calib_runs=g("calibration", "runs_per_sample"),
+            calib_drift=float(g("calibration", "c_P_drift")), calib_runs=g("calibration", "runs_per_sample"),
             calib_ref_provisional=bool(g("calibration", "ref_provisional")), triv_chains=g("calibration", "triv_chains"),
             triv_n=g("calibration", "triv_n"), v_ref_ms=float(t["calibration"].get("v_ref_ms", 0.0)),
             service_calib_s=g("calibration", "service_s"),
@@ -109,21 +115,104 @@ class Params:
             dos_total_s=g("dos", "total_s"), dos_item_cap=g("dos", "item_cap"),
             file_cap=g("caps", "file_cap"), verify_s=g("caps", "verify_s"), setup_s=g("caps", "setup_s"),
             setup_cap=g("caps", "setup_cap"), work_cap=g("caps", "work_cap"), build_s=g("caps", "build_s"),
-            mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"))
+            mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"),
+            fingerprint=g("machine", "fingerprint"), lengths=t["stream"].get("lengths"))
+        if check:
+            p.check_lengths()
+        return p
+
+    def check_lengths(self):
+        """The season's fixed chain lengths (`[stream] lengths`): exactly `M + 1` integers (step 1's
+        two chains, then one per step), each in `[n_lo, n_hi]`; else a ValueError naming the defect."""
+        ns, M = self.lengths, self.M
+        if not (isinstance(ns, list) and all(type(n) is int for n in ns)):
+            raise ValueError("[stream] lengths is not a list of integers")
+        if type(M) is not int:
+            raise ValueError(f"[stream] M is not an integer ({M!r}), so [stream] lengths cannot be checked")
+        if len(ns) != M + 1:
+            raise ValueError(f"[stream] lengths has {len(ns)} entries, M + 1 = {M + 1} expected "
+                             "(step 1's two chains, then one per step)")
+        bad = [(k, n) for k, n in enumerate(ns) if not self.n_lo <= n <= self.n_hi]
+        if bad:
+            raise ValueError(f"[stream] lengths outside [n_lo, n_hi] = [{self.n_lo}, {self.n_hi}] at (index, n) {bad[:4]}")
 
 
 def chain_json(n, start):
     return json.dumps({"n": n, "start": start.hex()}).encode()
 
 
+FP_HASHED = ("cpu_model", "vm_shape", "frequency_policy", "image_id")    # what comparability is about
+FP_RECORDED = ("host_kernel",)       # published in the result, never hashed (it changes on updates)
+# the file's other fields (`microcode`) are neither hashed nor recorded in the result
+
+
+def fingerprint(path=None):
+    """The machine fingerprint (AGENTS.md §6) from the file named by `RF_MACHINE_FINGERPRINT`, which
+    the evaluation VM provides: a JSON object with the required fields `cpu_model`,
+    `frequency_policy`, `image_id` (non-empty strings) and `vm_shape` (`{"vcpus": positive int,
+    "memory": non-empty}`). `hash` is the sha256 of the canonical JSON (`json.dumps(obj,
+    sort_keys=True, separators=(",", ":"))`, UTF-8) of exactly those four fields; `host_kernel` is
+    recorded, not hashed; the file's other fields (`microcode` among them) are ignored. `status`: `ok`, `missing` (no variable or no file) or
+    `unreadable` (not JSON, not an object with the required fields), with `reason`. The CPU model
+    itself is never recorded."""
+    path = path or os.environ.get("RF_MACHINE_FINGERPRINT")
+    out = {"status": "missing", "hash": None, "reason": None}
+    if not path:
+        out["reason"] = "RF_MACHINE_FINGERPRINT is not set"
+        return out
+    if not os.path.isfile(path):
+        out["reason"] = "the fingerprint file named by RF_MACHINE_FINGERPRINT does not exist"
+        return out
+    out["status"] = "unreadable"
+    try:
+        obj = json.load(open(path))
+    except (OSError, ValueError) as e:
+        out["reason"] = f"the fingerprint file is not JSON ({e.__class__.__name__})"
+        return out
+    if not isinstance(obj, dict):
+        out["reason"] = "the fingerprint file is not a JSON object"
+        return out
+    nonempty = lambda v: isinstance(v, str) and v.strip() != ""  # noqa: E731
+    shape = obj.get("vm_shape")
+    bad = [k for k in ("cpu_model", "frequency_policy", "image_id") if not nonempty(obj.get(k))]
+    if not (isinstance(shape, dict) and type(shape.get("vcpus")) is int and shape["vcpus"] > 0
+            and (nonempty(shape.get("memory")) or (type(shape.get("memory")) is int and shape["memory"] > 0))):
+        bad.append("vm_shape")
+    if bad:
+        out["reason"] = f"the fingerprint file lacks the required field(s) {sorted(bad)}"
+        return out
+    canon = json.dumps({k: obj[k] for k in FP_HASHED}, sort_keys=True, separators=(",", ":"))
+    out.update(status="ok", hash=hashlib.sha256(canon.encode()).hexdigest())
+    for k in FP_RECORDED:
+        out[k] = str(obj[k])[:200] if obj.get(k) is not None else None
+    return out
+
+
 def machine():
-    model = next((l.split(":", 1)[1].strip() for l in open("/proc/cpuinfo") if l.startswith("model name")), None)
+    """What the result records about the machine (no CPU model, no CPU flags): the fingerprint's
+    hash and status, the unhashed `host_kernel`, the job's CPUs and memory, and the
+    runner as the workflow names it (AGENTS.md §8: `RUNNER_NAME`, `RF_RUNNER_ENVIRONMENT` =
+    `runner.environment`, `RF_RUNNER_LABELS` = the job's `runs-on` labels, comma-separated)."""
     mem = next((int(l.split()[1]) for l in open("/proc/meminfo") if l.startswith("MemTotal")), None)
-    flags = next((l.split(":", 1)[1].split() for l in open("/proc/cpuinfo") if l.startswith("flags")), [])
-    return {"cpu_model": model, "nproc": os.cpu_count(), "mem_total_kb": mem, "kernel": platform.release(),
-            "simd": [f for f in ("avx2", "avx512f", "sha_ni", "pclmulqdq", "vpclmulqdq", "gfni") if f in flags],
-            "memcap": memcap_method(), "image_os": os.environ.get("ImageOS"),
-            "image_version": os.environ.get("ImageVersion"), "runner_name": os.environ.get("RUNNER_NAME")}
+    labels = [x for x in os.environ.get("RF_RUNNER_LABELS", "").split(",") if x]
+    fp = fingerprint()
+    return {"fingerprint": fp["hash"], "fingerprint_status": fp["status"], "fingerprint_reason": fp["reason"],
+            "host_kernel": fp.get("host_kernel"),
+            "nproc": os.cpu_count(), "mem_total_kb": mem, "kernel": platform.release(),
+            "memcap": memcap_method(), "runner_name": os.environ.get("RUNNER_NAME"),
+            "runner_environment": os.environ.get("RF_RUNNER_ENVIRONMENT"), "runner_labels": labels}
+
+
+def fingerprint_problem(fp_status, fp_hash, expected):
+    """Why the machine is not the season's (an organiser ERROR, AGENTS.md §6), or None: the season's
+    `"any"` (the smoke) accepts every machine."""
+    if expected == "any":
+        return None
+    if fp_status == "missing":
+        return "missing"
+    if fp_status != "ok" or not fp_hash:
+        return "unreadable"
+    return None if fp_hash == expected else "mismatched"
 
 
 def build_calib(out_dir):
@@ -140,20 +229,17 @@ def build_calib(out_dir):
 
 
 def request_root():
-    """Where request directories live (R-M1): a tmpfs (`/dev/shm`), whose pages a prover writes are
+    """Where request directories live: a tmpfs (`/dev/shm`), whose pages a prover writes are
     charged to its own memory cgroup, so a request cannot fill the runner's disk; else None (the
     work directory)."""
     d = "/dev/shm"
     if os.path.isdir(d) and os.access(d, os.W_OK) and not os.environ.get("RF_NO_SHM"):
-        tok = os.environ.get("RF_RUN_TOKEN", "")      # a duel's run (rfh.slate finds what it leaves)
-        return tempfile.mkdtemp(prefix=f"rf-req-{tok}-" if tok else "rf-req-", dir=d)
+        return tempfile.mkdtemp(prefix="rf-req-", dir=d)
     return None
 
 
 class Bench:
-    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print,
-                 lengths=None):
-        self.lengths = lengths               # a duel's shared chain lengths (`draws.duel`), else drawn here
+    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print):
         self.p, self.run, self.service_bin, self.bench_bin = p, run, service_bin, bench_bin
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
@@ -168,17 +254,14 @@ class Bench:
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
         svc = Service(self.service_bin, os.path.join(self.work, "svc", name),
-                      # a duel's run names the scope by its token (rfh.slate finds an orphaned service by it:
-                      # the service is non-dumpable, its environment unreadable)
-                      wrap=memcap(self.p.mem_service, f"rf-svc-{os.environ['RF_RUN_TOKEN']}-{name}"
-                                  if os.environ.get("RF_RUN_TOKEN") else f"rf-svc-{name}-{os.getpid()}"),
+                      wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
                       stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
         return svc.start()
 
     @staticmethod
     def diag(svc, output):
-        """What a failed run said (Q13): the prover's output tail and the service's refusals."""
+        """What a failed run said: the prover's output tail and the service's refusals."""
         out = f"; prover output (tail): {printable(output.strip())}" if output.strip() else ""
         ref = svc.refusals(5)
         return out + (f"; service refusals: {printable('; '.join(ref), 600)}" if ref else "")
@@ -188,11 +271,11 @@ class Bench:
         try:
             rec["service_stats"] = svc.stop()
         except ServiceError as e:
-            raise Fail(f"the service failed during the run ({e}); the run is aborted (V4-A4)")
+            raise Fail(f"the service failed during the run ({e}); the run is aborted")
 
     def alive(self, svc):
         if svc.proc is None or svc.proc.poll() is not None:
-            raise Fail("the service died during the run (V4-A4: a restart is a new key; the run is aborted)")
+            raise Fail("the service died during the run (a restart is a new key; the run is aborted)")
 
     # -- storage and checks ----------------------------------------------------------------------
     def keep(self, rel, data):
@@ -217,15 +300,15 @@ class Bench:
 
     def capped(self, n):
         """The timeout of one badge run of `n` checks: `verify_s` per check and 30 s, and while the
-        stream's cap runs at most 30 s past it (review M-3: work begun before the cap ends within
+        stream's cap runs at most 30 s past it (work begun before the cap ends within
         30 s of it)."""
         t = self.p.verify_s * (n + 1) + 30
         return t if self.deadline is None else min(t, max(0.0, self.left()) + 30)
 
     def check(self, items, what, timeout=None, runs_wanted=2):
         """`acc` on items (vk, stmt, store-relative path, label): every one must be accepted, and its
-        time `V_i` is the best of two measurements (§11 m-8), each batch warmed with an untimed first
-        check (RF-m3). While the stream's cap runs, each badge run ends within 30 s of it and the
+        time `V_i` is the best of two measurements, each batch warmed with an untimed first
+        check. While the stream's cap runs, each badge run ends within 30 s of it and the
         second is skipped once the cap is reached (its first measurement then stands). Returns
         [(best ns, [the measurements])]."""
         bare = [(vk, c, rel) for vk, c, rel, _ in items]
@@ -241,7 +324,7 @@ class Bench:
         return [(min(ms), list(ms)) for ms in zip(*runs)]
 
     def canary_check(self, vk, targets, what):
-        """The statement canaries (C15) of every target (store path, stmt, others): the accepted file,
+        """The statement canaries of every target (store path, stmt, others): the accepted file,
         checked against another statement, must be rejected."""
         items = [(vk, c, rel, f"{rel} {name}") for rel, stmt, others in targets for name, c in canaries(stmt, others)]
         res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries", timeout=self.capped(len(items)))
@@ -253,35 +336,35 @@ class Bench:
     # -- calibration -------------------------------------------------------------------------------
     def calibrate(self):
         """Before the stream: the chain checker's instance (`triv_chains` chains of `triv_n` steps,
-        `2^24` compressions in season 1, fresh starts, its root computed here) and the service's
-        calls/s and compressions/s (V4-A5, C-m8; published, not in the score). `T_triv` and `c_P` are
+        `2^24` permutations in season 1, fresh starts, its root computed here) and the service's
+        calls/s and permutations/s (published, not in the score). `T_triv` and `c_P` are
         sampled during the stream (`sample`)."""
         inst = os.path.join(self.work, "instance")
         os.makedirs(inst, exist_ok=True)
         starts = draws.starts(self.p.triv_chains)
-        root = digest.tree_root(digest.leaf_digests(starts, self.p.triv_n))
+        root = digest.tree_root(digest.leaf_digests(starts, self.p.triv_n, self.service_bin))
         with open(os.path.join(inst, "leaves.json"), "w") as f:
             json.dump({"n": self.p.triv_n, "starts": [s.hex() for s in starts]}, f)
         self.triv = (os.path.join(inst, "leaves.json"), root)
-        cal = {"triv_compressions": self.p.triv_chains * self.p.triv_n, "pinned_core": self.badge.core}
+        cal = {"triv_permutations": self.p.triv_chains * self.p.triv_n, "pinned_core": self.badge.core}
         svc = self.service("calibration")
-        rec = {"keygen_ms": float(svc.info.get("keygen_ms", "nan")), "simd": svc.info.get("simd")}
+        rec = {"keygen_ms": float(svc.info.get("keygen_ms", "nan"))}     # no CPU flags in a result
         try:
-            # RF-m5: the CPUs this job may use, not the machine's count
+            # the CPUs this job may use, not the machine's count
             for threads in sorted({1, len(os.sched_getaffinity(0))}):
                 out = subprocess.run([self.bench_bin, "oracle.sock", "throughput", str(threads), "1024", "64",
                                       str(self.p.service_calib_s)], cwd=svc.sock_dir, capture_output=True, text=True,
                                      timeout=60).stdout
                 kv = dict(x.split("=") for x in out.split())
-                # RB-m6: QUERY batches of 1,024 queries of 64 bytes; a keyed query of q bytes is
-                # max(1, ceil(q / 64)) compressions after the cached key block
-                per = max(1, -(-int(kv["size"]) // 64))
+                # QUERY batches of 1,024 queries of 64 bytes; a keyed query of q bytes is
+                # Keccak-256(k ‖ q) with |k| = 32: floor((32 + q) / 136) + 1 permutations
+                per = (32 + int(kv["size"])) // 136 + 1
                 rec[f"threads_{threads}"] = {"query_bytes": int(kv["size"]), "batch": int(kv["batch"]),
-                                             "calls_per_s": float(kv["calls_per_s"]), "compressions_per_query": per,
-                                             "compressions_per_s": float(kv["calls_per_s"]) * per,
+                                             "calls_per_s": float(kv["calls_per_s"]), "permutations_per_query": per,
+                                             "permutations_per_s": float(kv["calls_per_s"]) * per,
                                              "us_per_request": float(kv["us_per_request"])}
         except Fail as e:
-            e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
+            e.rec = rec        # a failed run keeps its measurements in the result
             raise
         finally:
             self.stop(svc, rec)
@@ -289,7 +372,7 @@ class Bench:
         return cal
 
     def sample(self, before_step):
-        """One calibration sample (§5.4, §11 m-2; review m-2), with no entry process alive: an idle
+        """One calibration sample (AGENTS.md §6), with no entry process alive: an idle
         gap (`idle_s`), then `runs_per_sample` short runs of the prover-shaped workload `calib` on the
         job's CPUs (their median is the sample, every run is published) and one run of the chain
         checker on one pinned core."""
@@ -302,35 +385,37 @@ class Bench:
                                      capture_output=True, text=True, timeout=120).stdout
                 kv = dict(x.split("=", 1) for x in out.split()[1:] if "=" in x)
                 runs.append(int(kv["ns"]))
-                s["clmul"] = kv.get("clmul")
             s["calib_runs_ns"], s["calib_ns"] = runs, statistics.median(runs)
         s["triv_ns"] = self.badge.chaincheck(self.triv[0], self.triv[1])
         self.samples.append(s)
         return s
 
     def calibration(self):
-        """`c_P` (median of the samples over the reference time, clamped) and `T_triv` (median of the
-        chain checker's samples); `v_ref = T_triv / R`, or the season's fixed `v_ref_ms` (the smoke).
-        The samples' relative spread is published (review m-2), and `c_P_provisional` says whether the
-        reference time is still a placeholder (review m-3)."""
+        """`c_P` (median of the samples over the season's fixed `ref_ns`), a health check of the
+        machine, never a factor of the score (AGENTS.md §6): `c_P_drift = |c_P - 1|`, and `c_P_ok`
+        unless it exceeds the season's `c_P_drift` while `ref_ns` is measured (`c_P_provisional`
+        false; while it is a placeholder the drift is recorded, not enforced). `T_triv` (median of
+        the chain checker's samples); `v_ref = T_triv / R`, or the season's fixed `v_ref_ms` (the
+        smoke). The samples' relative spread is published."""
         cs = [s["calib_ns"] for s in self.samples if "calib_ns" in s]
         ts = [s["triv_ns"] for s in self.samples]
-        lo, hi = self.p.calib_clamp
         raw = statistics.median(cs) / self.p.calib_ref_ns if cs else 1.0
         triv = statistics.median(ts)
         v_ref = self.p.v_ref_ms * 1e6 if self.p.v_ref_ms else triv / self.p.R
         cv = lambda xs: statistics.stdev(xs) / statistics.fmean(xs) if len(xs) > 1 else 0.0  # noqa: E731
-        return {"c_P": min(hi, max(lo, raw)), "c_P_raw": raw, "calib_ref_ns": self.p.calib_ref_ns,
+        drift = abs(raw - 1.0)
+        return {"c_P": raw, "c_P_drift": drift, "c_P_drift_cap": self.p.calib_drift,
+                "c_P_ok": self.p.calib_ref_provisional or drift <= self.p.calib_drift, "calib_ref_ns": self.p.calib_ref_ns,
                 "c_P_provisional": self.p.calib_ref_provisional, "T_triv_ns": triv, "R": self.p.R, "v_ref_ns": v_ref,
                 "v_ref_source": "fixed by the season file" if self.p.v_ref_ms else "measured: T_triv / R",
                 "calib_cv": cv(cs), "triv_cv": cv(ts),
                 "calib_within_sample_cv": [cv(s["calib_runs_ns"]) for s in self.samples if "calib_runs_ns" in s],
-                "samples": self.samples, "software_clmul": any(s.get("clmul") == "soft" for s in self.samples)}
+                "samples": self.samples}
 
     # -- the stream ----------------------------------------------------------------------------------
     def one(self, svc, tag, kind, inputs):
         """One timed request, within `ready_s`, `step_s` and the stream's cap: its `Step` record, or
-        None when the stream's cap stopped it. Every other failure is the entry's (R-M1, review M-1):
+        None when the stream's cap stopped it. Every other failure is the entry's:
         the request's own errors (`request`), a directory the runner cannot prepare or remove, and a
         filesystem left fuller than before the request (bytes or inodes of the request
         directories' filesystem, after cleanup)."""
@@ -363,25 +448,24 @@ class Bench:
         return r
 
     def stream_run(self):
-        """The stream (§2): `M` steps, a fresh process each, `PROVER first` then `PROVER step`, under
-        one service lifetime; every output checked with `acc` against the runner's own statement
-        (best of two), the statement canaries of `π_1`, `π_2`, `π_M`, interleaved calibration
-        samples, the re-timing (§5.3), all within `stream_s`. A stream that reaches the cap is scored
-        over its completed, checked steps and flagged `truncated` (§6)."""
+        """The stream (AGENTS.md §6): `M` steps, a fresh process each, `PROVER first` then `PROVER
+        step`, under one service lifetime; every output checked with `acc` against the runner's own
+        statement (best of two), the statement canaries of `π_1`, `π_2`, `π_M`, interleaved
+        calibration samples, the re-timing, all within `stream_s`. A stream that reaches the cap is
+        scored over its completed, checked steps and flagged `truncated`."""
         p, name = self.p, "stream"
         M = p.M
-        ns = draws.lengths(M + 1, p.n_lo, p.n_hi) if self.lengths is None else list(self.lengths)
-        if not (len(ns) == M + 1 and all(type(n) is int and p.n_lo <= n <= p.n_hi for n in ns)):
-            raise RuntimeError(f"the duel's chain lengths do not fit the season (M + 1 = {M + 1} in [{p.n_lo}, {p.n_hi}])")
-        starts = draws.starts(M + 1)
+        p.check_lengths()
+        ns = list(p.lengths)                  # the season's fixed, published lengths
+        starts = draws.starts(M + 1)          # fresh CSPRNG draws per evaluation
         self.log(f"[{name}] computing {M + 1} leaf digests (sum of lengths {sum(ns)})")
-        ld = digest.leaf_digests(starts, ns)          # §11 m-7: all before the first request
+        ld = digest.leaf_digests(starts, ns, self.service_bin)  # all before the first request
         stmts = [digest.node_stmt(ld[0], ld[1])]
         for i in range(2, M + 1):
             stmts.append(digest.node_stmt(stmts[-1], ld[i]))
         self.req_root = request_root()
         svc = self.service(name)
-        rec = {"vk": svc.vk.hex(), "service": svc.info, "M_drawn": M, "lengths": ns,
+        rec = {"vk": svc.vk.hex(), "service": {k: v for k, v in svc.info.items() if k != "simd"}, "M_drawn": M, "lengths": ns,
                "starts": [s.hex() for s in starts], "leaf_digests": [d.hex() for d in ld],
                "statements": [c.hex() for c in stmts], "steps": [], "truncated": False,
                "request_dir": "tmpfs (/dev/shm)" if self.req_root else "the work directory"}
@@ -389,8 +473,8 @@ class Bench:
 
         def flush(after_cap=False):
             """Check the pending outputs: best of two, each badge run within 30 s of the cap; after
-            truncation one run of at most 30 s (review M-3). A batch the cap stops (a timeout past
-            it; a crash is the entry's failure, review m-5) leaves its steps unscored and truncates
+            truncation one run of at most 30 s. A batch the cap stops (a timeout past
+            it; a crash is the entry's failure) leaves its steps unscored and truncates
             the stream."""
             if pending:
                 items = [it for _, it in pending]
@@ -447,7 +531,7 @@ class Bench:
             if not steps:
                 raise Fail(f"{name}: no step completed within stream_s = {p.stream_s} s")
             # a closing sample when the last is old, only with 30 s of the cap to spare; none after
-            # truncation (review M-3)
+            # truncation
             if (not rec["truncated"] and self.left() > 30
                     and self.samples[-1]["before_step"] <= len(steps) + 1 - max(1, p.calib_every // 2)):
                 self.sample(len(steps) + 1)
@@ -456,7 +540,7 @@ class Bench:
             def target(k):
                 return (steps[k - 1]["file"], stmts[k - 1],
                         [("next-leaf", ld[k + 1] if k < M else None), ("first-child", ld[0] if k == 1 else stmts[k - 2])])
-            if not rec["truncated"]:      # no canaries after truncation (review M-3); a cap reached
+            if not rec["truncated"]:      # no canaries after truncation; a cap reached
                 try:                      # during them truncates the stream
                     rec["canaries"] = self.canary_check(svc.vk, [target(k) for k in sorted({1, min(2, last), last})], name)
                 except Fail as e:
@@ -467,7 +551,7 @@ class Bench:
                 rec["retime"] = self.retime(svc, steps, stmts, inputs)
             self.alive(svc)
         except Fail as e:
-            e.rec = rec        # RF-m7: a failed run keeps its measurements in the result
+            e.rec = rec        # a failed run keeps its measurements in the result
             raise
         finally:
             self.deadline = None
@@ -483,7 +567,7 @@ class Bench:
 
     # -- re-timing -----------------------------------------------------------------------------------
     def retime(self, svc, steps, stmts, inputs):
-        """§5.3 as amended (R-M2, §11 m-4): fit `P ≈ a·n + b` by trimmed least squares; every step with
+        """The re-timing (AGENTS.md §6): fit `P ≈ a·n + b` by trimmed least squares; every step with
         `P_i > retime_factor · (a·n_i + b)`, largest ratio first, at most `retime_frac` of the steps,
         is run once more in a fresh process on the same inputs (the same `prev.bin`); its output must
         be accepted. The faster run is **kept**: its `P_i`, `V_i` and `|π_i|` are scored; the first
@@ -492,7 +576,7 @@ class Bench:
         over = sorted(((s["P_s"] / max(1e-9, a * s["n"] + b), k) for k, s in enumerate(steps)), reverse=True)
         over = [(q, k) for q, k in over if q > self.p.retime_factor]
         limit = int(self.p.retime_frac * len(steps))
-        out = {"fit": {"a_s_per_compression": a, "b_s": b}, "candidates": len(over), "limit": limit, "rerun": []}
+        out = {"fit": {"a_s_per_permutation": a, "b_s": b}, "candidates": len(over), "limit": limit, "rerun": []}
         keys = ("P_s", "V_ns", "V_runs_ns", "pi_bytes", "file_bytes", "file", "startup_s", "kill_s", "mem_peak")
         for q, k in over[:limit]:
             if self.left() <= 0:
@@ -519,18 +603,18 @@ class Bench:
             if kept == 2:
                 s.update({key: again[key] for key in keys if key != "file"}, scored_file=rel)
             s["retime"] = {"ratio": q, "first": first, "second": {key: again[key] for key in keys}, "kept": kept,
-                           "calib_sample": len(self.samples) - 1}      # §11 m-4: the last sample
+                           "calib_sample": len(self.samples) - 1}      # the last sample
             out["rerun"].append(i)
         return out
 
     # -- the DoS column -------------------------------------------------------------------------------
     def dos(self, vk, stmt, rel, v_ref_ns):
-        """The DoS column (RF-M1 (2), RF-m6, V4-A9; V4-A11: on the stream's last output `π_M`):
+        """The DoS column (AGENTS.md §6; on the stream's last output `π_M`):
         `dos.proofs` random and mutated signed proofs of its statement, each checked (parse plus `acc`,
-        the badge's own clock, §11 m-12) within the per-item cap (`dos.item_factor · v_ref`, or
+        the badge's own clock) within the per-item cap (`dos.item_factor · v_ref`, or
         `verify_s` where the season file says so) and all within `dos.total_s`. A breach of either
         cap, or a crash of the checker, is the entry's failure, and the slow input is kept and named.
-        An accepted input is recorded, not failed (V4-A9)."""
+        An accepted input is recorded, not failed."""
         data = open(os.path.join(self.store, rel), "rb").read()
         files = dos_inputs(data, self.p.dos_proofs, random.SystemRandom())
         items = [(vk, stmt, self.keep(f"dos/{k}.bin", b)) for k, b in enumerate(files)]
@@ -570,7 +654,7 @@ def fs_free(path):
 
 
 def step_record(i, n_i, r, rel):
-    """The per-step record of §8 (the score adds its derived fields)."""
+    """The per-step record (the score adds its derived fields)."""
     return {"index": i, "n": n_i, "P_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": pi_size(r.proof),
             "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns}
@@ -582,7 +666,7 @@ def pi_size(file_bytes):
 
 
 def fit(ns, ps):
-    """The robust per-step fit (§11 m-4; `sim2.py`'s `_fit_pred`): least squares of `P` on `n` over the
+    """The robust per-step fit: least squares of `P` on `n` over the
     steps whose residual is among the lowest 80% (at least 3), refitted until that set is stable. The
     first set is ranked against the Theil–Sen line (median pairwise slope), so that the slow steps
     being trimmed cannot pull the first fit (with a least-squares start, two slow steps at small `n`
@@ -614,32 +698,33 @@ def fit(ns, ps):
     return a, b, se
 
 
-def score_parts(p, steps, c_P, v_ref_ns, d_P=0.0, f_P=1.0, d_V=0.0, d_pi=0):
-    """`(P̄, V̄)` of §4 as amended (§11 simplification 1), optionally at a perturbed point: every `P_i`
+def score_parts(p, steps, v_ref_ns, d_P=0.0, f_P=1.0, d_V=0.0, d_pi=0):
+    """`(P̄, V̄)` (AGENTS.md §7), optionally at a perturbed point: every `P_i`
     times `f_P` minus `d_P` seconds, every `V_i` minus `d_V` seconds, every `|π_i|` minus `d_pi` bytes."""
     num = sum(s["n"] * (max(0.0, s["P_s"] * f_P - d_P) / s["n"]) ** 3 for s in steps)
-    P = (p.n_ref / c_P) * (num / sum(s["n"] for s in steps)) ** (1 / 3)
+    P = p.n_ref * (num / sum(s["n"] for s in steps)) ** (1 / 3)
     xs = [max(0.0, s["V_ns"] / 1e9 - d_V) / (v_ref_ns / 1e9) + max(0, s["pi_bytes"] - d_pi) / p.s_ref for s in steps]
     return P, p.kappa * statistics.fmean(max(x, x ** 3) for x in xs)
 
 
 def score(p: Params, stream):
-    """`S = P̄ + V̄` (V4-A11 §4 with §11 simplification 1; seconds per `2^18`-compression step, lower
+    """`S = P̄ + V̄` (AGENTS.md §7; seconds per `2^18`-permutation step, lower
     is better) from the one stream run, every step at its kept run:
 
-        P̄ = (n_ref / c_P) · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)
+        P̄ = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)
         V̄ = κ · (1/M) Σ_i max(x_i, x_i³),   x_i = V_i / v_ref + |π_i| / s_ref,   κ = K · v0
 
-    with the published diagnostics of §8: shares, `P̄` per octave, marginal values, the fit (never
-    scored), the largest `x_i`, a batching indicator. Adds the derived per-step fields in place."""
+    with the published diagnostics (AGENTS.md §7): shares, `P̄` per octave, marginal values, the fit
+    (never scored), the largest `x_i`, a batching indicator. Adds the derived per-step fields in
+    place."""
     if not stream or not stream.get("steps"):
         return {}
     steps, cal = stream["steps"], stream["calibration"]
-    c_P, v_ref = cal["c_P"], cal["v_ref_ns"]
-    P, V = score_parts(p, steps, c_P, v_ref)
+    v_ref = cal["v_ref_ns"]
+    P, V = score_parts(p, steps, v_ref)
     S = P + V
     out = {"S": S, "P_bar": P, "V_bar": V, "share_P": P / S, "share_V": V / S, "K": p.K, "kappa": p.kappa,
-           "n_ref": p.n_ref, "s_ref": p.s_ref, "c_P": c_P, "T_triv_ns": cal["T_triv_ns"], "v_ref_ns": v_ref,
+           "n_ref": p.n_ref, "s_ref": p.s_ref, "c_P": cal.get("c_P"), "T_triv_ns": cal["T_triv_ns"], "v_ref_ns": v_ref,
            "M": len(steps), "sum_n": sum(s["n"] for s in steps), "truncated": bool(stream.get("truncated")),
            "c_P_provisional": bool(cal.get("c_P_provisional"))}
     tot_p3 = sum(s["n"] * (s["P_s"] / s["n"]) ** 3 for s in steps)
@@ -655,17 +740,17 @@ def score(p: Params, stream):
     for s in steps:
         s["fit_P_s"] = a * s["n"] + b
         s["fit_ratio"] = s["P_s"] / max(1e-9, s["fit_P_s"])
-    out["fit"] = {"a_s_per_compression": a, "b_s": b, "a_ci95": [a - 1.96 * sa, a + 1.96 * sa],
+    out["fit"] = {"a_s_per_permutation": a, "b_s": b, "a_ci95": [a - 1.96 * sa, a + 1.96 * sa],
                   "b_ci95": [b - 1.96 * sb, b + 1.96 * sb],
                   "estimator": "trimmed least squares (lowest 80% of residuals, from a Theil–Sen start, to a fixed point)",
                   "scored": False}
-    out["P_bar_per_octave"] = {f"2^{lo}": score_parts(p, sub, c_P, v_ref)[0] for lo in range(17, 21)
+    out["P_bar_per_octave"] = {f"2^{lo}": score_parts(p, sub, v_ref)[0] for lo in range(17, 21)
                                if (sub := [s for s in steps if (1 << lo) <= s["n"] < (1 << (lo + 1))])}
     rel = lambda P2, V2: (P2 + V2) / S - 1  # noqa: E731
-    out["marginal"] = {"chain_speed_1pct": rel(*score_parts(p, steps, c_P, v_ref, f_P=0.99)),
-                       "overhead_0.1s_per_step": rel(*score_parts(p, steps, c_P, v_ref, d_P=0.1)),
-                       "verifier_10ms": rel(*score_parts(p, steps, c_P, v_ref, d_V=0.01)),
-                       "proof_100KB": rel(*score_parts(p, steps, c_P, v_ref, d_pi=100_000)),
+    out["marginal"] = {"chain_speed_1pct": rel(*score_parts(p, steps, v_ref, f_P=0.99)),
+                       "overhead_0.1s_per_step": rel(*score_parts(p, steps, v_ref, d_P=0.1)),
+                       "verifier_10ms": rel(*score_parts(p, steps, v_ref, d_V=0.01)),
+                       "proof_100KB": rel(*score_parts(p, steps, v_ref, d_pi=100_000)),
                        "note": "relative change of S at the current point (negative: better)"}
     k = max(range(len(steps)), key=lambda j: steps[j]["x"])
     out["largest_x"] = {key: steps[k][key] for key in ("index", "x", "x_verifier", "x_size")}

@@ -1,17 +1,17 @@
 /-
   RecursionFast.Library.Compose  (UNTRUSTED, kernel-checked)
 
-  **The composition argument across the harness tree** (V4-8, V4-A10; CGSY24 Thm 5.1's
+  **The composition argument across the harness tree** (CGSY24 Thm 5.1's
   straight-line argument), from the contract's single-output knowledge soundness by a union
   bound over the extracted proofs. Fix a submission `S` and a public key `vk`. The harness's tree
   has `2^r` leaves whose digests are `leafStmt hᵢ n` (the runner computes them from the chain ends
   `hᵢ` it knows, with `n ≤ chainCap`), and its root digest `c₀` is `treeRoot` of them.
 
-  **The walk** (deterministic; `walk`, whose type is the statement, RA-M1). Given one oracle log
+  **The walk** (deterministic; `walk`, whose type is the statement). Given one oracle log
   `L` and a root signed proof `p₀` that `S.acc vk` accepts, it returns, computed from `p₀`
   through `S.E` on `L` (`Outcome`):
   * **the leaf starts**: `sᵢ` with `chainEnd sᵢ n = hᵢ` for every leaf;
-  * **a BLAKE2s collision** (`Collision`): the tagged preimages of a statement mismatch;
+  * **a Keccak-256 collision** (`Collision`): the tagged preimages of a statement mismatch;
   * **a forgery in the extraction tree of `p₀`**: a signed proof `p` at a path `bs` of the tree
     (`InTree`: the root, or a child of a node witness `S.E` returns for a member) whose trace has
     queries of at most `queryCap` bytes and a valid signature on its digest under `vk`, while the
@@ -22,7 +22,7 @@
   At each member the walk checks the signed proof's trace against `L`; if it is contained it asks
   `S.E` on `L`, checks the witness (`Rel` is decidable), and compares its digests with the tree's.
   `compose` states the same as a proposition; its first disjunct, that leaf starts exist, is free
-  whenever the harness drew them, so the content is that `walk` computes them (RA-M1).
+  whenever the harness drew them, so the content is that `walk` computes them.
 
   **The probability** (`compose_prob`), stated on the walk's output. Let `A` be a query program
   asking at most `Q` queries that outputs the root signed proof, run against one lazily sampled
@@ -51,9 +51,9 @@
   signature is an EUF-CMA forgery, unless the service signed a different trace with the same
   digest, which is a collision of `traceBytes` encodings (injective on queries of at most
   `queryCap` bytes, `traceBytes_inj`; the forgery carries that cap, and the service's traces have
-  it by the wire cap). Collisions and forgeries are then bounded by `Adv_coll + Adv_EUF-CMA`
-  (archive/v4-dev-record:docs/v4/BRIEF.md §2). Also on paper: lazy sampling against a random function, randomised adversaries,
-  and the PRF hybrid (archive/v4-dev-record:docs/DESIGN-v4-srom.md §2.3).
+  it by the wire cap). Collisions and forgeries are then bounded by `Adv_coll + Adv_EUF-CMA`.
+  Also on paper: lazy sampling against a random function, randomised adversaries, and the PRF
+  hybrid from the random oracle to the keyed deployment (AGENTS.md §12).
 -/
 import RecursionFast.Library.Trace
 import RecursionFast.Library.Tree
@@ -122,7 +122,7 @@ inductive Outcome (S : Submission) (vk : Digest) (L : Log) (n : ℕ) (hs : List 
     (c₀ : Digest) (p₀ : Signed) (d : ℕ) where
   /-- The leaf starts: chain `n` from `ss[i]` ends at `hs[i]`, for every leaf. -/
   | starts (ss : List Digest) (h : List.Forall₂ (fun s h => chainEnd s n = h) ss hs)
-  /-- A BLAKE2s collision. -/
+  /-- A Keccak-256 collision. -/
   | collision (col : Collision)
   /-- A forgery against the log, at the member `(c, f.p)` of the extraction tree. -/
   | forgery (f : Forgery vk L) (c : Digest) (bs : List Bool) (mem : InTree S L c₀ p₀ bs c f.p)
@@ -329,7 +329,7 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ chainCap) (c₀ : Digest) (p₀ : S
         | .starts _ _, .escape c q bs' m hd' h' => .escape c q bs' m hd' h'
       else .collision (nodeCollision he (hroot.symm.trans hw.1))
 
-/-- **The walk over the harness tree** (V4-8): from the log `L` and an accepted root signed
+/-- **The walk over the harness tree**: from the log `L` and an accepted root signed
 proof, the root's leaf starts, an explicit collision, an explicit capped forgery in the extraction
 tree of the root signed proof, or an escape in it within depth `r`, computed from it through `S.E`
 on `L`. Its type is the composition statement. -/
@@ -339,8 +339,8 @@ def walk (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
     Outcome S vk L n hs (treeRoot (hs.map fun h => leafStmt h n)) p r :=
   walkFrom L n hn _ p r r hs hr p [] (by simp) hacc .root
 
-/-- **The composition theorem** (V4-8), the proposition `walk` proves: the leaf starts exist, or
-a BLAKE2s collision exists, or a capped forgery against `L` lies in the extraction tree of the
+/-- **The composition theorem**, the proposition `walk` proves: the leaf starts exist, or
+a Keccak-256 collision exists, or a capped forgery against `L` lies in the extraction tree of the
 root signed proof, or a member of that tree within depth `r` escapes the extractor on `L`. -/
 theorem compose (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
     (hr : hs.length = 2 ^ r) (p : Signed)
@@ -358,7 +358,7 @@ theorem compose (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List D
 
 /-- The existential shadow of `compose` without the forgery's tree membership. **Trivially true
 for every key a signer knows** (`Controls/Compose.lean`, `compose_exists_free`): it says nothing
-beyond `compose` and is kept only as a readability corollary (RA-M1). -/
+beyond `compose` and is kept only as a readability corollary. -/
 theorem compose_exists (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
     (hr : hs.length = 2 ^ r) (p : Signed)
     (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
@@ -459,7 +459,7 @@ theorem escape_prob_le (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (c₀ : Di
   simp only [memberAt, hmem.follow_eq]
   exact he.wins hL
 
-/-- **The composition theorem with probabilities** (V4-8, V4-A10): for an adversary `A` asking
+/-- **The composition theorem with probabilities**: for an adversary `A` asking
 at most `Q` queries and outputting the root signed proof, with `Q + qV ≤ logCap`, the probability
 over one lazily sampled random oracle that `acc` accepts the root and the walk on `A`'s final log
 ends in an escape, returning none of the leaf starts, a collision, or a forgery in the extraction

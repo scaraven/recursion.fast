@@ -1,7 +1,7 @@
 -- Keyword tokens of the allowed import closure that scripts/source-rule.py does NOT reject,
--- reviewed (S9D-M1 fix pass, 2026-10-15, Lean v4.34.1 and the pinned Mathlib/packages/Clean):
+-- reviewed (Lean v4.34.1 and the pinned Mathlib/packages/Clean):
 -- none runs code chosen by the submitter at elaboration time without leaving a declaration.
--- tests/source-rule/sweep.py (CI step 3) fails on any keyword that is neither rejected nor listed
+-- tests/source-rule/sweep.py (a CI step) fails on any keyword that is neither rejected nor listed
 -- here, so a toolchain or package bump forces a review of its new keywords.
 -- Notes on the ones that looked suspicious:
 --   meta, public, private: modifiers; a `meta def` is a declaration (gate rules 3 and 7).
