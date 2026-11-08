@@ -286,7 +286,7 @@ is scored.
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
 | REJECT | the entry failed a rule or a cap; the result names the reason |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose chain lengths are not the season's or a malformed `[stream] lengths`, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint and the well-formedness of the season's lengths are checked first, in the setup job, and the stream's lengths against the season's at aggregation; a fingerprint or chain-lengths failure uses up no attempt (a retry at the same pin cannot clear it). Organiser errors in a row, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count toward the author's quota |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose chain lengths are not the season's or a malformed `[stream] lengths`, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint and the well-formedness of the season's lengths are checked first, in the setup job, and the stream's lengths against the season's at aggregation; a fingerprint or chain-lengths failure uses up no attempt (a retry at the same pin cannot clear it). Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9 says when; one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
 
 A result is **comparable** iff it is ACCEPT, its stream was not truncated and the job plan matched
 (an ACCEPT is always on the season's machine and with the season's chain lengths: anything else is
@@ -350,7 +350,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 11 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
 | jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 50 min; 30 min; 10 min |
-| the benchmark VM; evaluations at a time; evaluations started per author per 24 h | 4 cores / 8 threads, 16 GB; 1; 3 |
+| the benchmark VM; evaluations at a time | 4 cores / 8 threads, 16 GB; 1 |
 
 ## 10. Hard rules for the Lean side
 
