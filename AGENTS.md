@@ -346,7 +346,8 @@ hold both.
 - **A pin move ports the records first.** When the pin moves while a record stands, the bot
   re-evaluates each standing record's retained commit at the new pin before any other entry (one
   run when one commit holds both); a record keeps its crown if that is a comparable, attested ACCEPT.
-  If it fails, no record stands in that track.
+  If it fails, no record stands in that track. A port competes only in the tracks whose record it
+  carries, and item 5 does not refuse a record's own port.
 - **The margin (2 %) is the owner's choice**, and it does not keep noise out. The relative
   run-to-run spread of one entry's `S` on the evaluation machine with the fixed chain lengths is σ ≈
   1.75 % (ten runs at the smoke shape, [`harness/smoke.toml`](harness/smoke.toml); mostly per-step
