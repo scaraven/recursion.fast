@@ -8,8 +8,10 @@ format) · Prob (the calculus of the contract's `prob`) · KS (knowledge soundne
 adversary that reads its log, the union bound) · Trace (`runSeq` to `runLog`, trace-encoding
 injectivity) · Signer (the reference signer and `sigOk_sign`) · KeccakFast and Fast (the
 word-level badge path, proved equal) · WitnessSending (certified for every key) · SigTrust (no
-certified verifier trusts a signature) · Compose (the composition walk across the harness tree and
-its probability) · SignerFast (the executable reference signer).
+certified verifier trusts a signature) · Unforgeability (the EUF-CMA, SUF-CMA and signature-only
+forgery events, the service's signed traces) · Compose (the composition walk across the harness
+tree, its reduction to EUF-CMA and collisions, and its probability) · SignerFast (the executable
+reference signer).
 -/
 import RecursionFast.Library.Keccak
 import RecursionFast.Library.Oracle
@@ -27,5 +29,6 @@ import RecursionFast.Library.KeccakFast
 import RecursionFast.Library.Fast
 import RecursionFast.Library.WitnessSending
 import RecursionFast.Library.SigTrust
+import RecursionFast.Library.Unforgeability
 import RecursionFast.Library.Compose
 import RecursionFast.Library.SignerFast

@@ -18,12 +18,10 @@
   * `sigTrust_ks_iff`: for every relation `R` and error `ε`, `Vsig (pk sk)` is knowledge-sound
     with no query, for some extractor, **exactly when every statement has a witness** (the shape
     of `acceptAll_ks_iff`, `Library/KS.lean`): a signature is no knowledge.
-  * `sigTrust_ks_of_unsignable` (the twin): under a key for which no signature verifies, the same
-    verifier is knowledge-sound at error `0` for every relation and extractor. So it is exactly the
-    quantification over keys whose secret the adversary may hold that excludes it; a certificate
-    for one fixed key would not.
   * The same facts about the library's potential (`KState`): `sigTrust_extracts`,
     `sigTrust_kstate_iff`, `sigTrust_no_kstate_none`.
+  So it is the certificate's quantification over keys, which reaches keys whose secret the
+  adversary holds, that excludes this verifier.
   `Controls/Certificate.lean` turns these into statements about `Certificate`.
 -/
 import RecursionFast.Library.Signer
@@ -116,14 +114,5 @@ theorem sigTrust_kstate_iff (sk : ℕ → ℕ → Digest) (R : Digest → Wit �
 theorem sigTrust_no_kstate_none (sk : ℕ → ℕ → Digest) (R : Digest → Wit → Prop) (ε : ℝ≥0) :
     IsEmpty (KState R (Vsig (Signer.pk sk)) (fun _ _ _ => none) ε) :=
   ⟨fun k => by obtain ⟨_, h, _⟩ := sigTrust_extracts sk k 0; cases h⟩
-
-/-- **The twin**: under a key for which no signature verifies, the signature-trusting verifier is
-knowledge-sound at error `0` with no query, for every relation and extractor. -/
-theorem sigTrust_ks_of_unsignable {vk : Digest} (hvk : ∀ m σ, SigOk vk m σ = false)
-    (R : Digest → Wit → Prop) (E : Digest → Proof → Log → Option Wit) :
-    KS R (Vsig vk) E 0 0 := by
-  refine (KState.zero 0 fun L c π h => ?_).ks fun _ _ _ => le_rfl
-  simp only [Vsig, OProg.runLog, Option.some.injEq, hvk] at h
-  split at h <;> cases h
 
 end RecursionFast.SigTrust

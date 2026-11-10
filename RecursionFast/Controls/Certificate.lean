@@ -23,12 +23,10 @@ Negative:
   with an extractor that returns nothing, is **not certified**: the certificate's key quantifier
   reaches `Signer.pk sk`, and the adversary that holds `sk` (`SigTrust.adversary`) asks nothing,
   outputs a statement with its signature, and wins with probability `1`. With any extractor,
-  `sigTrust_certificate_opens`: a certificate would make the extractor open the signature of every
-  statement, on the empty log, to a witness of the relation. **Why the quantifier is what does
-  it**: `sigTrust_ks_unsignable` (the same verifier is knowledge-sound at error `0` under any key
-  for which no signature verifies), so a certificate stated for one key could not exclude it.
-  That no such key can be exhibited (it would need a digest outside the image of a Keccak-256
-  tree) is why the twin is stated for every such key rather than for one.
+  knowledge soundness under such a key makes the extractor open the signature of every
+  statement, on the empty log, to a witness (`SigTrust.sigTrust_ks_extracts`), and the verifier
+  has a knowledge state exactly when every statement has a witness
+  (`SigTrust.sigTrust_kstate_iff`): a signature is no knowledge.
 * The certificate does **not** exclude a verifier that recognises a public function of the
   oracle (`Controls/Backdoor.lean`); the deployment does.
 
@@ -116,22 +114,6 @@ theorem sigTrust_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = SigTrust
     (hE : S.E = fun _ _ _ => none) : ¬ Certificate S := fun h =>
   have hs := small_of_caps h.cap.2.2.1 h.cap.1
   SigTrust.sigTrust_not_ks_none (fun _ _ => 0) _ hs.1 hs.2 (hV _ ▸ hE ▸ h.secure _)
-
-/-- With any extractor, a certificate would open every statement's signature, on the empty log,
-to a witness of the relation. -/
-theorem sigTrust_certificate_opens (S : Submission) (hV : ∀ vk, S.V vk = SigTrust.Vsig vk)
-    (h : Certificate S) (sk : ℕ → ℕ → Digest) (c : Digest) :
-    ∃ w, S.E c (SigTrust.sigProof (Signer.sign sk 0 c)) [] = some w ∧
-      Rel (S.acc (Signer.pk sk)) c w :=
-  have hs := small_of_caps h.cap.2.2.1 h.cap.1
-  SigTrust.sigTrust_ks_extracts sk (hV _ ▸ h.secure (Signer.pk sk)) hs.1 hs.2 c
-
-/-- **The twin**: under a key for which no signature verifies, the signature-trusting verifier
-is knowledge-sound for the relation of every `acc` and every extractor. -/
-theorem sigTrust_ks_unsignable {vk : Digest} (hvk : ∀ m σ, SigOk vk m σ = false)
-    (acc : Digest → Signed → Bool) (E : Digest → Proof → Log → Option Wit) :
-    KS (Rel acc) (SigTrust.Vsig vk) E 0 0 :=
-  SigTrust.sigTrust_ks_of_unsignable hvk _ E
 
 /-! ## What the certificate does not exclude -/
 

@@ -26,7 +26,8 @@ knowledge content is the named extractor `E` with its program and budget (`Secur
   certifiable (`Controls/Certificate.lean`, `sigTrust_no_certificate`), and a certificate never
   rests on unforgeability. Unforgeability is used once, outside the certificate: the composition
   argument across the tree (`Library/Compose.lean`) returns a forgery when a signed trace in
-  the extraction tree is not in the run's one oracle log.
+  the extraction tree is not in the run's one oracle log, an EUF-CMA forgery against the
+  service's signed traces or a collision (`walkSigned`).
 * *Why the trace is used up exactly and its queries capped.* Completeness is
   required for every witness of the relation, and a node witness carries its children's traces.
   If a trace could carry entries after the verifier's last query, or queries of any length, the
