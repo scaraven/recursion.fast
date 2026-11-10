@@ -3,15 +3,13 @@
 
   python3 -I harness/local-season.py [SEASON] > season-local.toml
 
-The copy is `harness/season.toml` (or SEASON) with three lines changed, as `harness/smoke.toml`
+The copy is `harness/season.toml` (or SEASON) with two lines changed, as `harness/smoke.toml`
 has them, and nothing else: every shape and cap stays the season's.
 
 - `[machine] fingerprint = "any"`: your machine is not the evaluation machine, whose fingerprint
   check would otherwise stop the run as an organiser ERROR before the prover is built;
 - `[calibration] ref_provisional = true`: `c_P` against the season's `ref_ns` is recorded, not
-  enforced (your machine's `calib` time is not the season's);
-- `[dos] item_cap = "verify_s"`: a DoS input may take the per-check cap rather than
-  `item_factor · v_ref`, since your `v_ref` is not the evaluation machine's.
+  enforced (your machine's `calib` time is not the season's).
 
 The season name gains `-local`. A local run is never attested and is not a result.
 """
@@ -21,7 +19,7 @@ import sys
 import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOCAL = {"fingerprint": '"any"', "ref_provisional": "true", "item_cap": '"verify_s"'}
+LOCAL = {"fingerprint": '"any"', "ref_provisional": "true"}
 
 
 def local_season(text):
@@ -34,8 +32,7 @@ def local_season(text):
     if n != 1:
         raise SystemExit("local-season: no `name =` line")
     t = tomllib.loads(text)
-    for table, key, want in (("machine", "fingerprint", "any"), ("calibration", "ref_provisional", True),
-                             ("dos", "item_cap", "verify_s")):
+    for table, key, want in (("machine", "fingerprint", "any"), ("calibration", "ref_provisional", True)):
         if t.get(table, {}).get(key) != want:
             raise SystemExit(f"local-season: [{table}] {key} is not {want!r} in the copy; "
                              "the season file's layout changed")

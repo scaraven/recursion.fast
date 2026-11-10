@@ -3,13 +3,16 @@
 
   python3 tests/harness/test_tv.py
 
-1. `V_i` is the best of two measurements, each batch warmed with an untimed first check;
-   an output rejected on either measurement fails the entry; no check is a gate on time (the
-   verifier's time is priced by the score, with its knee at `v_ref`).
-2. The score: `P̄` is the work-weighted cubic mean of `P_i/n_i` times `n_ref` (`c_P` is a health
-   check, never a factor: AGENTS.md §6); `V̄ = κ · mean
-   max(x, x³)` with `x = V/v_ref + |π|/s_ref`: a step at `x = 2` costs 8 units, one at `x = 0.5` half
-   a unit; the marginal values have the right signs.
+1. `V_i` is one measurement, the batch warmed with an untimed first check; a rejected output
+   fails the entry; no check is a gate on time (the verifier's time is priced by the score, with
+   its scale `v_ref`, and bounded only by the stream's cap); a badge run outside the stream
+   has no time bound and is refused.
+2. The two scores (AGENTS.md §7), pinned by hand-computed vectors: `P̄` is the work-weighted
+   cubic mean of `P_i/n_i` times `n_ref` (`c_P` is a health check, never a factor: AGENTS.md §6);
+   the sum `S = P̄ + V̄`, `V̄ = κ · mean x` with `x = V/v_ref + |π|/s_ref`, linear (a step at
+   `x = 2` costs 2 units: no knee); the product `S× = P̄ · (1 + (mean V / v_ref)²)`, with no size
+   term (`g = 2` at a mean check time of `v_ref`, 1.25 at half of it); the marginal values of both
+   have the right signs.
 3. The chain lengths and the draws: `M` a season constant (not drawn); the chain lengths the
    season file's fixed list, which `rfh.draws.published_lengths` re-derives from its public label
    (and the smoke's from its own), `M + 1` integers in `[n_lo, n_hi]`, with no float rounding near
@@ -22,6 +25,7 @@
 import os
 import statistics
 import sys
+import time
 from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,18 +36,20 @@ from rfh.bench import Bench, Fail, Params, fingerprint, fingerprint_problem, fit
 
 class StubBadge:
     def __init__(self, script, reject=()):
-        self.script, self.calls, self.warm, self.reject = list(script), 0, [], set(reject)
+        self.script, self.calls, self.warm, self.reject, self.timeouts = list(script), 0, [], set(reject), []
 
-    def verify(self, items, store, timeout=None, warm=False):
+    def verify(self, items, store, timeout, warm=False):
         self.calls += 1
         self.warm.append(warm)
+        self.timeouts.append(timeout)
         return [((self.calls, k) not in self.reject, self.script.pop(0)) for k in range(len(items))]
 
 
 def bench(script, reject=()):
     b = Bench.__new__(Bench)
-    b.p = SimpleNamespace(verify_s=10)
-    b.badge, b.store, b.deadline = StubBadge(script, reject), "/nonexistent", None
+    b.p = SimpleNamespace()
+    b.badge, b.store = StubBadge(script, reject), "/nonexistent"
+    b.deadline = (time.monotonic() + 1000, "the stream's cap")
     return b
 
 
@@ -55,18 +61,26 @@ def main():
         print(("ok   " if cond else "FAIL ") + what)
         fails += not cond
     two = [(b"v", b"c", "f", "a"), (b"v", b"c", "g", "b")]
-    b = bench([150, 60, 90, 70])
+    b = bench([150, 60])
     res = b.check(two, "two")
-    check(res == [(90, [150, 90]), (60, [60, 70])] and b.badge.calls == 2 and b.badge.warm == [True, True],
-          f"V_i is the best of two warmed measurements: {res}")
-    for rej, what in (({(1, 1)}, "first"), ({(2, 0)}, "second")):
+    t = b.badge.timeouts[0]
+    check(res == [150, 60] and b.badge.calls == 1 and b.badge.warm == [True] and 1029 < t <= 1030,
+          f"V_i is one warmed measurement, the badge run bounded only by the stream's cap plus 30 s: {res}, {t:.1f} s")
+    for k in (0, 1):
         try:
-            bench([1, 1, 1, 1], reject=rej).check(two, "x")
-            check(False, f"an output rejected on the {what} measurement passes")
+            bench([1, 1], reject={(1, k)}).check(two, "x")
+            check(False, f"output {k} rejected passes")
         except Fail as e:
-            check("rejected by acc" in str(e), f"an output rejected on the {what} measurement fails the entry: {e}")
-    b = bench([10 ** 12, 10 ** 12])                     # 1,000 s: slow, but not a gate
-    check(b.check(two[:1], "slow") == [(10 ** 12, [10 ** 12, 10 ** 12])], "a slow check is scored, not failed")
+            check("rejected by acc" in str(e), f"a rejected output ({k}) fails the entry: {e}")
+    b = bench([10 ** 12])                     # 1,000 s: slow, but not a gate
+    check(b.check(two[:1], "slow") == [10 ** 12], "a slow check is scored, not failed")
+    b = bench([1])
+    b.deadline = None
+    try:
+        b.check(two[:1], "outside")
+        check(False, "a badge run outside the stream runs without a time bound")
+    except RuntimeError:
+        check(b.badge.calls == 0, "a badge run outside the stream is refused (it would have no time bound)")
 
     p = Params.load(os.path.join(ROOT, "harness", "season.toml"))
     v_ref = 177.8e6
@@ -80,14 +94,51 @@ def main():
     check(abs(score(p, st)["P_bar"] - sc["P_bar"]) < 1e-9, "c_P does not scale P̄: c_P = 2 leaves it unchanged")
     st = {"steps": [mk(1, 1 << 18, 1.0, 2 * v_ref, 0), mk(2, 1 << 18, 1.0, 0, p.s_ref // 2)], "calibration": dict(cal)}
     sc = score(p, st)
-    check(abs(sc["V_bar"] - p.kappa * (8 + 0.5) / 2) < 1e-9 and abs(sc["S"] - 1 - sc["V_bar"]) < 1e-9,
-          f"V̄ = κ · mean max(x, x³): x = 2 (verifier) costs 8, x = 0.5 (size) costs 0.5 ({sc['V_bar']:.6f})")
-    check(abs(p.kappa - p.K * 0.6595) < 1e-4, f"κ = K · v0 (season: {p.kappa} = {p.K} × 659.5 ms)")
+    check(abs(sc["V_bar"] - p.kappa * (2 + 0.5) / 2) < 1e-9 and abs(sc["S"] - 1 - sc["V_bar"]) < 1e-9
+          and abs(sc["x_bar"] - 1.25) < 1e-12,
+          f"V̄ = κ · mean x, linear: x = 2 (verifier) costs 2, x = 0.5 (size) costs 0.5 ({sc['V_bar']:.6f})")
+    check(p.K == 5 and p.kappa == 3.2975 and abs(p.kappa - p.K * 0.6595) < 1e-4,
+          f"κ = K · v0 (season: {p.kappa} = {p.K} × 659.5 ms)")
     m = sc["marginal"]
     check(all(m[k] < 0 for k in ("chain_speed_1pct", "overhead_0.1s_per_step", "verifier_10ms", "proof_100KB")),
           f"every marginal improvement lowers S: {m}")
+    check(all(m["product_" + k] < 0 for k in ("chain_speed_1pct", "overhead_0.1s_per_step", "verifier_10ms"))
+          and m["product_proof_100KB"] == 0, "every prover or verifier improvement lowers S×; proof size does not move it")
+
     check(st["steps"][0]["x_verifier"] == 2 and st["steps"][1]["x_size"] == 0.5 and sc["largest_x"]["index"] == 1,
           "x is split into its verifier and size parts per step, and the largest is named")
+    # hand-computed vectors at the season's constants (κ = 3.2975 s, s_ref = 2 MiB), v_ref = 659.5 ms:
+    # steps (n, P, V, |π|) = (2^18, 1 s, 1.319 s, 0) and (2^18, 2 s, 0, 1 MiB): x = 2 and 0.5;
+    # P̄ = ((1 + 8)/2)^(1/3) = 1.6509636244473134; V̄ = 3.2975 · 1.25 = 4.121875; S = 5.7728386244473134;
+    # mean V = 0.6595 s = v_ref, g = 2, S× = 3.3019272488946268; mean |π| = 524,288 B
+    vr = 659.5e6
+    st = {"steps": [mk(1, 1 << 18, 1.0, 1.319e9, 0), mk(2, 1 << 18, 2.0, 0, 1 << 20)],
+          "calibration": {"c_P": 1.0, "v_ref_ns": vr, "T_triv_ns": 10 * vr}}
+    sc = score(p, st)
+    want = {"P_bar": 1.6509636244473134, "V_bar": 4.121875, "S": 5.7728386244473134, "x_bar": 1.25,
+            "V_mean_s": 0.6595, "g": 2.0, "S_product": 3.3019272488946268, "pi_mean_bytes": 524288}
+    check(all(abs(sc[k] - v) < 1e-9 for k, v in want.items()) and sc["tracks"] == {"sum": "S", "product": "S_product"},
+          f"vector 1 (x = 2 above 1, mean V = v_ref): {({k: sc[k] for k in want})}")
+    check([s["x"] for s in st["steps"]] == [2.0, 0.5] and "g_x" not in st["steps"][0]
+          and abs(st["steps"][0]["share_V"] - 0.8) < 1e-12,
+          "per step: x = 2 and 0.5, no g_x, share_V = x_i / Σx (0.8)")
+    # P̄'s work-weighting, n_i ≠ n_ref: steps (2^17, 1 s) and (2^19, 1 s), rates 2^-17 and 2^-19 s per
+    # permutation; Σ n (P/n)³ / Σ n = (2^-34 + 2^-38) / (5 · 2^17) = 3.4 · 2^-55, so
+    # P̄ = 2^18 · (3.4 · 2^-55)^(1/3) = 1.7^(1/3) = 1.193483191927337 (an unweighted cubic mean of the
+    # rates would give 2^18 · ((2^-51 + 2^-57)/2)^(1/3) ≈ 1.5956; a plain mean of the rates 1.25)
+    sw = {"steps": [mk(1, 1 << 17, 1.0, 0, 0), mk(2, 1 << 19, 1.0, 0, 0)],
+          "calibration": {"c_P": 1.0, "v_ref_ns": vr, "T_triv_ns": 10 * vr}}
+    sc = score(p, sw)
+    check(abs(sc["P_bar"] - 1.193483191927337) < 1e-12 and abs(sc["S"] - sc["P_bar"]) < 1e-12
+          and abs(sc["S_product"] - sc["P_bar"]) < 1e-12,
+          f"vector 3 (n = 2^17 and 2^19): P̄ = 1.7^(1/3), work-weighted ({sc['P_bar']!r})")
+    # half of v_ref on average (V = 0.6595 s and 0): g = 1.25; one step of 1 s at n_ref and no proof: P̄ = 1
+    st = {"steps": [mk(1, 1 << 18, 1.0, 0.6595e9, 0), mk(2, 1 << 18, 1.0, 0, 0)],
+          "calibration": {"c_P": 1.0, "v_ref_ns": vr, "T_triv_ns": 10 * vr}}
+    sc = score(p, st)
+    check(abs(sc["g"] - 1.25) < 1e-12 and abs(sc["S_product"] - 1.25) < 1e-12
+          and abs(sc["S"] - (1 + 3.2975 * 0.5)) < 1e-12,
+          f"vector 2 (mean V = v_ref / 2): g = 1.25, S× = 1.25, S = 1 + κ/2 = 2.64875 ({sc['g']}, {sc['S_product']}, {sc['S']})")
 
     # AGENTS.md §6: c_P against the fixed ref_ns is a health check; its drift is an organiser ERROR
     # once ref_ns is measured, recorded but not enforced while it is a placeholder
@@ -106,7 +157,7 @@ def main():
     check(p.calib_ref_provisional or p.fingerprint != "0" * 64,
           "a measured ref_ns comes with a measured fingerprint, not the all-zero placeholder")
 
-    # the local copy of the season (harness/local-season.py): three lines changed, as the smoke has them
+    # the local copy of the season (harness/local-season.py): two lines changed, as the smoke has them
     import subprocess
     import tempfile
     out = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "local-season.py")],
@@ -117,10 +168,9 @@ def main():
         with open(loc_path, "w") as f:
             f.write(out.stdout)
         lp = Params.load(loc_path)
-    check(lp.fingerprint == "any" and lp.calib_ref_provisional is True and lp.dos_item_cap == "verify_s"
-          and lp.name == p.name + "-local",
-          "the local season accepts any machine, records c_P's drift without enforcing it, and caps a DoS input at verify_s")
-    same = {k for k in vars(p) if k not in ("fingerprint", "calib_ref_provisional", "dos_item_cap", "name")}
+    check(lp.fingerprint == "any" and lp.calib_ref_provisional is True and lp.name == p.name + "-local",
+          "the local season accepts any machine and records c_P's drift without enforcing it")
+    same = {k for k in vars(p) if k not in ("fingerprint", "calib_ref_provisional", "name")}
     diff = sorted(k for k in same if getattr(lp, k) != getattr(p, k))
     check(not diff, f"every other parameter of the local season is the season's ({diff})")
 

@@ -31,10 +31,9 @@
 #                on the record gets the record's unchanged modules for free (by design), and
 #                whether a slow build fits can depend on the cache hitting.
 #   benchmark    prover build, setup, the runs, the checks, the score; untrusted code runs only
-#                inside the sandbox. **One job**: the calibration, the one IVC stream (interleaved
-#                `c_P` and `T_triv` samples, the re-timing) and the DoS column on the stream's last
-#                output; one run, no repeats. The input `split` is kept for callers and selects the
-#                same one job. The parts are defined once, in `harness/aggregate.py` (the `plan` job
+#                inside the sandbox. **One job**: the calibration and the one IVC stream
+#                (interleaved `c_P` and `T_triv` samples, the re-timing); one run, no repeats.
+#                The input `split` is kept for callers and selects the same one job. The parts are defined once, in `harness/aggregate.py` (the `plan` job
 #                prints them), and the aggregation requires exactly that set: a missing, duplicated
 #                or mismatched part is ERROR, never ACCEPT. The VM provides the machine
 #                fingerprint's file (`RF_MACHINE_FINGERPRINT`, AGENTS.md §6); the step names the
@@ -43,9 +42,10 @@
 #   attest       signs the result JSON with a GitHub artifact attestation; runs no entry code.
 #
 # Time: the caps inside a job (`harness/season.toml`) are nested so that their sum and the
-# job's fixed steps stay below its limit: an entry that is slow or hangs fails a cap
-# and is REJECTed with the reason (a kernel over its cap leaves the certificate unchecked),
-# never killed with its job, which would be a missing part and an ERROR. The limits:
+# job's fixed steps stay below its limit, so no job is killed with its entry (a missing part and an
+# ERROR): a step over its cap is the entry's REJECT with the reason (a kernel over its cap leaves
+# the certificate unchecked); a stream that reaches `stream_s`, a slow or hung check included, is
+# truncated and not comparable (REJECT if no step was checked). The limits:
 #   setup, setup-tools, plan, attest: 30, 30, 10, 10 minutes;
 #   certificate: the entry's capped steps render_s 30 + source_rule_s 120 + build_s 1200 + kernel_s
 #     600 + gate_s 120 + badge_s 180 = 2250 s (37.5 min; 47.5 with nanoda's second kernel_s), limit
@@ -53,9 +53,15 @@
 #     and comparator restores, the toolchain, the fetch, the record restore within 2 min, the
 #     manifest checks, the certificate artifact); the entry-build upload runs only while more than
 #     6 min remain;
-#   benchmark: one benchmark of at most PART_S = 44 min (harness/evaluate.py), limit 50.
-# Worst case 180 minutes (190 with nanoda); with the core commit's caches in place the `rf-bench`
-# slot is held for at most certificate + benchmark = 100 minutes (110) per evaluation (AGENTS.md
+#   benchmark: one benchmark of at most PART_S = 64 min (harness/evaluate.py), limit 70: inside
+#     PART_S the entry's capped steps build_s 120 + setup_s 240 + the setup tree's hash 60 +
+#     stream_s 3000 = 3420 s (57 min), 7 min for the organiser's own steps (the calibration
+#     instance, the leaf digests, the 30 s a check batch may run past stream_s, the service's stop,
+#     the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
+#     restore, the certificate download, the fetch, the result upload). The server kills a bench
+#     VM 90 minutes after its job starts (infra/slots.json `hard_limit_s`), 20 above this limit.
+# Worst case 200 minutes (210 with nanoda); with the core commit's caches in place the `rf-bench`
+# slot is held for at most certificate + benchmark = 120 minutes (130) per evaluation (AGENTS.md
 # §6).
 #
 # What runs here: only what is about the entry, and the organiser's environment it runs in
@@ -69,8 +75,9 @@
 # certificate and benchmark jobs, checkouts do not persist credentials, the entry is fetched by SHA
 # as data with plain git, and every sandboxed process starts with an empty environment.
 #
-# Record acceptance (AGENTS.md §8): the submissions bot applies the record rule
-# (`S < (1 - margin) · S_record`); this workflow only states the facts. `harness/verify-record.sh
+# Record acceptance (AGENTS.md §8): the submissions bot applies the record rule per track
+# (`S_t < (1 - margin) · S_t,record`, the sum `S` and the product `S_product`); this workflow only
+# states the facts. `harness/verify-record.sh
 # result.json` checks provenance (`gh attestation verify` with `--signer-workflow
 # scaraven/recursion.fast/.github/workflows/evaluate.yml`, a self-hosted runner, the signer digest
 # equal to the result's `harness_commit`), that the result records our runner (`runner`: name `rf-…`,
@@ -335,7 +342,7 @@ jobs:
     if: >-
       needs.certificate.outputs.status == 'ok' || needs.certificate.outputs.status == 'provisional'
     runs-on: rf-bench
-    timeout-minutes: 50
+    timeout-minutes: 70          # the arithmetic is in the header
     permissions: { contents: read }
     env:
       SVC_KEY: rf-svc-${{ needs.plan.outputs.core_sha }}
@@ -365,7 +372,7 @@ jobs:
         if: steps.svc.outputs.cache-hit == 'true'
         env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
         run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
-      - name: benchmark (every step capped by the season; the part within 44 min, harness/evaluate.py PART_S)
+      - name: benchmark (every step capped by the season; the part within 64 min, harness/evaluate.py PART_S)
         # RF_ENTRY_NAME: the entry's identity for the provisional ranking (aggregate.py --rank);
         # RF_RUNNER_*: the runner as this job names it (AGENTS.md §8; RUNNER_NAME is the runner's
         # own)
@@ -381,7 +388,7 @@ jobs:
             python3 -I - "$PART" "$msg" "$out" "$RF_HARNESS_COMMIT" <<'EOF'
           import json, sys
           part, msg, out, commit = sys.argv[1:]
-          parts = ["calibrate", "stream", "dos"] if part == "all" else part.split(",")
+          parts = ["calibrate", "stream"] if part == "all" else part.split(",")
           json.dump({"parts": parts, "benchmark": "error", "organiser_error": "cache", "reasons": [msg], "harness": {"commit": commit}}, open(out, "w"))
           EOF
             exit 0

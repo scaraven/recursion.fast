@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Checks a result's provenance, its runner and its verdict, or says why not (TRUSTED;
 # AGENTS.md §8). It is a necessary condition for a record, not the record rule: the submissions bot
-# applies that rule (`S < (1 - margin) · S_record`, against the standing record at the pin) on a
-# result this script accepted. Needs `gh` ≥ 2.49 and a GitHub token able to read the attestations
-# of the submissions repository.
+# applies that rule per track (`S_t < (1 - margin) · S_t,record`, the sum and the product, against
+# the track's standing record at the pin) on a result this script accepted. Needs `gh` ≥ 2.49 and
+# a GitHub token able to read the attestations of the submissions repository.
 #
 #   harness/verify-record.sh result.json                     1-5
 #   harness/verify-record.sh --provenance-only result.json   1-2 (any verdict: the bot's check of

@@ -30,14 +30,17 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
   change between seasons, so keep a portable fallback), one throwaway VM per job: 96 steps; the first proves two fresh chains,
   and each after it the previous proof plus one fresh chain. The chain lengths, between `2^17` and
   `2^20` steps, are one fixed, published sequence (`harness/season.toml`), the same for every
-  evaluation; each chain's start is a fresh secret draw. The score `S` is the
-  prover's time per `2^18` Keccak permutations (chain steps) plus a charge for verifier time and
-  proof size; lower is better. Results are signed with GitHub artifact attestations.
-- **Records.** A new record must be accepted, comparable (on the season's machine), attested, run at
-  the current rules commit, and beat the standing record's score by more than the margin (2 %, set
-  by the owner). One entry's score varies by about 1.75 % from run to run, so a near-copy of the
-  record can beat it by noise; byte copies and re-used record prover binaries are refused, and the
-  owner can retire a record won by noise.
+  evaluation; each chain's start is a fresh secret draw. Two scores are computed from the one
+  stream, both from the prover's time per `2^18` Keccak permutations (chain steps), `P̄`: the
+  **sum** `S = P̄ + V̄` adds a linear charge for verifier time and proof size, and the **product**
+  `S× = P̄ · (1 + (mean V / v_ref)²)` multiplies it by a verifier factor; lower is better in both.
+  Results are signed with GitHub artifact attestations.
+- **Records**, one per track (sum and product). A new record in a track must be accepted,
+  comparable (on the season's machine), attested, run at the current rules commit, and beat that
+  track's standing record by more than the margin (2 % in both, set by the owner); one result can
+  set both. One entry's score varies by about 1.75 % from run to run, so a near-copy of a record can
+  beat it by noise; byte copies are refused, a prover binary that took a record of either track can
+  never take one again, and the owner can retire a record of one track won by noise.
 
 ## Read and take part
 

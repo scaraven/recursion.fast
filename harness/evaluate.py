@@ -66,7 +66,7 @@ from rfh import buildcache  # noqa: E402
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
-PART_S = 2640           # the benchmark job (44 min of its 50): the outer bound of its capped steps
+PART_S = 3840           # the benchmark job (64 min of its 70): the outer bound of its capped steps
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
 
 
@@ -479,7 +479,7 @@ def bench_job(a, cert):
     if a.parts:
         cmd += ["--parts", a.parts]
     # every step the entry controls is capped inside (season file); this bounds the organiser's own
-    # steps, so that a part ends inside its job (the benchmark job's 50 minutes)
+    # steps, so that a part ends inside its job (the benchmark job's 70 minutes)
     try:
         subprocess.run(cmd, timeout=PART_S)
         res = json.load(open(a.out))

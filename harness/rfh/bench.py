@@ -1,16 +1,16 @@
 """The benchmark of one entry (TRUSTED RUNTIME): the IVC stream, its checks and calibration, the
-re-timing, the DoS column and the score (the rules are in `AGENTS.md` §6, §7). One stream per
+re-timing and the score (the rules are in `AGENTS.md` §6, §7). One stream per
 evaluation, with its own service lifetime; every request is a fresh sandboxed process; every check
 and every calibration sample runs while no entry process is alive. Every step the entry controls is
-capped by the season file, so an entry that is slow or hangs fails with the reason, inside its job's
-time limit.
+capped by the season file, inside its job's time limit: a request over its cap fails with the
+reason; a stream that reaches `stream_s` (a slow or hung check included) is truncated, or fails if
+no step was checked.
 """
 import hashlib
 import json
 import math
 import os
 import platform
-import random
 import shutil
 import statistics
 import subprocess
@@ -20,7 +20,7 @@ import tomllib
 from dataclasses import dataclass
 
 from . import digest, draws
-from .checks import Badge, BadgeError, canaries, dos_inputs
+from .checks import Badge, BadgeError, canaries
 from .prover import fresh_dir, remove_tree, request
 from .sandbox import memcap, memcap_method
 from .service import Service, ServiceError
@@ -28,7 +28,7 @@ from .service import Service, ServiceError
 
 class Fail(Exception):
     """The entry fails the benchmark (the message says why). `kind`: the badge's failure kind when a
-    check failed (`timeout`, `crash`, `slow`), else None."""
+    check failed (`timeout`, `crash`), else None."""
 
     def __init__(self, msg, kind=None):
         super().__init__(msg)
@@ -76,12 +76,7 @@ class Params:
     triv_n: int
     v_ref_ms: float
     service_calib_s: float
-    dos_proofs: int
-    dos_item_factor: float
-    dos_total_s: float
-    dos_item_cap: str
     file_cap: int
-    verify_s: float
     setup_s: float
     setup_cap: int
     work_cap: int
@@ -111,9 +106,7 @@ class Params:
             calib_ref_provisional=bool(g("calibration", "ref_provisional")), triv_chains=g("calibration", "triv_chains"),
             triv_n=g("calibration", "triv_n"), v_ref_ms=float(t["calibration"].get("v_ref_ms", 0.0)),
             service_calib_s=g("calibration", "service_s"),
-            dos_proofs=g("dos", "proofs"), dos_item_factor=float(g("dos", "item_factor")),
-            dos_total_s=g("dos", "total_s"), dos_item_cap=g("dos", "item_cap"),
-            file_cap=g("caps", "file_cap"), verify_s=g("caps", "verify_s"), setup_s=g("caps", "setup_s"),
+            file_cap=g("caps", "file_cap"), setup_s=g("caps", "setup_s"),
             setup_cap=g("caps", "setup_cap"), work_cap=g("caps", "work_cap"), build_s=g("caps", "build_s"),
             mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"),
             fingerprint=g("machine", "fingerprint"), lengths=t["stream"].get("lengths"))
@@ -244,7 +237,7 @@ class Bench:
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
         os.makedirs(self.store, exist_ok=True)
-        self.badge = Badge(badge_dir, p.mem_badge, p.verify_s, os.path.join(work, "badge-scratch"))
+        self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"))
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
         self.triv = None                     # the chain checker's calibration instance (leaves.json, root)
@@ -289,45 +282,38 @@ class Bench:
         """Seconds left before the running cap (None without one)."""
         return None if self.deadline is None else self.deadline[0] - time.monotonic()
 
-    def verify(self, items, what, warm=False, timeout=None):
-        """The badge on (vk, stmt, store-relative path) items, `verify_s` per check and 30 s to start;
-        a badge failure is the entry's."""
-        t = timeout if timeout is not None else self.p.verify_s * (len(items) + warm) + 30
+    def verify(self, items, what, timeout, warm=False):
+        """The badge on (vk, stmt, store-relative path) items within `timeout` seconds for the whole
+        run; a badge failure is the entry's."""
         try:
-            return self.badge.verify(items, self.store, timeout=t, warm=warm)
+            return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
         except BadgeError as e:
             raise Fail(f"{what}: {e}", kind=e.kind)
 
-    def capped(self, n):
-        """The timeout of one badge run of `n` checks: `verify_s` per check and 30 s, and while the
-        stream's cap runs at most 30 s past it (work begun before the cap ends within
-        30 s of it)."""
-        t = self.p.verify_s * (n + 1) + 30
-        return t if self.deadline is None else min(t, max(0.0, self.left()) + 30)
+    def capped(self):
+        """The timeout of one badge run: 30 s past the stream's cap (work begun before the cap ends
+        within 30 s of it). No check has a bound of its own; every badge run of the benchmark is
+        inside the stream."""
+        if self.deadline is None:
+            raise RuntimeError("a badge run outside the stream has no time bound")
+        return max(0.0, self.left()) + 30
 
-    def check(self, items, what, timeout=None, runs_wanted=2):
+    def check(self, items, what, timeout=None):
         """`acc` on items (vk, stmt, store-relative path, label): every one must be accepted, and its
-        time `V_i` is the best of two measurements, each batch warmed with an untimed first
-        check. While the stream's cap runs, each badge run ends within 30 s of it and the
-        second is skipped once the cap is reached (its first measurement then stands). Returns
-        [(best ns, [the measurements])]."""
+        time `V_i` is one measurement, the batch warmed with an untimed first check. The badge
+        run ends within `timeout`, by default within 30 s of the stream's cap. Returns [ns]."""
         bare = [(vk, c, rel) for vk, c, rel, _ in items]
-        runs = []
-        for k in range(runs_wanted):
-            if k and self.deadline is not None and self.left() <= 0:
-                break
-            res = self.verify(bare, what, warm=True, timeout=timeout if timeout is not None else self.capped(len(bare)))
-            for (_, _, _, label), (ok, _) in zip(items, res):
-                if not ok:
-                    raise Fail(f"{what}: {label} rejected by acc" + (" when measured again" if k else ""))
-            runs.append([ns for _, ns in res])
-        return [(min(ms), list(ms)) for ms in zip(*runs)]
+        res = self.verify(bare, what, timeout if timeout is not None else self.capped(), warm=True)
+        for (_, _, _, label), (ok, _) in zip(items, res):
+            if not ok:
+                raise Fail(f"{what}: {label} rejected by acc")
+        return [ns for _, ns in res]
 
     def canary_check(self, vk, targets, what):
         """The statement canaries of every target (store path, stmt, others): the accepted file,
         checked against another statement, must be rejected."""
         items = [(vk, c, rel, f"{rel} {name}") for rel, stmt, others in targets for name, c in canaries(stmt, others)]
-        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries", timeout=self.capped(len(items)))
+        res = self.verify([(vk, c, rel) for vk, c, rel, _ in items], f"{what} canaries", self.capped())
         bad = [label for (_, _, _, label), (ok, _) in zip(items, res) if ok]
         if bad:
             raise Fail(f"{what}: canaries accepted (a proof accepted for another statement): {bad[:5]}")
@@ -450,7 +436,7 @@ class Bench:
     def stream_run(self):
         """The stream (AGENTS.md §6): `M` steps, a fresh process each, `PROVER first` then `PROVER
         step`, under one service lifetime; every output checked with `acc` against the runner's own
-        statement (best of two), the statement canaries of `π_1`, `π_2`, `π_M`, interleaved
+        statement (one timed check), the statement canaries of `π_1`, `π_2`, `π_M`, interleaved
         calibration samples, the re-timing, all within `stream_s`. A stream that reaches the cap is
         scored over its completed, checked steps and flagged `truncated`."""
         p, name = self.p, "stream"
@@ -472,24 +458,22 @@ class Bench:
         steps, pending = rec["steps"], []
 
         def flush(after_cap=False):
-            """Check the pending outputs: best of two, each badge run within 30 s of the cap; after
-            truncation one run of at most 30 s. A batch the cap stops (a timeout past
-            it; a crash is the entry's failure) leaves its steps unscored and truncates
-            the stream."""
+            """Check the pending outputs in one badge run, within 30 s of the cap; after truncation
+            within 30 s. A batch the cap stops (a timeout past it; a crash is the entry's
+            failure) leaves its steps unscored and truncates the stream."""
             if pending:
                 items = [it for _, it in pending]
                 try:
-                    res = (self.check(items, f"{name} outputs", timeout=30, runs_wanted=1) if after_cap
-                           else self.check(items, f"{name} outputs"))
+                    res = self.check(items, f"{name} outputs", timeout=30 if after_cap else None)
                 except Fail as e:
-                    if e.kind != "timeout" or self.deadline is None or self.left() > 0:
+                    if e.kind != "timeout":           # a timeout is past the cap (the only bound)
                         raise
                     del steps[len(steps) - len(pending):]       # the cap stopped it: unchecked, unscored
                     pending.clear()
                     rec["truncated"] = True
                     raise _Cap()
-                for (k, _), (best, both) in zip(pending, res):
-                    steps[k].update(V_ns=best, V_runs_ns=both)
+                for (k, _), ns in zip(pending, res):
+                    steps[k]["V_ns"] = ns
                 pending.clear()
 
         def inputs(i):
@@ -544,7 +528,7 @@ class Bench:
                 try:                      # during them truncates the stream
                     rec["canaries"] = self.canary_check(svc.vk, [target(k) for k in sorted({1, min(2, last), last})], name)
                 except Fail as e:
-                    if e.kind != "timeout" or self.left() > 0:
+                    if e.kind != "timeout":
                         raise
                     rec["truncated"], rec["canaries"] = True, None
             if not rec["truncated"]:
@@ -577,7 +561,7 @@ class Bench:
         over = [(q, k) for q, k in over if q > self.p.retime_factor]
         limit = int(self.p.retime_frac * len(steps))
         out = {"fit": {"a_s_per_permutation": a, "b_s": b}, "candidates": len(over), "limit": limit, "rerun": []}
-        keys = ("P_s", "V_ns", "V_runs_ns", "pi_bytes", "file_bytes", "file", "startup_s", "kill_s", "mem_peak")
+        keys = ("P_s", "V_ns", "pi_bytes", "file_bytes", "file", "startup_s", "kill_s", "mem_peak")
         for q, k in over[:limit]:
             if self.left() <= 0:
                 out["stopped_by_cap"] = True
@@ -590,14 +574,14 @@ class Bench:
                 break
             rel = self.keep(f"stream/step{i}.retime.bin", r.proof)
             try:
-                (best, both), = self.check([(svc.vk, stmts[i - 1], rel, f"stream step {i} (re-timed)")], "stream re-timing")
+                (ns,) = self.check([(svc.vk, stmts[i - 1], rel, f"stream step {i} (re-timed)")], "stream re-timing")
             except Fail as e:
-                if e.kind != "timeout" or self.left() > 0:
+                if e.kind != "timeout":
                     raise
                 out["stopped_by_cap"] = True              # the first times stand
                 break
             again = step_record(i, s["n"], r, rel)
-            again.update(V_ns=best, V_runs_ns=both)
+            again["V_ns"] = ns
             first = {key: s[key] for key in keys}
             kept = 2 if again["P_s"] < s["P_s"] else 1
             if kept == 2:
@@ -606,39 +590,6 @@ class Bench:
                            "calib_sample": len(self.samples) - 1}      # the last sample
             out["rerun"].append(i)
         return out
-
-    # -- the DoS column -------------------------------------------------------------------------------
-    def dos(self, vk, stmt, rel, v_ref_ns):
-        """The DoS column (AGENTS.md §6; on the stream's last output `π_M`):
-        `dos.proofs` random and mutated signed proofs of its statement, each checked (parse plus `acc`,
-        the badge's own clock) within the per-item cap (`dos.item_factor · v_ref`, or
-        `verify_s` where the season file says so) and all within `dos.total_s`. A breach of either
-        cap, or a crash of the checker, is the entry's failure, and the slow input is kept and named.
-        An accepted input is recorded, not failed."""
-        data = open(os.path.join(self.store, rel), "rb").read()
-        files = dos_inputs(data, self.p.dos_proofs, random.SystemRandom())
-        items = [(vk, stmt, self.keep(f"dos/{k}.bin", b)) for k, b in enumerate(files)]
-        item_cap = self.p.dos_item_factor * v_ref_ns if self.p.dos_item_cap == "v_ref" else self.p.verify_s * 1e9
-        try:
-            res = self.badge.verify(items, self.store, timeout=self.p.dos_total_s)
-        except BadgeError as e:
-            k = len(e.partial)
-            where = f"; input {k} (store/{items[k][2]}) was being checked" if k < len(items) else ""
-            if e.kind == "timeout":
-                raise Fail(f"DoS column: not finished within {self.p.dos_total_s} s{where}")
-            if e.kind != "slow":
-                raise Fail(f"DoS column: the checker crashed{where} ({e})")
-            res = e.partial                    # every answer is in; the per-item cap names the slow one
-        slow = [(ns, k) for k, (_, ns) in enumerate(res) if ns > item_cap]
-        if slow:
-            ns, k = max(slow)
-            raise Fail(f"DoS column: input {k} took {ns / 1e6:.1f} ms, above the per-item cap of "
-                       f"{item_cap / 1e6:.1f} ms ({len(slow)} inputs over; kept as store/{items[k][2]})")
-        acc = [k for k, (ok, _) in enumerate(res) if ok]
-        worst = max(range(len(res)), key=lambda k: res[k][1])
-        return {"target": rel, "proofs": len(items), "accepted": len(acc), "accepted_inputs": [items[k][2] for k in acc[:5]],
-                "max_ns": res[worst][1], "max_input": items[worst][2], "item_cap_ns": item_cap,
-                "total_s": self.p.dos_total_s, "over_v_ref": sum(1 for _, ns in res if ns > v_ref_ns)}
 
 
 FS_SLACK = 1 << 20        # bytes the request directories' filesystem may lose to other processes
@@ -699,43 +650,55 @@ def fit(ns, ps):
 
 
 def score_parts(p, steps, v_ref_ns, d_P=0.0, f_P=1.0, d_V=0.0, d_pi=0):
-    """`(P̄, V̄)` (AGENTS.md §7), optionally at a perturbed point: every `P_i`
-    times `f_P` minus `d_P` seconds, every `V_i` minus `d_V` seconds, every `|π_i|` minus `d_pi` bytes."""
+    """`(P̄, V̄, V̄ₘ)` (AGENTS.md §7; `V̄ₘ` the mean check time in seconds), optionally at a perturbed
+    point: every `P_i` times `f_P` minus `d_P` seconds, every `V_i` minus `d_V` seconds, every `|π_i|`
+    minus `d_pi` bytes."""
     num = sum(s["n"] * (max(0.0, s["P_s"] * f_P - d_P) / s["n"]) ** 3 for s in steps)
     P = p.n_ref * (num / sum(s["n"] for s in steps)) ** (1 / 3)
-    xs = [max(0.0, s["V_ns"] / 1e9 - d_V) / (v_ref_ns / 1e9) + max(0, s["pi_bytes"] - d_pi) / p.s_ref for s in steps]
-    return P, p.kappa * statistics.fmean(max(x, x ** 3) for x in xs)
+    vs = [max(0.0, s["V_ns"] / 1e9 - d_V) for s in steps]
+    xs = [v / (v_ref_ns / 1e9) + max(0, s["pi_bytes"] - d_pi) / p.s_ref for v, s in zip(vs, steps)]
+    return P, p.kappa * statistics.fmean(xs), statistics.fmean(vs)
+
+
+def product(P, V_mean_s, v_ref_ns):
+    """The product track's score `S× = P̄ · g`, `g = 1 + (V̄ₘ / v_ref)²` (AGENTS.md §7): `(S×, g)`."""
+    g = 1 + (V_mean_s / (v_ref_ns / 1e9)) ** 2
+    return P * g, g
 
 
 def score(p: Params, stream):
-    """`S = P̄ + V̄` (AGENTS.md §7; seconds per `2^18`-permutation step, lower
-    is better) from the one stream run, every step at its kept run:
+    """The two scores (AGENTS.md §7; seconds per `2^18`-permutation step, lower is better) from the
+    one stream run, every step at its kept run:
 
-        P̄ = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)
-        V̄ = κ · (1/M) Σ_i max(x_i, x_i³),   x_i = V_i / v_ref + |π_i| / s_ref,   κ = K · v0
+        P̄  = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)
+        S  = P̄ + V̄,   V̄ = κ · (1/M) Σ_i x_i,   x_i = V_i / v_ref + |π_i| / s_ref,   κ = K · v0   (sum)
+        S× = P̄ · g,   g = 1 + (V̄ₘ / v_ref)²,   V̄ₘ = (1/M) Σ_i V_i                              (product)
 
-    with the published diagnostics (AGENTS.md §7): shares, `P̄` per octave, marginal values, the fit
-    (never scored), the largest `x_i`, a batching indicator. Adds the derived per-step fields in
-    place."""
+    with the published diagnostics (AGENTS.md §7): shares, `P̄` per octave, marginal values of both,
+    the fit (never scored), the largest `x_i`, a batching indicator. `tracks` names each track's
+    score field. Adds the derived per-step fields in place."""
     if not stream or not stream.get("steps"):
         return {}
     steps, cal = stream["steps"], stream["calibration"]
     v_ref = cal["v_ref_ns"]
-    P, V = score_parts(p, steps, v_ref)
+    P, V, Vm = score_parts(p, steps, v_ref)
     S = P + V
+    Sx, g = product(P, Vm, v_ref)
     out = {"S": S, "P_bar": P, "V_bar": V, "share_P": P / S, "share_V": V / S, "K": p.K, "kappa": p.kappa,
            "n_ref": p.n_ref, "s_ref": p.s_ref, "c_P": cal.get("c_P"), "T_triv_ns": cal["T_triv_ns"], "v_ref_ns": v_ref,
            "M": len(steps), "sum_n": sum(s["n"] for s in steps), "truncated": bool(stream.get("truncated")),
-           "c_P_provisional": bool(cal.get("c_P_provisional"))}
+           "c_P_provisional": bool(cal.get("c_P_provisional")),
+           "x_bar": V / p.kappa, "V_mean_s": Vm, "g": g, "S_product": Sx,
+           "pi_mean_bytes": statistics.fmean(s["pi_bytes"] for s in steps),
+           "tracks": {"sum": "S", "product": "S_product"}}
     tot_p3 = sum(s["n"] * (s["P_s"] / s["n"]) ** 3 for s in steps)
     for s in steps:
         xv, xp = s["V_ns"] / v_ref, s["pi_bytes"] / p.s_ref
-        x = xv + xp
-        s.update(P_per_n=s["P_s"] / s["n"], x=x, x_verifier=xv, x_size=xp, g_x=max(x, x ** 3),
+        s.update(P_per_n=s["P_s"] / s["n"], x=xv + xp, x_verifier=xv, x_size=xp,
                  share_P3=s["n"] * (s["P_s"] / s["n"]) ** 3 / tot_p3 if tot_p3 else 0.0)
-    tot_g = sum(s["g_x"] for s in steps)
+    tot_x = sum(s["x"] for s in steps)
     for s in steps:
-        s["share_V"] = s["g_x"] / tot_g if tot_g else 0.0
+        s["share_V"] = s["x"] / tot_x if tot_x else 0.0
     a, b, (sa, sb) = fit([s["n"] for s in steps], [s["P_s"] for s in steps])
     for s in steps:
         s["fit_P_s"] = a * s["n"] + b
@@ -746,12 +709,15 @@ def score(p: Params, stream):
                   "scored": False}
     out["P_bar_per_octave"] = {f"2^{lo}": score_parts(p, sub, v_ref)[0] for lo in range(17, 21)
                                if (sub := [s for s in steps if (1 << lo) <= s["n"] < (1 << (lo + 1))])}
-    rel = lambda P2, V2: (P2 + V2) / S - 1  # noqa: E731
-    out["marginal"] = {"chain_speed_1pct": rel(*score_parts(p, steps, v_ref, f_P=0.99)),
-                       "overhead_0.1s_per_step": rel(*score_parts(p, steps, v_ref, d_P=0.1)),
-                       "verifier_10ms": rel(*score_parts(p, steps, v_ref, d_V=0.01)),
-                       "proof_100KB": rel(*score_parts(p, steps, v_ref, d_pi=100_000)),
-                       "note": "relative change of S at the current point (negative: better)"}
+    moves = {"chain_speed_1pct": {"f_P": 0.99}, "overhead_0.1s_per_step": {"d_P": 0.1},
+             "verifier_10ms": {"d_V": 0.01}, "proof_100KB": {"d_pi": 100_000}}
+    out["marginal"] = {}
+    for name, kw in moves.items():
+        P2, V2, Vm2 = score_parts(p, steps, v_ref, **kw)
+        out["marginal"][name] = (P2 + V2) / S - 1
+        out["marginal"][f"product_{name}"] = product(P2, Vm2, v_ref)[0] / Sx - 1 if Sx else 0.0
+    out["marginal"]["note"] = ("relative change of S (and, prefixed product_, of S_product) at the current point "
+                               "(negative: better)")
     k = max(range(len(steps)), key=lambda j: steps[j]["x"])
     out["largest_x"] = {key: steps[k][key] for key in ("index", "x", "x_verifier", "x_size")}
     res = [s["P_s"] - s["fit_P_s"] for s in steps]

@@ -19,7 +19,9 @@
    of its late bytes read; one that closes stdout without `done` and leaves a child computing is
    charged until every process is dead; no process survives any request;
 8. a prover that makes /work unusable (an input's name taken by a directory, or /work made
-   unreadable) is the entry's failure with that reason, never a harness error.
+   unreadable) is the entry's failure with that reason, never a harness error;
+9. a badge `verify` that gives one answer and hangs is killed at the batch's timeout (the only
+   bound on a check): `BadgeError` of kind `timeout`, and none of its processes survives.
 """
 import os
 import subprocess
@@ -200,6 +202,34 @@ def main():
         out, _ = sb.proc.communicate(timeout=120)
         sb.kill()
         check((sb.proc.returncode == 0) == want, f"memory cap 64M, touching {mib} MiB: exit {sb.proc.returncode}")
+
+    # 9. a hanging check, through the runner's own badge runner
+    from rfh.checks import Badge, BadgeError
+    bdir, store = os.path.join(tmp, "hang-badge"), os.path.join(tmp, "hang-store")
+    os.makedirs(bdir)
+    os.makedirs(store)
+    open(os.path.join(store, "p.bin"), "wb").write(b"x")
+    with open(os.path.join(bdir, "verify"), "w") as f:
+        f.write("#!/bin/sh\necho accept 1\nexec /bin/sleep 9871\n")
+    os.chmod(os.path.join(bdir, "verify"), 0o755)
+    badge = Badge(bdir, "256M", os.path.join(tmp, "hang-scratch"))
+    os.makedirs(badge.scratch)
+    t0, kind = time.monotonic(), None
+    try:
+        badge.verify([(b"v" * 32, b"c" * 32, "p.bin")] * 2, store, timeout=2)
+    except BadgeError as e:
+        kind = e.kind
+    dt = time.monotonic() - t0
+    time.sleep(0.5)
+    left = []
+    for pid in survivors("/bin/sleep"):
+        try:
+            if b"9871" in open(f"/proc/{pid}/cmdline", "rb").read():
+                left.append(pid)
+        except OSError:
+            pass
+    check(kind == "timeout" and dt < 15 and not left,
+          f"a hanging badge check is killed at its timeout: {kind} after {dt:.1f} s, survivors {left}")
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 

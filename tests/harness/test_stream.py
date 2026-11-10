@@ -64,12 +64,12 @@ def make(times, stop_at=None, retime_times=None, cap_in_retime=False, M=8, batch
         return len(targets)
     b.canary_check = canary_check
 
-    def check(items, what, timeout=None, runs_wanted=2):
-        b.check_calls.append((len(items), timeout, runs_wanted))
+    def check(items, what, timeout=None):
+        b.check_calls.append((len(items), timeout))
         if batch_fail and len(b.check_calls) == batch_fail[0]:
             b.left = lambda: -1.0
             raise Fail("stream outputs: verify: ...", kind=batch_fail[1])
-        return [(1000 + len(rel), [1000 + len(rel), 2000][:runs_wanted]) for _, _, rel, _ in items]
+        return [1000 + len(rel) for _, _, rel, _ in items]
     b.check = check
 
     def one(svc, tag, kind, ins):
@@ -146,7 +146,7 @@ def main():
     rec = b.stream_run()
     check(rec["truncated"] and rec["M"] == 5 and "retime" not in rec and all("V_ns" in s for s in rec["steps"]),
           f"the cap stops step 6: truncated, scored over 5 checked steps, not re-timed (M = {rec['M']})")
-    check(not b.canary_calls and [x["before_step"] for x in b.samples] == [1, 5] and b.check_calls[-1] == (1, 30, 1),
+    check(not b.canary_calls and [x["before_step"] for x in b.samples] == [1, 5] and b.check_calls[-1] == (1, 30),
           f"after truncation: no canaries, no closing sample, the last batch one run of 30 s ({b.check_calls[-1]})")
     b = make(times, batch_fail=(2, "timeout"))
     rec = b.stream_run()

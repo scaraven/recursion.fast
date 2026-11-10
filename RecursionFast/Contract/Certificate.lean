@@ -13,7 +13,7 @@ entries (the submission's declared query bound), every query of `tr` at most `qu
 with its queries answered in order by `tr`, used up exactly (`OProg.runSeq`). The conjuncts are in
 order of cheapest rejection; compiled `&&` stops at the first `false`.
 This one predicate is the node clause of the relation, the harness's check of every proof it is
-given (every step of the stream, its re-runs, the canaries, the DoS column), and the check any
+given (every step of the stream, its re-runs, the canaries), and the check any
 third party runs later with the published `vk`. It never evaluates the oracle and needs no service.
 
 **The certificate.** Knowledge soundness for the relation of the submission's own `acc`,

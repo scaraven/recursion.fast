@@ -23,10 +23,11 @@ its matrix from `--print-matrix`, and the aggregation requires **exactly** that 
 Each part is identified by the `parts` its result JSON records. A missing, extra, duplicated or
 mismatched part, or parts that disagree on the season or the harness commit, make the verdict
 ERROR and the result not comparable, so a job lost to its time limit or to a runner failure never
-yields an ACCEPT. The benchmark is **one job**: the calibration, the one stream (with
-its interleaved samples and its re-timing) and the DoS column on the stream's last output (`split`
-is kept as a name for callers and is the same one job). The score is recomputed here from the
-stream's per-step records with `rfh.bench.score`, the definition the runner used. Verdict: REJECT
+yields an ACCEPT. The benchmark is **one job**: the calibration and the one stream (with
+its interleaved samples and its re-timing; `split` is kept as a name for callers and is the same
+one job). Both scores (the sum `S` and the
+product `S_product`, AGENTS.md §7) are recomputed here from the stream's per-step records with
+`rfh.bench.score`, the definition the runner used; whatever score a part recorded is replaced. Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
 not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. The result is
 **comparable** iff it is ACCEPT and its stream was not truncated (its cap reached, AGENTS.md §8; a
@@ -47,8 +48,9 @@ The result also records the runner the benchmark ran on (`runner`: name, environ
 `--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
 binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
 three evaluations, by the median score of its last three (by `finished`), each REJECT,
-PROVISIONAL, truncated or otherwise not comparable run counting as infinite; it publishes each
-entry's counts of evaluations, failures and unscored runs. ERROR results (the organiser's) are not
+PROVISIONAL, truncated or otherwise not comparable run counting as infinite, once per track
+(`median_S` for the sum, which orders the rows, `median_S_product` for the product); it publishes
+each entry's counts of evaluations, failures and unscored runs. ERROR results (the organiser's) are not
 counted.
 """
 import argparse
@@ -59,7 +61,7 @@ import os
 import statistics
 import sys
 
-ALL_PARTS = "calibrate,stream,dos"
+ALL_PARTS = "calibrate,stream"
 # one benchmark job; `split` is the same one job (the name callers pass)
 PLANS = {"split": ["all"], "single": ["all"]}
 ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness")
@@ -153,7 +155,7 @@ def combine(p, plan, season_sha, job, cert, parts, lengths_defect=None):
            "parts": [], "reasons": list(cert.get("reasons", []))}
     res["stream"] = None
     for r in parts:
-        res["parts"].append({k: r.get(k) for k in ("parts", "machine", "harness", "prover", "calib", "calibration", "dos",
+        res["parts"].append({k: r.get(k) for k in ("parts", "machine", "harness", "prover", "calib", "calibration",
                                                     "benchmark", "reasons", "started", "finished", "comparable",
                                                     "provisional")})
         res["stream"] = r.get("stream") or res["stream"]     # one run; the plan check rejects a second
@@ -251,20 +253,21 @@ def rank(results):
     inf = float("inf")
     for key, rs in by.items():
         rs.sort(key=lambda r: r.get("finished") or "")
-        vals = [r["score"]["S"] if r.get("verdict") == "ACCEPT" and r.get("comparable")
-                and (r.get("score") or {}).get("S") is not None else inf for r in rs[-3:]]
-        med = statistics.median(vals) if len(rs) >= 3 else None
-        rows.append({"entry": key, "evaluations": len(rs),
-                     "failures": sum(r.get("verdict") == "REJECT" for r in rs),
-                     "not_scored": sum(r.get("verdict") == "ACCEPT" and not r.get("comparable") for r in rs),
-                     "last_three": [v if v != inf else "failed or not scored" for v in vals],
-                     "median_S": "unranked (fewer than 3 evaluations)" if med is None
-                     else (med if med != inf else "failed")})
+        row = {"entry": key, "evaluations": len(rs), "failures": sum(r.get("verdict") == "REJECT" for r in rs),
+               "not_scored": sum(r.get("verdict") == "ACCEPT" and not r.get("comparable") for r in rs)}
+        for field, suffix in (("S", ""), ("S_product", "_product")):
+            vals = [r["score"][field] if r.get("verdict") == "ACCEPT" and r.get("comparable")
+                    and (r.get("score") or {}).get(field) is not None else inf for r in rs[-3:]]
+            med = statistics.median(vals) if len(rs) >= 3 else None
+            row["last_three" + suffix] = [v if v != inf else "failed or not scored" for v in vals]
+            row["median_S" + suffix] = ("unranked (fewer than 3 evaluations)" if med is None
+                                        else (med if med != inf else "failed"))
+        rows.append(row)
     rows.sort(key=lambda x: (not isinstance(x["median_S"], float), x["median_S"] if isinstance(x["median_S"], float) else 0))
     return {"schema": "recursion.fast/v4/ranking-2",
-            "rule": "per entry (its name in the submissions repository), the median of its last three evaluations, "
-                    "a REJECT, PROVISIONAL, truncated or not comparable run counting as infinite; ranked from three "
-                    "evaluations", "entries": rows}
+            "rule": "per entry (its name in the submissions repository) and per track, the median of its last three "
+                    "evaluations, a REJECT, PROVISIONAL, truncated or not comparable run counting as infinite; ranked "
+                    "from three evaluations, ordered by the sum (median_S)", "entries": rows}
 
 
 if __name__ == "__main__":

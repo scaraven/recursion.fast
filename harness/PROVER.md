@@ -122,10 +122,11 @@ exists, or because of what a prover left behind, is the entry's failure**: an in
 taken, the directory made unreadable, the filesystem filled so that the runner's own writes fail,
 files the runner cannot remove, the filesystem left fuller after cleanup.
 
-**Between steps** the runner checks outputs (in batches of `check_every` = 8, each `V_i` the best of
-two measurements, pinned to one core) and takes calibration samples, **never while an entry
-process is alive**. The whole stream, every request, check, canary, calibration sample and re-run,
-runs within `stream_s` (1,920 s, wall time; the season file's value binds, and a later season may
+**Between steps** the runner checks outputs (in batches of `check_every` = 8, each batch warmed
+by an untimed check of its first output, each `V_i` one measurement, pinned to one core) and takes
+calibration samples, **never while an entry process is alive**. No check has a time cap of its
+own. The whole stream, every request, check, canary, calibration sample and re-run,
+runs within `stream_s` (3,000 s, wall time; the season file's value binds, and a later season may
 set another). A stream that reaches it is scored over its completed steps and flagged
 `truncated`; such a run is never ranked.
 
@@ -134,23 +135,25 @@ runs once more, on the same inputs, every step with `P_i > 1.3 × (a·n_i + b)`,
 at most 10% of the steps. The faster run is kept and scored (its time, its `V` and its `|π|`); the
 first output stays the child of the next step. The re-run's output must be accepted too.
 
-**The score** (AGENTS.md §7; lower is better, seconds per `2^18`-permutation step):
+**The scores** (AGENTS.md §7; two tracks, each with its own records; lower is better, seconds per
+`2^18`-permutation step):
 
 ```
-S  = P̄ + V̄
-P̄  = 2^18 · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)
-V̄  = κ · (1/M) · Σ_i max(x_i, x_i^3),   x_i = V_i / v_ref + |π_i| / 2 MiB,   κ = 0.9893 s
+S   = P̄ + V̄                                                     the sum
+S×  = P̄ · (1 + (V̄ₘ / v_ref)^2),   V̄ₘ = (1/M) · Σ_i V_i            the product
+P̄   = 2^18 · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)
+V̄   = κ · (1/M) · Σ_i x_i,   x_i = V_i / v_ref + |π_i| / 2 MiB,   κ = 3.2975 s
 ```
 
 `P_i` the step's time, `n_i` its new permutations, one per chain step (step 1: `nA + nB`), `V_i`
 one `acc` check of the step's file (parse included), `v_ref = T_triv / 10` (`T_triv` the
 organiser's chain checker on `2^24` permutations, measured on the evaluation machine), `|π_i|` the
-bytes of `π` alone. **There is no
-proof cap**: `|π|` is priced (100 KB of `π` costs about as much as 30 ms of verifier at `s_ref` = 2 MiB and `v_ref` = 659.5 ms), and
-`acc` only requires its length to fit a 64-bit word. Compact accumulation (folding with a running
+bytes of `π` alone. **There is no proof cap**: in the sum `|π|` is priced (100 KB of `π` costs
+about as much as 30 ms of verifier at `s_ref` = 2 MiB and `v_ref` = 659.5 ms); the product does not
+price it; `acc` only requires its length to fit a 64-bit word. Compact accumulation (folding with a running
 state inside `π`) is a wanted design: `s_ref` keeps winning proofs within a few MB. The per-step
 records (`WORK/stream.jsonl`, and `stream.steps` in the result) give every term, the fit, the
-marginal values and the share of each step.
+marginal values of both scores and the share of each step.
 
 ## 4. The oracle
 
@@ -169,14 +172,11 @@ A prover build or setup that fails or exceeds `build_s`, `setup_s` or `setup_cap
 `ready` line within `ready_s`, a non-zero exit, a timeout of `step_s`, or a missing, non-regular or
 over-cap (`file_cap`, 64 MiB) `proof.bin`; any output `acc` rejects (re-runs included); a statement
 canary `acc` accepts (the outputs of steps 1, 2 and `M`, checked against their statement with one bit
-flipped, against the next step's leaf statement and against their first child's statement); a check
-above `verify_s` (10 s); a filesystem error the prover caused in `/work`; the service dying
-during the run; in the DoS column on the last output, a mutated or random input that `acc` (parse
-plus the verifier) takes more than 10 × `v_ref` to decide, the column above its 180 s, or a crash of
-the checker (an accepted DoS input is recorded, not failed). No time is a pass/fail gate on the
-verifier: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
+flipped, against the next step's leaf statement and against their first child's statement); a crash
+of the checker; a filesystem error the prover caused in `/work`; the service dying during the run.
+No time is a pass/fail gate on the verifier: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
 completed steps, flagged `truncated` and not ranked. Every job of an evaluation ends within
-30 minutes, the certificate job within 50 and the benchmark job within 50, and these caps are nested
+30 minutes, the certificate job within 50 and the benchmark job within 70, and these caps are nested
 inside them. The first failure ends the evaluation (`harness/run-benchmark.py`). The reason in the
 result names the cause: the prover's output (its first 16 KiB and last 48 KiB are kept; the reason
 quotes the tail), the service's refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g.

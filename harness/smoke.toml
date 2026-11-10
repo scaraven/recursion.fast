@@ -3,8 +3,8 @@
 name = "smoke"
 
 [score]
-K = 1.5
-kappa = 0.2667
+K = 5
+kappa = 0.889     # K · the smoke's fixed v_ref_ms
 n_ref = 262144    # 2^18 permutations
 s_ref = 2097152
 R = 10
@@ -59,15 +59,8 @@ triv_n = 16
 v_ref_ms = 177.8      # the smoke fixes v_ref (the trivial check at n = 16 takes microseconds)
 service_s = 1
 
-[dos]
-proofs = 64
-item_factor = 10
-item_cap = "verify_s"   # at the smoke shape v_ref is not this machine's: the per-check cap applies
-total_s = 180
-
 [caps]
 file_cap = 67108864
-verify_s = 10
 setup_s = 240
 setup_cap = 4294967296
 work_cap = 4294967296
