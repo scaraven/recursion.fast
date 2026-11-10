@@ -10,8 +10,8 @@ uniforms that come from SHA-256 of a public label (no seed was chosen, no draw w
 
 **The chain starts are drawn fresh per evaluation** (32 bytes each, here) from the operating
 system's CSPRNG (`secrets`, which reads `os.urandom`), never from a seeded generator, never reused,
-and published only after the run. The service's keys (never published) and the DoS inputs are
-likewise fresh per evaluation, drawn where they are used. The number of steps `M` is one published
+and published only after the run. The service's keys (never published) are likewise fresh per
+evaluation, drawn where they are used. The number of steps `M` is one published
 season constant.
 """
 import hashlib

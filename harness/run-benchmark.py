@@ -3,7 +3,7 @@
 
   python3 -I harness/run-benchmark.py --season harness/season.toml --entry ENTRY --badge BADGE_DIR \
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
-      [--parts calibrate,stream,dos] [--provisional]
+      [--parts calibrate,stream] [--provisional]
 
 ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
 `chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; the calibration
@@ -11,7 +11,7 @@ workload `calib` built from `harness/tools/calib.c` with the runner's `gcc` (bef
 runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, its directory within
 `setup_cap`); the calibration instance and the service calibration; the stream (its own service; every
 step a fresh process, every output checked, the statement canaries, interleaved `c_P` and `T_triv`
-samples, the re-timing); the DoS column on its last output; the score (`rfh.bench.score`). One stream
+samples, the re-timing); the two scores (`rfh.bench.score`: the sum and the product). One stream
 per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and into
 the result. The first failure ends the run with `benchmark: fail` and its reason; a truncated stream
 (its cap reached) is scored over its completed steps and flagged, never ranked. A machine whose
@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rfh.bench import Bench, Fail, Params, build_calib, fingerprint_problem, fs_free, machine, printable, score  # noqa: E402
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
-ALL_PARTS = ["calibrate", "stream", "dos"]
+ALL_PARTS = ["calibrate", "stream"]
 
 
 class Drift(Exception):
@@ -157,6 +157,7 @@ def main():
                 for s in res["stream"]["steps"]:
                     f.write(json.dumps(s) + "\n")
             log(f"score: S = {res['score']['S']:.4f} (P̄ {res['score']['P_bar']:.4f}, V̄ {res['score']['V_bar']:.4f}), "
+                f"S× = {res['score']['S_product']:.4f} (g {res['score']['g']:.4f}), "
                 f"M = {res['score']['M']}" + (", TRUNCATED" if res["stream"]["truncated"] else ""))
             if res["stream"]["truncated"]:
                 res["comparable"] = False
@@ -164,12 +165,6 @@ def main():
                 raise Drift(f"organiser ERROR: c_P = {cal['c_P']:.4f} drifted by {cal['c_P_drift']:.4f} from the "
                             f"season's ref_ns, beyond c_P_drift = {cal['c_P_drift_cap']}: the machine was not "
                             "in its calibrated state; not the entry's failure, and never a score change", "drift")
-        if "dos" in parts and "stream" in res:
-            save("dos")
-            st = res["stream"]
-            res["dos"] = bench.dos(bytes.fromhex(st["vk"]), bytes.fromhex(st["last_stmt"]), st["last_file"],
-                                   st["calibration"]["v_ref_ns"])
-            log(f"DoS column: {res['dos']}")
     except Fail as e:
         res["benchmark"] = "fail"
         res["reasons"].append(str(e))

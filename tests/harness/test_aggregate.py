@@ -4,12 +4,13 @@ and `--rank` ranks provisionally.
 
   python3 tests/harness/test_aggregate.py
 
-The plan is one job (`split` and `single` both): its part gives ACCEPT, scored from the
-stream's per-step records with `rfh.bench.score` (the S the runner wrote is ignored); the part
+The plan is one job (`split` and `single` both): its part gives ACCEPT, both scores (the sum `S`
+and the product `S_product`) recomputed from the stream's per-step records with `rfh.bench.score`
+(the scores the runner wrote are ignored; a hand-computed vector pins both); the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
 gives REJECT; a rejected certificate gives REJECT; a truncated stream is ACCEPTed but not comparable.
-The ranking takes, per entry (not per binary), the median of its last three evaluations, a REJECT or a
-truncated run counting as its worst, and ranks only from three evaluations.
+The ranking takes, per entry (not per binary) and per track, the median of its last three evaluations,
+a REJECT or a truncated run counting as its worst, and ranks only from three evaluations.
 AGENTS.md §6: with a season that names a machine fingerprint, a benchmark on another machine, or with a
 missing or unreadable fingerprint, is an organiser ERROR whatever the entry did (the reason says
 which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts any machine. The score does not depend on `c_P` (AGENTS.md §6), and the result records the runner (AGENTS.md §8) and no CPU model. A stream whose chain lengths are
@@ -37,15 +38,15 @@ LENGTHS = tomllib.load(open(SEASON, "rb"))["stream"]["lengths"]      # the smoke
 
 
 def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP, c_P=1.0, fp_status=None,
-         lengths=LENGTHS):
-    steps = [{"index": i, "n": 1 << 18, "P_s": P, "V_ns": 0, "pi_bytes": 0} for i in (1, 2)]
+         lengths=LENGTHS, V=(0, 0), pi=(0, 0)):
+    steps = [{"index": i, "n": 1 << 18, "P_s": P, "V_ns": V[i - 1], "pi_bytes": pi[i - 1]} for i in (1, 2)]
     r = {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
          "harness": {"commit": commit}, "machine": {"fingerprint": fp, "fingerprint_status": fp_status or ("ok" if fp else "missing"),
                                                      "fingerprint_reason": None if fp else "RF_MACHINE_FINGERPRINT is not set",
                                                      "runner_name": "rf-bench-1",
                                                      "runner_environment": "self-hosted",
                                                      "runner_labels": ["rf-bench"]}, "prover": {"binary_sha256": "h"},
-         "score": {"S": 999.0},
+         "score": {"S": 999.0, "S_product": 999.0},
          "stream": {"steps": steps, "truncated": truncated, "lengths": lengths,
                     "calibration": {"c_P": c_P, "v_ref_ns": 177.8e6, "T_triv_ns": 1.778e9}}}
     return r
@@ -67,7 +68,7 @@ def run(tmp, parts, cert_status="ok", plan="split", season=SEASON):
 
 def main():
     tmp = tempfile.mkdtemp(prefix="rf-agg-", dir=os.environ.get("RF_TEST_TMP"))
-    full = [part("calibrate,stream,dos")]
+    full = [part("calibrate,stream")]
     fails = 0
 
     def check(r, verdict, what, comparable=None):
@@ -85,28 +86,35 @@ def main():
     r = run(tmp, full)
     check(r, "ACCEPT", "the planned part")
     sc = r.get("score", {})
-    holds(abs(sc.get("S", 0) - 1.0) < 1e-9 and sc.get("M") == 2,
-          f"the score is recomputed from the steps (two steps of 1 s at n_ref, V = 0: S = 1, not the part's 999): {sc.get('S')}")
+    holds(abs(sc.get("S", 0) - 1.0) < 1e-9 and abs(sc.get("S_product", 0) - 1.0) < 1e-9 and sc.get("M") == 2,
+          f"both scores are recomputed from the steps (two steps of 1 s at n_ref, V = 0: S = S× = 1, not the "
+          f"part's 999): {sc.get('S')}, {sc.get('S_product')}")
+    # the smoke season (κ = 0.889 s, s_ref = 2 MiB), v_ref = 177.8 ms: steps (1 s, V = 355.6 ms, |π| = 0) and
+    # (1 s, V = 0, |π| = 1 MiB): x = 2 and 0.5, V̄ = 0.889 · 1.25 = 1.11125, S = 2.11125; mean V = v_ref, g = 2, S× = 2
+    sc = run(tmp, [part("calibrate,stream", V=(355.6e6, 0), pi=(0, 1 << 20))]).get("score", {})
+    holds(abs(sc.get("S", 0) - 2.11125) < 1e-9 and abs(sc.get("S_product", 0) - 2.0) < 1e-9 and sc.get("g") == 2.0,
+          f"the aggregation agrees with the hand-computed vector on both tracks: S {sc.get('S')}, S× {sc.get('S_product')}")
     check(run(tmp, full, plan="single"), "ACCEPT", "the single plan's one part")
     check(run(tmp, []), "ERROR", "the part missing")
     check(run(tmp, full + full), "ERROR", "the part duplicated")
-    check(run(tmp, [part("calibrate,stream")]), "ERROR", "a part without the DoS column")
-    check(run(tmp, [part("calibrate,stream,dos", commit="b" * 40), part("calibrate,stream,dos")]), "ERROR",
+    check(run(tmp, [part("calibrate")]), "ERROR", "a part without the stream")
+    check(run(tmp, [part("calibrate,stream,extra")]), "ERROR", "a part with a part the plan does not name")
+    check(run(tmp, [part("calibrate,stream", commit="b" * 40), part("calibrate,stream")]), "ERROR",
           "parts from two harness commits")
-    check(run(tmp, [part("calibrate,stream,dos", benchmark="fail")]), "REJECT", "a failed part")
+    check(run(tmp, [part("calibrate,stream", benchmark="fail")]), "REJECT", "a failed part")
     check(run(tmp, full, cert_status="reject"), "REJECT", "a rejected certificate")
-    check(run(tmp, [part("calibrate,stream,dos", truncated=True)]), "ACCEPT", "a truncated stream", comparable=False)
+    check(run(tmp, [part("calibrate,stream", truncated=True)]), "ACCEPT", "a truncated stream", comparable=False)
     holds("duel" not in r and "incumbent" not in r and "cpu_models" not in r and "mixed_cpu" not in r,
           "no duel, incumbent or CPU-model field")
     holds(r.get("runner") == {"name": "rf-bench-1", "environment": "self-hosted", "labels": ["rf-bench"]},
           f"the runner is recorded: {r.get('runner')}")
-    holds(abs(run(tmp, [part("calibrate,stream,dos", c_P=1.7)])["score"]["S"] - 1.0) < 1e-9,
+    holds(abs(run(tmp, [part("calibrate,stream", c_P=1.7)])["score"]["S"] - 1.0) < 1e-9,
           "c_P does not scale the score: c_P = 1.7 gives the same S = 1")
 
     # AGENTS.md §6: the season's machine fingerprint
     fixed = os.path.join(tmp, "fixed.toml")
     open(fixed, "w").write(open(SEASON).read().replace('fingerprint = "any"', f'fingerprint = "{FP}"'))
-    A = "calibrate,stream,dos"
+    A = "calibrate,stream"
     r = run(tmp, [part(A)], season=fixed)
     check(r, "ACCEPT", "the season's fingerprint: comparable")
     holds({k: r["machine"][k] for k in ("fingerprint", "expected", "matches")} == {"fingerprint": FP, "expected": FP, "matches": True},
@@ -182,7 +190,7 @@ def main():
     def res(S, verdict="ACCEPT", when="t", e="e", comparable=None, binary=None):
         return {"verdict": verdict, "comparable": (verdict == "ACCEPT") if comparable is None else comparable,
                 "finished": when, "entry": {"name": e}, "prover_sha256": binary or when,
-                "score": {"S": S} if S is not None else {}}
+                "score": {"S": S, "S_product": 10 * S} if S is not None else {}}
     rk = os.path.join(tmp, "rank.json")
     files = []
     for k, r in enumerate([res(3.0, when="1"), res(1.0, when="2"), res(2.0, when="3"), res(9.0, when="4"),
@@ -203,6 +211,9 @@ def main():
           f"truncated (not comparable) runs count as infinite (5, trunc, trunc, 1 → failed): {rows['t']}")
     holds(isinstance(rows["one"]["median_S"], str) and "unranked" in rows["one"]["median_S"],
           f"an entry with fewer than three evaluations is not ranked: {rows['one']}")
+    holds(rows["e"]["median_S_product"] == 20.0 and rows["g"]["median_S_product"] == 15.0
+          and rows["t"]["median_S_product"] == "failed" and "unranked" in rows["one"]["median_S_product"],
+          f"the product track is ranked the same way, from S_product: {rows['e']['last_three_product']}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

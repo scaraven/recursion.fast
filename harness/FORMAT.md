@@ -27,7 +27,8 @@ The file ends exactly after `path_15`. Its size is
 - **Strict.** A file that is not exactly one such encoding (a length running past the end,
   bytes after `path_15`) is not a signed proof: `verify` rejects it, whatever it contains.
 - **What `acc` then checks** (contract `Submission.acc`): `|π| < 2^64` (its
-  length fits a word; `acc` has no proof-size cap: `|π|` is priced by the score, and the runner bounds the file, below);
+  length fits a word; `acc` has no proof-size cap: `|π|` is priced by the sum's `s_ref`, and the
+  runner bounds the file, below);
   every `|q_i| ≤ queryCap = 2^20`; `SigOk vk (traceDigest tr) σ`; and the verifier `V vk c π`,
   run with its `i`-th oracle query answered from the `i`-th trace entry (`OProg.runSeq`), asks
   exactly `q_0, …, q_{m−1}` in order, uses every entry, and returns `true`.
@@ -44,8 +45,9 @@ The file ends exactly after `path_15`. Its size is
 - **The trace's length**: `acc` also requires `m ≤ qV` of the entry (right after the size cap);
   nothing in this format changes.
 - **Size caps of the runner**: a file above `file_cap` (64 MiB, `harness/season.toml`) is not read;
-  it is the only bound on `π` the deployment has (`|π|` is priced by the score's `s_ref`, and
-  an entry's own verifier bounds the children it accepts). The trace is bounded by `qV ≤ 2^16`
+  it is the only bound on `π` the deployment has (`|π|` is priced by the sum's `s_ref`, not by the
+  product, where `file_cap` is the only bound; an entry's own verifier bounds the children it
+  accepts). The trace is bounded by `qV ≤ 2^16`
   queries of at most `2^20` bytes each. The extractor's efficiency is claimed for proofs of up to
   `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
 

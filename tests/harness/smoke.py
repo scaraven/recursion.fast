@@ -11,8 +11,8 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
    certified;
 1. `evaluate.py bench` of that entry through every part (the calibration, the stream with its
-   interleaved samples, its statement canaries on π_1, π_2 and π_M and its re-timing, the DoS column
-   on π_M, the score) with the compiled `accF` badge: verdict ACCEPT; then the organiser's canaries
+   interleaved samples, its statement canaries on π_1, π_2 and π_M and its re-timing, the score)
+   with the compiled `accF` badge: verdict ACCEPT; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
@@ -122,7 +122,7 @@ def organiser_check(badge_dir, work, r):
     each file must be accepted and each mutation rejected."""
     store = os.path.join(work, "store")
     os.makedirs(os.path.join(store, "organiser-canaries"))
-    badge = Badge(badge_dir, "4G", 60, os.path.join(work, "organiser-canaries-scratch"))
+    badge = Badge(badge_dir, "4G", os.path.join(work, "organiser-canaries-scratch"))
     os.makedirs(badge.scratch)
     st = r["stream"]
     vk = bytes.fromhex(st["vk"])
@@ -137,7 +137,7 @@ def organiser_check(badge_dir, work, r):
             open(os.path.join(store, m), "wb").write(data)
             items.append((vk, c, m))
             want.append((f"{rel} {name}", False))
-    res = badge.verify(items, store)
+    res = badge.verify(items, store, timeout=60 * len(items) + 60)
     return len(items) - len(targets), [what for (what, ok), (got, _) in zip(want, res) if got != ok]
 
 
@@ -339,24 +339,30 @@ def main():
         dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
         check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
               f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')}")
+        mine, agg_sc = r.get("score") or {}, whole.get("score") or {}
+        check(all(k in mine and abs(agg_sc.get(k, -1) - mine[k]) <= 1e-12 * max(1.0, abs(mine[k])) for k in ("S", "S_product")),
+              f"aggregate recomputes both scores as the runner did: S {agg_sc.get('S')} = {mine.get('S')}, "
+              f"S× {agg_sc.get('S_product')} = {mine.get('S_product')}")
     step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
         sc, st = r["score"], r["stream"]
-        check(all(k in sc for k in ("S", "P_bar", "V_bar", "c_P", "v_ref_ns", "M", "marginal", "fit")) and sc["M"] == st["M"]
+        check(all(k in sc for k in ("S", "P_bar", "V_bar", "S_product", "g", "V_mean_s", "x_bar", "pi_mean_bytes", "c_P",
+                                    "v_ref_ns", "M", "marginal", "fit"))
+              and sc.get("tracks") == {"sum": "S", "product": "S_product"} and sc["M"] == st["M"]
               and not st["truncated"],
-              f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, V̄ {sc.get('V_bar')}, M {sc.get('M')} of {st.get('M_drawn')}")
+              f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, V̄ {sc.get('V_bar')}, S× {sc.get('S_product')}, "
+              f"g {sc.get('g')}, M {sc.get('M')} of {st.get('M_drawn')}")
         smoke_stream = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]
         fixed = smoke_stream["lengths"]
         check(st["M_drawn"] == smoke_stream["M"] and len(fixed) == smoke_stream["M"] + 1 and st["lengths"] == fixed,
               f"the stream ran the smoke's M = {smoke_stream['M']} steps over its fixed list of M + 1 = {len(fixed)} "
               f"lengths: {st['lengths']}")
-        check(all(all(k in s for k in ("P_s", "V_ns", "V_runs_ns", "pi_bytes", "x", "startup_s", "kill_s")) for s in st["steps"]),
-              f"every step records P, V (both runs), |π|, x, start-up and kill latency: {sorted(st['steps'][0])}")
+        check(all(all(k in s for k in ("P_s", "V_ns", "pi_bytes", "x", "startup_s", "kill_s")) for s in st["steps"]),
+              f"every step records P, V, |π|, x, start-up and kill latency: {sorted(st['steps'][0])}")
         check(st["canaries"] >= 4, f"statement canaries on π_1, π_2, π_M rejected: {st['canaries']}")
         check("retime" in st and len(st["calibration"]["samples"]) >= 2,
               f"re-timing ran ({st.get('retime', {}).get('rerun')}) and calibration was sampled "
               f"{len(st['calibration']['samples'])} times")
-        check(r["dos"]["proofs"] > 0 and r["dos"]["target"] == st["last_file"], f"DoS column on π_M: {r['dos']}")
     for flag, _ in broken_entries:
         rb = results.get(flag, {})
         why = " ".join(rb.get("reasons", []))

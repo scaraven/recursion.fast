@@ -17,10 +17,11 @@ The fastest **recursive prover for Keccak-256 hash chains** whose soundness is p
 entry is a hash-based non-interactive argument for one relation over 32-byte digests: a leaf digest
 commits to a Keccak-256 chain from a secret start, a node digest to two accepted children. The
 benchmark is incrementally verifiable computation: the prover extends one running proof by one
-fresh chain per step, 96 steps, and the score charges its time per permutation, its verifier's
-time and its proof's size. Soundness is not measured: it is a kernel-checked theorem, knowledge
-soundness in the random-oracle model, and the oracle is deployed as a secret-keyed service that
-signs the answers each proof used (the signed random oracle, §5).
+fresh chain per step, 96 steps, and two scores rank it, each with its own records: the sum of its
+prover time per permutation and a charge on its verifier's time and proof size, and the product of
+its prover time and a verifier factor (§7). Soundness is not measured: it is a kernel-checked
+theorem, knowledge soundness in the random-oracle model, and the oracle is deployed as a
+secret-keyed service that signs the answers each proof used (the signed random oracle, §5).
 
 ## 2. What an entry is
 
@@ -60,10 +61,11 @@ the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
 `prover/prover.s`. It passes the certificate and runs through the benchmark at the smoke's shape
-([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed: its `V`
-re-checks every chain of the stream so far, so its check time grows with the stream's history and
-exceeds `verify_s` from about step 32 on the evaluation machine (with the caps lifted it would also
-exceed `stream_s` and the DoS column's caps).
+([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is accepted and scored, and
+far from competitive: its `V` re-checks every chain of the stream so far, so its check time grows
+with the stream's history (about 10 s around step 31–32 on the evaluation machine, about
+1.1–1.2 µs per permutation of history; at that rate about 38 s at step 96) and `V̄` dominates its
+score.
 
 ## 3. The relation and acceptance
 
@@ -94,7 +96,8 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   `tr`, which must be for that query, and the trace is used up exactly
   ([`Oracle.lean#L49-L56`](RecursionFast/Contract/Oracle.lean#L49-L56)).
 - `acc` is the node clause of the relation, the harness's check of every proof, and anyone's check
-  later with the published `vk`. There is no proof-size cap in `acc`: size is priced by the score.
+  later with the published `vk`. There is no proof-size cap in `acc`: size is priced by the sum's
+  `s_ref`; in the product only `file_cap` bounds it.
 
 ## 4. The certificate
 
@@ -206,27 +209,25 @@ statement and signed proof as the runner received them and one fresh chain, a si
   derived once, from public SHA-256 values through the inverse CDF of the density `∝ 1/n²` (equal
   expected work per octave); the file states the derivation. The chain starts (32 bytes each) are
   fresh secret draws per evaluation from the OS CSPRNG; a step learns its chain's start only when
-  its inputs arrive. The service's keys and the DoS inputs are also fresh per evaluation. After
+  its inputs arrive. The service's keys are also fresh per evaluation. After
   the run the result publishes the starts, the leaf digests and statements over them, the
-  lengths and the run's public key `vk`; the keys are never written or published, and the DoS
-  inputs are not published (the result names only the slowest one and at most five accepted ones). `M` is a
+  lengths and the run's public key `vk`; the keys are never written or published. `M` is a
   published constant. The owner may change the sequence between seasons, so tuning a prover to
   these exact lengths is not a lasting gain.
 - **What is timed.** `P_i`: from just before the inputs are renamed into `/work` (a constant-time
   rename) to the death of the last process of the sandbox. Start-up to the `ready` line is untimed (capped by `ready_s`).
 - **Checks.** Every output is checked with the compiled `acc` against the runner's statement,
-  between steps, in batches of 8, with no entry process alive; `V_i` is the wall time of one check
-  (parse included) pinned to one core, the best of two. A rejected output fails the run.
+  between steps, in batches of 8, with no entry process alive; each batch starts with an untimed
+  warm-up check of its first output, and `V_i` is the wall time of one check (parse included)
+  pinned to one core, measured once. A rejected output fails the run. No check has a time cap of
+  its own: a slow verifier is priced by `V̄` (§7) and bounded only by `stream_s`.
 - **Statement canaries.** The outputs of steps 1, 2 and `M` must be rejected against their
   statement with one bit flipped and against their first child's statement; the outputs of steps 1
   and 2 also against the next step's leaf statement.
 - **Re-timing.** After the stream, `P ≈ a·n + b` is fitted (trimmed least squares); each step above
   `1.3 ×` the fit, at most 10 % of the steps, is run once more on the same inputs; its output must
-  be accepted, and the faster run's `P_i`, `V_i` and `|π_i|` are scored.
-- **DoS column.** 100 random and mutated signed proofs for `π_M`'s statement (random bytes; random
-  `π` with `π_M`'s genuine trace and signature; bit flips in `π`; bit flips and truncations of the
-  file). Each must be decided within `10 × v_ref` (parse plus `acc`), the column within 180 s. A
-  breach or a crash fails the run; an accepted input is recorded, not failed.
+  be accepted, and the faster run's `P_i`, `V_i` and `|π_i|` are scored. If `stream_s` is reached
+  during a re-run or its check, the first times stand and the stream is not truncated.
 - **Calibration.** Before step 1, every 8 steps, and once at the end if the last sample is at least
   4 steps old and 30 s of `stream_s` remain; always with no entry process alive:
   three runs of the organiser's prover-shaped workload `calib`
@@ -246,23 +247,46 @@ statement and signed proof as the runner received them and one fresh chain, a si
   the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
   it (§12).
 - **Throughput.** One evaluation at a time. With the core commit's caches in place, one evaluation
-  holds the benchmark slot for about 100 minutes (the certificate and benchmark jobs, at most 50
-  each, §9, plus a few minutes of the setup jobs' cache lookups; 110 with a second kernel); when the caches must first be built, as after a pin move, up to about three
-  hours. A full queue with warm caches completes about a dozen or more evaluations a day; there is no
-  cap per author (§15).
+  holds the benchmark slot for at most about 2 hours (the certificate job, at most 50 minutes, and
+  the benchmark job, at most 70, §9, plus a few minutes of the setup jobs' cache lookups; 130
+  minutes with a second kernel); when the caches must first be built, as after a pin move, up to
+  about three and a half hours. A full queue with warm caches completes about a dozen evaluations
+  a day when every evaluation runs to its limits, more when they end sooner; there is no cap per
+  author (§15).
 
-## 7. The score
+## 7. The scores
+
+Two tracks are scored from the one stream, each with its own records (§8); both are in seconds per
+`2^18`-permutation step, and lower is better.
 
 ```
-S  = P̄ + V̄                                              seconds per 2^18-permutation step; lower is better
-P̄  = n_ref · ( Σ_i n_i · (P_i / n_i)^3 / Σ_i n_i )^(1/3)
-V̄  = κ · (1/M) · Σ_i max(x_i, x_i^3),        x_i = V_i / v_ref + |π_i| / s_ref
+S   = P̄ + V̄                                       the sum
+S×  = P̄ · g                                       the product
+P̄   = n_ref · ( Σ_i n_i · (P_i / n_i)^3 / Σ_i n_i )^(1/3)
+V̄   = κ · (1/M) · Σ_i x_i,           x_i = V_i / v_ref + |π_i| / s_ref
+g   = 1 + ( V̄ₘ / v_ref )^2,          V̄ₘ = (1/M) · Σ_i V_i   (seconds)
 ```
 
 `P̄` is a work-weighted cubic mean of the prover's time per permutation, so work moved into a few
-steps costs more than it saves. `V̄` charges verifier time and proof size linearly below the knee
-`x = 1` and cubically above it. Computed by `score` in [`harness/rfh/bench.py`](harness/rfh/bench.py)
-and recomputed by [`harness/aggregate.py`](harness/aggregate.py). Constants, from
+steps costs more than it saves; it is the same number in both tracks.
+
+- **The sum** charges verifier time and proof size linearly, at one exchange rate for every entry:
+  one millisecond of check time on every step costs about `K = 5` ms of `S` (exactly when the run's
+  `v_ref` equals `v0`; `K · v0 / v_ref` in general), as much as about 5 ms of `P̄`, which is about
+  6.2–6.4 ms of prover time on every step (at the season's lengths one millisecond of `P_i` on every
+  step moves `P̄` by about 0.8 ms); one MiB of mean proof size costs `κ / 2 ≈ 1.65 s`. `K` is set so
+  that at an estimated recursive entry on the machine (`P̄ ≈ 5.2 s`, `V_i ≈ 300 ms`,
+  `|π_i| ≈ 300 KB`) the shares of `S` are about 70 % prover and 30 % verifier and proof size
+  (73/27 there). Away from that point the shares move with the entry; the exchange rate does not.
+- **The product** multiplies the prover's time by a verifier factor: `g = 1` for a free verifier,
+  1.05 at `V̄ₘ = 150 ms`, 1.21 at 300 ms, 2 at `v_ref`, quadratic beyond. Its elasticity in `P̄` is
+  1 everywhere, so a 10 % faster prover is worth 10 % whatever the verifier; its elasticity in the
+  mean check time is `2u² / (1 + u²)` with `u = V̄ₘ / v_ref` (0.34 at 300 ms, 1 at `v_ref`, at most 2).
+  Proof size is not scored in the product; `file_cap` bounds it.
+
+Both are computed by `score` in [`harness/rfh/bench.py`](harness/rfh/bench.py) and recomputed by
+[`harness/aggregate.py`](harness/aggregate.py); the result's `score` holds `S` (the sum), `S_product`
+(the product) and `tracks = {"sum": "S", "product": "S_product"}`. Constants, from
 [`harness/season.toml`](harness/season.toml):
 
 | Symbol | Value | Meaning |
@@ -271,13 +295,14 @@ and recomputed by [`harness/aggregate.py`](harness/aggregate.py). Constants, fro
 | `n_i` | fixed | permutations (chain steps) newly given in step `i` (step 1: `nA + nB`), from the season's `[stream] lengths` (§6) |
 | `n_ref` | `2^18` | `P̄` is per this many permutations |
 | `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
-| `v_ref` | `T_triv / R`, `R = 10`, measured | the verifier knee: a tenth of the trivial check of `2^24` permutations |
-| `s_ref` | 2 MiB | the proof-size knee; `|π_i|` counts the bytes of `π` only, not the trace or signature |
-| `κ` | 0.9893 s | `K · v0`, `K = 1.5`, `v0 = 659.5 ms` (`v_ref` measured on the machine): seconds per unit of `max(x, x³)` |
+| `v_ref` | `T_triv / R`, `R = 10`, measured | the verifier scale of both tracks: a tenth of the trivial check of `2^24` permutations |
+| `s_ref` | 2 MiB | the proof-size scale of the sum; `|π_i|` counts the bytes of `π` only, not the trace or signature |
+| `κ` | 3.2975 s | `K · v0`, `K = 5`, `v0 = 659.5 ms` (`v_ref` measured on the machine): seconds of `S` per unit of `x` |
 
 Every result also publishes the per-step records (`stream.jsonl`), the fit, `P̄` per octave, the
-marginal values at the entry's own point, the largest `x_i` and a batching indicator. None of these
-is scored.
+marginal values of both scores at the entry's own point, the largest `x_i`, the mean `x_i`, the mean
+check time, `g`, the mean `|π_i|` and a batching indicator. None of these is scored beyond the two
+scores.
 
 ## 8. Verdicts and records
 
@@ -293,7 +318,8 @@ A result is **comparable** iff it is ACCEPT, its stream was not truncated and th
 ERROR). A stream that reaches
 `stream_s` is scored over its completed steps, flagged `truncated` and not comparable.
 
-**The record rule.** A result is a new record iff all of:
+**The record rule.** Each track, the sum and the product, has its own records. A result is a new
+record in a track iff all of:
 
 1. its verdict is ACCEPT and `comparable: true`;
 2. its attestation verifies ([`harness/verify-record.sh`](harness/verify-record.sh); its
@@ -305,27 +331,37 @@ ERROR). A stream that reaches
    `rf-bench` or `rf-light`) the result records are checked for consistency, but they
    are what the server wrote and prove nothing by themselves;
 3. `harness_commit` equals the core commit the submissions repository pins;
-4. no record stands at the pin, or `S < (1 − margin) · S_record`, with `S_record` the standing
-   record's own score at the pin and `margin = 0.02`;
-5. its prover binary's SHA-256 is not that of an earlier record (a resubmitted copy is `accepted`,
-   never a record).
+4. no record of that track stands at the pin, or `S_t < (1 − margin) · S_t,record`, with `S_t` the
+   track's score (`S` or `S×`), `S_t,record` the standing record's own score in that track at the
+   pin and `margin = 0.02`;
+5. its prover binary's SHA-256 is not that of an earlier record of either track (a resubmitted copy
+   is `accepted`, never a record).
 
-- **Records are per pin**: the standing record is the newest, not retired, record evaluated at the
-  pinned core commit. With none, the first result meeting items 1–3 and 5 is the record.
-- **A pin move ports the record first.** When the pin moves while a record stands, the bot
-  re-evaluates that record's retained commit at the new pin before any other entry; it keeps the
-  crown if that is a comparable, attested ACCEPT. If it fails, no record stands.
+Items 1–3 and 5 are the same for both tracks; one result can set both records, and one entry may
+hold both.
+
+- **Records are per pin and per track**: a track's standing record is its newest, not retired,
+  record evaluated at the pinned core commit. With none, the first result meeting items 1–3 and 5
+  is that track's record.
+- **A pin move ports the records first.** When the pin moves while a record stands, the bot
+  re-evaluates each standing record's retained commit at the new pin before any other entry (one
+  run when one commit holds both); a record keeps its crown if that is a comparable, attested ACCEPT.
+  If it fails, no record stands in that track. A port competes only in the tracks whose record it
+  carries, and item 5 does not refuse a record's own port.
 - **The margin (2 %) is the owner's choice**, and it does not keep noise out. The relative
-  run-to-run spread of one entry's `S` on the evaluation machine with the fixed chain lengths is
-  σ ≈ 1.75 % (ten runs at the smoke shape, [`harness/smoke.toml`](harness/smoke.toml); mostly
-  per-step process overhead, which weighs more with the smoke's short chains, so likely smaller at
-  the season's shape). `S` and `S_record` are two runs, so two runs of one entry differ by about
-  √2·σ ≈ 2.5 %: a near-copy of the record can beat it by noise. (A margin that kept noise out would
-  be about 3·√2·σ ≈ 7.4 %.) Byte copies of an evaluated root and a record's prover binary are
-  refused (item 5 and the submissions repository's copy rule). The owner may change the margin
-  between seasons, which changes this file.
-- The owner may retire a record (a near-copy that beat it by noise, say) with the bot's `retire`;
-  then no record stands.
+  run-to-run spread of one entry's `S` on the evaluation machine with the fixed chain lengths is σ ≈
+  1.75 % (ten runs at the smoke shape, [`harness/smoke.toml`](harness/smoke.toml); mostly per-step
+  process overhead, which weighs more with the smoke's short chains, so likely smaller at the
+  season's shape). Those runs took each `V_i` as the best of two checks; with one check per output
+  the spread can only be the same or larger. `S` and `S_record` are two runs, so two runs of one
+  entry differ by about √2·σ ≈ 2.5 %: a near-copy of the record can beat it by noise. (A margin that
+  kept noise out would be about 3·√2·σ ≈ 7.4 %.) The margin is the same in both tracks; at a
+  realistic entry the product moves about 1.6 times as much as the sum for a given relative change
+  of every check time (elasticity 0.34 against 0.21), so its spread is a little larger. Byte copies
+  of an evaluated root and a record's prover binary are refused (item 5 and the submissions
+  repository's copy rule). The owner may change the margin between seasons, which changes this file.
+- The owner may retire a record of one track (a near-copy that beat it by noise, say) with the bot's
+  `retire`; then no record stands in that track.
 
 The submissions repository's bot applies this rule to the attested results.
 
@@ -344,12 +380,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | gate; badge build | 120 s; 180 s |
 | prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB, `2^20` entries |
 | start-up to `ready`; one request (`step_s`) | 10 s; 60 s |
-| the whole stream, every request, check, canary, sample and re-run (`stream_s`) | 1,920 s wall per stream (reached: truncated, §8) |
-| one `acc` check (`verify_s`); one DoS input; the DoS column | 10 s; `10 × v_ref`; 180 s |
+| the whole stream, every request, check, canary, sample and re-run (`stream_s`; no check has a cap of its own) | 3,000 s wall per stream (reached: truncated, §8) |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 11 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
-| jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 50 min; 30 min; 10 min |
+| jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 70 min; 30 min; 10 min |
 | the benchmark VM; evaluations at a time | 4 cores / 8 threads, 16 GB; 1 |
 
 ## 10. Hard rules for the Lean side
@@ -416,7 +451,8 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   sizes, its ISA extensions), and it is published (§6). The machine may change between
   seasons; records are then re-evaluated at the new pin by the port (§8).
 - **A near-copy of the record can win by noise.** The margin (2 %, §8) is below the spread of the
-  difference of two runs of one entry (√2·σ ≈ 2.5 %, σ ≈ 1.75 % measured at the smoke shape), so a
+  difference of two runs of one entry (√2·σ ≈ 2.5 %, σ ≈ 1.75 % measured at the smoke shape with
+  each `V_i` the best of two checks, so a lower bound for one check), so a
   near-copy that is no faster can still beat the record by more than 2 %. Byte copies and re-used
   record prover binaries are refused, and the owner retires a record won that way.
 - **`c_P`'s drift is an organiser ERROR, not a score change**: `ref_ns` (316.2 ms) and
@@ -424,15 +460,20 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   measured on the machine, 1.55 %, and far more of the median that is judged) are fixed
   per season, and neither moves `S`. The drift is judged on all the stream's samples, so a drifting
   machine costs a full benchmark job before its ERROR.
-- **Retiring a record leaves no record standing**: the record it beat is not restored, and that
-  record's prover binary, like every record's, can never take the record again.
-- **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains
-  about 0.4–1.0 % at the score's base estimates, below the record margin (2 %).
-- **The score's constants** (`K`, `s_ref`, the power 3, the re-timing rule) come from a simulated
-  loss study, not from measured entries.
-- **Crafted inputs are not tested.** The DoS column uses random mutations. Inputs assembled from
-  published parts (for example a deep chain of nodes over public signed leaves) took an earlier
-  entry's `acc` 68–183 s before its authors bounded it; the rules bound only what the column measures.
+- **Retiring a record leaves no record standing in that track**: the record it beat is not
+  restored, and that record's prover binary, like every record's, can never take a record of either
+  track again.
+- **The end of the stream is known** (`M = 96`). Leaving the last chains to the verifier gains at
+  most about 0.2 % in either score (two chains, a verifier at the chain checker's speed), below the
+  record margin (2 %).
+- **The scores' constants** (`K = 5`, `s_ref`, the power 3 of `P̄`, the exponent 2 of `g`, the
+  re-timing rule) come from a reference operating point estimated from the first recursive entries
+  and from a study of trivial entries, not from entries measured on the machine.
+- **Malformed and crafted inputs are not tested, and `acc` has no time bound.** The benchmark
+  checks the entry's own outputs and the statement canaries only. Inputs assembled from published
+  parts (for example a deep chain of nodes over public signed leaves) took an earlier entry's `acc`
+  68–183 s before its authors bounded it; nothing in the rules bounds what such an input costs a
+  third party who checks it.
 - **The service is trusted runtime**: a bug that signs a wrong answer, reuses an index or exposes
   the key would be accept-all.
 - **On paper, not in the kernel**: unforgeability of the signature, the PRF step from the random
@@ -454,15 +495,13 @@ From the first two certified entries (`spartan-srom`, `flock-recursive`) and the
 prover. Their timings were measured on GitHub-hosted runners with a different chain hash, so they
 are indicative only, except where a bullet says "on the machine".
 
-- **`V̄` dominated the first recursive entry**: `S = 29.05` with `P̄ = 4.52` and `V̄ = 24.52`.
-  Above the knee the verifier term grows cubically; size `V` and `|π|` before the prover.
-- **Your verifier's start-up is on the stream clock.** Each check batch, canary and re-run check
-  starts a badge process, about 29 per stream; one entry's `V` took 11.7 s to initialise on a
-  runner, so 1 s of start-up costs about 30 s of `stream_s`.
-- **The DoS per-input cap (`10 × v_ref`, 6.6 s on the machine) binds a heavy `V`**, including on random
-  `π` under a genuine trace and signature (`SigOk` passes, your `V` runs on garbage). Reject
-  malformed proofs early; bound what a proof can make `V` recompute (a clear leaf of `2^20` steps
-  costs about 0.4 s for the organiser's chain checker on the machine).
+- **The verifier weighs as much as the prover.** The first recursive entry's verifier and proof
+  size cost several times its prover time. Under the sum one millisecond of check time on every
+  step costs as much as 5 ms of `P̄`; under the product a verifier at four times `v_ref` multiplies
+  the prover time by 17. Size `V` and `|π|` with the prover.
+- **Your verifier's start-up is on the stream clock.** Each check batch (12), the canaries (1) and
+  each re-run's check (at most 9) start a badge process; one entry's `V` took 11.7 s to initialise
+  on a runner, so 1 s of start-up costs 13–22 s of `stream_s`.
 - **The certificate build is tight**: a 199-module entry used 968–984 s of the 1,200 s cap on a
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
@@ -523,15 +562,16 @@ before the prover is built, and its `c_P` drift check would too. To run the seas
 own machine, generate a local copy and pass it to `--season`:
 
 ```sh
-python3 -I harness/local-season.py > /tmp/season-local.toml   # fingerprint "any", ref_provisional true, DoS item cap verify_s
+python3 -I harness/local-season.py > /tmp/season-local.toml   # fingerprint "any", ref_provisional true
 python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
   --work /tmp/rf-work-season --out result-season.json --season /tmp/season-local.toml
 ```
 
-Every shape and every other cap is then the season's; only those three lines and the season's
-name differ (as in the smoke), and your machine's speed is not the evaluation machine's. The
-witness-sending example of §2 REJECTs at this shape: on the evaluation machine its check exceeds
-`verify_s` from about step 32, which is expected and not a harness fault.
+Every shape and every other cap is then the season's; only those two lines and the season's name
+differ (as in the smoke), and your machine's speed is not the evaluation machine's. The
+witness-sending example of §2 spends about 2,100 s of `stream_s` on its checks at this shape on the
+evaluation machine (about 2,350 s for the whole stream); on a slower machine it can reach `stream_s`
+and be truncated, which is expected and not a harness fault.
 
 Set `RF_HARNESS_COMMIT` when the checkout is not a git checkout. `harness/ci/build-kernels.sh` holds the
 kernels' pins; [`scripts/tools.env`](scripts/tools.env) sets the variables from `RF_KERNELS` instead.

@@ -143,10 +143,8 @@ jobs:
         run: timeout 60 python3 tests/harness/test_stream.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT
         run: timeout 120 python3 tests/harness/test_partcap.py
-      - name: the aggregation (every planned part, the machine fingerprint) and the DoS column
-        run: |
-          timeout 60 python3 tests/harness/test_aggregate.py
-          timeout 60 python3 tests/harness/test_dos.py
+      - name: the aggregation (every planned part, the machine fingerprint)
+        run: timeout 60 python3 tests/harness/test_aggregate.py
       - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, one aggregated evaluation)
         run: timeout 600 python3 tests/harness/smoke.py --mock --work "$RUNNER_TEMP/smoke-mock"
 
