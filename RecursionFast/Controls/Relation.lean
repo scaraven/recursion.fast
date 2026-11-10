@@ -30,8 +30,8 @@ Negative:
 * **`child_trace_nonempty`**: a witness-sending child carrying a trace, even a validly signed
   one, is rejected (exact consumption).
 * **`acc_changed_answer`**: if `acc` accepts one proof on two different traces with one
-  signature, the signature verifies on two different digests, or the two traces' encodings
-  collide: a changed answer is never free.
+  signature, the signature verifies on two different digests, or the two traces' tagged
+  encodings are an explicit collision: a changed answer is never free.
 * `acc_query_at_cap` (positive): a signed one-entry trace whose query has exactly `queryCap`
   bytes is accepted under a verifier that asks it and declares `qV = 1` (exact consumption,
   trace length at `qV`, query cap, signature).
@@ -249,19 +249,20 @@ theorem child_trace_nonempty (vk c₁ c₂ : Digest) (π : Proof) (e : ByteArray
   simpa [acc_eq] using h.2.1
 
 /-- **A changed answer is never free**: if `acc` accepts one proof with one signature on two
-different traces, the signature verifies on both digests, and they differ unless the traces'
-encodings collide. -/
+different traces, the signature verifies on both digests, and they differ unless the two traces'
+tagged encodings are an explicit collision. -/
 theorem acc_changed_answer (S : Submission) (vk c : Digest) (π : Proof) (σ : Sig)
     {tr tr' : Trace} (h : S.acc vk c ⟨π, tr, σ⟩ = true) (h' : S.acc vk c ⟨π, tr', σ⟩ = true)
     (hne : tr ≠ tr') : SigOk vk (traceDigest tr) σ = true ∧ SigOk vk (traceDigest tr') σ = true ∧
-      (traceDigest tr ≠ traceDigest tr' ∨ Nonempty Collision) := by
+      (traceDigest tr ≠ traceDigest tr' ∨ ∃ col : Collision,
+        col.x = tagTrace :: traceBytes tr ∧ col.y = tagTrace :: traceBytes tr') := by
   simp only [Submission.acc, Bool.and_eq_true, decide_eq_true_eq] at h h'
   refine ⟨h.1.2, h'.1.2, ?_⟩
   by_cases hd : traceDigest tr = traceDigest tr'
   · rcases traceDigest_eq (fun e he => (h.1.1.2 e he).trans_lt (by decide))
-      (fun e he => (h'.1.1.2 e he).trans_lt (by decide)) hd with ht | ⟨c, -⟩
+      (fun e he => (h'.1.1.2 e he).trans_lt (by decide)) hd with ht | hc
     · exact absurd ht hne
-    · exact Or.inr ⟨c⟩
+    · exact Or.inr hc
   · exact Or.inl hd
 
 /-! ## The caps -/

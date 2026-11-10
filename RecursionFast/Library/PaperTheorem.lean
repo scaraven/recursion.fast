@@ -142,7 +142,7 @@ theorem paper (k : KState R V E ε) (G : OProg (Digest × Proof)) (n : ℕ)
 
 /-- **The potential reaches `1` rarely**: for a game asking at most `n ≤ logCap` queries under
 every oracle, the final log's potential is at least `1` with probability at most `n · ε`. The one
-event of the meter's lossless composition (`Library/Compose.lean`, `compose_of_kstate`). -/
+event of the meter's lossless composition (`Library/Compose.lean`, `walk_not_escaped`). -/
 theorem prob_potential_ge_one (k : KState R V E ε) (G : OProg α) (n : ℕ)
     (hG : ∀ H, (G.queries H).length ≤ n) (hn : n ≤ logCap) :
     prob (fun _ L => 1 ≤ k.μ L) G [] ≤ n * ε :=

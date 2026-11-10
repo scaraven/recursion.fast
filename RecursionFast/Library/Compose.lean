@@ -7,7 +7,7 @@
   has `2^r` leaves whose digests are `leafStmt hᵢ n` (the runner computes them from the chain ends
   `hᵢ` it knows, with `n ≤ chainCap`), and its root digest `c₀` is `treeRoot` of them.
 
-  **The walk** (deterministic; `walk`, whose type is the statement). Given one oracle log
+  **The walk** (deterministic and compiled; `walk`). Given one oracle log
   `L` and a root signed proof `p₀` that `S.acc vk` accepts, it returns, computed from `p₀`
   through `S.E` on `L` (`Outcome`):
   * **the leaf starts**: `sᵢ` with `chainEnd sᵢ n = hᵢ` for every leaf;
@@ -21,8 +21,13 @@
     (`Escape`).
   At each member the walk checks the signed proof's trace against `L`; if it is contained it asks
   `S.E` on `L`, checks the witness (`Rel` is decidable), and compares its digests with the tree's.
-  `compose` states the same as a proposition; its first disjunct, that leaf starts exist, is free
-  whenever the harness drew them, so the content is that `walk` computes them.
+  **The type `Outcome` is not the statement**: it is inhabited with no content (a Keccak-256
+  collision exists by pigeonhole, `Controls/Compose.lean`, `collision_nonempty`, and the leaf
+  starts exist whenever the harness drew them). The content is the compiled definition of `walk`,
+  which computes its outcome from `p₀`, `S.E` and `L`, together with the kernel theorems about what
+  it returns: `compose_prob`, `walk_not_escaped`, `extract_of_E`, `walkFrom_leaf`. That the
+  definition computes, and so chooses no data classically, is the compiler's check, not a kernel
+  statement.
 
   **The probability** (`compose_prob`), stated on the walk's output. Let `A` be a query program
   asking at most `Q` queries that outputs the root signed proof, run against one lazily sampled
@@ -36,28 +41,66 @@
   `KS.union` (`Library/KS.lean`) adds the bounds (`escape_prob_le`). No inner member's verifier
   is run by these adversaries, since `E` reads the log: each member costs `(Q + qV) · ε`.
 
-  **The meter's lossless composition** (`compose_of_kstate`): with a knowledge state
+  **The meter's lossless composition** (`walk_not_escaped`): with a knowledge state
   (`Library/Security.lean`) and one log of potential below `1`, functional and within `logCap`,
   no member escapes (`Escape.not_of_kstate`), so the walk returns one of the first three
   outcomes, and the one event, a potential of at least `1`, has probability at most `n · ε` for a
   game of `n` queries (`PaperTheorem.prob_potential_ge_one`), for the whole tree.
 
-  `compose_exists`, the disjunction without the forgery's membership, is **trivially true for
-  every key a signer knows** (anyone holding `sk` signs a trace with a fresh answer:
-  `Controls/Compose.lean`, `forgery_trivial`) and is kept only as a documented corollary.
+  **The forgery outcome against the service's signed traces** (`Forgery.reduce`, `walkSigned`).
+  Let `T` list the traces the service signed, with their signatures, and `Honest T L` say that
+  the log accounts for them: every answer the service signs is an oracle evaluation it made, so
+  in `L`, and its queries are within the wire cap. A forgery against `L` is then, computed:
+  * an **EUF-CMA forgery** against the signing record `issued T`
+    (`Library/Unforgeability.lean`, `EufForgery`): a valid signature on its trace's digest, a
+    message the service never signed; or
+  * a **collision** of `traceBytes` encodings, when the service signed some trace of `T` with that
+    digest: the two traces differ (one is in `L`, the other is not), and the encoding is injective
+    on queries within `queryCap` (`traceBytes_inj`).
+  `walkSigned` is `walk` with its forgery so reduced: the leaf starts, a collision, an EUF-CMA
+  forgery in the extraction tree, or an escape. As for `walk`, its type `SignedOutcome` is not the
+  statement (a collision inhabits it); the content is the compiled definition and the theorems
+  about it. `compose_prob_signed` bounds the probability that it returns no leaf starts by the
+  escape bound plus the probabilities that it returns a collision and an EUF-CMA forgery;
+  `walkSigned_not_escaped` is its lossless form. The reduction of one forgery
+  (`Forgery.reduce`) does not depend on the tree's shape; the walk around it is for balanced
+  trees.
 
-  What stays on paper: the probability of the third outcome. A trace not contained in `L` was
-  never signed by the service as such (every query a `sign` request evaluates is in `L`), so the
-  signature is an EUF-CMA forgery, unless the service signed a different trace with the same
-  digest, which is a collision of `traceBytes` encodings (injective on queries of at most
-  `queryCap` bytes, `traceBytes_inj`; the forgery carries that cap, and the service's traces have
-  it by the wire cap). Collisions and forgeries are then bounded by `Adv_coll + Adv_EUF-CMA`.
-  Also on paper: lazy sampling against a random function, randomised adversaries, and the PRF
+  **Which signature property, and why not signature-only security.** The original signed-oracle
+  construction (Chiesa–Tromer, "Proof-Carrying Data and Hearsay Arguments from Signature Cards",
+  ICS 2010, §2) assumes signatures that are EUF-CMA and also secure against **signature-only
+  forgery** (`SigOnlyForgery`: "a hitherto-unseen signature that is valid for any message (the
+  forger is not required to say which one)"). Its list extractor (§3.5, Algorithm 5) finds, for
+  each signature a proof carries, the oracle query whose answer has that signature value, because
+  the concise proof does not carry the signed message (instance and witness); its failure is an
+  unseen signature on an unnamed message. This walk matches a signed proof to the log by its
+  trace, the signed message itself, which a signed proof carries in the clear, and never compares
+  signature values (`extract`); the EUF-CMA event reads no signature of the record
+  (`Library/Unforgeability.lean`, `eufForgery_issued_iff`). Its failure is a valid signature on a
+  named message: **EUF-CMA and collision resistance of Keccak-256 suffice**, as in the soundness
+  reduction of Chiesa–Guan–Yildiz 2026 (proof of Theorem 5.2), and signature-only security is not
+  used. A second valid signature on a trace the service signed, not issued by the service, is a
+  SUF-CMA and signature-only forgery but no EUF-CMA forgery (`Controls/Unforgeability.lean`,
+  `resign_not_euf`); it does not affect the walk. (A second signature the service itself issues on
+  a trace is in its signing record and no forgery of any kind.)
+
+  A bare forgery against the log is free for a known signer (`Controls/Compose.lean`,
+  `forgery_trivial`); the content of the forgery outcome is its membership of the extraction tree
+  and, against the service's signed traces, its reduction.
+
+  What stays on paper: the probabilities of the collision and the EUF-CMA outcomes, bounded by
+  `Adv_coll + Adv_EUF-CMA`. The EUF-CMA adversary runs the whole evaluation (the prover, the
+  service with its `sign` requests sent to the signing oracle, the harness's checks), keeps the
+  signed traces as `T`, which the log accounts for by the service's specification, and outputs
+  `walkSigned`'s forgery; the collision finder does the same with the signing key drawn itself.
+  Also on paper: EUF-CMA of the scheme with each index used once, from Keccak-256's properties
+  (AGENTS.md §11); lazy sampling against a random function, randomised adversaries, and the PRF
   hybrid from the random oracle to the keyed deployment (AGENTS.md §12).
 -/
 import RecursionFast.Library.Trace
 import RecursionFast.Library.Tree
 import RecursionFast.Library.KS
+import RecursionFast.Library.Unforgeability
 import RecursionFast.Contract.Certificate
 
 open scoped NNReal
@@ -162,11 +205,6 @@ theorem acc_parts {S : Submission} {vk c : Digest} {p : Signed} (h : S.acc vk c 
       SigOk vk (traceDigest p.tr) p.σ = true ∧ (S.V vk c p.π).runSeq p.tr = some true := by
   simp only [Submission.acc, Bool.and_eq_true, decide_eq_true_eq] at h
   exact ⟨h.1.1.1.2, h.1.1.2, h.1.2, h.2⟩
-
-/-- Membership of an entry in a log is decidable, by the entries' decidable equality
-(`ByteArray`'s own `BEq` is not known lawful, so the instance is given explicitly). -/
-private instance decMemLog (e : ByteArray × Digest) (L : Log) : Decidable (e ∈ L) :=
-  @List.instDecidableMemOfLawfulBEq _ instBEqOfDecidableEq _ e L
 
 /-- One level over an even-length prefix pairs within the prefix. -/
 private theorem treeLevel_append : ∀ (xs ys : List Digest), xs.length % 2 = 0 →
@@ -332,42 +370,14 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ chainCap) (c₀ : Digest) (p₀ : S
 /-- **The walk over the harness tree**: from the log `L` and an accepted root signed
 proof, the root's leaf starts, an explicit collision, an explicit capped forgery in the extraction
 tree of the root signed proof, or an escape in it within depth `r`, computed from it through `S.E`
-on `L`. Its type is the composition statement. -/
+on `L`. Its type `Outcome` is not the statement (a collision inhabits it); the content is this
+compiled definition and the theorems about what it returns (`compose_prob`, `walk_not_escaped`,
+`walkFrom_leaf`). -/
 def walk (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
     (hr : hs.length = 2 ^ r) (p : Signed)
     (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
     Outcome S vk L n hs (treeRoot (hs.map fun h => leafStmt h n)) p r :=
   walkFrom L n hn _ p r r hs hr p [] (by simp) hacc .root
-
-/-- **The composition theorem**, the proposition `walk` proves: the leaf starts exist, or
-a Keccak-256 collision exists, or a capped forgery against `L` lies in the extraction tree of the
-root signed proof, or a member of that tree within depth `r` escapes the extractor on `L`. -/
-theorem compose (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
-    (hr : hs.length = 2 ^ r) (p : Signed)
-    (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
-    (∃ ss, List.Forall₂ (fun s h => chainEnd s n = h) ss hs) ∨ Nonempty Collision ∨
-      (∃ (f : Forgery vk L) (c : Digest) (bs : List Bool),
-        InTree S L (treeRoot (hs.map fun h => leafStmt h n)) p bs c f.p) ∨
-      ∃ (c : Digest) (q : Signed) (bs : List Bool), bs.length ≤ r ∧
-        InTree S L (treeRoot (hs.map fun h => leafStmt h n)) p bs c q ∧ Escape S vk L c q := by
-  cases walk L n hn r hs hr p hacc with
-  | starts ss h => exact Or.inl ⟨ss, h⟩
-  | collision col => exact Or.inr (Or.inl ⟨col⟩)
-  | forgery f c bs m => exact Or.inr (Or.inr (Or.inl ⟨f, c, bs, m⟩))
-  | escape c q bs m hd h => exact Or.inr (Or.inr (Or.inr ⟨c, q, bs, hd, m, h⟩))
-
-/-- The existential shadow of `compose` without the forgery's tree membership. **Trivially true
-for every key a signer knows** (`Controls/Compose.lean`, `compose_exists_free`): it says nothing
-beyond `compose` and is kept only as a readability corollary. -/
-theorem compose_exists (L : Log) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
-    (hr : hs.length = 2 ^ r) (p : Signed)
-    (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
-    (∃ ss, List.Forall₂ (fun s h => chainEnd s n = h) ss hs) ∨ Nonempty Collision ∨
-      Nonempty (Forgery vk L) ∨
-      ∃ (c : Digest) (q : Signed) (bs : List Bool), bs.length ≤ r ∧
-        InTree S L (treeRoot (hs.map fun h => leafStmt h n)) p bs c q ∧ Escape S vk L c q :=
-  (compose L n hn r hs hr p hacc).imp_right
-    (Or.imp_right (Or.imp_left fun ⟨f, _, _, _⟩ => ⟨f⟩))
 
 /-! ## An escape is a knowledge-soundness failure -/
 
@@ -385,17 +395,15 @@ theorem Escape.not_of_kstate (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : 
   fun h => h.2.2 (k.final L c p.π hlen hμ (Escape.wins hL h).1)
 
 /-- **The meter's composition** (lossless): from a knowledge state and one functional log within
-`logCap` of potential below `1`, the leaf starts, a collision, or a capped forgery in the
-extraction tree of the root signed proof. -/
-theorem compose_of_kstate (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : Log}
+`logCap` of potential below `1`, the walk does not escape: it returns the leaf starts, a
+collision, or a capped forgery in the extraction tree of the root signed proof. -/
+theorem walk_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : Log}
     (hL : L.Functional) (hlen : L.length ≤ logCap) (hμ : k.μ L < 1) (n : ℕ) (hn : n ≤ chainCap)
     (r : ℕ) (hs : List Digest) (hr : hs.length = 2 ^ r) (p : Signed)
     (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
-    (∃ ss, List.Forall₂ (fun s h => chainEnd s n = h) ss hs) ∨ Nonempty Collision ∨
-      ∃ (f : Forgery vk L) (c : Digest) (bs : List Bool),
-        InTree S L (treeRoot (hs.map fun h => leafStmt h n)) p bs c f.p :=
-  (compose L n hn r hs hr p hacc).imp_right (Or.imp_right fun h => h.resolve_right
-    fun ⟨_, _, _, _, _, he⟩ => Escape.not_of_kstate k hL hlen hμ he)
+    ¬ (walk L n hn r hs hr p hacc).Escaped := fun h =>
+  have ⟨_, _, _, _, _, he⟩ := h.exists
+  Escape.not_of_kstate k hL hlen hμ he
 
 /-! ## The probability: a union bound over the extraction tree -/
 
@@ -475,6 +483,207 @@ theorem compose_prob (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ) (h
   obtain ⟨c, q, bs, hd, hmem, h⟩ := he.exists
   exact ⟨bs, mem_paths.mpr hd, c, q, hmem, h⟩
 
+/-! ## The forgery outcome against the service's signed traces: EUF-CMA or a collision -/
+
+/-- A query within `queryCap` is shorter than `2^64` bytes. -/
+private theorem lt64 {tr : Trace} (h : ∀ e ∈ tr, e.1.size ≤ queryCap) :
+    ∀ e ∈ tr, e.1.size < 2 ^ 64 :=
+  fun e he => (h e he).trans_lt (by unfold queryCap; norm_num)
+
+/-- **The reduction of a forgery to EUF-CMA or a collision**, computed. Given signed traces `T`
+the log `L` accounts for, a forgery against `L` is an EUF-CMA forgery against the signing record
+of `T` (its signature on its trace's digest, which no trace of `T` has), or, for the first trace
+of `T` with its trace's digest, a collision of the two traces' encodings. The forgery is
+identified by its trace, the message, never by its signature value. -/
+def Forgery.reduce {L : Log} (T : List (Trace × Sig)) (hT : Honest T L) (f : Forgery vk L) :
+    PLift (EufForgery (SigOk vk) (issued T) (traceDigest f.p.tr) f.p.σ) ⊕
+      {col : Collision // ∃ x ∈ T, col.x = tagTrace :: traceBytes x.1 ∧
+        col.y = tagTrace :: traceBytes f.p.tr} :=
+  match h : T.find? (fun x => decide (traceDigest x.1 = traceDigest f.p.tr)) with
+  | some x =>
+    have hx := List.mem_of_find?_eq_some h
+    have hd := List.find?_some h
+    .inr ⟨⟨tagTrace :: traceBytes x.1, tagTrace :: traceBytes f.p.tr, fun hb => f.notIn
+        (traceBytes_inj (lt64 (hT.cap x hx)) (lt64 f.cap) (List.cons.inj hb).2 ▸ hT.inLog x hx),
+      of_decide_eq_true hd⟩, x, hx, rfl, rfl⟩
+  | none => .inl ⟨f.sig, fun hm => by
+      obtain ⟨x, hx, hd⟩ := mem_fst_issued.mp hm
+      exact List.find?_eq_none.mp h x hx (decide_eq_true hd)⟩
+
+/-- **A forgery against the log is an EUF-CMA forgery or a collision**: given signed traces `T`
+the log `L` accounts for, an EUF-CMA forgery against the signing record of `T` on its trace's
+digest, or a collision of the encodings of a trace of `T` and its trace. -/
+theorem Forgery.euf_or_collision {L : Log} {T : List (Trace × Sig)} (hT : Honest T L)
+    (f : Forgery vk L) :
+    EufForgery (SigOk vk) (issued T) (traceDigest f.p.tr) f.p.σ ∨
+      ∃ x ∈ T, ∃ col : Collision, col.x = tagTrace :: traceBytes x.1 ∧
+        col.y = tagTrace :: traceBytes f.p.tr :=
+  match f.reduce T hT with
+  | .inl ⟨h⟩ => .inl h
+  | .inr ⟨col, x, hx, h⟩ => .inr ⟨x, hx, col, h⟩
+
+/-- **What the walk returns against signed traces `T`**: the leaf starts, a collision, an
+EUF-CMA forgery against the signing record of `T` in the extraction tree, or an escape in it
+within depth `d`. -/
+inductive SignedOutcome (S : Submission) (vk : Digest) (L : Log) (T : List (Trace × Sig)) (n : ℕ)
+    (hs : List Digest) (c₀ : Digest) (p₀ : Signed) (d : ℕ) where
+  /-- The leaf starts: chain `n` from `ss[i]` ends at `hs[i]`, for every leaf. -/
+  | starts (ss : List Digest) (h : List.Forall₂ (fun s h => chainEnd s n = h) ss hs)
+  /-- A Keccak-256 collision. -/
+  | collision (col : Collision)
+  /-- An EUF-CMA forgery against the signing record of `T`, at the member `(c, q)` of the
+  extraction tree: `q`'s signature on its trace's digest, a message no trace of `T` has. -/
+  | euf (c : Digest) (q : Signed) (bs : List Bool) (mem : InTree S L c₀ p₀ bs c q)
+      (h : EufForgery (SigOk vk) (issued T) (traceDigest q.tr) q.σ)
+  /-- An escape at the member `(c, p)` of the extraction tree, within depth `d`. -/
+  | escape (c : Digest) (p : Signed) (bs : List Bool) (mem : InTree S L c₀ p₀ bs c p)
+      (depth : bs.length ≤ d) (h : Escape S vk L c p)
+
+namespace SignedOutcome
+variable {L : Log} {T : List (Trace × Sig)} {n : ℕ} {hs : List Digest} {c₀ : Digest} {p₀ : Signed}
+  {d : ℕ}
+
+/-- The leaf starts the outcome returns, if it returns them. -/
+def starts? : SignedOutcome S vk L T n hs c₀ p₀ d → Option (List Digest)
+  | .starts ss _ => some ss
+  | _ => none
+
+/-- The outcome is a collision. -/
+def IsCollision : SignedOutcome S vk L T n hs c₀ p₀ d → Prop
+  | .collision _ => True
+  | _ => False
+
+/-- The outcome is an EUF-CMA forgery against the signing record of `T`. -/
+def IsEuf : SignedOutcome S vk L T n hs c₀ p₀ d → Prop
+  | .euf .. => True
+  | _ => False
+
+/-- The outcome is an escape. -/
+def Escaped : SignedOutcome S vk L T n hs c₀ p₀ d → Prop
+  | .escape .. => True
+  | _ => False
+
+/-- An outcome with no leaf starts is a collision, an EUF-CMA forgery or an escape. -/
+theorem cases_of_starts?_none {o : SignedOutcome S vk L T n hs c₀ p₀ d} (h : o.starts? = none) :
+    o.IsCollision ∨ o.IsEuf ∨ o.Escaped := by
+  cases o with
+  | starts => exact absurd h (by simp [starts?])
+  | collision => exact .inl trivial
+  | euf => exact .inr (.inl trivial)
+  | escape => exact .inr (.inr trivial)
+
+end SignedOutcome
+
+/-- **The walk's outcome against signed traces `T`** the log accounts for: a forgery is reduced
+by `Forgery.reduce` to an EUF-CMA forgery or a collision; the other outcomes are kept. -/
+def Outcome.reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
+    {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} :
+    Outcome S vk L n hs c₀ p₀ d → SignedOutcome S vk L T n hs c₀ p₀ d
+  | .starts ss h => .starts ss h
+  | .collision col => .collision col
+  | .forgery f c bs m =>
+    match f.reduce T hT with
+    | .inl ⟨h⟩ => .euf c f.p bs m h
+    | .inr col => .collision col.1
+  | .escape c p bs m hd h => .escape c p bs m hd h
+
+/-- **A forgery outcome that is an EUF-CMA forgery is reduced to one**: if no signed trace of `T`
+has the forged trace's digest, the reduced outcome is the EUF-CMA outcome. -/
+theorem Outcome.isEuf_reduce_forgery {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
+    {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} (f : Forgery vk L) (c : Digest)
+    (bs : List Bool) (m : InTree S L c₀ p₀ bs c f.p)
+    (h : EufForgery (SigOk vk) (issued T) (traceDigest f.p.tr) f.p.σ) :
+    ((Outcome.forgery f c bs m : Outcome S vk L n hs c₀ p₀ d).reduce hT).IsEuf := by
+  simp only [Outcome.reduce]
+  split
+  · trivial
+  · rename_i col _
+    obtain ⟨⟨x, y, _, heq⟩, t, ht, hx, hy⟩ := col
+    simp only at hx hy
+    subst hx hy
+    exact h.2 (mem_fst_issued.mpr ⟨t, ht, heq⟩)
+
+/-- Reducing a forgery keeps escapes and only them. -/
+theorem Outcome.escaped_reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
+    {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} (o : Outcome S vk L n hs c₀ p₀ d) :
+    (o.reduce hT).Escaped ↔ o.Escaped := by
+  cases o with
+  | forgery f c bs m =>
+    simp only [Outcome.reduce, Outcome.Escaped]
+    split <;> simp [SignedOutcome.Escaped]
+  | _ => simp [Outcome.reduce, Outcome.Escaped, SignedOutcome.Escaped]
+
+/-- Reducing a forgery keeps the leaf starts. -/
+theorem Outcome.starts?_reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
+    {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} (o : Outcome S vk L n hs c₀ p₀ d) :
+    (o.reduce hT).starts? = o.starts? := by
+  cases o with
+  | forgery f c bs m =>
+    simp only [Outcome.reduce, Outcome.starts?]
+    split <;> rfl
+  | _ => rfl
+
+/-- **The walk against the service's signed traces**: from the log `L`, signed traces `T` that
+`L` accounts for, and an accepted root signed proof, the root's leaf starts, an explicit
+collision, an explicit EUF-CMA forgery against the signing record of `T` in the extraction tree
+of the root signed proof, or an escape in it within depth `r`. Its type `SignedOutcome` is not the
+statement (a collision inhabits it); the content is this compiled definition and the theorems
+about what it returns (`compose_prob_signed`, `walkSigned_not_escaped`). No signature-only
+forgery is needed. -/
+def walkSigned (L : Log) (T : List (Trace × Sig)) (hT : Honest T L) (n : ℕ) (hn : n ≤ chainCap)
+    (r : ℕ) (hs : List Digest) (hr : hs.length = 2 ^ r) (p : Signed)
+    (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
+    SignedOutcome S vk L T n hs (treeRoot (hs.map fun h => leafStmt h n)) p r :=
+  (walk L n hn r hs hr p hacc).reduce hT
+
+/-- **No escape below the potential** for the walk against signed traces (lossless): from a
+knowledge state and one functional log within `logCap` of potential below `1`, the walk returns
+the leaf starts, a collision or an EUF-CMA forgery against the signing record. -/
+theorem walkSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : Log}
+    (hL : L.Functional) (hlen : L.length ≤ logCap) (hμ : k.μ L < 1) (T : List (Trace × Sig))
+    (hT : Honest T L) (n : ℕ) (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest)
+    (hr : hs.length = 2 ^ r) (p : Signed)
+    (hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true) :
+    ¬ (walkSigned L T hT n hn r hs hr p hacc).Escaped := fun h =>
+  walk_not_escaped k hL hlen hμ n hn r hs hr p hacc ((Outcome.escaped_reduce hT _).mp h)
+
+/-- The union bound for two events. -/
+private theorem prob_or_le {α : Type} (B₁ B₂ : α → Log → Prop) (p : OProg α) (L : Log) :
+    prob (fun x L => B₁ x L ∨ B₂ x L) p L ≤ prob B₁ p L + prob B₂ p L := by
+  have h := prob_exists_le {true, false} (fun b => if b then B₁ else B₂) p L
+  rw [Finset.sum_pair (by decide)] at h
+  refine (prob_mono (fun x L hx => ?_) p L).trans h
+  rcases hx with hx | hx
+  · exact ⟨true, by simp, hx⟩
+  · exact ⟨false, by simp, hx⟩
+
+/-- **The composition theorem with probabilities, against the service's signed traces**: for an
+adversary `A` asking at most `Q` queries and outputting the root signed proof, with
+`Q + qV ≤ logCap`, and signed traces `T p L` of each run (output `p`, final log `L`) that the
+log accounts for, the probability that `acc` accepts the root and the walk against `T p L`
+returns no leaf starts is at most `(2^(r+1) - 1) · (Q + qV) · ε` plus the probabilities that it
+returns a collision and that it returns an EUF-CMA forgery against the signing record of `T p L`.
+(`hT` costs nothing: `accounted` restricts any signed traces to those the log accounts for, and
+changes nothing on a run where they all are, `accounted_of_honest`.) -/
+theorem compose_prob_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
+    (hn : n ≤ chainCap) (r : ℕ) (hs : List Digest) (hr : hs.length = 2 ^ r) (A : OProg Signed)
+    {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
+    (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L) :
+    prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).starts? = none) A [] ≤
+      (2 ^ (r + 1) - 1 : ℕ) * ((Q + qV) * ε) +
+      prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+        (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsCollision) A [] +
+      prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+        (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsEuf) A [] := by
+  refine (prob_mono (fun p L ⟨hacc, hno⟩ => ?_) A []).trans
+    ((prob_or_le _ _ A []).trans (add_le_add ((prob_or_le _ _ A []).trans
+      (add_le_add_left (compose_prob hks n hn r hs hr A hA hQ) _)) le_rfl))
+  rcases SignedOutcome.cases_of_starts?_none hno with h | h | h
+  · exact .inl (.inr ⟨hacc, h⟩)
+  · exact .inr ⟨hacc, h⟩
+  · exact .inl (.inl ⟨hacc, (Outcome.escaped_reduce (hT p L) _).mp h⟩)
+
 /-! ## Reading the walk: the extraction step on a known extractor output -/
 
 /-- If the trace is in the log and the extractor returns a witness `w` of the relation, the
@@ -493,6 +702,15 @@ theorem extract_escape {L : Log} {c : Digest} {p : Signed} (hacc : S.acc vk c p 
     extract L c p hacc = .inr (.inr ⟨hacc, hin, hno⟩) := by
   unfold extract
   rw [dite_eq_left_of_eq_true (eq_true hin), dite_eq_right_of_eq_false (eq_false hno)]
+
+/-- If some entry of the trace is not in the log, the extraction step returns the signed proof
+as a forgery. -/
+theorem extract_forgery {L : Log} {c : Digest} {p : Signed} (hacc : S.acc vk c p = true)
+    (hnot : ¬ ∀ e ∈ p.tr, e ∈ L) :
+    extract L c p hacc =
+      .inr (.inl ⟨⟨p, (acc_parts hacc).2.1, (acc_parts hacc).2.2.1, hnot⟩, rfl⟩) := by
+  unfold extract
+  rw [dite_eq_right_of_eq_false (eq_false hnot)]
 
 /-- **The walk at a leaf**: on a one-leaf subtree whose signed proof's trace is in the log and
 which the extractor opens to the leaf witness `(s, n)` with `chainEnd s n` the leaf's chain end,
