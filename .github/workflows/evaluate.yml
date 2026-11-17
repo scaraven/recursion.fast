@@ -76,7 +76,7 @@
 # as data with plain git, and every sandboxed process starts with an empty environment.
 #
 # Record acceptance (AGENTS.md §8): the submissions bot applies the record rule per track
-# (`S_t < (1 - margin) · S_t,record`, the sum `S` and the product `S_product`); this workflow only
+# (`S_t < (1 - margin) · S_t,record`, the tracks `final` and `every`, both scored by `S`); this workflow only
 # states the facts. `harness/verify-record.sh
 # result.json` checks provenance (`gh attestation verify` with `--signer-workflow
 # scaraven/recursion.fast/.github/workflows/evaluate.yml`, a self-hosted runner, the signer digest

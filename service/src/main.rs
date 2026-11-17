@@ -9,11 +9,18 @@
 //! Unix socket PATH, and prints `vk <hex>`, `keygen_ms <ms>` and `ready` on stdout. It serves one
 //! thread per connection: `QUERY` (a batch of byte strings → `PRF_k(q) = Keccak-256(k ‖ q)` of each),
 //! `SIGN` (a batch of byte strings → their answers, computed here, and a signature on the trace
-//! digest with the next one-time key; refused after `2^16`), `VK`. It exits when its stdin reaches
-//! end of file (the runner closes it): it then takes the key lock, overwrites the keys, prints
-//! `stats …`, removes the socket and exits 0. The keys are never written anywhere; the process is
-//! made non-dumpable, so a process of the same uid cannot ptrace it or read its memory through
-//! /proc.
+//! digest with the next one-time key; refused after `2^16`), `VK`. It records the trace digest it
+//! signed at each one-time key index.
+//!
+//! Its stdin is the runner's control pipe. The line `replay` switches it to replay mode (once every
+//! in-flight request is done): it resets the replay index to 0 and prints `key <hex k>` and `replay
+//! ready`. In replay mode `SIGN` takes the next replay index `j` and re-issues the service run's
+//! signature at `j` if the trace digest is the one signed there, else refuses with `MISMATCH`; it
+//! never signs a new digest. `replay` may come again: each resets the index to 0. At end of file
+//! (the runner closes the pipe) it takes the key lock, overwrites the keys, prints `stats …`,
+//! removes the socket and exits 0. The signing seed is never written anywhere, and `k` only to
+//! stdout after `replay`; the process is made non-dumpable, so a process of the same uid cannot
+//! ptrace it or read its memory through /proc.
 //!
 //! `--insecure-test-keys PRFKEY_HEX SEED_HEX` replaces the random keys by given ones and prints
 //! `INSECURE` on stdout. It exists for the known-answer tests only (`tests/service/`) and is
@@ -28,13 +35,13 @@
 
 use rf_oracle::keccak::{self, Keyed};
 use rf_oracle::proto::*;
-use rf_oracle::wots::Signer;
+use rf_oracle::wots::{NotSigned, Signer, NKEYS};
 use rf_oracle::{leaf_digests, parse_leaf_line, trace_digest};
 use std::fs::File;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::RwLock;
 use std::time::Instant;
 
@@ -57,10 +64,13 @@ fn random32(b: &mut [u8; 32]) {
     }
 }
 
-/// The secret state: the PRF and the signer. `None` once wiped at shutdown.
+/// The secret state: the PRF, the signer and the mode. `None` once wiped at shutdown.
 struct Keys {
     prf: Keyed,
     signer: Signer,
+    /// `None` in the service run; in replay mode, the next replay index (set to 0 by each
+    /// `replay` line, under the write lock).
+    replay: Option<AtomicU32>,
 }
 
 struct State {
@@ -70,6 +80,8 @@ struct State {
     queries: AtomicU64,
     query_bytes: AtomicU64,
     signatures: AtomicU64,
+    replays: AtomicU64,
+    mismatches: AtomicU64,
     socket: String,
 }
 
@@ -161,22 +173,42 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
             let (ans, _) = resp[16..].as_chunks_mut::<32>();
             keys.prf.eval_many(&qs, ans);
             let sig = if op == OP_SIGN {
-                match keys.signer.sign(&trace_digest(&qs, ans)) {
-                    Ok(s) => Some(s),
-                    Err(_) => {
-                        drop(guard);
-                        return refuse(&mut w, ST_EXHAUSTED, "all 2^16 one-time keys are used");
+                let td = trace_digest(&qs, ans);
+                match &keys.replay {
+                    None => match keys.signer.sign(&td) {
+                        Ok(s) => Some(s),
+                        Err(_) => {
+                            drop(guard);
+                            return refuse(&mut w, ST_EXHAUSTED, "all 2^16 one-time keys are used");
+                        }
+                    },
+                    Some(next) => {
+                        // one atomic step, saturating at 2^16 (no digest is recorded there)
+                        let j = next.try_update(Ordering::SeqCst, Ordering::SeqCst, |x| Some((x + 1).min(NKEYS as u32))).unwrap();
+                        match keys.signer.resign(j, &td) {
+                            Ok(s) => Some(s),
+                            Err(e) => {
+                                drop(guard);
+                                st.mismatches.fetch_add(1, Ordering::Relaxed);
+                                let why = match e {
+                                    NotSigned::Nothing => "no trace was signed there in the service run",
+                                    NotSigned::Differs => "the trace digest differs from the one signed there in the service run",
+                                };
+                                return refuse(&mut w, ST_MISMATCH, &format!("replay at one-time key index {j}: {why}"));
+                            }
+                        }
                     }
                 }
             } else {
                 None
             };
+            let replaying = keys.replay.is_some();
             drop(guard);
             let n = 32 * qs.len() + if sig.is_some() { rf_oracle::wots::Sig::BYTES } else { 0 };
             resp[..16].copy_from_slice(&header(ST_OK, count, n as u64));
             if let Some(s) = &sig {
                 s.encode(&mut resp);
-                st.signatures.fetch_add(1, Ordering::Relaxed);
+                if replaying { &st.replays } else { &st.signatures }.fetch_add(1, Ordering::Relaxed);
             }
             st.queries.fetch_add(count as u64, Ordering::Relaxed);
             st.query_bytes.fetch_add(blen - 4 * count as u64, Ordering::Relaxed);
@@ -184,6 +216,18 @@ fn serve(mut w: UnixStream, st: &State) -> io::Result<()> {
         st.requests.fetch_add(1, Ordering::Relaxed);
         w.write_all(&resp)?;
     }
+}
+
+/// The `replay` control line: once in-flight requests finish (the write lock), enter replay mode
+/// or stay in it, reset the replay index to 0, and print `key <hex k>` and `replay ready`.
+fn enter_replay(st: &State) {
+    let mut g = st.keys.write().unwrap_or_else(|e| e.into_inner());
+    let Some(keys) = g.as_mut() else { return };
+    keys.replay = Some(AtomicU32::new(0));
+    let mut k = keys.prf.key();
+    let mut so = io::stdout().lock();
+    let _ = writeln!(so, "key {}", hex(&k)).and_then(|_| writeln!(so, "replay ready")).and_then(|_| so.flush());
+    keccak::wipe(&mut k);
 }
 
 /// Wipe the keys (after in-flight requests finish), report, remove the socket, exit.
@@ -195,12 +239,14 @@ fn shutdown(st: &State) -> ! {
     }
     let _ = std::fs::remove_file(&st.socket);
     println!(
-        "stats requests={} queries={} query_bytes={} signatures={} refusals={}",
+        "stats requests={} queries={} query_bytes={} signatures={} refusals={} replays={} mismatches={}",
         st.requests.load(Ordering::SeqCst),
         st.queries.load(Ordering::SeqCst),
         st.query_bytes.load(Ordering::SeqCst),
         st.signatures.load(Ordering::SeqCst),
-        REFUSALS.load(Ordering::SeqCst)
+        REFUSALS.load(Ordering::SeqCst),
+        st.replays.load(Ordering::SeqCst),
+        st.mismatches.load(Ordering::SeqCst)
     );
     let _ = io::stdout().flush();
     std::process::exit(0)
@@ -303,12 +349,14 @@ fn main() {
     let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o666));
     let vk = signer.vk();
     let st: &'static State = Box::leak(Box::new(State {
-        keys: RwLock::new(Some(Keys { prf, signer })),
+        keys: RwLock::new(Some(Keys { prf, signer, replay: None })),
         conns: AtomicUsize::new(0),
         requests: AtomicU64::new(0),
         queries: AtomicU64::new(0),
         query_bytes: AtomicU64::new(0),
         signatures: AtomicU64::new(0),
+        replays: AtomicU64::new(0),
+        mismatches: AtomicU64::new(0),
         socket: socket.clone(),
     }));
     println!("vk {}", hex(&vk));
@@ -316,10 +364,21 @@ fn main() {
     println!("simd scalar");
     println!("ready");
     let _ = io::stdout().flush();
+    // the control pipe: `replay` lines until end of file (or a read error), then shut down
     std::thread::spawn(move || {
-        let mut buf = [0u8; 256];
         let mut stdin = io::stdin().lock();
-        while matches!(stdin.read(&mut buf), Ok(n) if n > 0) {}
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if !matches!(stdin.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+                break;
+            }
+            if line == b"replay\n" {
+                enter_replay(st);
+            } else {
+                eprintln!("rf-oracle: ignored control line {:?}", String::from_utf8_lossy(&line[..line.len().min(64)]));
+            }
+        }
         shutdown(st)
     });
     for conn in listener.incoming() {

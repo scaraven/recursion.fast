@@ -1,5 +1,5 @@
-"""The runner's digests (TRUSTED RUNTIME): chain ends, leaf and node statements and the tree root,
-byte for byte as the contract (`Relation.lean`, `Tree.lean`, hashed with
+"""The runner's digests (TRUSTED RUNTIME): chain ends, leaf and node statements, the tree root and
+the stream's statements, byte for byte as the contract (`Relation.lean`, `Tree.lean`, hashed with
 Keccak-256):
 
   chainStep d     = Keccak-256(0x43 ‖ d)                 33 bytes, one permutation
@@ -7,6 +7,8 @@ Keccak-256):
   nodeStmt c1 c2  = Keccak-256(0x4E ‖ c1 ‖ c2)           65 bytes
   treeRoot cs     = adjacent pairs hashed by nodeStmt, level by level (an odd last digest is carried
                     up; one digest is its own root; the empty list has the zero digest)
+  the stream      X_i = treeRoot [L_i1, …, L_iC]  (C = 4: nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)),
+                  c_1 = X_1, c_i = nodeStmt c_{i-1} X_i
 
 Keccak-256 is Ethereum's (`rfh/keccak.py`). The chains (millions of permutations per run) are hashed
 by the trusted service binary's `rf-oracle --leaves` mode (no key, no socket; `service/src/main.rs`);
@@ -87,3 +89,25 @@ def tree_levels(cs):
 def tree_root(cs) -> bytes:
     """`treeRoot cs`."""
     return tree_levels(cs)[-1][0] if cs else ZERO
+
+
+def stream_statements(leaves, chains):
+    """The stream's statements from its leaf statements, `chains` per step in step order:
+    `(X, c, first)`, lists over the steps `i = 1 … M`: `X_i = treeRoot` of step `i`'s leaves (for 4
+    chains `nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)`), the output statements `c_1 = X_1`,
+    `c_i = nodeStmt c_{i-1} X_i`, and the first child of each `c_i` (the statement canary
+    `first-child`): `c_{i-1}` for `i ≥ 2`; for `i = 1` the first digest of the level below `X_1`
+    (`nodeStmt L_11 L_12` for 4 chains), None for one chain."""
+    if chains < 1 or len(leaves) % chains:
+        raise ValueError("stream_statements: a whole number of steps of `chains` leaves each")
+    X, c, first = [], [], []
+    for i in range(len(leaves) // chains):
+        levels = tree_levels(leaves[chains * i:chains * (i + 1)])
+        X.append(levels[-1][0])
+        if i == 0:
+            c.append(X[0])
+            first.append(levels[-2][0] if len(levels) > 1 else None)
+        else:
+            c.append(node_stmt(c[-1], X[-1]))
+            first.append(c[-2])
+    return X, c, first

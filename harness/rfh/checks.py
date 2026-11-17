@@ -106,11 +106,10 @@ class Badge:
 def canaries(stmt: bytes, others=()):
     """The statement canaries (AGENTS.md §6) of a proof accepted for `stmt`: the
     statements it must be rejected for, as (name, statement): `stmt` with its first bit flipped, and
-    each (name, statement) of `others` that differs from `stmt` (in the stream: the statement of the
-    leaf the next step adds, `next-leaf`, and the step's first child, `first-child`)."""
+    each (name, statement) of `others` that differs from `stmt` (in the stream: the output's first
+    child, `first-child`: `c_{i-1}` for a step `i ≥ 2`, `nodeStmt L_11 L_12` for step 1)."""
     flip = bytearray(stmt)
     flip[0] ^= 1
     out = [("stmt-bit", bytes(flip))]
     out += [(name, c) for name, c in others if c is not None and c != stmt]
     return out
-

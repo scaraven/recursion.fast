@@ -18,7 +18,11 @@
 6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
 7. shutdown on stdin end of file: exit 0, socket removed, statistics printed;
 8. `rf-oracle --leaves`: leaf digests of chains against the references, in input order, on 1 and
-   several threads; a malformed line exits 2.
+   several threads; a malformed line exits 2;
+9. replay mode: after the control line `replay` the service prints `key <hex k>` and `replay ready`;
+   `SIGN` of the service run's traces in order returns byte-identical responses, any other trace at
+   an index (never signed, or signed with another digest) is refused with status 4 `MISMATCH`;
+   each `replay` resets the index to 0; `QUERY` and `VK` are unchanged; end of file still shuts down.
 """
 import functools
 import os
@@ -102,6 +106,72 @@ def chain_leaf(s, n):
     for _ in range(n):
         s = W.keccak_c(b"C" + s)
     return W.keccak_c(b"L" + s + W.enc64(n))
+
+
+def replay(p):
+    """Write the control line `replay`; the lines the service prints up to `replay ready`."""
+    p.stdin.write(b"replay\n")
+    p.stdin.flush()
+    lines = []
+    while True:
+        line = p.stdout.readline().decode()
+        if not line:
+            raise RuntimeError("service died")
+        lines.append(line.rstrip("\n"))
+        if lines[-1] == "replay ready":
+            return lines
+
+
+def test_replay(tmp):
+    p, info, sock = start(os.path.join(tmp, "svc-replay"))
+    traces = [[b"abc", bytes(200)], [], [pattern(n) for n in (0, 103, 104, 300)]]
+    c = Client(sock)
+    first = [c.call(OP_SIGN, t) for t in traces]
+    check([r[0] for r in first] == [0, 0, 0] and [struct.unpack("<I", r[2][32 * len(t):32 * len(t) + 4])[0]
+                                                   for r, t in zip(first, traces)] == [0, 1, 2],
+          "service run: three SIGNs at indices 0, 1, 2")
+    q = b"replay query"
+    a = c.query([q])[0]
+    # any other control line is ignored (a note on stderr), the service keeps serving
+    p.stdin.write(b"hello\n")
+    p.stdin.flush()
+    check(c.vk() == bytes.fromhex(info["vk"]), "an unknown control line is ignored: the service still serves")
+    lines = replay(p)
+    key = lines[0].split(" ", 1)[1] if len(lines) == 2 and lines[0].startswith("key ") else ""
+    check(len(lines) == 2 and len(key) == 64 and key == key.lower(),
+          f"replay prints exactly `key <64 lowercase hex>` and `replay ready`: {[l[:12] for l in lines]}")
+    check(bytes.fromhex(key or "00") == PRF_KEY and pykeccak.keccak256(bytes.fromhex(key or "00") + q) == a,
+          "the printed key k recomputes a QUERY answer of the service run: Keccak-256(k ‖ q)")
+    c2 = Client(sock)
+    again = [c2.call(OP_SIGN, t) for t in traces]
+    check(again == first, "replay: SIGN of the same three traces in order returns byte-identical responses")
+    check(c2.query([q]) == [a] and c2.vk() == bytes.fromhex(info["vk"]), "replay: QUERY and VK unchanged")
+    st, _, msg = c2.call(OP_SIGN, [b"never signed"])
+    check(st == 4 and b"index 3" in msg and b"no trace" in msg and c2.s.recv(1) == b"",
+          f"replay: another trace at index 3 (never signed) is refused with MISMATCH (status {st}, {msg.decode()!r}), "
+          "connection closed")
+    c2.close()
+    lines2 = replay(p)
+    check(lines2 == lines, "a second replay prints the same two lines")
+    c3 = Client(sock)
+    changed = [traces[0][0], bytes(199)]
+    st, _, msg = c3.call(OP_SIGN, changed)
+    check(st == 4 and b"index 0" in msg and b"differs" in msg,
+          f"after a second replay: a changed trace at index 0 is refused with MISMATCH (status {st}, {msg.decode()!r})")
+    c3.close()
+    replay(p)
+    c4 = Client(sock)
+    check([c4.call(OP_SIGN, t) for t in traces] == first, "a third replay resets the index to 0 again: identical responses")
+    st, _, _ = c4.call(OP_SIGN, traces[0])
+    check(st == 4, f"replay: the trace of index 0 at index 3 is refused (status {st}): replay never signs anew")
+    c4.close()
+    c.close()
+    code, out = stop(p)
+    stats = {k: int(v) for k, v in (kv.split("=") for kv in next(l for l in out.splitlines() if l.startswith("stats ")).split()[1:])} \
+        if "stats " in out else {}
+    check(code == 0 and not os.path.exists(sock), f"replay mode: shutdown on stdin EOF (exit {code}), socket removed")
+    check((stats.get("signatures"), stats.get("replays"), stats.get("mismatches"), stats.get("refusals")) == (3, 6, 3, 3),
+          f"replay statistics: {stats}")
 
 
 def test_leaves(binary):
@@ -326,6 +396,9 @@ def main():
 
     # 8. the runner's chain hasher
     test_leaves(RELEASE if os.path.exists(RELEASE) else BIN)
+
+    # 9. replay mode
+    test_replay(tmp)
 
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0

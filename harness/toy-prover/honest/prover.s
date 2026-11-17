@@ -513,445 +513,23 @@ handshake:
 	.size	handshake, .-handshake
 	.section	.rodata.str1.1
 .LC6:
-	.string	"RF_ORACLE"
-.LC7:
-	.string	"RF_ORACLE unset"
-	.section	.rodata.str1.8,"aMS",@progbits,1
-	.align 8
-.LC8:
-	.string	"cannot connect to the oracle service"
-	.section	.rodata.str1.1
-.LC9:
-	.string	"SIGN write"
-.LC10:
-	.string	"SIGN read"
-.LC11:
-	.string	"SIGN refused"
-	.text
-	.p2align 4
-	.type	signed_file, @function
-signed_file:
-.LFB97:
-	.cfi_startproc
-	pushq	%r14
-	.cfi_def_cfa_offset 16
-	.cfi_offset 14, -16
-	pushq	%r13
-	.cfi_def_cfa_offset 24
-	.cfi_offset 13, -24
-	pushq	%r12
-	.cfi_def_cfa_offset 32
-	.cfi_offset 12, -32
-	pushq	%rbp
-	.cfi_def_cfa_offset 40
-	.cfi_offset 6, -40
-	pushq	%rbx
-	.cfi_def_cfa_offset 48
-	.cfi_offset 3, -48
-	subq	$4096, %rsp
-	.cfi_def_cfa_offset 4144
-	orq	$0, (%rsp)
-	subq	$832, %rsp
-	.cfi_def_cfa_offset 4976
-	movl	svc(%rip), %eax
-	movq	%fs:40, %r12
-	movq	%r12, 4920(%rsp)
-	movq	%rsi, %r12
-	movq	%rdi, %r13
-	testl	%eax, %eax
-	js	.L77
-.L83:
-	leaq	128(%rsp), %rbp
-	movl	svc(%rip), %edi
-	movl	$16, %edx
-	movq	$2, 128(%rsp)
-	movq	$0, 136(%rsp)
-	movq	%rbp, %rsi
-	call	write@PLT
-	cmpq	$16, %rax
-	jne	.L78
-	xorl	%ebx, %ebx
-	.p2align 4
-	.p2align 3
-.L79:
-	movl	$16, %edx
-	movl	svc(%rip), %edi
-	leaq	0(%rbp,%rbx), %rsi
-	subq	%rbx, %rdx
-	movq	%rdx, %rcx
-	call	__read_chk@PLT
-	testq	%rax, %rax
-	jle	.L88
-	addq	%rax, %rbx
-	cmpq	$15, %rbx
-	jbe	.L79
-	cmpb	$0, 128(%rsp)
-	jne	.L85
-	movq	%rbp, %rax
-	leaq	120(%rsp), %rsi
-	xorl	%edx, %edx
-	.p2align 5
-	.p2align 4
-	.p2align 3
-.L86:
-	movzbl	15(%rax), %ecx
-	salq	$8, %rdx
-	subq	$1, %rax
-	orq	%rcx, %rdx
-	cmpq	%rsi, %rax
-	jne	.L86
-	cmpq	$4772, %rdx
-	jne	.L85
-	xorl	%ebx, %ebx
-	leaq	144(%rsp), %r14
-	movl	$4772, %ebp
-	.p2align 4
-	.p2align 3
-.L87:
-	movq	%rbp, %rdx
-	movl	svc(%rip), %edi
-	leaq	(%r14,%rbx), %rsi
-	subq	%rbx, %rdx
-	movq	%rdx, %rcx
-	call	__read_chk@PLT
-	testq	%rax, %rax
-	jle	.L88
-	addq	%rax, %rbx
-	cmpq	$4771, %rbx
-	jbe	.L87
-	movq	%r12, %rsi
-	movq	%rsp, %rdi
-	movq	$0, (%rsp)
-	movq	$0, 8(%rsp)
-	call	app64
-	movq	%r12, %rdx
-	movq	%r13, %rsi
-	movq	%rsp, %rdi
-	call	app
-	xorl	%esi, %esi
-	movq	%rsp, %rdi
-	call	app64
-	movl	144(%rsp), %esi
-	movq	%rsp, %rdi
-	call	app64
-	movl	$4768, %edx
-	leaq	148(%rsp), %rsi
-	movq	%rsp, %rdi
-	call	app
-	movq	(%rsp), %rax
-	movq	8(%rsp), %rdx
-	movq	4920(%rsp), %rcx
-	subq	%fs:40, %rcx
-	jne	.L95
-	addq	$4928, %rsp
-	.cfi_remember_state
-	.cfi_def_cfa_offset 48
-	popq	%rbx
-	.cfi_def_cfa_offset 40
-	popq	%rbp
-	.cfi_def_cfa_offset 32
-	popq	%r12
-	.cfi_def_cfa_offset 24
-	popq	%r13
-	.cfi_def_cfa_offset 16
-	popq	%r14
-	.cfi_def_cfa_offset 8
-	ret
-.L77:
-	.cfi_restore_state
-	leaq	.LC6(%rip), %rdi
-	call	getenv@PLT
-	movq	%rax, %rsi
-	testq	%rax, %rax
-	je	.L96
-	xorl	%eax, %eax
-	movl	$27, %ecx
-	leaq	18(%rsp), %rdi
-	movl	$107, %edx
-	rep stosl
-	leaq	18(%rsp), %rdi
-	movw	$1, 16(%rsp)
-	call	strncpy@PLT
-	xorl	%edx, %edx
-	movl	$1, %esi
-	movl	$1, %edi
-	call	socket@PLT
-	movl	%eax, svc(%rip)
-	testl	%eax, %eax
-	js	.L82
-	movl	$110, %edx
-	leaq	16(%rsp), %rsi
-	movl	%eax, %edi
-	call	connect@PLT
-	testl	%eax, %eax
-	je	.L83
-.L82:
-	leaq	.LC8(%rip), %rdi
-	call	die
-.L88:
-	leaq	.LC10(%rip), %rdi
-	call	die
-.L78:
-	leaq	.LC9(%rip), %rdi
-	call	die
-.L95:
-	call	__stack_chk_fail@PLT
-.L85:
-	leaq	.LC11(%rip), %rdi
-	call	die
-.L96:
-	leaq	.LC7(%rip), %rdi
-	call	die
-	.cfi_endproc
-.LFE97:
-	.size	signed_file, .-signed_file
-	.section	.rodata.str1.1
-.LC12:
-	.string	"%2x"
-	.text
-	.p2align 4
-	.type	unhex.constprop.0, @function
-unhex.constprop.0:
-.LFB106:
-	.cfi_startproc
-	pushq	%r13
-	.cfi_def_cfa_offset 16
-	.cfi_offset 13, -16
-	pushq	%r12
-	.cfi_def_cfa_offset 24
-	.cfi_offset 12, -24
-	pushq	%rbp
-	.cfi_def_cfa_offset 32
-	.cfi_offset 6, -32
-	movq	%rdi, %rbp
-	pushq	%rbx
-	.cfi_def_cfa_offset 40
-	.cfi_offset 3, -40
-	subq	$24, %rsp
-	.cfi_def_cfa_offset 64
-	movq	%fs:40, %rbx
-	movq	%rbx, 8(%rsp)
-	movq	%rsi, %rbx
-	leaq	64(%rbx), %r13
-	.p2align 4
-	.p2align 3
-.L100:
-	xorl	%eax, %eax
-	leaq	4(%rsp), %rdx
-	leaq	.LC12(%rip), %rsi
-	movq	%rbx, %rdi
-	call	__isoc23_sscanf@PLT
-	cmpl	$1, %eax
-	jne	.L104
-	movl	4(%rsp), %eax
-	addq	$2, %rbx
-	addq	$1, %rbp
-	movb	%al, -1(%rbp)
-	cmpq	%r13, %rbx
-	jne	.L100
-	xorl	%eax, %eax
-.L97:
-	movq	8(%rsp), %rdx
-	subq	%fs:40, %rdx
-	jne	.L105
-	addq	$24, %rsp
-	.cfi_remember_state
-	.cfi_def_cfa_offset 40
-	popq	%rbx
-	.cfi_def_cfa_offset 32
-	popq	%rbp
-	.cfi_def_cfa_offset 24
-	popq	%r12
-	.cfi_def_cfa_offset 16
-	popq	%r13
-	.cfi_def_cfa_offset 8
-	ret
-.L104:
-	.cfi_restore_state
-	movl	$-1, %eax
-	jmp	.L97
-.L105:
-	call	__stack_chk_fail@PLT
-	.cfi_endproc
-.LFE106:
-	.size	unhex.constprop.0, .-unhex.constprop.0
-	.section	.rodata.str1.1
-.LC13:
-	.string	""
-.LC14:
-	.string	"\"n\":"
-.LC15:
-	.string	"\"start\":"
-	.text
-	.p2align 4
-	.type	prove_chain_file, @function
-prove_chain_file:
-.LFB100:
-	.cfi_startproc
-	pushq	%rbp
-	.cfi_def_cfa_offset 16
-	.cfi_offset 6, -16
-	movq	%rsp, %rbp
-	.cfi_def_cfa_register 6
-	pushq	%r15
-	pushq	%r14
-	pushq	%r13
-	pushq	%r12
-	.cfi_offset 15, -24
-	.cfi_offset 14, -32
-	.cfi_offset 13, -40
-	.cfi_offset 12, -48
-	movq	%rdi, %r12
-	pushq	%rbx
-	andq	$-32, %rsp
-	subq	$224, %rsp
-	.cfi_offset 3, -56
-	movq	%rsi, 24(%rsp)
-	movq	%fs:40, %rax
-	movq	%rax, 216(%rsp)
-	xorl	%eax, %eax
-	call	readfile
-	leaq	32(%rsp), %rdi
-	leaq	.LC13(%rip), %rsi
-	movq	%rdx, 40(%rsp)
-	movl	$1, %edx
-	movq	%rax, 32(%rsp)
-	call	app
-	movq	32(%rsp), %r13
-	leaq	.LC14(%rip), %rsi
-	movq	%r13, %rdi
-	call	strstr@PLT
-	leaq	.LC15(%rip), %rsi
-	movq	%r13, %rdi
-	movq	%rax, %rbx
-	call	strstr@PLT
-	testq	%rbx, %rbx
-	je	.L110
-	testq	%rax, %rax
-	je	.L110
-	leaq	8(%rax), %rdi
-	movl	$34, %esi
-	call	strchr@PLT
-	testq	%rax, %rax
-	je	.L110
-	leaq	1(%rax), %rsi
-	leaq	64(%rsp), %rdi
-	call	unhex.constprop.0
-	testl	%eax, %eax
-	jne	.L110
-	leaq	4(%rbx), %rdi
-	movl	$10, %edx
-	xorl	%esi, %esi
-	call	__isoc23_strtoull@PLT
-	vmovdqa	64(%rsp), %ymm0
-	leaq	160(%rsp), %r12
-	movq	%rax, %rbx
-	vmovdqa	%ymm0, 128(%rsp)
-	testq	%rax, %rax
-	je	.L112
-	xorl	%r14d, %r14d
-	leaq	160(%rsp), %r12
-	.p2align 4
-	.p2align 3
-.L113:
-	movb	$67, 160(%rsp)
-	movl	$33, %edx
-	movq	%r12, %rsi
-	leaq	96(%rsp), %rdi
-	vmovdqu	%ymm0, 161(%rsp)
-	vmovdqa	%ymm0, 96(%rsp)
-	vzeroupper
-	call	keccak256
-	addq	$1, %r14
-	vmovdqa	96(%rsp), %ymm0
-	cmpq	%r14, %rbx
-	jne	.L113
-.L112:
-	movb	$76, 160(%rsp)
-	leaq	193(%rsp), %rdx
-	xorl	%eax, %eax
-	vmovdqu	%ymm0, 161(%rsp)
-	.p2align 5
-	.p2align 4
-	.p2align 3
-.L114:
-	shrx	%rax, %rbx, %rcx
-	addl	$8, %eax
-	movb	%cl, (%rdx)
-	addq	$1, %rdx
-	cmpl	$64, %eax
-	jne	.L114
-	movq	24(%rsp), %rdi
-	movl	$41, %edx
-	movq	%r12, %rsi
-	vzeroupper
-	call	keccak256
-	xorl	%esi, %esi
-	leaq	48(%rsp), %rdi
-	movq	$0, 48(%rsp)
-	movq	$0, 56(%rsp)
-	call	app64
-	movl	$32, %edx
-	leaq	48(%rsp), %rdi
-	leaq	128(%rsp), %rsi
-	call	app
-	movq	%rbx, %rsi
-	leaq	48(%rsp), %rdi
-	call	app64
-	movq	48(%rsp), %r12
-	movq	56(%rsp), %rdx
-	movq	%r12, %rdi
-	movq	%rdx, %rsi
-	call	signed_file
-	movq	%r12, %rdi
-	movq	%rax, %r14
-	movq	%rdx, %rbx
-	call	free@PLT
-	movq	%r13, %rdi
-	call	free@PLT
-	movq	%r14, %rax
-	movq	%rbx, %rdx
-	movq	216(%rsp), %rcx
-	subq	%fs:40, %rcx
-	jne	.L122
-	leaq	-40(%rbp), %rsp
-	popq	%rbx
-	popq	%r12
-	popq	%r13
-	popq	%r14
-	popq	%r15
-	popq	%rbp
-	.cfi_remember_state
-	.cfi_def_cfa 7, 8
-	ret
-.L110:
-	.cfi_restore_state
-	movq	%r12, %rdi
-	call	die
-.L122:
-	call	__stack_chk_fail@PLT
-	.cfi_endproc
-.LFE100:
-	.size	prove_chain_file, .-prove_chain_file
-	.section	.rodata.str1.1
-.LC16:
 	.string	"proof.bin"
-.LC17:
+.LC7:
 	.string	"%s.tmp"
-.LC18:
+.LC8:
 	.string	"wb"
 	.text
 	.p2align 4
 	.type	writefile.constprop.0, @function
 writefile.constprop.0:
-.LFB107:
+.LFB110:
 	.cfi_startproc
 	pushq	%r13
 	.cfi_def_cfa_offset 16
 	.cfi_offset 13, -16
-	leaq	.LC16(%rip), %r9
+	leaq	.LC6(%rip), %r9
 	movq	%rdi, %r13
-	leaq	.LC17(%rip), %r8
+	leaq	.LC7(%rip), %r8
 	pushq	%r12
 	.cfi_def_cfa_offset 24
 	.cfi_offset 12, -24
@@ -972,11 +550,11 @@ writefile.constprop.0:
 	xorl	%eax, %eax
 	movq	%rsp, %rdi
 	call	__snprintf_chk@PLT
-	leaq	.LC18(%rip), %rsi
+	leaq	.LC8(%rip), %rsi
 	movq	%rsp, %rdi
 	call	fopen@PLT
 	testq	%rax, %rax
-	je	.L125
+	je	.L78
 	movq	%rax, %rcx
 	movq	%r12, %rdx
 	movl	$1, %esi
@@ -984,19 +562,19 @@ writefile.constprop.0:
 	movq	%rax, %rbp
 	call	fwrite@PLT
 	cmpq	%rax, %r12
-	jne	.L125
+	jne	.L78
 	movq	%rbp, %rdi
 	call	fclose@PLT
 	testl	%eax, %eax
-	jne	.L125
-	leaq	.LC16(%rip), %rsi
+	jne	.L78
+	leaq	.LC6(%rip), %rsi
 	movq	%rsp, %rdi
 	call	rename@PLT
 	testl	%eax, %eax
-	jne	.L125
+	jne	.L78
 	movq	520(%rsp), %rax
 	subq	%fs:40, %rax
-	jne	.L132
+	jne	.L85
 	addq	$536, %rsp
 	.cfi_remember_state
 	.cfi_def_cfa_offset 40
@@ -1009,21 +587,21 @@ writefile.constprop.0:
 	popq	%r13
 	.cfi_def_cfa_offset 8
 	ret
-.L125:
+.L78:
 	.cfi_restore_state
-	leaq	.LC16(%rip), %rdi
+	leaq	.LC6(%rip), %rdi
 	call	die
-.L132:
+.L85:
 	call	__stack_chk_fail@PLT
 	.cfi_endproc
-.LFE107:
+.LFE110:
 	.size	writefile.constprop.0, .-writefile.constprop.0
 	.section	.rodata.str1.1
-.LC19:
+.LC9:
 	.string	"malformed child file"
-	.section	.rodata.str1.8
+	.section	.rodata.str1.8,"aMS",@progbits,1
 	.align 8
-.LC20:
+.LC10:
 	.string	"trailing bytes in a child file"
 	.text
 	.p2align 4
@@ -1052,7 +630,7 @@ app_signed_words:
 	movq	%rax, 88(%rsp)
 	xorl	%eax, %eax
 	cmpq	$7, %rdx
-	jbe	.L136
+	jbe	.L89
 	movq	%rdi, %rbx
 	movq	%rsi, %r12
 	movq	%rdx, %r13
@@ -1062,29 +640,29 @@ app_signed_words:
 	.p2align 5
 	.p2align 4
 	.p2align 3
-.L135:
+.L88:
 	movzbl	(%rax), %edx
 	salq	$8, %r15
 	subq	$1, %rax
 	orq	%rdx, %r15
 	cmpq	%rcx, %rax
-	jne	.L135
+	jne	.L88
 	leaq	-8(%r13), %r8
 	cmpq	%r15, %r8
-	jb	.L136
+	jb	.L89
 	leaq	64(%rsp), %rdx
 	xorl	%eax, %eax
 	movq	%rdx, 56(%rsp)
 	.p2align 5
 	.p2align 4
 	.p2align 3
-.L137:
+.L90:
 	shrx	%rax, %r15, %rcx
 	addl	$8, %eax
 	movb	%cl, (%rdx)
 	addq	$1, %rdx
 	cmpl	$64, %eax
-	jne	.L137
+	jne	.L90
 	movq	56(%rsp), %rsi
 	movl	$8, %edx
 	movq	%rbx, %rdi
@@ -1103,7 +681,7 @@ app_signed_words:
 	movq	48(%rsp), %r8
 	subq	%r15, %r8
 	cmpq	$7, %r8
-	jbe	.L136
+	jbe	.L89
 	leaq	-8(%r12), %rdi
 	leaq	(%r15,%r12), %rax
 	movq	$0, 32(%rsp)
@@ -1112,7 +690,7 @@ app_signed_words:
 	.p2align 5
 	.p2align 4
 	.p2align 3
-.L138:
+.L91:
 	movq	32(%rsp), %rdx
 	movzbl	15(%rax), %ecx
 	subq	$1, %rax
@@ -1120,22 +698,22 @@ app_signed_words:
 	orq	%rdx, %rcx
 	movq	%rcx, 32(%rsp)
 	cmpq	%rax, %rsi
-	jne	.L138
+	jne	.L91
 	movq	%rcx, %r14
 	movq	%rcx, %rsi
 	movq	%rbx, %rdi
 	addq	$16, %r15
 	call	app64
 	testq	%r14, %r14
-	je	.L139
+	je	.L92
 	xorl	%r14d, %r14d
 	.p2align 4
 	.p2align 3
-.L142:
+.L95:
 	movq	%r13, %rax
 	subq	%r15, %rax
 	cmpq	$7, %rax
-	jbe	.L136
+	jbe	.L89
 	movq	24(%rsp), %rax
 	leaq	(%r15,%r12), %rdx
 	leaq	(%r15,%rax), %rsi
@@ -1143,18 +721,18 @@ app_signed_words:
 	.p2align 5
 	.p2align 4
 	.p2align 3
-.L140:
+.L93:
 	movzbl	7(%rdx), %ecx
 	salq	$8, %rax
 	subq	$1, %rdx
 	orq	%rcx, %rax
 	cmpq	%rdx, %rsi
-	jne	.L140
+	jne	.L93
 	addq	$8, %r15
 	movq	%r13, %rdx
 	subq	%r15, %rdx
 	cmpq	%rax, %rdx
-	jb	.L136
+	jb	.L89
 	leaq	(%r12,%r15), %rdi
 	movq	56(%rsp), %rcx
 	xorl	%edx, %edx
@@ -1162,13 +740,13 @@ app_signed_words:
 	.p2align 5
 	.p2align 4
 	.p2align 3
-.L141:
+.L94:
 	shrx	%rdx, %rax, %rsi
 	addl	$8, %edx
 	movb	%sil, (%rcx)
 	addq	$1, %rcx
 	cmpl	$64, %edx
-	jne	.L141
+	jne	.L94
 	movq	56(%rsp), %rsi
 	movl	$8, %edx
 	movq	%rbx, %rdi
@@ -1190,7 +768,7 @@ app_signed_words:
 	movq	%r13, %rax
 	subq	%r15, %rax
 	cmpq	$31, %rax
-	jbe	.L136
+	jbe	.L89
 	leaq	(%r12,%r15), %rsi
 	movl	$32, %edx
 	movq	%rbx, %rdi
@@ -1198,22 +776,22 @@ app_signed_words:
 	call	app
 	addq	$1, %r14
 	cmpq	32(%rsp), %r14
-	jne	.L142
-.L139:
+	jne	.L95
+.L92:
 	movq	%r13, %rax
 	subq	%r15, %rax
 	cmpq	$4775, %rax
-	jbe	.L136
+	jbe	.L89
 	leaq	(%r12,%r15), %rsi
 	movl	$4776, %edx
 	movq	%rbx, %rdi
 	addq	$4776, %r15
 	call	app
 	cmpq	%r15, %r13
-	jne	.L156
+	jne	.L109
 	movq	88(%rsp), %rax
 	subq	%fs:40, %rax
-	jne	.L157
+	jne	.L110
 	leaq	-40(%rbp), %rsp
 	popq	%rbx
 	popq	%r12
@@ -1224,80 +802,737 @@ app_signed_words:
 	.cfi_remember_state
 	.cfi_def_cfa 7, 8
 	ret
-.L136:
+.L89:
 	.cfi_restore_state
-	leaq	.LC19(%rip), %rdi
+	leaq	.LC9(%rip), %rdi
 	call	die
-.L157:
+.L110:
 	call	__stack_chk_fail@PLT
-.L156:
-	leaq	.LC20(%rip), %rdi
+.L109:
+	leaq	.LC10(%rip), %rdi
 	call	die
 	.cfi_endproc
 .LFE95:
 	.size	app_signed_words, .-app_signed_words
+	.section	.rodata.str1.1
+.LC11:
+	.string	"RF_ORACLE"
+.LC12:
+	.string	"RF_ORACLE unset"
+	.section	.rodata.str1.8
+	.align 8
+.LC13:
+	.string	"cannot connect to the oracle service"
+	.section	.rodata.str1.1
+.LC14:
+	.string	"SIGN write"
+.LC15:
+	.string	"SIGN read"
+.LC16:
+	.string	"SIGN refused"
+	.text
 	.p2align 4
-	.type	ws_node, @function
-ws_node:
-.LFB96:
+	.type	signed_file, @function
+signed_file:
+.LFB97:
 	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register 6
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	andq	$-32, %rsp
+	subq	$4096, %rsp
+	orq	$0, (%rsp)
+	subq	$864, %rsp
+	.cfi_offset 15, -24
+	.cfi_offset 14, -32
+	.cfi_offset 13, -40
+	.cfi_offset 12, -48
+	.cfi_offset 3, -56
+	movq	%rdi, 24(%rsp)
+	movl	svc(%rip), %edi
+	movq	%fs:40, %r13
+	movq	%r13, 4952(%rsp)
+	movq	%rsi, %r13
+	testl	%edi, %edi
+	js	.L134
+.L113:
+	leaq	160(%rsp), %r12
+	movl	$16, %edx
+	movq	$2, 160(%rsp)
+	movq	$0, 168(%rsp)
+	movq	%r12, %rsi
+	call	write@PLT
+	cmpq	$16, %rax
+	jne	.L135
+	xorl	%ebx, %ebx
+	.p2align 4
+	.p2align 3
+.L117:
+	movl	$16, %edx
+	movl	svc(%rip), %edi
+	leaq	(%r12,%rbx), %rsi
+	subq	%rbx, %rdx
+	movq	%rdx, %rcx
+	call	__read_chk@PLT
+	testq	%rax, %rax
+	jle	.L122
+	addq	%rax, %rbx
+	cmpq	$15, %rbx
+	jbe	.L117
+	cmpb	$0, 160(%rsp)
+	jne	.L119
+	movq	%r12, %rdx
+	leaq	152(%rsp), %rsi
+	xorl	%eax, %eax
+	.p2align 5
+	.p2align 4
+	.p2align 3
+.L120:
+	movzbl	15(%rdx), %ecx
+	salq	$8, %rax
+	subq	$1, %rdx
+	orq	%rcx, %rax
+	cmpq	%rdx, %rsi
+	jne	.L120
+	cmpq	$4772, %rax
+	jne	.L119
+	xorl	%r14d, %r14d
+	leaq	176(%rsp), %r15
+	.p2align 4
+	.p2align 3
+.L121:
+	movl	$4772, %edx
+	movl	svc(%rip), %edi
+	leaq	(%r15,%r14), %rsi
+	subq	%r14, %rdx
+	movq	%rdx, %rcx
+	call	__read_chk@PLT
+	testq	%rax, %rax
+	jle	.L122
+	addq	%rax, %r14
+	cmpq	$4771, %r14
+	jbe	.L121
+	movq	%r12, %rdx
+	xorl	%eax, %eax
+	.p2align 5
+	.p2align 4
+	.p2align 3
+.L123:
+	shrx	%rax, %r13, %rcx
+	addl	$8, %eax
+	movb	%cl, (%rdx)
+	addq	$1, %rdx
+	cmpl	$64, %eax
+	jne	.L123
+	movl	$8, %edx
+	movq	%r12, %rsi
+	leaq	32(%rsp), %rdi
+	movq	$0, 32(%rsp)
+	movq	$0, 40(%rsp)
+	call	app
+	movq	24(%rsp), %rsi
+	movq	%r13, %rdx
+	leaq	32(%rsp), %rdi
+	call	app
+	movl	$8, %edx
+	movq	%r12, %rsi
+	movq	$0, 160(%rsp)
+	leaq	32(%rsp), %rdi
+	call	app
+	movl	176(%rsp), %esi
+	movq	%r12, %rdx
+	xorl	%eax, %eax
+	.p2align 5
+	.p2align 4
+	.p2align 3
+.L124:
+	shrx	%rax, %rsi, %rcx
+	addl	$8, %eax
+	movb	%cl, (%rdx)
+	addq	$1, %rdx
+	cmpl	$64, %eax
+	jne	.L124
+	movl	$8, %edx
+	movq	%r12, %rsi
+	leaq	32(%rsp), %rdi
+	call	app
+	movl	$4768, %edx
+	leaq	32(%rsp), %rdi
+	leaq	180(%rsp), %rsi
+	call	app
+	movq	32(%rsp), %rax
+	movq	40(%rsp), %rdx
+	movq	4952(%rsp), %rcx
+	subq	%fs:40, %rcx
+	jne	.L136
+	leaq	-40(%rbp), %rsp
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_remember_state
+	.cfi_def_cfa 7, 8
+	ret
+	.p2align 4,,10
+	.p2align 3
+.L134:
+	.cfi_restore_state
+	leaq	.LC11(%rip), %rdi
+	call	getenv@PLT
+	testq	%rax, %rax
+	je	.L137
+	movl	$1, %edx
+	vpxor	%xmm0, %xmm0, %xmm0
+	leaq	50(%rsp), %rdi
+	movq	%rax, %rsi
+	movw	%dx, 48(%rsp)
+	movl	$107, %edx
+	vmovdqu	%ymm0, 114(%rsp)
+	vmovdqu	%ymm0, 50(%rsp)
+	vmovdqu	%ymm0, 82(%rsp)
+	vmovdqu	%xmm0, 142(%rsp)
+	vzeroupper
+	call	strncpy@PLT
+	xorl	%edx, %edx
+	movl	$1, %esi
+	movl	$1, %edi
+	call	socket@PLT
+	movl	%eax, svc(%rip)
+	testl	%eax, %eax
+	js	.L116
+	movl	$110, %edx
+	leaq	48(%rsp), %rsi
+	movl	%eax, %edi
+	call	connect@PLT
+	testl	%eax, %eax
+	jne	.L116
+	movl	svc(%rip), %edi
+	jmp	.L113
+.L122:
+	leaq	.LC15(%rip), %rdi
+	call	die
+.L135:
+	leaq	.LC14(%rip), %rdi
+	call	die
+.L136:
+	call	__stack_chk_fail@PLT
+.L119:
+	leaq	.LC16(%rip), %rdi
+	call	die
+.L137:
+	leaq	.LC12(%rip), %rdi
+	call	die
+.L116:
+	leaq	.LC13(%rip), %rdi
+	call	die
+	.cfi_endproc
+.LFE97:
+	.size	signed_file, .-signed_file
+	.p2align 4
+	.type	prove_node, @function
+prove_node:
+.LFB101:
+	.cfi_startproc
+	pushq	%rbp
+	.cfi_def_cfa_offset 16
+	.cfi_offset 6, -16
+	movq	%rsp, %rbp
+	.cfi_def_cfa_register 6
+	pushq	%r15
+	.cfi_offset 15, -24
+	movq	%rsi, %r15
+	pushq	%r14
+	.cfi_offset 14, -32
+	movq	%rdx, %r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%rbx
+	andq	$-32, %rsp
+	addq	$-128, %rsp
+	.cfi_offset 13, -40
+	.cfi_offset 12, -48
+	.cfi_offset 3, -56
+	vmovdqu	(%rsi), %ymm0
+	movq	16(%rbp), %r13
+	movq	%rcx, 24(%rsp)
+	leaq	48(%rsp), %rsi
+	movq	%r8, 16(%rsp)
+	movq	%fs:40, %r12
+	movq	%r12, 120(%rsp)
+	movq	24(%rbp), %r12
+	vmovdqu	%ymm0, 49(%rsp)
+	vmovdqu	(%rdx), %ymm0
+	movl	$65, %edx
+	movb	$78, 48(%rsp)
+	vmovdqu	%ymm0, 81(%rsp)
+	vzeroupper
+	call	keccak256
+	movl	$1, %esi
+	leaq	32(%rsp), %rdi
+	movq	$0, 32(%rsp)
+	movq	$0, 40(%rsp)
+	call	app64
+	movl	$32, %edx
+	movq	%r15, %rsi
+	leaq	32(%rsp), %rdi
+	call	app
+	movl	$32, %edx
+	movq	%r14, %rsi
+	leaq	32(%rsp), %rdi
+	call	app
+	movq	24(%rsp), %rsi
+	movq	16(%rsp), %rdx
+	leaq	32(%rsp), %rdi
+	call	app_signed_words
+	movq	%r13, %rsi
+	movq	%r12, %rdx
+	leaq	32(%rsp), %rdi
+	call	app_signed_words
+	movq	32(%rsp), %rbx
+	movq	40(%rsp), %rdx
+	movq	%rbx, %rdi
+	movq	%rdx, %rsi
+	call	signed_file
+	movq	%rbx, %rdi
+	movq	%rax, %r12
+	movq	%rdx, %r13
+	call	free@PLT
+	movq	120(%rsp), %rax
+	subq	%fs:40, %rax
+	jne	.L141
+	leaq	-40(%rbp), %rsp
+	movq	%r12, %rax
+	movq	%r13, %rdx
+	popq	%rbx
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	.cfi_remember_state
+	.cfi_def_cfa 7, 8
+	ret
+.L141:
+	.cfi_restore_state
+	call	__stack_chk_fail@PLT
+	.cfi_endproc
+.LFE101:
+	.size	prove_node, .-prove_node
+	.section	.rodata.str1.1
+.LC17:
+	.string	"chain%d.json"
+.LC18:
+	.string	""
+.LC19:
+	.string	"\"n\":"
+.LC20:
+	.string	"\"start\":"
+.LC21:
+	.string	"%2x"
+	.text
+	.p2align 4
+	.type	prove_x, @function
+prove_x:
+.LFB102:
+	.cfi_startproc
+	leaq	8(%rsp), %r10
+	.cfi_def_cfa 10, 0
+	andq	$-32, %rsp
+	pushq	-8(%r10)
+	pushq	%rbp
+	movq	%rsp, %rbp
+	.cfi_escape 0x10,0x6,0x2,0x76,0
+	pushq	%r15
+	pushq	%r14
+	pushq	%r13
+	pushq	%r12
+	pushq	%r10
+	.cfi_escape 0xf,0x3,0x76,0x58,0x6
+	.cfi_escape 0x10,0xf,0x2,0x76,0x78
+	.cfi_escape 0x10,0xe,0x2,0x76,0x70
+	.cfi_escape 0x10,0xd,0x2,0x76,0x68
+	.cfi_escape 0x10,0xc,0x2,0x76,0x60
+	pushq	%rbx
+	.cfi_escape 0x10,0x3,0x2,0x76,0x50
+	leaq	-176(%rbp), %rbx
+	subq	$512, %rsp
+	movq	%fs:40, %rax
+	movq	%rax, -56(%rbp)
+	leaq	-432(%rbp), %rax
+	movq	%rdi, -560(%rbp)
+	movq	$0, -488(%rbp)
+	movq	%rax, -496(%rbp)
+	leaq	-240(%rbp), %rax
+	movq	%rax, -528(%rbp)
+	leaq	-464(%rbp), %rax
+	movq	%rax, -536(%rbp)
+.L152:
+	movq	-528(%rbp), %r14
+	movl	-488(%rbp), %r9d
+	movl	$32, %ecx
+	xorl	%eax, %eax
+	leaq	.LC17(%rip), %r8
+	movl	$32, %esi
+	movl	$2, %edx
+	movq	%r14, %rdi
+	call	__snprintf_chk@PLT
+	movq	%r14, %rdi
+	call	readfile
+	movq	-536(%rbp), %rdi
+	leaq	.LC18(%rip), %rsi
+	movq	%rdx, -456(%rbp)
+	movl	$1, %edx
+	movq	%rax, -464(%rbp)
+	call	app
+	movq	-464(%rbp), %r14
+	leaq	.LC19(%rip), %rsi
+	movq	%r14, %rdi
+	movq	%r14, -504(%rbp)
+	call	strstr@PLT
+	leaq	.LC20(%rip), %rsi
+	movq	%r14, %rdi
+	movq	%rax, %r12
+	call	strstr@PLT
+	testq	%r12, %r12
+	je	.L145
+	testq	%rax, %rax
+	je	.L145
+	leaq	8(%rax), %rdi
+	movl	$34, %esi
+	call	strchr@PLT
+	testq	%rax, %rax
+	je	.L145
+	leaq	1(%rax), %r14
+	leaq	-208(%rbp), %r15
+	.p2align 4
+	.p2align 3
+.L147:
+	xorl	%eax, %eax
+	leaq	-468(%rbp), %rdx
+	leaq	.LC21(%rip), %rsi
+	movq	%r14, %rdi
+	call	__isoc23_sscanf@PLT
+	cmpl	$1, %eax
+	jne	.L145
+	movl	-468(%rbp), %eax
+	addq	$1, %r15
+	addq	$2, %r14
+	movb	%al, -1(%r15)
+	cmpq	%r15, %rbx
+	jne	.L147
+	movq	-488(%rbp), %r15
+	leaq	-368(%rbp), %rax
+	leaq	4(%r12), %rdi
+	xorl	%esi, %esi
+	movq	%rax, -552(%rbp)
+	movl	$10, %edx
+	leaq	-112(%rbp), %r12
+	salq	$5, %r15
+	addq	%r15, %rax
+	movq	%rax, -512(%rbp)
+	call	__isoc23_strtoull@PLT
+	vmovdqa	-208(%rbp), %ymm0
+	movq	%rax, %r14
+	vmovdqa	%ymm0, -144(%rbp)
+	testq	%rax, %rax
+	je	.L148
+	xorl	%r15d, %r15d
+	leaq	-112(%rbp), %r12
+	.p2align 4
+	.p2align 3
+.L149:
+	movb	$67, -112(%rbp)
+	movl	$33, %edx
+	movq	%r12, %rsi
+	movq	%rbx, %rdi
+	vmovdqu	%ymm0, -111(%rbp)
+	vmovdqa	%ymm0, -176(%rbp)
+	vzeroupper
+	call	keccak256
+	addq	$1, %r15
+	vmovdqa	-176(%rbp), %ymm0
+	cmpq	%r15, %r14
+	jne	.L149
+.L148:
+	movb	$76, -112(%rbp)
+	leaq	-79(%rbp), %rdx
+	xorl	%eax, %eax
+	vmovdqu	%ymm0, -111(%rbp)
+	.p2align 5
+	.p2align 4
+	.p2align 3
+.L150:
+	shrx	%rax, %r14, %rcx
+	addl	$8, %eax
+	movb	%cl, (%rdx)
+	addq	$1, %rdx
+	cmpl	$64, %eax
+	jne	.L150
+	movq	-512(%rbp), %rdi
+	movl	$41, %edx
+	movq	%r12, %rsi
+	vzeroupper
+	call	keccak256
+	movq	$0, (%r12)
+	movq	%r12, %rsi
+	movl	$8, %edx
+	leaq	-448(%rbp), %rdi
+	movq	$0, -448(%rbp)
+	movq	$0, -440(%rbp)
+	call	app
+	leaq	-144(%rbp), %rax
+	movl	$32, %edx
+	leaq	-448(%rbp), %rdi
+	movq	%rax, %rsi
+	movq	%rax, -544(%rbp)
+	call	app
+	movq	%r12, %rdx
+	xorl	%eax, %eax
+	.p2align 5
+	.p2align 4
+	.p2align 3
+.L151:
+	shrx	%rax, %r14, %rcx
+	addl	$8, %eax
+	movb	%cl, (%rdx)
+	addq	$1, %rdx
+	cmpl	$64, %eax
+	jne	.L151
+	movl	$8, %edx
+	movq	%r12, %rsi
+	leaq	-448(%rbp), %rdi
+	call	app
+	movq	-448(%rbp), %r15
+	movq	-440(%rbp), %rdx
+	movq	%r15, %rdi
+	movq	%rdx, %rsi
+	call	signed_file
+	movq	%r15, %rdi
+	movq	%rax, -520(%rbp)
+	movq	%rdx, -512(%rbp)
+	call	free@PLT
+	movq	-504(%rbp), %rdi
+	call	free@PLT
+	movq	-496(%rbp), %rsi
+	movq	-520(%rbp), %rax
+	movq	-512(%rbp), %rdx
+	addq	$1, -488(%rbp)
+	movq	%rax, (%rsi)
+	cmpq	$4, -488(%rbp)
+	leaq	16(%rsi), %rax
+	movq	%rdx, 8(%rsi)
+	movq	%rax, -496(%rbp)
+	jne	.L152
+	movq	-560(%rbp), %r14
+	movq	-544(%rbp), %r15
+	pushq	-408(%rbp)
+	leaq	-336(%rbp), %rdx
+	movq	-552(%rbp), %rsi
+	pushq	-416(%rbp)
+	movq	-432(%rbp), %rcx
+	movq	%r15, %rdi
+	movq	-424(%rbp), %r8
+	call	prove_node
+	pushq	-376(%rbp)
+	leaq	-304(%rbp), %rsi
+	movq	%r12, %rdi
+	pushq	-384(%rbp)
+	movq	%rdx, %rbx
+	leaq	-272(%rbp), %rdx
+	movq	%rax, %r13
+	movq	-400(%rbp), %rcx
+	movq	-392(%rbp), %r8
+	call	prove_node
+	addq	$32, %rsp
+	movq	%r13, %rcx
+	movq	%r15, %rsi
+	pushq	%rdx
+	movq	%rbx, %r8
+	movq	%r12, %rdx
+	movq	%r14, %rdi
+	pushq	%rax
+	call	prove_node
+	popq	%rcx
+	popq	%rsi
+	movq	-56(%rbp), %rcx
+	subq	%fs:40, %rcx
+	jne	.L166
+	leaq	-48(%rbp), %rsp
+	popq	%rbx
+	popq	%r10
+	.cfi_remember_state
+	.cfi_def_cfa 10, 0
+	popq	%r12
+	popq	%r13
+	popq	%r14
+	popq	%r15
+	popq	%rbp
+	leaq	-8(%r10), %rsp
+	.cfi_def_cfa 7, 8
+	ret
+.L145:
+	.cfi_restore_state
+	movq	-528(%rbp), %rdi
+	call	die
+.L166:
+	call	__stack_chk_fail@PLT
+	.cfi_endproc
+.LFE102:
+	.size	prove_x, .-prove_x
+	.section	.rodata.str1.8
+	.align 8
+.LC22:
+	.string	"usage: prover setup|first|step DIR"
+	.section	.rodata.str1.1
+.LC23:
+	.string	"cannot enter DIR"
+.LC24:
+	.string	"setup"
+.LC25:
+	.string	"first"
+.LC26:
+	.string	"done"
+.LC27:
+	.string	"step"
+.LC28:
+	.string	"prev.stmt"
+.LC29:
+	.string	"prev.bin"
+.LC30:
+	.string	"unknown mode"
+	.section	.text.startup,"ax",@progbits
+	.p2align 4
+	.globl	main
+	.type	main, @function
+main:
+.LFB107:
+	.cfi_startproc
+	endbr64
 	pushq	%r15
 	.cfi_def_cfa_offset 16
 	.cfi_offset 15, -16
-	movq	%rdi, %r15
 	pushq	%r14
 	.cfi_def_cfa_offset 24
 	.cfi_offset 14, -24
-	movq	%rsi, %r14
-	movl	$1, %esi
 	pushq	%r13
 	.cfi_def_cfa_offset 32
 	.cfi_offset 13, -32
-	movq	%rdx, %r13
 	pushq	%r12
 	.cfi_def_cfa_offset 40
 	.cfi_offset 12, -40
-	movq	%rcx, %r12
 	pushq	%rbp
 	.cfi_def_cfa_offset 48
 	.cfi_offset 6, -48
 	pushq	%rbx
 	.cfi_def_cfa_offset 56
 	.cfi_offset 3, -56
-	subq	$56, %rsp
-	.cfi_def_cfa_offset 112
-	movq	%r8, 8(%rsp)
+	subq	$152, %rsp
+	.cfi_def_cfa_offset 208
+	movq	%fs:40, %rax
+	movq	%rax, 136(%rsp)
+	xorl	%eax, %eax
+	cmpl	$3, %edi
+	jne	.L182
+	movq	16(%rsi), %rdi
+	movq	%rsi, %rbx
+	call	chdir@PLT
+	testl	%eax, %eax
+	jne	.L183
+	movq	8(%rbx), %rbx
+	leaq	.LC24(%rip), %rsi
+	movq	%rbx, %rdi
+	call	strcmp@PLT
+	testl	%eax, %eax
+	je	.L170
+	leaq	.LC25(%rip), %rsi
+	movq	%rbx, %rdi
+	call	strcmp@PLT
+	testl	%eax, %eax
+	je	.L184
+	leaq	.LC27(%rip), %rsi
+	movq	%rbx, %rdi
+	call	strcmp@PLT
+	testl	%eax, %eax
+	jne	.L172
+	call	handshake
+	leaq	.LC28(%rip), %rdi
+	call	readfile
 	leaq	16(%rsp), %rdi
-	movq	%fs:40, %rbp
-	movq	%rbp, 40(%rsp)
-	movq	%r9, %rbp
-	movq	$0, 16(%rsp)
-	movq	$0, 24(%rsp)
-	call	app64
-	movl	$32, %edx
-	movq	%r15, %rsi
-	leaq	16(%rsp), %rdi
+	leaq	.LC18(%rip), %rsi
+	movq	%rdx, 24(%rsp)
+	movl	$1, %edx
+	movq	%rax, 16(%rsp)
 	call	app
-	movl	$32, %edx
-	movq	%r14, %rsi
-	leaq	16(%rsp), %rdi
-	call	app
-	movq	%r13, %rsi
+	cmpq	$64, 24(%rsp)
+	jbe	.L173
+	movq	16(%rsp), %r15
+	leaq	32(%rsp), %r14
+	leaq	64(%rsp), %r13
+	movq	%r14, %rbx
+	leaq	12(%rsp), %r12
+	movq	%r15, %rbp
+	.p2align 4
+	.p2align 3
+.L175:
+	xorl	%eax, %eax
 	movq	%r12, %rdx
-	leaq	16(%rsp), %rdi
-	call	app_signed_words
-	movq	8(%rsp), %rsi
-	leaq	16(%rsp), %rdi
-	movq	%rbp, %rdx
-	call	app_signed_words
-	movq	16(%rsp), %rax
-	movq	24(%rsp), %rdx
-	movq	40(%rsp), %rcx
-	subq	%fs:40, %rcx
-	jne	.L161
-	addq	$56, %rsp
+	leaq	.LC21(%rip), %rsi
+	movq	%rbp, %rdi
+	call	__isoc23_sscanf@PLT
+	cmpl	$1, %eax
+	jne	.L173
+	movl	12(%rsp), %eax
+	addq	$1, %rbx
+	addq	$2, %rbp
+	movb	%al, -1(%rbx)
+	cmpq	%r13, %rbx
+	jne	.L175
+	movq	%r15, %rdi
+	call	free@PLT
+	leaq	.LC29(%rip), %rdi
+	call	readfile
+	movq	%rbx, %rdi
+	movq	%rax, %r12
+	movq	%rdx, %rbp
+	call	prove_x
+	leaq	96(%rsp), %rdi
+	movq	%r12, %rcx
+	movq	%rbp, %r8
+	pushq	%rdx
+	.cfi_def_cfa_offset 216
+	movq	%r14, %rsi
+	movq	%rbx, %rdx
+	pushq	%rax
+	.cfi_def_cfa_offset 224
+	call	prove_node
+	movq	%rdx, %rsi
+	movq	%rax, %rdi
+	call	writefile.constprop.0
+	leaq	.LC26(%rip), %rdi
+	call	puts@PLT
+	movq	stdout(%rip), %rdi
+	call	fflush@PLT
+	popq	%rax
+	.cfi_def_cfa_offset 216
+	popq	%rdx
+	.cfi_def_cfa_offset 208
+.L170:
+	movq	136(%rsp), %rax
+	subq	%fs:40, %rax
+	jne	.L185
+	addq	$152, %rsp
 	.cfi_remember_state
 	.cfi_def_cfa_offset 56
+	xorl	%eax, %eax
 	popq	%rbx
 	.cfi_def_cfa_offset 48
 	popq	%rbp
@@ -1311,173 +1546,35 @@ ws_node:
 	popq	%r15
 	.cfi_def_cfa_offset 8
 	ret
-.L161:
+.L184:
 	.cfi_restore_state
-	call	__stack_chk_fail@PLT
-	.cfi_endproc
-.LFE96:
-	.size	ws_node, .-ws_node
-	.section	.rodata.str1.8
-	.align 8
-.LC21:
-	.string	"usage: prover setup|first|step DIR"
-	.section	.rodata.str1.1
-.LC22:
-	.string	"cannot enter DIR"
-.LC23:
-	.string	"setup"
-.LC24:
-	.string	"first"
-.LC25:
-	.string	"chainA.json"
-.LC26:
-	.string	"chainB.json"
-.LC27:
-	.string	"done"
-.LC28:
-	.string	"step"
-.LC29:
-	.string	"prev.stmt"
-.LC30:
-	.string	"prev.bin"
-.LC31:
-	.string	"chain.json"
-.LC32:
-	.string	"unknown mode"
-	.section	.text.startup,"ax",@progbits
-	.p2align 4
-	.globl	main
-	.type	main, @function
-main:
-.LFB103:
-	.cfi_startproc
-	endbr64
-	pushq	%r15
-	.cfi_def_cfa_offset 16
-	.cfi_offset 15, -16
-	pushq	%r14
-	.cfi_def_cfa_offset 24
-	.cfi_offset 14, -24
-	pushq	%rbx
-	.cfi_def_cfa_offset 32
-	.cfi_offset 3, -32
-	subq	$112, %rsp
-	.cfi_def_cfa_offset 144
-	movq	%fs:40, %rax
-	movq	%rax, 104(%rsp)
-	xorl	%eax, %eax
-	cmpl	$3, %edi
-	jne	.L176
-	movq	16(%rsi), %rdi
-	movq	%rsi, %rbx
-	call	chdir@PLT
-	testl	%eax, %eax
-	jne	.L177
-	movq	8(%rbx), %rbx
-	leaq	.LC23(%rip), %rsi
-	movq	%rbx, %rdi
-	call	strcmp@PLT
-	testl	%eax, %eax
-	je	.L165
-	leaq	.LC24(%rip), %rsi
-	movq	%rbx, %rdi
-	call	strcmp@PLT
-	testl	%eax, %eax
-	je	.L178
-	leaq	.LC28(%rip), %rsi
-	movq	%rbx, %rdi
-	call	strcmp@PLT
-	testl	%eax, %eax
-	jne	.L167
 	call	handshake
-	leaq	.LC29(%rip), %rdi
-	call	readfile
-	leaq	16(%rsp), %rdi
-	leaq	.LC13(%rip), %rsi
-	movq	%rdx, 24(%rsp)
-	movl	$1, %edx
-	movq	%rax, 16(%rsp)
-	call	app
-	cmpq	$64, 24(%rsp)
-	jbe	.L169
-	movq	16(%rsp), %rdx
-	leaq	32(%rsp), %rdi
-	movq	%rdx, %rsi
-	movq	%rdx, 8(%rsp)
-	call	unhex.constprop.0
-	testl	%eax, %eax
-	jne	.L169
-	movq	8(%rsp), %rdi
-	call	free@PLT
-	leaq	.LC30(%rip), %rdi
-	call	readfile
-	leaq	64(%rsp), %rsi
-	leaq	.LC31(%rip), %rdi
-	movq	%rsi, 8(%rsp)
-	movq	%rax, %r14
-	movq	%rdx, %r15
-.L175:
-	call	prove_chain_file
-	movq	8(%rsp), %rsi
-	movq	%r15, %rcx
-	leaq	32(%rsp), %rdi
-	movq	%rdx, %r9
-	movq	%rax, %r8
-	movq	%r14, %rdx
-	call	ws_node
-	movq	%rax, %rdi
-	movq	%rdx, %rsi
-	call	signed_file
+	leaq	96(%rsp), %rdi
+	call	prove_x
 	movq	%rax, %rdi
 	movq	%rdx, %rsi
 	call	writefile.constprop.0
-	leaq	.LC27(%rip), %rdi
+	leaq	.LC26(%rip), %rdi
 	call	puts@PLT
 	movq	stdout(%rip), %rdi
 	call	fflush@PLT
-.L165:
-	movq	104(%rsp), %rax
-	subq	%fs:40, %rax
-	jne	.L179
-	addq	$112, %rsp
-	.cfi_remember_state
-	.cfi_def_cfa_offset 32
-	xorl	%eax, %eax
-	popq	%rbx
-	.cfi_def_cfa_offset 24
-	popq	%r14
-	.cfi_def_cfa_offset 16
-	popq	%r15
-	.cfi_def_cfa_offset 8
-	ret
-.L178:
-	.cfi_restore_state
-	call	handshake
-	leaq	32(%rsp), %rsi
-	leaq	.LC25(%rip), %rdi
-	call	prove_chain_file
-	leaq	64(%rsp), %rsi
-	leaq	.LC26(%rip), %rdi
-	movq	%rsi, 8(%rsp)
-	movq	%rax, %r14
-	movq	%rdx, %r15
-	jmp	.L175
-.L169:
-	leaq	.LC29(%rip), %rdi
+	jmp	.L170
+.L173:
+	leaq	.LC28(%rip), %rdi
 	call	die
-.L177:
+.L183:
+	leaq	.LC23(%rip), %rdi
+	call	die
+.L182:
 	leaq	.LC22(%rip), %rdi
 	call	die
-.L176:
-	leaq	.LC21(%rip), %rdi
-	call	die
-.L179:
+.L185:
 	call	__stack_chk_fail@PLT
-.L167:
-	leaq	.LC32(%rip), %rdi
+.L172:
+	leaq	.LC30(%rip), %rdi
 	call	die
 	.cfi_endproc
-.LFE103:
+.LFE107:
 	.size	main, .-main
 	.section	.rodata
 	.align 8

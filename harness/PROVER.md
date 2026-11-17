@@ -38,7 +38,7 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 |---|---|
 | `/prover/prover` | the binary (read-only) |
 | `/setup` | the setup directory (read-only after `setup`) |
-| `/work` | the request's own directory, read-write, the working directory |
+| `/work` | the request's own directory, read-write, the working directory (fresh for every request) |
 | `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`) |
 | `/tmp` | an empty tmpfs (counted in the memory cap) |
 | `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes, but `/proc/stat`, `/proc/cpuinfo` and `/proc/meminfo` are the machine's (global) |
@@ -47,7 +47,7 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 Nothing else exists: no `/usr`, no shell, no network, no other process. The environment is
 `RF_ORACLE=/run/rf/oracle.sock`, `RF_SETUP=/setup`, `HOME=/work`, `TMPDIR=/tmp`, `PATH=/prover`.
 Resources: every CPU of the machine (shared with the service, which computes the oracle on the same
-CPUs), memory capped by a cgroup (`memory.prover` of the season, 11 GiB in season 1; the service
+CPUs), memory capped by a cgroup (`memory.prover` of the season, 8 GiB in season 1; the service
 has its own 2 GiB), `oom_score_adj = 1000`. A seccomp filter fails (EPERM) `ptrace`,
 `process_vm_*`, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_*`, key management, mounts,
 namespaces and module loading. When a request ends, every process the prover started is killed.
@@ -72,34 +72,62 @@ A prover with nothing to set up exits 0.
 
 ### The stream: `prover first /work`, then `prover step /work` (timed per request)
 
-**One benchmark, pure IVC** (AGENTS.md §6). An evaluation is one stream of `M` steps under one
-service lifetime; every step is a fresh process; nothing survives a request except the proof the
-runner copies, so **state between steps travels only inside `π`**.
+**One benchmark, pure IVC** (AGENTS.md §6). An evaluation is one stream of `M` steps (`M = 8` in
+season 1, 4 in the smoke) under one service lifetime, run once against the service and then twice
+more, timed, against its replay (below). Every step is a fresh process in a fresh sandbox (fresh
+`/work`, fresh `/tmp`, read-only `/setup`); nothing survives a request except the proof the runner
+copies, so **state between steps travels only inside `π`**.
 
-- **Step 1** (`prover first /work`): inputs `chainA.json`, `chainB.json`. Output `proof.bin`: a
-  signed proof of `nodeStmt (leafStmt (chainEnd a nA) nA) (leafStmt (chainEnd b nB) nB)`.
-- **Step i ≥ 2** (`prover step /work`): inputs `prev.stmt`, `prev.bin` (the previous step's
-  statement and its signed proof, exactly as the runner received it) and `chain.json`. Output
-  `proof.bin`: a signed proof of `nodeStmt prev (leafStmt (chainEnd s n) n)`.
+Every step proves four fresh chains of exactly `n` steps (`n = 2^20`, the contract's `chainCap`, in
+season 1; 32 in the smoke), `n_i = 4n` permutations per step:
+
+```
+L_ij = leafStmt (chainEnd s_ij n) n                                   j = 1 … 4
+X_i  = nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)
+c_1  = X_1,        c_i = nodeStmt c_{i-1} X_i                         (i = 2 … M)
+```
+
+- **Step 1** (`prover first /work`): inputs `chain0.json` … `chain3.json` (the chains `s_11 … s_14`).
+  Output `proof.bin`: a signed proof of `c_1 = X_1`.
+- **Step i ≥ 2** (`prover step /work`): inputs `prev.stmt` (`c_{i-1}`), `prev.bin` (the previous
+  step's output, exactly as the runner received it in the service run) and `chain0.json` …
+  `chain3.json`. Output `proof.bin`: a signed proof of `c_i = nodeStmt c_{i-1} X_i`.
 
 A step may make any number of `SIGN` requests within the lifetime's budget of `2^16` signatures (a
-node needs a signed proof of its leaf child as its witness). The runner computes every statement
-itself; every output is checked with `acc` under the run's `vk` against that statement, and must
-be accepted.
+node needs signed proofs of its children as its witness). The runner computes every statement
+itself and checks outputs against them (below).
 
-**What is fixed, what is drawn, and what is told** (AGENTS.md §6). The chain lengths are **fixed
-and published**: `[stream] lengths` in `harness/season.toml` (`M + 1` values in `[2^17, 2^20]`:
-step 1's two chains, then one per step; `harness/smoke.toml` has its own), the same for every
-evaluation and every entry, derived once from public SHA-256 values through the inverse CDF of the
-density `∝ 1/n²` (the file states how). The chain **starts** are fresh secret draws per evaluation
-from the OS CSPRNG, published only after the run; a step learns its chain's start only when its
-inputs arrive. The sequence may change between seasons, so a prover tuned to these exact lengths
-gains nothing lasting. The number of steps is **not** drawn either: `M = 96` in season 1 (6 in the
-smoke), the same for every entry. Two cross-step side channels exist and are harmless given the
-re-timing rule below: the signature index the service returns (how many signatures this lifetime made) and
-`CLOCK_REALTIME`. With `M` public a step can count its position anyway;
-leaving the last few chains to the final check gains about 0.4–1.0 % at most (estimate), because
-the verifier charge prices the work it creates.
+**What is fixed, what is drawn, and what is told** (AGENTS.md §6). The shape is **fixed and
+published**: `M`, the four chains per step and their one length `n` (`[stream]` of
+`harness/season.toml`; `harness/smoke.toml` has its own), the same for every evaluation and every
+entry. The chain **starts** (`4 · M` of them) are fresh secret draws per evaluation from the OS
+CSPRNG, published only after the run; a step learns its chains' starts only when its inputs arrive.
+
+**The two runs** (AGENTS.md §6).
+
+1. **The service run** (untimed): the stream as above against the service, under `step_s` per
+   request and the benchmark's `stream_s`. No key is anywhere in the prover's reach. Its times are
+   recorded (`P_service_s`), never scored. Every output is kept and checked (below) before any
+   secret is revealed.
+2. **The timed passes** (`timed_runs = 2`): the runner removes every request directory of the
+   service run, then, before each pass, puts the service in **replay mode**: it reveals its PRF key
+   `k`, resets its one-time-key counter to 0, and from then on answers `SIGN` at index `j` only if
+   the trace digest equals the one it signed at index `j` in the service run (it returns that same
+   signature), else it refuses with status 4 `MISMATCH` (`service/PROTOCOL.md`); `QUERY` is served
+   unchanged. Each pass runs steps `1 … M` again, each a fresh sandbox, with the same chains, the
+   runner's `prev.stmt`, the **service run's** output of step `i − 1` as `prev.bin`, and one more
+   input, **`oracle.key`**: `k` as 64 lowercase hex characters and a newline, staged with the other
+   inputs, so it appears in `/work` only when the clock runs (every `k`-dependent computation is
+   timed). A prover may use `k` to compute oracle answers itself instead of asking the service, or
+   ignore it; it may branch on whether `/work/oracle.key` exists.
+
+**Determinism is required.** Each timed output must be **byte-identical** to the service run's
+output of that step; otherwise the entry is REJECTed, the reason naming the pass, the step and the
+first differing byte offset. A prover's output must be a function of its inputs, its setup and the
+oracle answers: no clock, no `/dev/urandom`, no thread-order dependence in what it writes, a
+deterministic grinding order (for example the least nonce in a fixed search order), and its `SIGN`
+requests in an order its inputs fix (the service assigns one-time indices in the order `SIGN`
+requests arrive, and a replay refuses any other digest at an index).
 
 **The handshake** (per request):
 
@@ -122,38 +150,40 @@ exists, or because of what a prover left behind, is the entry's failure**: an in
 taken, the directory made unreadable, the filesystem filled so that the runner's own writes fail,
 files the runner cannot remove, the filesystem left fuller after cleanup.
 
-**Between steps** the runner checks outputs (in batches of `check_every` = 8, each batch warmed
-by an untimed check of its first output, each `V_i` one measurement, pinned to one core) and takes
-calibration samples, **never while an entry process is alive**. No check has a time cap of its
-own. The whole stream, every request, check, canary, calibration sample and re-run,
-runs within `stream_s` (3,000 s, wall time; the season file's value binds, and a later season may
-set another). A stream that reaches it is scored over its completed steps and flagged
-`truncated`; such a run is never ranked.
+**The checks of the service run** (AGENTS.md §6, §7), never while an entry process is alive:
 
-**Re-timing** (AGENTS.md §6). After the stream the runner fits `P ≈ a·n + b` (trimmed least squares) and
-runs once more, on the same inputs, every step with `P_i > 1.3 × (a·n_i + b)`, largest ratio first,
-at most 10% of the steps. The faster run is kept and scored (its time, its `V` and its `|π|`); the
-first output stays the child of the next step. The re-run's output must be accepted too.
+- every output's size is at most `pi_cap` (1 MiB): its `|π|` if it parses as a signed proof
+  (`harness/FORMAT.md`) and `acc` accepts it, else its file size;
+- every output is checked with `acc` under the run's `vk` against the runner's statement `c_i`, in
+  batches of `check_every` (8) between steps, each batch warmed by an untimed check of its first
+  output, each `V_i` one measurement on one pinned core; a `V_i` above `v_cap` (128 ms) is timed
+  twice more and the minimum counts;
+- the **final** output (step `M`) must be accepted, with `|π_M| ≤ final_pi_cap` (512 KiB) and
+  `V_M ≤ v_cap`, and its statement canaries rejected (`c_M` with its first bit flipped, and its
+  first child `c_{M-1}`): the track **`final`**;
+- the track **`every`** additionally needs every intermediate output accepted with `V_i ≤ v_cap`
+  and the statement canaries of outputs 1 and 2 rejected (output 1's first child is
+  `nodeStmt L_11 L_12`). An entry that meets `final` but not `every` is scored in `final` only, the
+  result saying why (`score.tracks_reason`); intermediate outputs need not be proofs at all.
 
-**The scores** (AGENTS.md §7; two tracks, each with its own records; lower is better, seconds per
-`2^18`-permutation step):
+No check has a time cap of its own. The whole benchmark, the service run, every request, check,
+canary, calibration sample and both timed passes, runs within `stream_s` (3,000 s, wall time; the
+season file's value binds, and a later season may set another); reaching it is the entry's
+REJECT.
+
+**The score** (AGENTS.md §7; one score, both tracks; lower is better, seconds):
 
 ```
-S   = P̄ + V̄                                                     the sum
-S×  = P̄ · (1 + (V̄ₘ / v_ref)^2),   V̄ₘ = (1/M) · Σ_i V_i            the product
-P̄   = 2^18 · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)
-V̄   = κ · (1/M) · Σ_i x_i,   x_i = V_i / v_ref + |π_i| / 2 MiB,   κ = 3.2975 s
+S   = P̄ · 2^(|π_M| / 1 MiB)
+P̄   = 2^18 · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)      = (mean_i P_i^3)^(1/3) / 16 at n_i = 2^22
+P_i = the minimum of step i's two timed times
 ```
 
-`P_i` the step's time, `n_i` its new permutations, one per chain step (step 1: `nA + nB`), `V_i`
-one `acc` check of the step's file (parse included), `v_ref = T_triv / 10` (`T_triv` the
-organiser's chain checker on `2^24` permutations, measured on the evaluation machine), `|π_i|` the
-bytes of `π` alone. **There is no proof cap**: in the sum `|π|` is priced (100 KB of `π` costs
-about as much as 30 ms of verifier at `s_ref` = 2 MiB and `v_ref` = 659.5 ms); the product does not
-price it; `acc` only requires its length to fit a 64-bit word. Compact accumulation (folding with a running
-state inside `π`) is a wanted design: `s_ref` keeps winning proofs within a few MB. The per-step
-records (`WORK/stream.jsonl`, and `stream.steps` in the result) give every term, the fit, the
-marginal values of both scores and the share of each step.
+`|π_M|` the bytes of the final output's `π` alone. `V` is not scored (it is capped), nor the size of
+any intermediate output (capped), nor the service run's times. The cubic mean prices deferral:
+moving all work into the last step multiplies `P̄` by `M^(2/3) = 4`. The per-step records
+(`WORK/stream.jsonl`, and `stream.steps` in the result) give the service run's time, both timed
+times, `|π|`, `V` and each step's share of the cubic sum.
 
 ## 4. The oracle
 
@@ -168,20 +198,21 @@ queries. The service's measured throughput on the job's machine is published in 
 
 ## 5. What fails a run
 
-A prover build or setup that fails or exceeds `build_s`, `setup_s` or `setup_cap`; a request with no
-`ready` line within `ready_s`, a non-zero exit, a timeout of `step_s`, or a missing, non-regular or
-over-cap (`file_cap`, 64 MiB) `proof.bin`; any output `acc` rejects (re-runs included); a statement
-canary `acc` accepts (the outputs of steps 1, 2 and `M`, checked against their statement with one bit
-flipped, against the next step's leaf statement and against their first child's statement); a crash
-of the checker; a filesystem error the prover caused in `/work`; the service dying during the run.
-No time is a pass/fail gate on the verifier: `V_i` is scored. Reaching `stream_s` is not a failure: the run is scored over its
-completed steps, flagged `truncated` and not ranked. Every job of an evaluation ends within
-30 minutes, the certificate job within 50 and the benchmark job within 70, and these caps are nested
-inside them. The first failure ends the evaluation (`harness/run-benchmark.py`). The reason in the
-result names the cause: the prover's output (its first 16 KiB and last 48 KiB are kept; the reason
-quotes the tail), the service's refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g.
-a query above 2^20 bytes), and a kill by the memory cgroup (`killed: out of memory (cap …, peak
-…)`).
+A prover build or setup that fails or exceeds `build_s`, `setup_s` or `setup_cap`; a request (of the
+service run or of a timed pass) with no `ready` line within `ready_s`, a non-zero exit, a timeout of
+`step_s`, or a missing, non-regular or over-cap (`file_cap`, 64 MiB) `proof.bin`; any output above
+`pi_cap`; a final output that `acc` rejects, above `final_pi_cap`, with `V_M` above `v_cap` (the
+minimum of three checks), or whose statement canary `acc` accepts; a timed output that is not
+byte-identical to the service run's output of its step; a crash or timeout of the checker; a
+filesystem error the prover caused in `/work`; the service dying during the run; the benchmark
+reaching `stream_s`. An intermediate output that `acc` rejects, or above `v_cap`, or a canary of
+output 1 or 2 that `acc` accepts, does not fail the run: it leaves the entry out of the track
+`every`. Every job of an evaluation ends within 30 minutes, the certificate job within 50 and the
+benchmark job within 70, and these caps are nested inside them. The first failure ends the
+evaluation (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's
+output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's
+refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes, or a
+replay `MISMATCH`), and a kill by the memory cgroup (`killed: out of memory (cap …, peak …)`).
 
 ## 6. The Lean side's caps (the certificate job)
 

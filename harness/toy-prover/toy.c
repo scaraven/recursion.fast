@@ -6,17 +6,25 @@
  * empty and every proof is signed by one `SIGN` request with no items (service/PROTOCOL.md).
  * It computes the public Keccak-256 chains and statements itself, to name the children of a node. Its
  * proofs grow with every step (a node carries its children whole): it is a correct, slow entry.
+ * Per step it signs, in this fixed order (the service's one-time indices follow the order of the
+ * SIGN requests, and the timed passes must reproduce the service run byte for byte): the four
+ * leaves L1 … L4, N12 = nodeStmt L1 L2, N34 = nodeStmt L3 L4, X = nodeStmt N12 N34, and for a step
+ * i >= 2 the output nodeStmt prev X. It makes no oracle query, so it never reads oracle.key.
  *
  *   prover setup DIR      nothing to set up
- *   prover first DIR      ready/go handshake; DIR/chainA.json, DIR/chainB.json -> DIR/proof.bin, a signed
- *                         proof of nodeStmt (leaf A) (leaf B)
- *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/chain.json -> DIR/proof.bin,
- *                         a signed proof of nodeStmt prev (leaf)
+ *   prover first DIR      ready/go handshake; DIR/chain0.json … DIR/chain3.json -> DIR/proof.bin, a
+ *                         signed proof of X
+ *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/chain0.json …
+ *                         DIR/chain3.json -> DIR/proof.bin, a signed proof of nodeStmt prev X
  *
  * Built with -DBROKEN_CHAIN (proves a chain from a changed start), -DBROKEN_UNSIGNED (no SIGN, a
  * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
- * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up) or
- * -DBROKEN_OOM (allocates without bound) it is one of the smoke's deliberately broken provers. The committed assembly
+ * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up),
+ * -DBROKEN_OOM (allocates without bound) or -DBROKEN_NONDET (when DIR/oracle.key exists, that is in a
+ * timed pass, flips the last byte of its output) it is one of the smoke's deliberately broken
+ * provers. With -DFINAL_ONLY=K (K the stream's M) its outputs of the steps before K are not signed
+ * proofs (the file followed by one byte, the step's index, which the next step strips) and only
+ * step K's output is one: an entry of the track `final` alone. The committed assembly
  * (honest/prover.s) is `gcc -S -O2` of this file with no option, passed through
  * harness/tools/asm-compat.py (GCC 15 emits `.base64`, which the reference image's binutils 2.42 rejects).
  */
@@ -237,6 +245,38 @@ static buf prove_chain_file(const char *path, uint8_t c[32]) {
     free(j.p); return f;
 }
 
+/* A signed node c = nodeStmt c1 c2 from its children's signed proofs. */
+static buf prove_node(uint8_t c[32], const uint8_t c1[32], const uint8_t c2[32], buf f1, buf f2) {
+    node_stmt(c, c1, c2);
+    buf pi = ws_node(c1, c2, f1, f2), f = signed_file(pi);
+    free(pi.p); return f;
+}
+
+/* This step's four chains: the signed proof of X = nodeStmt (nodeStmt L1 L2) (nodeStmt L3 L4). */
+static buf prove_x(uint8_t x[32]) {
+    uint8_t c[4][32], n12[32], n34[32];
+    buf f[4];
+    for (int k = 0; k < 4; k++) {
+        char name[32]; snprintf(name, sizeof name, "chain%d.json", k);
+        f[k] = prove_chain_file(name, c[k]);
+    }
+    buf f12 = prove_node(n12, c[0], c[1], f[0], f[1]), f34 = prove_node(n34, c[2], c[3], f[2], f[3]);
+    return prove_node(x, n12, n34, f12, f34);
+}
+
+static void output(buf f, unsigned step) {
+#ifdef FINAL_ONLY
+    if (step < FINAL_ONLY) { uint8_t b = (uint8_t)step; app(&f, &b, 1); }   /* not a signed proof */
+#else
+    (void)step;
+#endif
+#ifdef BROKEN_NONDET
+    if (access("oracle.key", F_OK) == 0) f.p[f.n - 1] ^= 1;      /* the timed passes differ */
+#endif
+    writefile("proof.bin", f);
+    printf("done\n"); fflush(stdout);
+}
+
 static int mode_first(void) {
     handshake();
 #ifdef BROKEN_CAP
@@ -245,11 +285,8 @@ static int mode_first(void) {
 #ifdef BROKEN_OOM
     for (;;) { char *p = malloc(1 << 26); if (!p) die("malloc"); memset(p, 1, 1 << 26); }
 #endif
-    uint8_t ca[32], cb[32];
-    buf fa = prove_chain_file("chainA.json", ca), fb = prove_chain_file("chainB.json", cb);
-    buf pi = ws_node(ca, cb, fa, fb);
-    writefile("proof.bin", signed_file(pi));
-    printf("done\n"); fflush(stdout);
+    uint8_t x[32];
+    output(prove_x(x), 1);
     return 0;
 }
 
@@ -259,21 +296,27 @@ static void read_stmt(uint8_t c[32], const char *path) {
     free(b.p);
 }
 
+static int mode_step(void) {
+    handshake();
+    uint8_t prev[32], x[32], c[32];
+    unsigned step = 2;
+    read_stmt(prev, "prev.stmt");
+    buf fp = readfile("prev.bin");
+#ifdef FINAL_ONLY
+    if (fp.n < 1) die("empty prev.bin");
+    step = fp.p[--fp.n] + 1u;                       /* strip the previous step's index */
+#endif
+    buf fx = prove_x(x);
+    output(prove_node(c, prev, x, fp, fx), step);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 3) die("usage: prover setup|first|step DIR");
     if (chdir(argv[2])) die("cannot enter DIR");
     if (!strcmp(argv[1], "setup")) return 0;
     if (!strcmp(argv[1], "first")) return mode_first();
-    if (!strcmp(argv[1], "step")) {
-        handshake();
-        uint8_t c1[32], c2[32];
-        read_stmt(c1, "prev.stmt");
-        buf f1 = readfile("prev.bin"), f2 = prove_chain_file("chain.json", c2);
-        buf pi = ws_node(c1, c2, f1, f2);
-        writefile("proof.bin", signed_file(pi));
-        printf("done\n"); fflush(stdout);
-        return 0;
-    }
+    if (!strcmp(argv[1], "step")) return mode_step();
     die("unknown mode");
     return 2;
 }

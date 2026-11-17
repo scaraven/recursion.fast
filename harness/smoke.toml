@@ -1,13 +1,10 @@
-# recursion.fast: the CI smoke shape (a short stream, chains of 16 to 128 steps). Same keys
-# as season.toml.
+# recursion.fast: the CI smoke shape (a short stream of 4 steps of 4 chains of 32 steps). Same
+# keys as season.toml.
 name = "smoke"
 
 [score]
-K = 5
-kappa = 0.889     # K · the smoke's fixed v_ref_ms
 n_ref = 262144    # 2^18 permutations
-s_ref = 2097152
-R = 10
+size_ref = 1048576
 
 [certificate]     # the certificate job's Lean steps, as in the season
 build_s = 600
@@ -33,18 +30,14 @@ prover_bytes = 268435456  # 256 MiB
 claim_bytes = 65536       # claim.json, the renderer's input
 
 [stream]
-M = 6
-n_lo = 16
-n_hi = 128
+M = 4
+chains = 4
+n = 32            # the smoke's chains: 4 · 32 = 128 permutations per step
 ready_s = 10
 step_s = 60
 stream_s = 300
 check_every = 2
-retime_factor = 1.3
-retime_frac = 0.25    # one re-run is allowed at M = 6
-# the smoke's own fixed lengths, derived as the season's (harness/season.toml) with the label
-# "recursion.fast smoke chain lengths" on [16, 128]; M + 1 values
-lengths = [16, 55, 20, 74, 22, 90, 20]
+timed_runs = 2
 
 [calibration]
 every = 4
@@ -56,10 +49,15 @@ ref_provisional = true   # the smoke runs on any machine: c_P's drift is recorde
 c_P_drift = 0.05
 triv_chains = 4
 triv_n = 16
-v_ref_ms = 177.8      # the smoke fixes v_ref (the trivial check at n = 16 takes microseconds)
 service_s = 1
 
-[caps]
+[caps]            # as the season's, but v_cap
+pi_cap = 1048576
+final_pi_cap = 524288
+v_cap_ms = 2000   # the toy's witness-sending V grows with the stream's history (each node checks its
+                  # children's signatures again): 43, 131, 253, 402 ms over the 4 steps with the
+                  # compiled badge on an organiser workstation, so the season's 128 ms would REJECT it
+                  # from step 2 on; the smoke checks that REJECT separately (tests/harness/smoke.py)
 file_cap = 67108864
 setup_s = 240
 setup_cap = 4294967296
@@ -67,7 +65,7 @@ work_cap = 4294967296
 build_s = 120
 
 [memory]
-prover = "11G"
+prover = "8G"
 service = "2G"
 badge = "4G"
 
