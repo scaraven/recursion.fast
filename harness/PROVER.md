@@ -127,7 +127,10 @@ first differing byte offset. A prover's output must be a function of its inputs,
 oracle answers: no clock, no `/dev/urandom`, no thread-order dependence in what it writes, a
 deterministic grinding order (for example the least nonce in a fixed search order), and its `SIGN`
 requests in an order its inputs fix (the service assigns one-time indices in the order `SIGN`
-requests arrive, and a replay refuses any other digest at an index).
+requests arrive, and a replay refuses any other digest at an index). **A timed pass must make
+exactly the service run's `SIGN` requests**: any replay `MISMATCH` (in any pass), and any total
+other than `timed_runs` times the service run's signatures, is the entry's REJECT (a refusal at an
+index would otherwise be a bit carried from the service run into a timed pass).
 
 **The handshake** (per request):
 
@@ -143,6 +146,10 @@ requests arrive, and a replay refuses any other digest at an index).
    the clock stopped exists. A prover that closes stdout without `done` is timed until its last
    process exits. The cap is `step_s` (60 s) from the inputs to the death of the last process.
 
+**Before every request** (untimed, with no entry process alive) the runner reads every regular file
+of `/setup` and the binary in full, so every page of the files that outlive a request is in the page
+cache: their cache state carries nothing from one request to the next.
+
 `/work` is on a tmpfs where the machine has one: what the prover writes there counts against its
 memory cgroup. When the prover is dead, `/work` may hold at most `work_cap` (4 GiB, a sparse file at
 its size) in at most 65,536 entries. **Any failure the runner meets while the prover's sandbox
@@ -153,20 +160,26 @@ files the runner cannot remove, the filesystem left fuller after cleanup.
 **The checks of the service run** (AGENTS.md §6, §7), never while an entry process is alive:
 
 - every output's size is at most `pi_cap` (1 MiB): its `|π|` if it parses as a signed proof
-  (`harness/FORMAT.md`) and `acc` accepts it, else its file size;
-- every output is checked with `acc` under the run's `vk` against the runner's statement `c_i`, in
-  batches of `check_every` (8) between steps, each batch warmed by an untimed check of its first
-  output, each `V_i` one measurement on one pinned core; a `V_i` above `v_cap` (128 ms) is timed
-  twice more and the minimum counts;
-- the **final** output (step `M`) must be accepted, with `|π_M| ≤ final_pi_cap` (512 KiB) and
-  `V_M ≤ v_cap`, and its statement canaries rejected (`c_M` with its first bit flipped, and its
-  first child `c_{M-1}`): the track **`final`**;
+  (`harness/FORMAT.md`) that `acc` accepts, else its file size;
+- the intermediate outputs are checked with `acc` under the run's `vk` against the runner's
+  statements `c_i`, in batches of `check_every` (8) between steps, each batch warmed by an untimed
+  check of its first output, each `V_i` one measurement on one pinned core;
+- the **final** output (step `M`) is then checked on its own: it must be accepted, with
+  `|π_M| ≤ final_pi_cap` (512 KiB) and `V_M ≤ v_cap` (128 ms; above it the check is timed twice more
+  and the minimum counts), and its statement canaries rejected (`c_M` with its first bit flipped,
+  and its first child `c_{M-1}`): the track **`final`**. A crash or timeout of these checks is the
+  entry's REJECT;
 - the track **`every`** additionally needs every intermediate output accepted with `V_i ≤ v_cap`
-  and the statement canaries of outputs 1 and 2 rejected (output 1's first child is
-  `nodeStmt L_11 L_12`). An entry that meets `final` but not `every` is scored in `final` only, the
-  result saying why (`score.tracks_reason`); intermediate outputs need not be proofs at all.
+  (timed twice more above it, the minimum) and the statement canaries of outputs 1 and 2 rejected
+  (output 1's first child is `nodeStmt L_11 L_12`). An entry that meets `final` but not `every` is
+  scored in `final` only, the result saying why (`score.tracks_reason`); intermediate outputs need
+  not be proofs at all. A crash or timeout of an intermediate check, or of the canaries of outputs
+  1 and 2, costs only the track `every` (such a badge run is bounded by 60 s plus 2 `v_cap` per
+  check); once the track is lost, no intermediate is timed again and those canaries are skipped.
 
-No check has a time cap of its own. The whole benchmark, the service run, every request, check,
+The final output's checks have no time cap of their own. Calibration samples (AGENTS.md §6) are
+taken before the service run's step 1 (and every `every` steps), before each timed pass, and a
+closing one if 30 s of `stream_s` remain. The whole benchmark, the service run, every request, check,
 canary, calibration sample and both timed passes, runs within `stream_s` (3,000 s, wall time; the
 season file's value binds, and a later season may set another); reaching it is the entry's
 REJECT.
@@ -203,11 +216,12 @@ service run or of a timed pass) with no `ready` line within `ready_s`, a non-zer
 `step_s`, or a missing, non-regular or over-cap (`file_cap`, 64 MiB) `proof.bin`; any output above
 `pi_cap`; a final output that `acc` rejects, above `final_pi_cap`, with `V_M` above `v_cap` (the
 minimum of three checks), or whose statement canary `acc` accepts; a timed output that is not
-byte-identical to the service run's output of its step; a crash or timeout of the checker; a
+byte-identical to the service run's output of its step; a replay `MISMATCH`, or a timed pass that
+does not make exactly the service run's signatures; a crash or timeout of the final output's checks; a
 filesystem error the prover caused in `/work`; the service dying during the run; the benchmark
-reaching `stream_s`. An intermediate output that `acc` rejects, or above `v_cap`, or a canary of
-output 1 or 2 that `acc` accepts, does not fail the run: it leaves the entry out of the track
-`every`. Every job of an evaluation ends within 30 minutes, the certificate job within 50 and the
+reaching `stream_s`. An intermediate output that `acc` rejects (or rejects when timed again), or
+above `v_cap`, a canary of output 1 or 2 that `acc` accepts, or a crash or timeout of their checks,
+does not fail the run: it leaves the entry out of the track `every`. Every job of an evaluation ends within 30 minutes, the certificate job within 50 and the
 benchmark job within 70, and these caps are nested inside them. The first failure ends the
 evaluation (`harness/run-benchmark.py`). The reason in the result names the cause: the prover's
 output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's

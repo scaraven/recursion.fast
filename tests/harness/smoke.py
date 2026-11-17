@@ -19,13 +19,14 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
-2. six deliberately broken provers, built from the same C source with one option each, through
+2. seven deliberately broken provers, built from the same C source with one option each, through
    the stream with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
    compiled into the binary): each REJECT, the final output rejected by `acc`; a query above
    the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal; unbounded allocation
    under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory; an output that changes in
-   the timed passes (`BROKEN_NONDET`): REJECT naming the first differing byte; and one variant
+   the timed passes (`BROKEN_NONDET`): REJECT naming the first differing byte; a SIGN that differs
+   in the timed passes (`BROKEN_PROBE`, a replay MISMATCH read as a bit): REJECT; and one variant
    that is not broken, intermediate outputs that are not signed proofs (`FINAL_ONLY=4`): ACCEPT in
    the track `final` only, the reason recorded;
 3. the same entry with `certified := sorry`: PROVISIONAL, not comparable;
@@ -183,7 +184,7 @@ def main():
     smoke_M = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]["M"]
     broken_entries = [(flag.split("=")[0], broken(tmp, flag, hdr)) for flag, hdr in
                       (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
-                       ("BROKEN_CAP", None), ("BROKEN_OOM", None), ("BROKEN_NONDET", None),
+                       ("BROKEN_CAP", None), ("BROKEN_OOM", None), ("BROKEN_NONDET", None), ("BROKEN_PROBE", None),
                        (f"FINAL_ONLY={smoke_M}", None))]
     # what each broken prover's rejection must say (FINAL_ONLY is not broken: its check is below)
     final_rejected = f"the final output (step {smoke_M}) is rejected by acc"
@@ -192,7 +193,8 @@ def main():
               # the cgroup kills it; under the prlimit fallback the allocation fails, exit 1
               "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "service1: exit 1",
               "BROKEN_NONDET": "timed pass 1, step 1: the output differs from the service run's output of the step, "
-                               "first at byte offset"}
+                               "first at byte offset",
+              "BROKEN_PROBE": "timed pass 1: a SIGN in a timed pass differed from the service run's"}
     lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
     smoke_text = open(os.path.join(ROOT, "harness", "smoke.toml")).read()
     assert 'prover = "8G"' in smoke_text

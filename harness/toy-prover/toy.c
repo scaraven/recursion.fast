@@ -21,8 +21,9 @@
  * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
  * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up),
  * -DBROKEN_OOM (allocates without bound) or -DBROKEN_NONDET (when DIR/oracle.key exists, that is in a
- * timed pass, flips the last byte of its output) it is one of the smoke's deliberately broken
- * provers. With -DFINAL_ONLY=K (K the stream's M) its outputs of the steps before K are not signed
+ * timed pass, flips the last byte of its output) or -DBROKEN_PROBE (step 1 makes one extra SIGN of a
+ * one-byte trace, "0" in the service run and "1" in a timed pass: a replay MISMATCH would tell it a
+ * bit) it is one of the smoke's deliberately broken provers. With -DFINAL_ONLY=K (K the stream's M) its outputs of the steps before K are not signed
  * proofs (the file followed by one byte, the step's index, which the next step strips) and only
  * step K's output is one: an entry of the track `final` alone. The committed assembly
  * (honest/prover.s) is `gcc -S -O2` of this file with no option, passed through
@@ -264,7 +265,27 @@ static buf prove_x(uint8_t x[32]) {
     return prove_node(x, n12, n34, f12, f34);
 }
 
+#ifdef BROKEN_PROBE
+/* One SIGN of the one-query trace [q] on a connection of its own (the service closes a connection
+   after a refusal); the answer is read and ignored. */
+static void probe(uint8_t q) {
+    const char *path = getenv("RF_ORACLE"); if (!path) die("RF_ORACLE unset");
+    struct sockaddr_un a; memset(&a, 0, sizeof a); a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, path, sizeof a.sun_path - 1);
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof a)) die("cannot connect to the oracle service");
+    uint8_t m[21] = {2}; m[4] = 1; put64(m + 8, 5); m[16] = 1; m[20] = q;   /* SIGN, count 1, body u32 1 ‖ q */
+    if (write(s, m, sizeof m) != (ssize_t)sizeof m) die("SIGN write");
+    uint8_t h[16]; size_t got = 0;
+    while (got < 16) { ssize_t k = read(s, h + got, 16 - got); if (k <= 0) break; got += k; }
+    close(s);
+}
+#endif
+
 static void output(buf f, unsigned step) {
+#ifdef BROKEN_PROBE
+    if (step == 1) probe(access("oracle.key", F_OK) == 0 ? '1' : '0');
+#endif
 #ifdef FINAL_ONLY
     if (step < FINAL_ONLY) { uint8_t b = (uint8_t)step; app(&f, &b, 1); }   /* not a signed proof */
 #else

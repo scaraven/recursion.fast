@@ -121,7 +121,13 @@ def main():
             ("a canary of output 2 accepted", [mk(1, 1.0), mk(2, 1.0, canaries_accepted=["stmt-bit"]), mk(3, 1.0)],
              "output 2: statement canaries accepted by acc ['stmt-bit']"),
             ("the canaries of output 1 not recorded", [mk(1, 1.0, canaries_accepted=None), mk(2, 1.0)],
-             "output 1: statement canaries not checked")):
+             "output 1: statement canaries not checked"),
+            ("output 2's check crashed", [mk(1, 1.0), mk(2, 1.0, check_error="`verify: exit -11`"), mk(3, 1.0)],
+             "output 2: its check failed (`verify: exit -11`)"),
+            ("output 2 rejected when timed again", [mk(1, 1.0), mk(2, 1.0, recheck_rejected=True), mk(3, 1.0)],
+             "output 2: rejected by acc when timed again"),
+            ("the canaries' check of output 1 crashed", [mk(1, 1.0, canary_error="`x`"), mk(2, 1.0)],
+             "output 1: its statement canaries' check failed (`x`)")):
         sc = score(p, stream(steps))
         check(sc["tracks"] == {"final": "S"} and why in sc["tracks_reason"]["every"], f"{what}: `final` only ({why})")
 

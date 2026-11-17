@@ -53,14 +53,14 @@ stream_s = 3000   # wall seconds for the whole benchmark from its first calibrat
                   # check has a cap of its own); reaching it is the entry's REJECT. The timed passes
                   # repeat the service run's requests, so about 3 × the stream's proving time is
                   # needed. A later season may set another
-check_every = 8   # the service run's outputs checked in batches of this many, between steps (no entry
-                  # process alive)
+check_every = 8   # the service run's intermediate outputs checked in batches of this many, between
+                  # steps (no entry process alive); the final output is checked on its own after them
 timed_runs = 2    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
                   # service run's; P_i = the minimum of step i's times (no re-timing fit)
 
 [calibration]     # AGENTS.md §6: interleaved samples with no entry process alive, medians used
 every = 8         # one sample before the service run's step 1 and every 8 steps after, one before each
-                  # timed pass and a closing one
+                  # timed pass and a closing one if 30 s of stream_s remain
 idle_s = 2.0      # the idle gap before a sample (1 s left residual load)
 rounds = 32       # the work of one `calib` run (harness/tools/calib.c)
 runs_per_sample = 3     # a sample is the median of this many short runs
@@ -80,11 +80,12 @@ service_s = 2           # seconds per service throughput measurement (published,
 [caps]            # AGENTS.md §6, §7: the size and verifier caps (acc itself only requires |π| to fit a
                   # word); a breach of a final cap is the entry's REJECT, of an intermediate one its
                   # exclusion from the track `every`
-pi_cap = 1048576        # 1 MiB: every output, its |π| if acc accepts it, else its file size (a breach
-                        # is the entry's REJECT, whichever step)
+pi_cap = 1048576        # 1 MiB: every output, its |π| if it parses as a signed proof that acc accepts,
+                        # else its file size (a breach is the entry's REJECT, whichever step)
 final_pi_cap = 524288   # 512 KiB: the final output's |π| (both tracks)
 v_cap_ms = 128          # one acc check of a checked proof (parse included), one pinned core, after a
-                        # warm-up; above it the check is timed twice more and the minimum counts
+                        # warm-up; above it the check is timed twice more and the minimum counts (a
+                        # badge run of intermediate checks is bounded by 60 s + 2 v_cap per check)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB

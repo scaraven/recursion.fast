@@ -133,6 +133,14 @@ class Service:
             return []
         return [l for l in lines if l.startswith("rf-oracle: refused")][:limit]
 
+    def mismatches(self):
+        """Every replay `MISMATCH` refusal (status 4) the service logged so far, from its stderr."""
+        try:
+            lines = open(self.stderr_path, errors="replace").read().splitlines()
+        except OSError:
+            return []
+        return [l for l in lines if l.startswith("rf-oracle: refused (status 4)")]
+
     def kill(self):
         if self.proc is not None:
             self.proc.kill()

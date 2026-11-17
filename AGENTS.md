@@ -234,7 +234,7 @@ service, and every accepted proof comes from a run in which the prover never had
   the sandbox. Its times are recorded, not scored. Then, with no entry process alive, the runner
   checks outputs with the compiled `acc` against its own statements: the final output (step `M`)
   always, every intermediate output for the track `every`. **Caps:** every output's size is at
-  most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof, else its file size); the final `|π|`
+  most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof that `acc` accepts, else its file size); the final `|π|`
   is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, parse included, pinned to
   one core, after an untimed warm-up of its batch) is at most `v_cap` = 128 ms; a check above it is
   timed twice more and the least of the three counts.
@@ -251,11 +251,16 @@ service, and every accepted proof comes from a run in which the prover never had
   hex characters), all renamed into `/work` when the clock starts. Every output must be
   byte-identical to the service run's output of that step; a difference is the entry's REJECT, with
   the step, the pass and the first differing byte. Nothing of the service run's requests survives
-  into the timed passes (each request's directory is removed; `/setup` is read-only).
+  into the timed passes (each request's directory is removed; `/setup` is read-only, and before
+  every request the runner reads every file of the setup and the prover binary, so their page-cache
+  state carries nothing). Every `SIGN` of a timed pass must be the service run's at the same index:
+  any `MISMATCH`, or a pass that re-issues fewer or more signatures than the service run made, is
+  the entry's REJECT, so a refused `SIGN` cannot be used as a probe.
 - **What is timed.** `P_i`: from just before the inputs are renamed into `/work` (a constant-time
   rename) to the death of the last process of the sandbox, the least of step `i`'s two timed
   passes. Start-up to the `ready` line is untimed (capped by `ready_s`).
-- **Calibration.** Before the service run, between the runs, and after the timed passes, always
+- **Calibration.** Before the service run, between the runs, and after the timed passes (if 30 s
+  of `stream_s` remain), always
   with no entry process alive: three runs of the organiser's prover-shaped workload `calib`
   ([`harness/tools/calib.c`](harness/tools/calib.c), portable C: interleaved Keccak-256 chains and a
   memory sweep on every CPU) and the organiser's chain checker on `2^24` permutations.
@@ -483,10 +488,13 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **The timed passes trust isolation and determinism.** The timed passes are only a stopwatch:
   every accepted output comes from the service run, in which the prover never had `k`. A timed
   pass could reproduce an output without proving only through a channel from the service run's
-  requests, and the per-request sandbox (fresh `/work` and `/tmp`, read-only `/setup`, nothing
-  surviving a request) is the same isolation that keeps state between steps inside `π`. The price
-  is determinism: a prover whose output depends on thread timing or fresh randomness fails the
-  byte comparison.
+  requests, and the per-request sandbox (fresh `/work` and `/tmp`, read-only `/setup`) is the same
+  isolation that keeps state between steps inside `π`. Two channels around it are closed by the
+  runner: the page cache of the setup and the prover binary (re-read in full before every
+  request) and the replay service's answers (a refused `SIGN` is a REJECT). Lower-bandwidth
+  micro-architectural state (CPU caches, predictors) is not cleared; the calibration runs between
+  requests disturb it. The price is determinism: a prover whose output depends on thread timing or
+  fresh randomness fails the byte comparison.
 - **A trace is not size-capped beyond `file_cap`.** The caps count `|π|`; an accepted proof's trace
   (at most `qV ≤ 2^16` queries of at most `2^20` bytes, all asked by `V`, so within `v_cap`) is
   bounded only by the file cap. An output `acc` rejects is sized by its whole file.

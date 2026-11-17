@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import statistics
 import subprocess
 import tempfile
@@ -260,6 +261,7 @@ class Bench:
 
     def stop(self, svc, rec):
         rec["service_refusals"] = svc.refusals()
+        rec["service_mismatches"] = svc.mismatches()[:8]
         try:
             rec["service_stats"] = svc.stop()
         except ServiceError as e:
@@ -305,29 +307,62 @@ class Bench:
         cap."""
         return self.verify(items, what, timeout if timeout is not None else self.capped(), warm=True)
 
-    def v_capped(self, item, first_ns, what):
+    def v_capped(self, item, first_ns, what, timeout=None):
         """`V` of an accepted proof against `v_cap` (AGENTS.md §6): its one measurement `first_ns`;
         above the cap the check is timed twice more (one warmed badge run) and the minimum counts.
-        Returns (V ns, every measurement)."""
-        runs = [first_ns]
+        Returns (V ns, every measurement, whether every check accepted it); a badge failure raises
+        `Fail`."""
+        runs, again = [first_ns], True
         if first_ns > self.p.v_cap_ms * 1e6:
-            res = self.check([item, item], what)
-            if not all(ok for ok, _ in res):
-                raise Fail(f"{what}: an output acc accepted is rejected when checked again")
+            res = self.check([item, item], what, timeout)
+            again = all(ok for ok, _ in res)
             runs += [ns for _, ns in res]
-        return min(runs), runs
+        return min(runs), runs, again
 
-    def canary_check(self, vk, targets, what):
+    def canary_check(self, vk, targets, what, timeout=None):
         """The statement canaries (AGENTS.md §6) of every target (key, store path, stmt, others): the
         accepted file, checked against another statement, must be rejected. Returns {key: [the names
-        of the canaries `acc` accepted]} and the number of canaries checked; the caller decides."""
+        of the canaries `acc` accepted]} and the number of canaries checked; the caller decides. A
+        badge failure raises `Fail`."""
         items = [(key, name, (vk, c, rel)) for key, rel, stmt, others in targets for name, c in canaries(stmt, others)]
-        res = self.verify([it for _, _, it in items], f"{what} canaries", self.capped())
+        res = self.verify([it for _, _, it in items], f"{what} canaries", timeout if timeout is not None else self.capped())
         out = {key: [] for key, _, _, _ in targets}
         for (key, name, _), (ok, _) in zip(items, res):
             if ok:
                 out[key].append(name)
         return out, len(items)
+
+    def bounded(self, n):
+        """The timeout of a badge run of `n` checks of intermediate outputs (plus its warm-up), whose
+        failure costs only the track `every`: `INTERMEDIATE_SLACK_S` plus two `v_cap` per check, within
+        the stream's cap. (The final output's checks are bounded by the stream's cap alone.)"""
+        return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (n + 1) * self.p.v_cap_ms / 1e3)
+
+    def warm_caches(self):
+        """Before every request, untimed and with no entry process alive: read every regular file under
+        the setup directory and the prover binary in full, so that every page of the files a request
+        can see that outlive it is in the page cache and their cache state carries no information
+        from one request to the next (a request could otherwise evict chosen pages and the next one
+        probe which are cached). No link is followed; the setup directory is bounded by `setup_cap`
+        and 2^20 entries (checked after `setup`, read-only since). Returns (seconds, bytes read)."""
+        t0, total, buf = time.monotonic(), 0, bytearray(1 << 20)
+        files = [os.path.join(self.run.bin_dir, "prover")]
+        for root, _, names in os.walk(self.run.setup_dir, followlinks=False):
+            files += [os.path.join(root, n) for n in names]
+        for f in files:
+            try:
+                fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except OSError:
+                continue
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    while (k := os.readv(fd, [buf])) > 0:
+                        total += k
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+        return time.monotonic() - t0, total
 
     # -- calibration -------------------------------------------------------------------------------
     def calibrate(self):
@@ -411,7 +446,8 @@ class Bench:
         Every failure is the entry's: the request's own errors (`request`), the stream's cap reached
         during it, a directory the runner cannot prepare or remove, and a filesystem left fuller
         than before the request (bytes or inodes of the request directories' filesystem, after
-        cleanup). The request's directory and its staging directory are removed after it."""
+        cleanup). Before it the page cache of the setup and the binary is warmed (`warm_caches`); the
+        request's directory and its staging directory are removed after it."""
         root = self.req_root or os.path.join(self.work, "requests")
         os.makedirs(root, exist_ok=True)
         before = fs_free(root)
@@ -424,8 +460,10 @@ class Bench:
             raise Fail(f"{tag}: the request directory cannot be prepared ({e.strerror or e}); "
                        "the filesystem is in the state the prover's requests left it")
         dl = self.deadline[0] if self.deadline else None
+        warm_s, warm_bytes = self.warm_caches()
         r = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap)
+        r.warm_s, r.warm_bytes = warm_s, warm_bytes
         self.alive(svc)
         gone = remove_tree(work) & remove_tree(work + ".stage")
         after = fs_free(root)
@@ -489,6 +527,11 @@ class Bench:
             self.stop(svc, rec)
             if self.req_root:
                 shutil.rmtree(self.req_root, ignore_errors=True)
+        try:
+            self.audit_replays(rec)
+        except Fail as e:
+            e.rec = rec
+            raise
         rec["M"] = len(rec["steps"])
         rec["last_file"], rec["last_stmt"] = rec["steps"][-1]["file"], stmts[-1].hex()
         rec["calibration"] = self.calibration()
@@ -497,30 +540,47 @@ class Bench:
     def service_run(self, svc, rec, starts, stmts, first):
         """The service run (AGENTS.md §6), untimed: the stream against the service, every output
         kept. Its times are recorded (`P_service_s`), never scored. Every output's size is at most
-        `pi_cap`: its `|π|` if it parses as a signed proof (checked as it arrives), its file size if it
-        does not or if `acc` rejects it (checked after its check: a rejected file's trace is no place
-        to keep state uncounted). Every output is then checked with `acc` against the runner's statement, in batches
-        between steps (one warmed badge run each, one `V` measurement per output), and then, with no
-        entry process alive: the **final** output must be accepted against `c_M`, with `|π_M| ≤
-        final_pi_cap`, `V_M ≤ v_cap` and its statement canaries (`stmt-bit`, `first-child`)
-        rejected; any breach is the entry's REJECT. An intermediate output's breach of the track
-        `every`'s conditions (accepted, `V_i ≤ v_cap`, the canaries of outputs 1 and 2 rejected) is
-        recorded per step and only excludes the entry from that track (`every_reasons`)."""
+        `pi_cap`: its `|π|` if it parses as a signed proof that `acc` accepts, else its file size
+        (`|π|` checked as it arrives, the file size of a rejected one after its check: a rejected
+        file's trace is no place to keep state uncounted); a breach is the entry's REJECT.
+
+        The intermediate outputs are checked with `acc` against the runner's statements in batches
+        between steps (one warmed badge run each, one `V` measurement per output, each run bounded by
+        `bounded`). Then, with no entry process alive, the **final** output on its own: it must be
+        accepted against `c_M`, with `|π_M| ≤ final_pi_cap`, `V_M ≤ v_cap` (timed twice more above
+        it, the minimum) and its statement canaries (`stmt-bit`, `first-child`) rejected; any breach,
+        and any failure of its checks, is the entry's REJECT. Last the track `every`: re-timing of
+        intermediate `V_i` above the cap and the canaries of outputs 1 and 2, skipped once the track
+        is lost. A breach of the track's conditions, or a failed (crashed or timed-out) check of an
+        intermediate output or of those canaries, is recorded per step and only excludes the entry
+        from that track (`every_reasons`)."""
         p, steps, pending, M = self.p, rec["steps"], [], self.p.M
         v_cap = p.v_cap_ms * 1e6
 
+        def rejected_size(s):
+            if s["signed_proof"]:             # a rejected output is sized by its file
+                s["pi_bytes"], s["signed_proof"] = s["file_bytes"], False
+            if s["pi_bytes"] > p.pi_cap:
+                raise Fail(f"service run, step {s['index']}: the output, rejected by acc, has {s['pi_bytes']} bytes, "
+                           f"above pi_cap = {p.pi_cap}")
+
         def flush():
-            if pending:
-                res = self.check([it for _, it in pending], "the service run's outputs")
-                for (k, _), (ok, ns) in zip(pending, res):
-                    s = steps[k]
-                    s["accepted"], s["V_ns"] = ok, ns
-                    if not ok and s["signed_proof"]:    # a rejected output is sized by its file: a trace
-                        s["pi_bytes"], s["signed_proof"] = s["file_bytes"], False   # is no free storage
-                        if s["pi_bytes"] > p.pi_cap:
-                            raise Fail(f"service run, step {s['index']}: the output, rejected by acc, has "
-                                       f"{s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}")
+            """Check the pending intermediate outputs; a failed badge run costs the track `every`."""
+            if not pending:
+                return
+            items = [it for _, it in pending]
+            try:
+                res = self.check(items, "the service run's intermediate outputs", self.bounded(len(items)))
+            except Fail as e:
+                for k, _ in pending:
+                    steps[k]["check_error"] = printable(str(e), 300)
                 pending.clear()
+                return
+            for (k, _), (ok, ns) in zip(pending, res):
+                steps[k]["accepted"], steps[k]["V_ns"] = ok, ns
+                if not ok:
+                    rejected_size(steps[k])
+            pending.clear()
         for i in range(1, M + 1):
             if (i - 1) % p.calib_every == 0:
                 flush()
@@ -537,36 +597,80 @@ class Bench:
             if s["pi_bytes"] > p.pi_cap:
                 raise Fail(f"service run, step {i}: the output's {'|π|' if s['signed_proof'] else 'file size'} is "
                            f"{s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}")
-            pending.append((i - 1, (svc.vk, stmts[i - 1], rel)))
-            if len(pending) >= p.check_every:
-                flush()
+            if i < M:
+                pending.append((i - 1, (svc.vk, stmts[i - 1], rel)))
+                if len(pending) >= p.check_every:
+                    flush()
         flush()
-        final = steps[-1]
-        if not final["accepted"]:
+        # the final output, on its own: every failure here is the entry's REJECT
+        final, item = steps[-1], (svc.vk, stmts[M - 1], steps[-1]["file"])
+        ((ok, ns),) = self.check([item], "service run: the final output")
+        final["accepted"], final["V_ns"] = ok, ns
+        if not ok:
             raise Fail(f"service run: the final output (step {M}) is rejected by acc against c_{M}"
                        + self.diag(svc, ""))
         if final["pi_bytes"] > p.final_pi_cap:
             raise Fail(f"service run: the final output (step {M}) has |π| = {final['pi_bytes']} bytes, above "
                        f"final_pi_cap = {p.final_pi_cap}")
-        for s in steps:                   # V against the cap: above it, timed twice more, the minimum
-            if s["accepted"]:
-                s["V_ns"], s["V_runs_ns"] = self.v_capped((svc.vk, stmts[s["index"] - 1], s["file"]), s["V_ns"],
-                                                          f"service run, step {s['index']} (V above v_cap, timed again)")
+        final["V_ns"], final["V_runs_ns"], again = self.v_capped(item, ns, "service run: the final output (V above "
+                                                                       "v_cap, timed again)")
+        if not again:
+            raise Fail(f"service run: the final output (step {M}), accepted by acc, is rejected when checked again")
         if final["V_ns"] > v_cap:
             raise Fail(f"service run: the final output (step {M}) takes V = {final['V_ns'] / 1e6:.3f} ms (the minimum "
                        f"of {len(final['V_runs_ns'])} checks), above v_cap = {p.v_cap_ms:g} ms")
-        ks = sorted(k for k in {1, 2, M} if k <= M and steps[k - 1]["accepted"])
-        bad, rec["canaries"] = self.canary_check(
-            svc.vk, [(k, steps[k - 1]["file"], stmts[k - 1], [("first-child", first[k - 1])]) for k in ks], "service run")
-        for k in ks:
-            steps[k - 1]["canaries_accepted"] = bad[k]
+        bad, rec["canaries"] = self.canary_check(svc.vk, [(M, final["file"], stmts[M - 1], [("first-child", first[M - 1])])],
+                                                 "service run: the final output")
+        final["canaries_accepted"] = bad[M]
         if bad[M]:
             raise Fail(f"service run: the final output (step {M}): statement canaries accepted by acc (a proof "
                        f"accepted for another statement): {bad[M]}")
+        # the track `every`: never the run's failure; skipped once lost
+        lost = lambda: bool(every_reasons(p, rec, canaries=False))  # noqa: E731
+        inter = steps[:-1]
+        for s in inter if all(s.get("accepted") and not s.get("check_error") for s in inter) else []:
+            if s["V_ns"] > v_cap:
+                k = s["index"]
+                try:
+                    s["V_ns"], s["V_runs_ns"], again = self.v_capped(
+                        (svc.vk, stmts[k - 1], s["file"]), s["V_ns"], f"service run, step {k} (V above v_cap, timed again)",
+                        self.bounded(2))
+                    if not again:
+                        s["recheck_rejected"] = True
+                except Fail as e:
+                    s["check_error"] = printable(str(e), 300)
+                if s.get("check_error") or s.get("recheck_rejected") or s["V_ns"] > v_cap:
+                    break                     # `every` is lost: no more re-timing
+        ks = [k for k in (1, 2) if k < M]
+        if ks and not lost():
+            try:
+                bad, n = self.canary_check(svc.vk, [(k, steps[k - 1]["file"], stmts[k - 1], [("first-child", first[k - 1])])
+                                                    for k in ks], "service run: outputs 1 and 2", self.bounded(2 * len(ks)))
+                rec["canaries"] += n
+                for k in ks:
+                    steps[k - 1]["canaries_accepted"] = bad[k]
+            except Fail as e:
+                for k in ks:
+                    steps[k - 1]["canary_error"] = printable(str(e), 300)
         why = every_reasons(p, rec)
         rec["every"] = {"eligible": not why, "reasons": why}
         self.log(f"[service run] final output accepted (|π| {final['pi_bytes']} B, V {final['V_ns'] / 1e6:.3f} ms); "
                  + ("eligible for the track `every`" if not why else f"not eligible for `every`: {'; '.join(why)[:300]}"))
+
+    def audit_replays(self, rec):
+        """After the service has exited (its `stats` in `rec`): the timed passes made exactly the
+        service run's signatures, each pass all of them and nothing else: no `MISMATCH`
+        (`mismatches = 0`) and `replays = timed_runs · signatures`. A replay refusal is a bit a timed
+        pass could read (OK or MISMATCH at an index), so any is the entry's REJECT."""
+        st, want = rec.get("service_stats") or {}, self.p.timed_runs
+        if not all(isinstance(st.get(k), int) for k in ("signatures", "replays", "mismatches")):
+            raise Fail(f"the service reported no replay statistics ({sorted(st)})")
+        if st["mismatches"]:
+            raise Fail(f"a SIGN in a timed pass differed from the service run's ({st['mismatches']} MISMATCH refusals"
+                       + (f"; {printable(rec['service_mismatches'][0], 300)}" if rec.get("service_mismatches") else "") + ")")
+        if st["replays"] != want * st["signatures"]:
+            raise Fail(f"the timed passes made {st['replays']} signatures, not timed_runs · signatures = {want} · "
+                       f"{st['signatures']}: a timed pass must make exactly the service run's SIGN requests")
 
     def purge_requests(self):
         """Before the timed passes nothing of the service run's requests is left where a timed
@@ -614,8 +718,13 @@ class Bench:
                 s = steps[i - 1]
                 s.setdefault("P_timed_s", []).append(r.seconds)
                 s.setdefault("timed", []).append({"startup_s": r.startup_s, "kill_s": r.kill_s, "mem_peak": r.mem_peak,
-                                                  "work_bytes": r.work_bytes, "ended_by": r.ended})
+                                                  "work_bytes": r.work_bytes, "ended_by": r.ended, "warm_s": r.warm_s})
                 self.log(f"[timed pass {t}] step {i}: P={r.seconds:.4f} s (identical output)")
+            mism = svc.mismatches()
+            if mism:
+                raise Fail(f"timed pass {t}: a SIGN in a timed pass differed from the service run's "
+                           f"({len(mism)} refused; the first: {printable(mism[0], 300)}): a timed pass must make exactly "
+                           "the service run's SIGN requests, in its order")
         if self.left() > 30:              # a closing sample, only with 30 s of the cap to spare
             self.sample("closing")
         for s in steps:
@@ -623,6 +732,7 @@ class Bench:
 
 
 FS_SLACK = 1 << 20        # bytes the request directories' filesystem may lose to other processes
+INTERMEDIATE_SLACK_S = 60  # seconds a badge run of intermediate checks may take beyond 2 v_cap per check
 
 
 def fs_free(path):
@@ -647,28 +757,38 @@ def step_record(i, n_i, r, rel):
     size, ok = output_size(r.proof)
     return {"index": i, "n": n_i, "P_service_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": size, "signed_proof": ok,
-            "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns}
+            "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns,
+            "warm_s": getattr(r, "warm_s", None), "warm_bytes": getattr(r, "warm_bytes", None)}
 
 
-def every_reasons(p, stream):
+def every_reasons(p, stream, canaries=True):
     """Why the stream is not eligible for the track `every` (AGENTS.md §7), [] if it is: every
-    output accepted by `acc` against its statement, with `|π_i| ≤ pi_cap` and `V_i ≤ v_cap` (the
-    minimum of its checks), and the statement canaries of outputs 1 and 2 rejected. (The final
-    output's own conditions are the run's: their breach is a REJECT, never a reason here.) From
-    the per-step records alone, so the aggregation recomputes it."""
+    output checked and accepted by `acc` against its statement (again when timed again), with
+    `|π_i| ≤ pi_cap` and `V_i ≤ v_cap` (the minimum of its checks), and the statement canaries of
+    outputs 1 and 2 checked and rejected (with `canaries`). (The final output's own conditions are
+    the run's: their breach is a REJECT, never a reason here.) From the per-step records alone, so
+    the aggregation recomputes it."""
     out, v_cap = [], p.v_cap_ms * 1e6
     for s in stream["steps"]:
         i = s.get("index")
+        if s.get("check_error"):
+            out.append(f"output {i}: its check failed ({s['check_error']})")
+            continue
         if not s.get("accepted"):
             out.append(f"output {i} rejected by acc")
+            continue
+        if s.get("recheck_rejected"):
+            out.append(f"output {i}: rejected by acc when timed again")
             continue
         if not isinstance(s.get("pi_bytes"), int) or s["pi_bytes"] > p.pi_cap:
             out.append(f"output {i}: |π| = {s.get('pi_bytes')} bytes above pi_cap = {p.pi_cap}")
         if not isinstance(s.get("V_ns"), (int, float)) or s["V_ns"] > v_cap:
             v = s.get("V_ns")
             out.append(f"output {i}: V = {v / 1e6 if isinstance(v, (int, float)) else v} ms above v_cap = {p.v_cap_ms:g} ms")
-    for s in stream["steps"][:2]:
-        if s.get("accepted") and s.get("canaries_accepted") != []:
+    for s in stream["steps"][:2] if canaries else []:
+        if s.get("canary_error"):
+            out.append(f"output {s.get('index')}: its statement canaries' check failed ({s['canary_error']})")
+        elif s.get("accepted") and s.get("canaries_accepted") != []:
             out.append(f"output {s.get('index')}: statement canaries "
                        + (f"accepted by acc {s['canaries_accepted']}" if s.get("canaries_accepted") else "not checked"))
     return out
