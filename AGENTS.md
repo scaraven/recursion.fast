@@ -115,27 +115,27 @@ has four fields, and `CertificateR declared S`
 `ε`, `δ`, `qV`, `fuel` are within the declared ones and the declared fuel within the budget.
 
 - **`secure : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV`**
-  ([`Security.lean#L144-L156`](RecursionFast/Contract/Security.lean#L144-L156)). `V` asks at most
+  ([`Security.lean#L141-L153`](RecursionFast/Contract/Security.lean#L141-L153)). `V` asks at most
   `qV` queries on every input and every oracle function; and for every adversary, a query program
   asking at most `Q` queries on every oracle function and outputting `(c, π)`, with
   `Q + qV ≤ logCap`, run and then followed by `V` against one lazily sampled random oracle
-  (`prob`, [`#L133-L142`](RecursionFast/Contract/Security.lean#L133-L142)), the probability that
+  (`prob`, [`#L133-L142`](RecursionFast/Contract/Security.lean#L130-L139)), the probability that
   `V` accepts on the final query log while `E c π log` returns no witness of the relation is at most
   `(Q + qV) · ε`. The extractor reads the final log, the verifier's answers included (how this
   relates to the textbook notion: §12). The adversary is computationally unbounded, bounded only in
   queries.
 - **`complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ`**
-  ([`Security.lean#L158-L162`](RecursionFast/Contract/Security.lean#L158-L162)): on every statement
+  ([`Security.lean#L155-L159`](RecursionFast/Contract/Security.lean#L155-L159)): on every statement
   and witness of the relation, `P`'s proof, produced and then verified against one random oracle,
   is rejected with probability at most `δ`. Grinding is admitted. It is required for **every**
   witness, node witnesses with any accepted children included.
 - **`computes : Computes S.ext S.E S.fuel`**
-  ([`Extractor.lean#L183-L191`](RecursionFast/Contract/Extractor.lean#L183-L191)): the program
+  ([`Extractor.lean#L180-L188`](RecursionFast/Contract/Extractor.lean#L180-L188)): the program
   `ext` of the contract's step-counting machine
   ([`Machine.lean#L97-L133`](RecursionFast/Contract/Machine.lean#L97-L133)), on the input tape
-  `extractorInput c π L` ([`Extractor.lean#L108-L111`](RecursionFast/Contract/Extractor.lean#L108-L111)),
+  `extractorInput c π L` ([`Extractor.lean#L105-L108`](RecursionFast/Contract/Extractor.lean#L105-L108)),
   halts within `fuel t` steps (`t` the tape's length in words) with at most `outCap` words that
-  denote `E c π L` through `decodeWit` ([`#L168-L170`](RecursionFast/Contract/Extractor.lean#L168-L170)).
+  denote `E c π L` through `decodeWit` ([`#L168-L170`](RecursionFast/Contract/Extractor.lean#L165-L167)).
   This holds for every statement, proof of at most `8 · outCap` bytes (128 MiB) and log whose
   queries are below `2^64` bytes and whose tape is at most `2^64` words. The tape and output formats
   are normative ([`#L13-L33`](RecursionFast/Contract/Extractor.lean#L13-L33)). `E` takes no `vk`.
@@ -143,13 +143,13 @@ has four fields, and `CertificateR declared S`
 
 | Cap | Value | Lean |
 |---|---|---|
-| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L126-L127`](RecursionFast/Contract/Security.lean#L126-L127) |
-| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L164-L165`](RecursionFast/Contract/Security.lean#L164-L165) |
+| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L123-L124`](RecursionFast/Contract/Security.lean#L123-L124) |
+| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L161-L162`](RecursionFast/Contract/Security.lean#L161-L162) |
 | `qV ≤` | `2^16` | [`Certificate.lean#L117`](RecursionFast/Contract/Certificate.lean#L117) |
-| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L174-L175`](RecursionFast/Contract/Extractor.lean#L174-L175) |
-| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L180-L181`](RecursionFast/Contract/Extractor.lean#L180-L181) |
-| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L129-L131`](RecursionFast/Contract/Security.lean#L129-L131) |
-| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L177-L178`](RecursionFast/Contract/Extractor.lean#L177-L178) |
+| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L171-L172`](RecursionFast/Contract/Extractor.lean#L171-L172) |
+| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L177-L178`](RecursionFast/Contract/Extractor.lean#L177-L178) |
+| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L126-L128`](RecursionFast/Contract/Security.lean#L126-L128) |
+| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L174-L175`](RecursionFast/Contract/Extractor.lean#L174-L175) |
 | `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L54-L58`](RecursionFast/Contract/Relation.lean#L54-L58) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
@@ -246,7 +246,9 @@ which the prover never had the key.
 - **2. The timed passes.** The runner switches the service to replay mode (§5) and runs the
   stream `timed_runs` = 2 more times. Each step is a fresh process with the same seed, the runner's
   statement, the service run's previous output as `prev.bin`, and the file `oracle.key` (`k` as 64
-  hex characters), all renamed into `/work` when the clock starts. Every output must be
+  hex characters), all renamed into `/work` when the clock starts; the oracle socket
+  `/run/rf/oracle.sock` also appears only then, in both runs, so nothing key-dependent or
+  service-dependent can run in the untimed start-up (connect after `go`). Every output must be
   byte-identical to the service run's output of that step; a difference is the entry's REJECT, with
   the step, the pass and the first differing byte. Nothing of the service run's requests survives
   into the timed passes (each request's directory is removed; `/setup` is read-only, and before
@@ -295,7 +297,10 @@ output's `π` alone (not the trace or signature).
 
 - **Wall time, nothing else.** How the work is spread over the steps is the entry's choice: in
   `final`, where intermediate outputs need not be proofs, an entry may leave all hashing to the last
-  step, within `step_s` and the memory cap.
+  step, within `step_s` and the memory cap. Two limits bind it: `step_s` applies to the service
+  run too, where every oracle answer is a round trip to the service, and full deferral means
+  proving `2^25` permutations in one request with 8 GiB (256 bytes per permutation), which only a
+  streaming or accumulating prover can do.
 - **The size factor** is ×1.19 at 256 KiB and ×1.41 at the 512 KiB cap: halving the final proof
   from 512 to 256 KiB is worth about 16 % of prover time.
 - **The verifier is not scored.** It is capped at 128 ms per checked proof (§6).
@@ -344,10 +349,18 @@ record in a track iff all of:
    track's score (`S` in both), `S_t,record` the standing record's own score in that track at the
    pin and `margin = 0.02`;
 5. its prover binary's SHA-256 is not that of an earlier record of either track (a resubmitted copy
-   is `accepted`, never a record).
+   is `accepted`, never a record);
+6. **a confirmation run agrees**: a result that meets items 1–5 in a track is not crowned at once.
+   The bot evaluates the same commit once more at the same pin, ahead of other entries; the record
+   is taken only if that run also meets items 1–5 in the track, and the record's score is the worse
+   (larger) of the two. Otherwise the entry is `accepted`. A confirmation that ends in an organiser
+   ERROR is queued again, as a port is. A port (below) is not confirmed: it re-measures a
+   standing record at a new pin, and its author cannot re-roll it.
 
-Items 1–3 and 5 are the same for both tracks; one result can set both records, and one entry may
-hold both.
+Items 1–3, 5 and 6 are the same for both tracks; one result can set both records, and one entry may
+hold both. The confirmation makes a noise-won record need two lucky runs, not one: re-submitting
+the same prover (a NOTES edit, a one-byte change to the assembly) no longer re-draws the noise for
+a record.
 
 - **Records are per pin and per track**: a track's standing record is its newest, not retired,
   record evaluated at the pinned core commit. With none, the first result meeting items 1–3 and 5
@@ -480,6 +493,18 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   track again.
 - **The end of the stream is known** (`M = 8`), and an entry may defer work to the last step
   (§7). The verifier cap (128 ms) bounds what can be left to the verifier itself.
+- **Most of the work is batch Keccak proving.** A step's recursion (checking one child proof of at
+  most 1 MiB: its Merkle data, trace digest and signature) is roughly 0.3–3 % of its `2^22`
+  permutations, so the two tracks will rank close to each other, and the contest is mostly about
+  proving many Keccak permutations fast. A later season can weight recursion more with a smaller
+  `n` and a larger `M`, without a contract change.
+- **Leaf specialisation is allowed.** Within a leaf only 22 bits of one lane vary with `j`: the tag,
+  the seed and the padding are constant, round 1 is affine in `j` before its χ, only row `y = 0` of
+  the last χ is needed for the 256-bit output, and the index is a counter that need not be
+  committed. Exploiting this saves a few percent and is open to every entry.
+- **The scored size is `|π|` alone.** A signed file also carries the trace's answers and a
+  4,768-byte signature, which a public-hash deployment would not ship; the result publishes the
+  whole file size beside `|π|`.
 - **The leaf is a cube sum.** The `2^22` inputs of a leaf differ only in the index, so `leafValue`
   is a sum over a 22-variable cube of Keccak-f[1600]'s output bits; computing it faster than the
   hashes themselves would need a cube attack on the full 24 rounds (the best known reach about 7).

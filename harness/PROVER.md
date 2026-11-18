@@ -39,7 +39,7 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 | `/prover/prover` | the binary (read-only) |
 | `/setup` | the setup directory (read-only after `setup`) |
 | `/work` | the request's own directory, read-write, the working directory (fresh for every request) |
-| `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`) |
+| `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`), **only from `go` on**: connect after `go` |
 | `/tmp` | an empty tmpfs (counted in the memory cap) |
 | `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes, but `/proc/stat`, `/proc/cpuinfo` and `/proc/meminfo` are the machine's (global) |
 | `/sys/devices/system/cpu` | the CPU topology (read-only) |
@@ -48,7 +48,9 @@ Nothing else exists: no `/usr`, no shell, no network, no other process. The envi
 `RF_ORACLE=/run/rf/oracle.sock`, `RF_SETUP=/setup`, `HOME=/work`, `TMPDIR=/tmp`, `PATH=/prover`.
 Resources: every CPU of the machine (shared with the service, which computes the oracle on the same
 CPUs), memory capped by a cgroup (`memory.prover` of the season, 8 GiB in season 1; the service
-has its own 2 GiB), `oom_score_adj = 1000`. A seccomp filter fails (EPERM) `ptrace`,
+has its own 2 GiB), `oom_score_adj = 1000`. The runner reads `/setup` in full before every request
+(below), so its page cache is charged to the runner, not to the prover: up to `setup_cap` (4 GiB)
+of read-only setup can be resident beyond the prover's 8 GiB. A seccomp filter fails (EPERM) `ptrace`,
 `process_vm_*`, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_*`, key management, mounts,
 namespaces and module loading. When a request ends, every process the prover started is killed.
 
@@ -74,7 +76,8 @@ A prover with nothing to set up exits 0.
 
 ### The stream: `prover first /work`, then `prover step /work` (timed per request)
 
-**One benchmark, pure IVC** (AGENTS.md §6). An evaluation is one stream of `M` steps (`M = 8` in
+**One benchmark, an IVC stream** (AGENTS.md §6; in the track `final` only the last output needs to
+be a proof). An evaluation is one stream of `M` steps (`M = 8` in
 season 1, 4 in the smoke) under one service lifetime, run once against the service and then twice
 more, timed, against its replay (below). Every step is a fresh process in a fresh sandbox (fresh
 `/work`, fresh `/tmp`, read-only `/setup`); nothing survives a request except the proof the runner
@@ -131,15 +134,22 @@ requests in an order its inputs fix (the service assigns one-time indices in the
 requests arrive, and a replay refuses any other digest at an index). **A timed pass must make
 exactly the service run's `SIGN` requests**: any replay `MISMATCH` (in any pass), and any total
 other than `timed_runs` times the service run's signatures, is the entry's REJECT (a refusal at an
-index would otherwise be a bit carried from the service run into a timed pass).
+index would otherwise be a bit carried from the service run into a timed pass). Three pitfalls: a
+`SIGN` that fails or is retried still consumes its index, so never retry a `SIGN` unless the retry
+is fixed by the inputs; no output may depend on measured memory, load or time (`/proc/meminfo` and
+`/proc/stat` are the machine's), not even through a choice of chunk size or algorithm; and a local
+PRF computed from `oracle.key` must match the service's `QUERY` byte for byte, multi-block queries
+included (test it on 0-, 103-, 104- and 239-byte queries).
 
 **The handshake** (per request):
 
 1. The runner starts the process (with `vk.hex` already in `/work`). The prover loads its setup and
-   prints the line **`ready`** on stdout within `ready_s` (10 s). Start-up is untimed (reported).
+   prints the line **`ready`** on stdout within `ready_s` (10 s). Start-up is untimed (reported),
+   and the service is unreachable during it: `/run/rf/oracle.sock` does not exist yet.
 2. The runner writes the inputs to a staging directory the prover cannot see, **starts the
-   clock**, renames them into `/work` (constant time, whatever their size) and writes the
-   line **`go`** on the prover's stdin.
+   clock**, links the service's socket into `/run/rf`, renames the inputs into `/work` (constant
+   time, whatever their size) and writes the line **`go`** on the prover's stdin. A prover connects
+   to the service only after `go`.
 3. The prover writes `/work/proof.bin` and prints the line **`done`** (or exits). At `done`, or at
    the prover's exit, the runner kills **every process of the sandbox at once and stops the clock
    when all of them are dead**. Only then is `proof.bin` read. So work done after

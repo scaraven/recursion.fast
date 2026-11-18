@@ -97,6 +97,9 @@ def main():
           and abs(sc["S"] - 3.5676213450081633) < 1e-14 and sc["final_pi_bytes"] == 256 << 10
           and "P_bar" not in sc and "n_ref" not in sc,
           f"vector 1: S = P_total · 2^(|π_M| / 1 MiB), the final |π| only (output 1's 1 GiB ignored): {sc['S']!r}")
+    sc_f = score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10, file_bytes=(256 << 10) + 4840)]))
+    check(sc_f["final_file_bytes"] == (256 << 10) + 4840 and sc_f["S"] == score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10)]))["S"],
+          "the final output's whole file size is published beside |π_M| (final_file_bytes), never scored")
     check(sc["tracks"] == {"final": "S"} and "output 1: |π| = 1073741824 bytes above pi_cap" in sc["tracks_reason"]["every"],
           f"an intermediate |π| above pi_cap (recorded): `final` only: {sc['tracks_reason']}")
     # vector 2: the season's shape, P_i = i s (i = 1 … 8), |π_M| = 512 KiB: P_total = 36 s, S = 36 √2

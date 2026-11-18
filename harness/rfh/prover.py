@@ -8,8 +8,9 @@ interface). Every step runs in `sandbox.Sandbox`.
   read-only afterwards.
 * `request`: one `prover first /work` or `prover step /work` in a fresh process: the
   process starts and prints `ready` (within `ready_s`, untimed); the runner writes the inputs to a
-  staging directory the prover cannot see; the clock starts; the runner renames the inputs into
-  /work and sends `go`; at the prover's `done` line, its stdout's end or its exit the runner kills
+  staging directory the prover cannot see; the clock starts; the runner links the service's socket
+  into the request's own socket directory (so `/run/rf/oracle.sock` exists only from `go` on),
+  renames the inputs into /work and sends `go`; at the prover's `done` line, its stdout's end or its exit the runner kills
   the whole sandbox and **stops the clock when every process of it is dead** (`harness/PROVER.md`
   §3); then `proof.bin` is read. A filesystem error in the request's directory is the entry's
   failure.
@@ -213,9 +214,13 @@ class Step:
 
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
-            work_cap=None):
+            work_cap=None, sock_at_go=None):
     """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `inputs`:
-    name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. `ready_s`
+    name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. With
+    `sock_at_go` (the service's socket), `sock_dir` is the request's own empty, runner-owned
+    directory, bound read-only at `/run/rf`; once the clock runs, the socket is hard-linked into it
+    as `oracle.sock` (a connect through the link reaches the service), so no process of the
+    request can reach the service before `go` (the untimed start-up cannot `QUERY`). `ready_s`
     (default `step_s`) bounds the start-up to `ready`, `step_s` the proving; `deadline` (a monotonic
     time, the stream's cap) bounds both. **The clock stops when the request's process tree is
     dead**: at the prover's `done` line, its stdout's end or its exit, the runner kills the whole
@@ -278,6 +283,11 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
             with open(os.path.join(stage, name), "wb") as f:
                 f.write(data)
         t0 = time.monotonic()
+        if sock_at_go:
+            try:
+                os.link(sock_at_go, os.path.join(sock_dir, "oracle.sock"))
+            except OSError as e:
+                raise HarnessError(f"linking the service's socket into the request's socket directory: {e}") from e
         try:
             for name in inputs:
                 os.rename(os.path.join(stage, name), os.path.join(work, name))
@@ -306,6 +316,8 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
                 r.status = "the prover exited without `done` and its exit status was not reported"
             elif code != 0:
                 r.status = f"exit {code}"
+    except HarnessError:
+        raise
     except EntryFailure as e:
         r.status = str(e)
     except Exception as e:  # noqa: BLE001 (the default is the entry's failure)
@@ -335,6 +347,10 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
 
 class EntryFailure(Exception):
     """A failure the prover caused (its reason is the step's status)."""
+
+
+class HarnessError(RuntimeError):
+    """A failure of the runner's own (a harness error, never the entry's)."""
 
 
 def make_accessible(path):

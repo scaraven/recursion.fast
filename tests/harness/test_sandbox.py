@@ -21,7 +21,9 @@
 8. a prover that makes /work unusable (an input's name taken by a directory, or /work made
    unreadable) is the entry's failure with that reason, never a harness error;
 9. a badge `verify` that gives one answer and hangs is killed at the batch's timeout (the only
-   bound on a check): `BadgeError` of kind `timeout`, and none of its processes survives.
+   bound on a check): `BadgeError` of kind `timeout`, and none of its processes survives;
+10. the oracle socket exists only from `go` on: with `sock_at_go` (the benchmark's requests), a
+    connect to `RF_ORACLE` before `ready` fails (no such file) and one after `go` reaches the service.
 """
 import os
 import subprocess
@@ -190,6 +192,30 @@ def main():
     nb = tree_bytes(t)
     check(nb >= 1 << 40, f"tree_bytes counts a sparse file at its size, through mode-000 directories: {nb}")
     check(remove_tree(t), "a locked tree is removed (made accessible first)")
+
+    # 10. the socket only from `go` on: connect before `ready` and after `go`, and report errno, in proof.bin
+    conn = ('#include <errno.h>\n#include <sys/socket.h>\n#include <sys/un.h>\n'
+            'static int try(void){struct sockaddr_un a={.sun_family=AF_UNIX};strcpy(a.sun_path,getenv("RF_ORACLE"));'
+            'int s=socket(AF_UNIX,SOCK_STREAM,0);int r=connect(s,(struct sockaddr*)&a,sizeof a);int e=r?errno:0;close(s);return e;}\n')
+    prog = conn + HS + ('int main(){int pre=try();hs();int post=try();char b[64];sprintf(b,"pre=%d post=%d",pre,post);'
+                        'FILE*f=fopen("proof.bin","w");fputs(b,f);fclose(f);puts("done");fflush(stdout);return 0;}\n')
+    d = os.path.join(tmp, "sock-at-go")
+    os.makedirs(os.path.join(d, "bin"))
+    with open(os.path.join(d, "p.c"), "w") as f:
+        f.write("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\n" + prog)
+    subprocess.run(["gcc", "-static", "-O1", "-w", "-o", os.path.join(d, "bin", "prover"), os.path.join(d, "p.c")], check=True)
+    link_dir = os.path.join(os.path.dirname(svc.sock_dir), "req-sock")      # the socket's filesystem
+    os.makedirs(link_dir)
+    import errno
+    for at_go in (True, False):
+        w = os.path.join(d, f"work-{at_go}")
+        os.makedirs(w)
+        r = request(Run(os.path.join(d, "bin"), run.setup_dir, "256M"), "step", w,
+                    link_dir if at_go else svc.sock_dir, {"leaf.json": b"{}"}, 5, 1 << 20, ready_s=2,
+                    sock_at_go=svc.socket_path if at_go else None)
+        want = f"pre={errno.ENOENT} post=0".encode() if at_go else b"pre=0 post=0"
+        check(r.status == "ok" and r.proof == want,
+              f"{'with' if at_go else 'without'} sock_at_go, connect before ready / after go: {r.status} {r.proof!r}")
     svc.stop()
 
     # 5. the memory cap

@@ -424,8 +424,9 @@ class Bench:
         Every failure is the entry's: the request's own errors (`request`), the stream's cap reached
         during it, a directory the runner cannot prepare or remove, and a filesystem left fuller
         than before the request (bytes or inodes of the request directories' filesystem, after
-        cleanup). Before it the page cache of the setup and the binary is warmed (`warm_caches`); the
-        request's directory and its staging directory are removed after it."""
+        cleanup). Before it the page cache of the setup and the binary is warmed (`warm_caches`). The
+        service's socket appears in the request's `/run/rf` only at `go`. The request's directory,
+        its staging directory and its socket directory are removed after it."""
         root = self.req_root or os.path.join(self.work, "requests")
         os.makedirs(root, exist_ok=True)
         before = fs_free(root)
@@ -437,12 +438,17 @@ class Bench:
         except OSError as e:          # only a previous request can have left the filesystem so
             raise Fail(f"{tag}: the request directory cannot be prepared ({e.strerror or e}); "
                        "the filesystem is in the state the prover's requests left it")
+        # the request's own socket directory, on the service socket's filesystem (a hard link cannot
+        # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
+        sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", tag)
+        fresh_dir(sock)
         dl = self.deadline[0] if self.deadline else None
         warm_s, warm_bytes = self.warm_caches()
-        r = request(self.run, kind, work, svc.sock_dir, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
-                    ready_s=self.p.ready_s, work_cap=self.p.work_cap)
+        r = request(self.run, kind, work, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
+                    ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path)
         r.warm_s, r.warm_bytes = warm_s, warm_bytes
         self.alive(svc)
+        remove_tree(sock)
         gone = remove_tree(work) & remove_tree(work + ".stage")
         after = fs_free(root)
         if r.status == "ok" and not gone:
@@ -534,11 +540,13 @@ class Bench:
         v_cap = p.v_cap_ms * 1e6
 
         def rejected_size(s):
-            if s["signed_proof"]:             # a rejected output is sized by its file
+            """An output that `acc` did not accept (rejected, or its check crashed or timed out) is
+            sized by its whole file: its trace is no place to keep state uncounted."""
+            if s["signed_proof"]:
                 s["pi_bytes"], s["signed_proof"] = s["file_bytes"], False
             if s["pi_bytes"] > p.pi_cap:
-                raise Fail(f"service run, step {s['index']}: the output, rejected by acc, has {s['pi_bytes']} bytes, "
-                           f"above pi_cap = {p.pi_cap}")
+                raise Fail(f"service run, step {s['index']}: the output, not accepted by acc (rejected, or its check "
+                           f"failed), has {s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}")
 
         def flush():
             """Check the pending intermediate outputs; a failed badge run costs the track `every`."""
@@ -550,6 +558,7 @@ class Bench:
             except Fail as e:
                 for k, _ in pending:
                     steps[k]["check_error"] = printable(str(e), 300)
+                    rejected_size(steps[k])
                 pending.clear()
                 return
             for (k, _), (ok, ns) in zip(pending, res):
@@ -628,6 +637,9 @@ class Bench:
             except Fail as e:
                 for k in ks:
                     steps[k - 1]["canary_error"] = printable(str(e), 300)
+        for s in steps[:-1]:              # every output not accepted after all its checks: sized by its file
+            if not s.get("accepted") or s.get("check_error") or s.get("recheck_rejected"):
+                rejected_size(s)
         why = every_reasons(p, rec)
         rec["every"] = {"eligible": not why, "reasons": why}
         self.log(f"[service run] final output accepted (|π| {final['pi_bytes']} B, V {final['V_ns'] / 1e6:.3f} ms); "
@@ -788,6 +800,7 @@ def score(p: Params, stream):
     f = 2 ** (pi_M / p.size_ref)
     why = every_reasons(p, stream)
     out = {"S": P * f, "P_total_s": P, "size_factor": f, "final_pi_bytes": pi_M,
+           "final_file_bytes": steps[-1].get("file_bytes"),       # published beside |π_M|, never scored
            "tracks": {"final": "S", **({} if why else {"every": "S"})}}
     if why:
         out["tracks_reason"] = {"every": "; ".join(why)[:2000]}

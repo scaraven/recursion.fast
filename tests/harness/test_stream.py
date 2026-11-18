@@ -15,7 +15,9 @@
    and the first differing byte offset.
 4. The final output: rejected by acc, |π_M| above final_pi_cap, V_M above v_cap (after two more
    timings: the minimum counts, so one slow check is not a breach), a statement canary accepted, any
-   output above pi_cap: each the entry's REJECT. An intermediate output rejected by acc, or with V
+   output above pi_cap, where an output `acc` did not accept (rejected, its check crashed, or rejected
+   or crashed when timed again) is sized by its whole file: each the entry's REJECT. An intermediate
+   output rejected by acc, or with V
    above v_cap, or an accepted canary of output 1 or 2: scored in `final` only, the reason recorded.
 5. The stream's cap reached is the entry's REJECT (no truncation).
 6. Calibration samples: before the service run's step 1, before each timed pass and a closing one.
@@ -27,7 +29,8 @@
 9. The replay audit: a MISMATCH refusal logged in a timed pass, a MISMATCH in the service's final
    stats, or `replays ≠ timed_runs · signatures` is the entry's REJECT.
 10. Before every request the page cache of the setup directory and the prover binary is warmed (every
-    regular file read in full, no link followed), and the warm-up's time is recorded.
+    regular file read in full, no link followed), and the warm-up's time is recorded; every request
+    gets its own empty socket directory, into which the service's socket is linked only at `go`.
 """
 import json
 import os
@@ -209,10 +212,16 @@ def main():
     huge = b"z" * (p.pi_cap + 1)
     fails_with("an intermediate output above pi_cap (not a signed proof: its file size)",
                f"service run, step 2: the output's file size is {p.pi_cap + 1} bytes, above pi_cap", out_bytes={2: huge})
-    stash = signed.Signed(b"", [(b"q" * (p.pi_cap + 1), bytes(32))]).encode()
-    fails_with("a rejected intermediate that parses, its state in the trace (sized by its file)",
-               f"service run, step 2: the output, rejected by acc, has {len(stash)} bytes, above pi_cap",
+    stash = signed.Signed(b"", [(b"q" * (2 << 20), bytes(32))]).encode()     # |π| = 0, 2 MiB in the trace
+    not_acc = f"service run, step 2: the output, not accepted by acc (rejected, or its check failed), has {len(stash)} bytes"
+    fails_with("a rejected intermediate that parses, its state in the trace (sized by its file)", not_acc,
                out_bytes={2: stash}, reject={2})
+    fails_with("an intermediate whose batch check crashed, its state in the trace (sized by its file)", not_acc,
+               out_bytes={2: stash}, crash=("intermediate",))
+    fails_with("an intermediate rejected when timed again, its state in the trace (sized by its file)", not_acc,
+               out_bytes={2: stash}, V={2: 200e6}, recheck={2: [150e6, 140e6]}, recheck_reject={2})
+    fails_with("an intermediate whose re-timing crashed, its state in the trace (sized by its file)", not_acc,
+               out_bytes={2: stash}, V={2: 200e6}, crash=("timed again",))
     fails_with("V_M above v_cap in all three timings", "above v_cap = 128 ms", V={4: 200e6}, recheck={4: [150e6, 190e6]})
     fails_with("a canary of the final output accepted", "statement canaries accepted by acc", canary_ok=[(4, "x")])
     fails_with("the stream's cap", "stream_s", cap_at="timed1-step2")
@@ -289,26 +298,35 @@ def main():
     open(os.path.join(setup, "sub", "b.bin"), "wb").write(b"b" * 1000)
     os.symlink(os.path.join(setup, "a.bin"), os.path.join(setup, "link"))
     open(os.path.join(bindir, "prover"), "wb").write(b"p" * 5000)
-    events = []
+    events, socks = [], []
     w = Bench.__new__(Bench)
     w.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     w.run = SimpleNamespace(bin_dir=bindir, setup_dir=setup, mem="1G")
     w.req_root, w.work, w.deadline = None, d, None
     w.warm_caches = lambda: (events.append("warm"), Bench.warm_caches(w))[1]
 
+    svc_w = FakeSvc()
+    svc_w.sock_dir = os.path.join(d, "svc", "stream")
+    svc_w.socket_path = os.path.join(svc_w.sock_dir, "oracle.sock")
+
     def fake_request(run, kind, work, sock, inputs, step_s, file_cap, **kw):
         events.append("request")
+        socks.append((os.path.dirname(sock) == os.path.join(d, "svc", "requests") and os.listdir(sock) == [],
+                      kw.get("sock_at_go") == svc_w.socket_path))
         r = Step()
         r.seconds, r.proof = 0.001, b"x"
         return r
     real_request, bench_mod.request = bench_mod.request, fake_request
     try:
-        rs = [w.one(FakeSvc(), f"service{i}", "first", {}) for i in (1, 2, 3)]
+        rs = [w.one(svc_w, f"service{i}", "first", {}) for i in (1, 2, 3)]
     finally:
         bench_mod.request = real_request
     check(events == ["warm", "request"] * 3 and all(r.warm_bytes == 3_006_000 and r.warm_s >= 0 for r in rs),
           f"the setup directory and the binary are read in full before every request (no link followed): "
           f"{events}, {rs[0].warm_bytes} bytes")
+    check(socks == [(True, True)] * 3 and not os.listdir(os.path.join(d, "svc", "requests")),
+          "every request gets its own empty socket directory beside the service's, the service's socket linked "
+          "in only at `go` (sock_at_go), and the directory removed after it")
     b = make()
     rec = b.stream_run()
     check(all("warm_s" in s and all("warm_s" in x for x in s["timed"]) for s in rec["steps"]),

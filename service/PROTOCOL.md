@@ -11,7 +11,8 @@ service run is fixed.
 
 - A Unix stream socket. Its path is in the environment variable **`RF_ORACLE`** of every prover
   process (inside the sandbox it is `/run/rf/oracle.sock`). The socket is the only way to reach the
-  service.
+  service, and it exists in a request's sandbox only from the request's `go` on
+  (`harness/PROVER.md` §3): connect after `go`.
 - A connection carries any number of requests, answered in order. The service reads the next
   request only after it has written the response to the previous one, so a client may pipeline
   (write a request before reading the previous response) only if it keeps reading responses while
