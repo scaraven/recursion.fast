@@ -48,10 +48,8 @@ def printable(text, limit=1200):
 @dataclass
 class Params:
     name: str
-    n_ref: int
     size_ref: int
     M: int
-    chains: int
     n: int
     ready_s: float
     step_s: float
@@ -65,8 +63,6 @@ class Params:
     calib_drift: float
     calib_runs: int
     calib_ref_provisional: bool
-    triv_chains: int
-    triv_n: int
     service_calib_s: float
     pi_cap: int
     final_pi_cap: int
@@ -90,15 +86,14 @@ class Params:
         g = lambda sec, k: t[sec][k]  # noqa: E731 (a KeyError names the missing parameter)
         s = t["stream"]
         p = Params(
-            name=t["name"], n_ref=g("score", "n_ref"), size_ref=g("score", "size_ref"),
-            M=s.get("M"), chains=s.get("chains"), n=s.get("n"), ready_s=g("stream", "ready_s"),
+            name=t["name"], size_ref=g("score", "size_ref"),
+            M=s.get("M"), n=s.get("n"), ready_s=g("stream", "ready_s"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
             timed_runs=g("stream", "timed_runs"),
             calib_every=g("calibration", "every"), calib_idle_s=float(g("calibration", "idle_s")),
             calib_rounds=g("calibration", "rounds"), calib_ref_ns=float(g("calibration", "ref_ns")),
             calib_drift=float(g("calibration", "c_P_drift")), calib_runs=g("calibration", "runs_per_sample"),
-            calib_ref_provisional=bool(g("calibration", "ref_provisional")), triv_chains=g("calibration", "triv_chains"),
-            triv_n=g("calibration", "triv_n"), service_calib_s=g("calibration", "service_s"),
+            calib_ref_provisional=bool(g("calibration", "ref_provisional")), service_calib_s=g("calibration", "service_s"),
             pi_cap=g("caps", "pi_cap"), final_pi_cap=g("caps", "final_pi_cap"), v_cap_ms=float(g("caps", "v_cap_ms")),
             file_cap=g("caps", "file_cap"), setup_s=g("caps", "setup_s"),
             setup_cap=g("caps", "setup_cap"), work_cap=g("caps", "work_cap"), build_s=g("caps", "build_s"),
@@ -110,28 +105,25 @@ class Params:
 
     def shape(self):
         """The stream's shape, as the result records it (`stream.shape`) and the aggregation compares."""
-        return {"M": self.M, "chains": self.chains, "n": self.n}
+        return {"M": self.M, "n": self.n}
 
     def check_shape(self):
-        """The season's stream shape (`[stream] M`, `chains`, `n`): positive integers, `chains = 4`
-        (the statement `X_i` is the tree of four leaves), `n ≤ chainCap = 2^20` (the contract's bound
-        on a chain), `timed_runs ≥ 1`; else a ValueError naming the defect."""
-        bad = [k for k in ("M", "chains", "n") if type(getattr(self, k)) is not int or getattr(self, k) < 1]
+        """The season's stream shape (`[stream] M`, `n`): positive integers, `n ≤ leafCap = 2^22`
+        (the contract's bound on a leaf), `timed_runs ≥ 1`; else a ValueError naming the defect."""
+        bad = [k for k in ("M", "n") if type(getattr(self, k)) is not int or getattr(self, k) < 1]
         if bad:
             raise ValueError(f"[stream] {', '.join(bad)} not a positive integer")
-        if self.chains != 4:
-            raise ValueError(f"[stream] chains = {self.chains}, not 4 (X_i is nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4))")
-        if self.n > CHAIN_CAP:
-            raise ValueError(f"[stream] n = {self.n} above the contract's chainCap = 2^20")
+        if self.n > LEAF_CAP:
+            raise ValueError(f"[stream] n = {self.n} above the contract's leafCap = 2^22")
         if type(self.timed_runs) is not int or self.timed_runs < 1:
             raise ValueError(f"[stream] timed_runs = {self.timed_runs!r}, not a positive integer")
 
 
-CHAIN_CAP = 1 << 20       # the contract's chainCap (`Relation.lean`)
+LEAF_CAP = digest.LEAF_CAP       # the contract's leafCap (`Relation.lean`)
 
 
-def chain_json(n, start):
-    return json.dumps({"n": n, "start": start.hex()}).encode()
+def leaf_json(n, seed):
+    return json.dumps({"n": n, "seed": seed.hex()}).encode()
 
 
 FP_HASHED = ("cpu_model", "vm_shape", "frequency_policy", "image_id")    # what comparability is about
@@ -240,7 +232,6 @@ class Bench:
         self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"))
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
-        self.triv = None                     # the chain checker's calibration instance (leaves.json, root)
         self.samples = []                    # the interleaved calibration samples
         self.req_root = None
 
@@ -366,18 +357,9 @@ class Bench:
 
     # -- calibration -------------------------------------------------------------------------------
     def calibrate(self):
-        """Before the stream: the chain checker's instance (`triv_chains` chains of `triv_n` steps,
-        `2^24` permutations in season 1, fresh starts, its root computed here) and the service's
-        calls/s and permutations/s (published, not in the score). `T_triv` and `c_P` are
-        sampled during the stream (`sample`)."""
-        inst = os.path.join(self.work, "instance")
-        os.makedirs(inst, exist_ok=True)
-        starts = draws.starts(self.p.triv_chains)
-        root = digest.tree_root(digest.leaf_digests(starts, self.p.triv_n, self.service_bin))
-        with open(os.path.join(inst, "leaves.json"), "w") as f:
-            json.dump({"n": self.p.triv_n, "starts": [s.hex() for s in starts]}, f)
-        self.triv = (os.path.join(inst, "leaves.json"), root)
-        cal = {"triv_permutations": self.p.triv_chains * self.p.triv_n, "pinned_core": self.badge.core}
+        """Before the stream: the service's calls/s and permutations/s (published, not in the
+        score). `c_P` is sampled during the stream (`sample`)."""
+        cal = {"pinned_core": self.badge.core}
         svc = self.service("calibration")
         rec = {"keygen_ms": float(svc.info.get("keygen_ms", "nan"))}     # no CPU flags in a result
         try:
@@ -405,8 +387,8 @@ class Bench:
     def sample(self, before):
         """One calibration sample (AGENTS.md §6), with no entry process alive: an idle
         gap (`idle_s`), then `runs_per_sample` short runs of the prover-shaped workload `calib` on the
-        job's CPUs (their median is the sample, every run is published) and one run of the chain
-        checker on one pinned core. `before` names where in the benchmark it was taken."""
+        job's CPUs (their median is the sample, every run is published). `before` names where in the
+        benchmark it was taken."""
         time.sleep(self.p.calib_idle_s)
         s = {"before": before}
         if self.calib_bin:
@@ -417,7 +399,6 @@ class Bench:
                 kv = dict(x.split("=", 1) for x in out.split()[1:] if "=" in x)
                 runs.append(int(kv["ns"]))
             s["calib_runs_ns"], s["calib_ns"] = runs, statistics.median(runs)
-        s["triv_ns"] = self.badge.chaincheck(self.triv[0], self.triv[1])
         self.samples.append(s)
         return s
 
@@ -425,18 +406,15 @@ class Bench:
         """`c_P` (median of the samples over the season's fixed `ref_ns`), a health check of the
         machine, never a factor of the score (AGENTS.md §6): `c_P_drift = |c_P - 1|`, and `c_P_ok`
         unless it exceeds the season's `c_P_drift` while `ref_ns` is measured (`c_P_provisional`
-        false; while it is a placeholder the drift is recorded, not enforced). `T_triv` (median of
-        the chain checker's samples) is published, never scored. The samples' relative spread is
-        published."""
+        false; while it is a placeholder the drift is recorded, not enforced). The samples' relative
+        spread is published."""
         cs = [s["calib_ns"] for s in self.samples if "calib_ns" in s]
-        ts = [s["triv_ns"] for s in self.samples]
         raw = statistics.median(cs) / self.p.calib_ref_ns if cs else 1.0
         cv = lambda xs: statistics.stdev(xs) / statistics.fmean(xs) if len(xs) > 1 else 0.0  # noqa: E731
         drift = abs(raw - 1.0)
         return {"c_P": raw, "c_P_drift": drift, "c_P_drift_cap": self.p.calib_drift,
                 "c_P_ok": self.p.calib_ref_provisional or drift <= self.p.calib_drift, "calib_ref_ns": self.p.calib_ref_ns,
-                "c_P_provisional": self.p.calib_ref_provisional, "T_triv_ns": statistics.median(ts) if ts else None,
-                "calib_cv": cv(cs), "triv_cv": cv(ts),
+                "c_P_provisional": self.p.calib_ref_provisional, "calib_cv": cv(cs),
                 "calib_within_sample_cv": [cv(s["calib_runs_ns"]) for s in self.samples if "calib_runs_ns" in s],
                 "samples": self.samples}
 
@@ -478,16 +456,14 @@ class Bench:
             raise Fail(f"{tag}: {r.status}" + self.diag(svc, r.log))
         return r
 
-    def inputs(self, i, starts, stmts, prev, key=None):
-        """Step `i`'s request: (`first` or `step`, name → bytes). Every step gets its `chains` fresh
-        chains `chain0.json …`; a step `i ≥ 2` also `prev.stmt` (`c_{i-1}`) and `prev.bin` (`prev`,
-        the service run's output of step `i - 1`); a timed request also `oracle.key` (the service's
-        PRF key `k`, 64 lowercase hex characters and a newline), staged with the others, so it
-        appears in /work when the clock runs."""
-        C = self.p.chains
+    def inputs(self, i, seeds, stmts, prev, key=None):
+        """Step `i`'s request: (`first` or `step`, name → bytes). Every step gets its leaf,
+        `leaf.json` (`n` and the step's fresh seed `s_i`); a step `i ≥ 2` also `prev.stmt` (`c_{i-1}`)
+        and `prev.bin` (`prev`, the service run's output of step `i - 1`); a timed request also
+        `oracle.key` (the service's PRF key `k`, 64 lowercase hex characters and a newline). All are
+        staged and appear in /work together when the clock runs."""
         ins = {} if i == 1 else {"prev.stmt": (stmts[i - 2].hex() + "\n").encode(), "prev.bin": prev}
-        for j in range(C):
-            ins[f"chain{j}.json"] = chain_json(self.p.n, starts[C * (i - 1) + j])
+        ins["leaf.json"] = leaf_json(self.p.n, seeds[i - 1])
         if key is not None:
             ins["oracle.key"] = (key + "\n").encode()
         return ("first" if i == 1 else "step"), ins
@@ -499,25 +475,25 @@ class Bench:
         """The stream (AGENTS.md §6) under one service lifetime: the service run (`service_run`),
         then the timed passes (`timed`), all within `stream_s`, which is the entry's REJECT if
         reached. `M` steps, a fresh process each, `PROVER first` then `PROVER step`; step `i` proves
-        `c_i` from `chains` fresh chains of `n` steps each (`rfh.digest.stream_statements`)."""
+        `c_i` from one fresh leaf of `n` hashes (`rfh.digest.stream_statements`)."""
         p, name = self.p, "stream"
         p.check_shape()
-        M, C = p.M, p.chains
-        starts = draws.starts(C * M)          # fresh CSPRNG draws per evaluation
-        self.log(f"[{name}] computing {C * M} leaf digests ({C * M} chains of n = {p.n})")
-        ld = digest.leaf_digests(starts, p.n, self.service_bin)  # all before the first request
-        X, stmts, first = digest.stream_statements(ld, C)
+        M = p.M
+        seeds = draws.starts(M)               # fresh CSPRNG draws per evaluation, one per step
+        self.log(f"[{name}] computing {M} leaf digests (n = {p.n} hashes each)")
+        ld = digest.leaf_digests(seeds, p.n, self.service_bin)  # all before the first request
+        stmts, first = digest.stream_statements(ld)
         self.req_root = request_root()
         svc = self.service(name)
         rec = {"vk": svc.vk.hex(), "service": {k: v for k, v in svc.info.items() if k != "simd"}, "shape": p.shape(),
-               "starts": [s.hex() for s in starts], "leaf_digests": [d.hex() for d in ld],
-               "step_statements": [x.hex() for x in X], "statements": [c.hex() for c in stmts], "steps": [],
+               "seeds": [s.hex() for s in seeds], "leaf_digests": [d.hex() for d in ld],
+               "statements": [c.hex() for c in stmts], "steps": [],
                "truncated": False, "timed_runs": p.timed_runs,
                "request_dir": "tmpfs (/dev/shm)" if self.req_root else "the work directory"}
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
-            self.service_run(svc, rec, starts, stmts, first)
-            self.timed(svc, rec, starts, stmts)
+            self.service_run(svc, rec, seeds, stmts, first)
+            self.timed(svc, rec, seeds, stmts)
             self.alive(svc)
         except Fail as e:
             e.rec = rec        # a failed run keeps its measurements in the result
@@ -537,7 +513,7 @@ class Bench:
         rec["calibration"] = self.calibration()
         return rec
 
-    def service_run(self, svc, rec, starts, stmts, first):
+    def service_run(self, svc, rec, seeds, stmts, first):
         """The service run (AGENTS.md §6), untimed: the stream against the service, every output
         kept. Its times are recorded (`P_service_s`), never scored. Every output's size is at most
         `pi_cap`: its `|π|` if it parses as a signed proof that `acc` accepts, else its file size
@@ -587,10 +563,10 @@ class Bench:
                 self.sample(f"service run, step {i}")
             if self.left() <= 0:
                 raise Fail(f"service run, step {i}: {self.deadline[1]}")
-            kind, ins = self.inputs(i, starts, stmts, self.stored(steps[-1]) if steps else None)
+            kind, ins = self.inputs(i, seeds, stmts, self.stored(steps[-1]) if steps else None)
             r = self.one(svc, f"service{i}", kind, ins)
             rel = self.keep(f"stream/step{i}.bin", r.proof)
-            steps.append(step_record(i, p.chains * p.n, r, rel))
+            steps.append(step_record(i, p.n, r, rel))
             s = steps[-1]
             self.log(f"[service run] step {i}: n={s['n']} P={r.seconds:.4f} s file={s['file_bytes']} B "
                      f"|π|={s['pi_bytes'] if s['signed_proof'] else 'not a signed proof'}")
@@ -686,11 +662,11 @@ class Bench:
         if left:
             raise Fail(f"the service run left {len(left)} entries in the request directory that the runner cannot remove")
 
-    def timed(self, svc, rec, starts, stmts):
+    def timed(self, svc, rec, seeds, stmts):
         """The timed passes (AGENTS.md §6): `timed_runs` passes of steps `1 … M`, each a fresh
         sandbox as in the service run, after the service run's request directories are gone. Before
         each pass the service enters replay mode (`Service.replay`) and reveals its PRF key `k`; a
-        timed request gets the same chains, the runner's statement, the **service run's** output of
+        timed request gets the same leaf, the runner's statement, the **service run's** output of
         step `i - 1` as `prev.bin`, and `oracle.key`. Each output must be byte-identical to the
         service run's output of that step, else the entry's REJECT naming the pass, the step and the
         first differing byte. `P_i` = the minimum of step `i`'s timed times."""
@@ -706,7 +682,7 @@ class Bench:
                 if self.left() <= 0:
                     raise Fail(f"timed pass {t}, step {i}: {self.deadline[1]}")
                 ref = self.stored(steps[i - 1])
-                kind, ins = self.inputs(i, starts, stmts, self.stored(steps[i - 2]) if i > 1 else None, key)
+                kind, ins = self.inputs(i, seeds, stmts, self.stored(steps[i - 2]) if i > 1 else None, key)
                 r = self.one(svc, f"timed{t}-step{i}", kind, ins)
                 if r.proof != ref:
                     rel = self.keep(f"stream/timed{t}-step{i}.bin", r.proof)
@@ -794,38 +770,31 @@ def every_reasons(p, stream, canaries=True):
     return out
 
 
-def p_bar(p, steps, key="P_s"):
-    """`P̄ = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)` over the steps' `key` times."""
-    num = sum(s["n"] * (s[key] / s["n"]) ** 3 for s in steps)
-    return p.n_ref * (num / sum(s["n"] for s in steps)) ** (1 / 3)
-
-
 def score(p: Params, stream):
     """The score (AGENTS.md §7; seconds, lower is better), one number for both tracks:
 
-        S  = P̄ · 2^(|π_M| / size_ref)
-        P̄  = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3),   P_i = min over the timed passes
+        S        = P_total · 2^(|π_M| / size_ref)
+        P_total  = Σ_i P_i,   P_i = the least of step i's timed times
 
     `tracks` names the score field of each track the run is in: always `final` (a run that fails a
     `final` condition is REJECTed), `every` too when `every_reasons` is empty, else
-    `tracks_reason` says why not. Published diagnostics: `P̄` of the untimed service run, each
-    step's share of the cubic sum. Adds the derived per-step fields in place."""
+    `tracks_reason` says why not. Published diagnostics: the untimed service run's total, each
+    step's share of `P_total`. Adds the derived per-step fields in place."""
     if not stream or not stream.get("steps"):
         return {}
     steps, cal = stream["steps"], stream.get("calibration") or {}
-    P = p_bar(p, steps)
+    P = sum(s["P_s"] for s in steps)
     pi_M = steps[-1]["pi_bytes"]
     f = 2 ** (pi_M / p.size_ref)
     why = every_reasons(p, stream)
-    out = {"S": P * f, "P_bar": P, "size_factor": f, "final_pi_bytes": pi_M,
+    out = {"S": P * f, "P_total_s": P, "size_factor": f, "final_pi_bytes": pi_M,
            "tracks": {"final": "S", **({} if why else {"every": "S"})}}
     if why:
         out["tracks_reason"] = {"every": "; ".join(why)[:2000]}
-    out.update(n_ref=p.n_ref, size_ref=p.size_ref, M=len(steps), sum_n=sum(s["n"] for s in steps),
-               c_P=cal.get("c_P"), T_triv_ns=cal.get("T_triv_ns"), c_P_provisional=bool(cal.get("c_P_provisional")))
+    out.update(size_ref=p.size_ref, M=len(steps), sum_n=sum(s["n"] for s in steps),
+               c_P=cal.get("c_P"), c_P_provisional=bool(cal.get("c_P_provisional")))
     if all(isinstance(s.get("P_service_s"), (int, float)) for s in steps):
-        out["P_bar_service_run"] = p_bar(p, steps, "P_service_s")      # published, never scored
-    tot = sum(s["n"] * (s["P_s"] / s["n"]) ** 3 for s in steps)
+        out["P_total_service_run_s"] = sum(s["P_service_s"] for s in steps)      # published, never scored
     for s in steps:
-        s.update(P_per_n=s["P_s"] / s["n"], share_P3=s["n"] * (s["P_s"] / s["n"]) ** 3 / tot if tot else 0.0)
+        s["share_P"] = s["P_s"] / P if P else 0.0
     return out

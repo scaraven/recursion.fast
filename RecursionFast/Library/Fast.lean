@@ -10,8 +10,8 @@
   * `traceDigestF` (the trace's bytes built in a byte array) = `traceDigest`;
   * `wotsStepF`, `wotsChainF`, `wotsEndsF`, `wotsLeafF`, `sigNodeF`, `sigRootF`, `SigOkF` =
     their contract counterparts;
-  * `chainStepF`, `chainEndF`, `leafStmtF`, `nodeStmtF` = the relation's hashes (a verifier that
-    recomputes chains, such as the witness-sending one, runs these);
+  * `leafItemF`, `leafValueF` (tail-recursive), `leafStmtF`, `nodeStmtF` = the relation's hashes
+    (a verifier that recomputes leaves, such as the witness-sending one, runs these);
   * **`Submission.accF`** = `Submission.acc` (`accF_eq`): the harness may run `accF` and the
     record is about `acc`.
   Measured numbers: `scripts/speed/Speed.lean`.
@@ -151,14 +151,18 @@ theorem SigOkF_eq : SigOkF = SigOk := by
 
 /-! ## The relation's hashes -/
 
-/-- `chainStep` through the byte-array path. -/
-def chainStepF (d : Digest) : Digest :=
-  digestB (pushDigest ((ByteArray.emptyWithCapacity 33).push tagChain) d)
+/-- `leafItem` through the byte-array path. -/
+def leafItemF (s : Digest) (j : ℕ) : Digest :=
+  digestB (pushU64 (pushDigest ((ByteArray.emptyWithCapacity 41).push tagItem) s) j)
 
-/-- `chainEnd`, `n` steps of `chainStepF`. -/
-def chainEndF (s : Digest) : ℕ → Digest
-  | 0 => s
-  | n + 1 => chainEndF (chainStepF s) n
+/-- `leafValueF.go s k j h`: `h` XORed with the `k` hashes `leafItemF s j`, …,
+`leafItemF s (j + k - 1)`, in that order (tail-recursive). -/
+def leafValueF.go (s : Digest) : ℕ → ℕ → Digest → Digest
+  | 0, _, h => h
+  | k + 1, j, h => go s k (j + 1) (digestXor h (leafItemF s j))
+
+/-- `leafValue` with `leafItemF`, by the tail-recursive loop `leafValueF.go`. -/
+def leafValueF (s : Digest) (n : ℕ) : Digest := leafValueF.go s n 0 (Vector.replicate 32 0)
 
 /-- `leafStmt` through the byte-array path. -/
 def leafStmtF (h : Digest) (n : ℕ) : Digest :=
@@ -168,16 +172,23 @@ def leafStmtF (h : Digest) (n : ℕ) : Digest :=
 def nodeStmtF (c₁ c₂ : Digest) : Digest :=
   digestB (pushDigest (pushDigest ((ByteArray.emptyWithCapacity 65).push tagNode) c₁) c₂)
 
-theorem chainStepF_eq : chainStepF = chainStep := by
-  funext d
-  simp [chainStepF, chainStep, digestB_eq, pushDigest_data, ByteArray.data_push]
+theorem leafItemF_eq : leafItemF = leafItem := by
+  funext s j
+  simp [leafItemF, leafItem, digestB_eq, pushU64_data, pushDigest_data, ByteArray.data_push]
 
-theorem chainEndF_eq : chainEndF = chainEnd := by
-  funext s n
-  induction n generalizing s with
+/-- The loop from index `j` on the value of the first `j` hashes is the value of `j + k`. -/
+theorem leafValueF_go (s : Digest) (k j : ℕ) :
+    leafValueF.go s k j (leafValue s j) = leafValue s (j + k) := by
+  induction k generalizing j with
   | zero => rfl
-  | succ n ih => rw [chainEndF, ih, chainStepF_eq, chainEnd, chainEnd,
-      Function.iterate_succ_apply]
+  | succ k ih =>
+    rw [leafValueF.go, leafItemF_eq, show digestXor (leafValue s j) (leafItem s j) =
+      leafValue s (j + 1) from rfl, ih, Nat.add_right_comm, Nat.add_assoc]
+
+theorem leafValueF_eq : leafValueF = leafValue := by
+  funext s n
+  rw [leafValueF, show Vector.replicate 32 (0 : UInt8) = leafValue s 0 from rfl, leafValueF_go,
+    Nat.zero_add]
 
 theorem leafStmtF_eq : leafStmtF = leafStmt := by
   funext h n

@@ -4,7 +4,7 @@
 The root digest of `2^r` leaves, computed from the
 leaf digests by hashing up (`nodeStmt`, adjacent pairs, level by level), never from a digest a
 prover supplies. No prover is benchmarked on a tree (the benchmark is one stream of
-`nodeStmt` steps); the runner computes this root for the instance of the chain checker
+`nodeStmt` steps); the runner computes this root for the instance of the trivial checker
 that measures `T_triv,best`, and the library's composition theorem (`Library/Compose.lean`) is
 stated over it. The runner's Python `treeRoot` is tested against this definition by a
 known-answer control (`Controls/Tree.lean`).
@@ -14,6 +14,7 @@ on an odd level the last digest is carried up unhashed, a single digest is its o
 empty list has the zero digest. None of these cases occurs in a benchmark run.
 -/
 import RecursionFast.Contract.Relation
+import Mathlib.Logic.Function.Iterate
 
 namespace RecursionFast
 

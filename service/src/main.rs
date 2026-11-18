@@ -28,10 +28,11 @@
 //! binary the runner uses, whose hash every result records, rejects the option. The runner also
 //! refuses a service that prints `INSECURE`.
 //!
-//! `--leaves` is the runner's chain hasher and holds no secret: it draws no key and opens no socket.
-//! It reads lines `<start: 64 lowercase hex> <n: decimal>` from stdin until end of file and writes,
-//! for each, one line `leafStmt (chainEnd start n) n` (64 lowercase hex) to stdout, in input order,
-//! computed on N threads; a malformed line is reported on stderr and the exit code is 2.
+//! `--leaves` is the runner's leaf hasher and holds no secret: it draws no key and opens no socket.
+//! It reads lines `<seed: 64 lowercase hex> <n: decimal>` from stdin until end of file and writes,
+//! for each, one line `leafStmt (leafValue seed n) n` (64 lowercase hex) to stdout, in input order,
+//! the `n` hashes of every leaf spread over N threads; a malformed line is reported on stderr and the
+//! exit code is 2.
 
 use rf_oracle::keccak::{self, Keyed};
 use rf_oracle::proto::*;

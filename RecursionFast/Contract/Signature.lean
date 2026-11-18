@@ -9,10 +9,10 @@ per key, under a Merkle tree of `2^16` one-time keys whose root is the public ke
 below is public Keccak-256 under its own tag (`Relation.lean`).
 
 **Why this scheme.** Hash-based, so the contract has no group and no field;
-Keccak-256, so a node circuit needs one hash gadget for chains, statements, traces and signatures;
-`w = 4`, which minimises the in-circuit cost of one check (about 200 chain steps on average, 32
-permutations for the leaf, 16 for the path). Stateful: the service uses each index once and
-refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
+Keccak-256, so a node circuit needs one hash gadget for leaf items, statements, traces and
+signatures; `w = 4`, which minimises the in-circuit cost of one check (about 200 chain steps on
+average, 32 permutations for the leaf, 16 for the path). Stateful: the service uses each index
+once and refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 
 **Layouts.**
 * `traceDigest tr = Keccak-256(tagTrace ‖ item₀ ‖ item₁ ‖ …)`, `itemᵢ = enc64 |qᵢ| ‖ qᵢ ‖ aᵢ`.

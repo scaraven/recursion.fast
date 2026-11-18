@@ -25,7 +25,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="rf-partcap-", dir=os.environ.get("RF_TEST_TMP"))
     badge = os.path.join(tmp, "badge")
     os.makedirs(badge)
-    for f in os.listdir(os.path.join(HERE, "mock_badge")):
+    for f in sorted(x for x in os.listdir(os.path.join(HERE, "mock_badge")) if os.path.isfile(os.path.join(HERE, "mock_badge", x))):
         shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
     shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
     shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)

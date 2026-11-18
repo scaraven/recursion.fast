@@ -12,8 +12,8 @@
     (`decode_encode`). A node proof carries its two children's **signed proofs** (proof, trace,
     signature).
   * **Verifier (strict).** `check vk c π`: `π` is the canonical encoding of a leaf
-    witness of at most `chainCap` steps (checked before the hash) whose chain ends at the
-    statement's chain end, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
+    witness of at most `leafCap` hashes (checked before any hash) whose value and size the
+    statement commits to, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
     children `acc vk` accepts: each child's proof length within a word, its trace within `qV = 0`
     entries and its queries within `queryCap`, its signature valid on its trace's digest,
     and, since this verifier asks no query, its trace **empty** (exact consumption) and its
@@ -96,15 +96,15 @@ theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
 /-! ## The argument -/
 
 /-- **The strict witness-sending decision** under the key `vk`: `π` is the canonical encoding of
-a leaf witness of `c` (its length within `chainCap`, checked before any hash), or of a node
+a leaf witness of `c` (its size within `leafCap`, checked before any hash), or of a node
 witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof
 length within a word, trace length (`qV = 0`) and queries capped, signature valid, trace empty,
 proof accepted recursively). -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decodeF π with
   | some (.leaf s n) =>
-    decide (encodeF (.leaf s n) = π) && decide (n ≤ chainCap) &&
-      decide (c = leafStmtF (chainEndF s n) n)
+    decide (encodeF (.leaf s n) = π) && decide (n ≤ leafCap) &&
+      decide (c = leafStmtF (leafValueF s n) n)
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encodeF (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmtF c₁ c₂) &&
@@ -174,15 +174,15 @@ theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
 theorem check_eq (vk c : Digest) (π : Proof) : check vk c π =
     match decode π with
     | some (.leaf s n) =>
-      decide (encode (.leaf s n) = π) && decide (n ≤ chainCap) &&
-        decide (c = leafStmt (chainEnd s n) n)
+      decide (encode (.leaf s n) = π) && decide (n ≤ leafCap) &&
+        decide (c = leafStmt (leafValue s n) n)
     | some (.node c₁ c₂ p₁ p₂) =>
       if encode (.node c₁ c₂ p₁ p₂) = π then
         decide (c = nodeStmt c₁ c₂) && submission.acc vk c₁ p₁ && submission.acc vk c₂ p₂
       else false
     | none => false := by
   rw [check, decodeF_eq]
-  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, chainEndF_eq, nodeStmtF_eq,
+  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, leafValueF_eq, nodeStmtF_eq,
     SigOkF_eq, traceDigestF_eq]
 
 /-- An accepted proof is the canonical encoding of a witness of the relation it decodes to. -/

@@ -23,7 +23,7 @@
 #    wrote, not evidence (the labels prove nothing; 1 is the evidence);
 # 4. the verdict is ACCEPT and the result is comparable (all planned parts present, the stream not
 #    truncated; a machine that is not the season's is an ERROR, never an ACCEPT);
-# 5. the stream's shape (`stream.shape`: `M`, `chains`, `n`) is the season's `[stream]` shape, read
+# 5. the stream's shape (`stream.shape`: `M`, `n`) is the season's `[stream]` shape, read
 #    from `season.toml` beside this script (run it from the core checked out at `harness_commit`).
 # The trust anchor is the organiser's server: GitHub attests the workflow, the commit and the
 # self-hosted environment (1-2), and a third party can check only those.
@@ -61,7 +61,7 @@ if not (run.get("environment") == "self-hosted" and isinstance(name, str) and na
 if r.get("verdict") != "ACCEPT" or not r.get("comparable"):
     sys.exit(f"verify-record: verdict {r.get('verdict')}, comparable {r.get('comparable')}: not a record")
 s = tomllib.load(open(season, "rb"))["stream"]
-want = {k: s.get(k) for k in ("M", "chains", "n")}
+want = {k: s.get(k) for k in ("M", "n")}
 st = r.get("stream") if isinstance(r.get("stream"), dict) else {}
 if st.get("shape") != want:
     sys.exit(f"verify-record: the stream's shape {st.get('shape')} is not the season's {want} (harness/season.toml): not comparable")

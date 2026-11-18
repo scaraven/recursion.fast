@@ -56,7 +56,7 @@ def onTrace (tr : Trace) (c : Digest) (π : Proof) (b : Bool) : Bool :=
 (inlined), so that they may be magic proofs too. -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decode π with
-  | some (.leaf s n) => decide (n ≤ chainCap) && decide (c = leafStmt (chainEnd s n) n)
+  | some (.leaf s n) => decide (n ≤ leafCap) && decide (c = leafStmt (leafValue s n) n)
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encode (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmt c₁ c₂) &&

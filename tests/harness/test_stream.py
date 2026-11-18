@@ -3,14 +3,14 @@
 
   python3 tests/harness/test_stream.py
 
-1. Inputs: step 1 gets `chain0.json … chain3.json`, step i ≥ 2 also `prev.stmt` and `prev.bin`
-   (the service run's previous output); a timed request also `oracle.key` (the key the service's
-   replay mode revealed, 64 hex and a newline); the service run's requests get no key. The runner's
-   statements are `X_i = nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)`, `c_1 = X_1`,
-   `c_i = nodeStmt c_{i-1} X_i`; every chain has the season's `n`, every step `n_i = 4 n`.
+1. Inputs: step 1 gets `leaf.json` (`n` and the step's fresh seed), step i ≥ 2 also `prev.stmt` and
+   `prev.bin` (the service run's previous output); a timed request also `oracle.key` (the key the
+   service's replay mode revealed, 64 hex and a newline); the service run's requests get no key. The
+   runner's statements are `L_i = leafStmt (leafValue s_i n) n`, `c_1 = L_1`, `c_i = nodeStmt c_{i-1}
+   L_i`; every leaf has the season's `n`, `n_i = n`.
 2. The service run, then `timed_runs` timed passes, each after a `replay`; the timed passes' `prev.bin`
    is the service run's output; `P_i` is the minimum of the timed times, the service run's time is
-   recorded, not scored; the score is `P̄ · 2^(|π_M| / size_ref)`.
+   recorded, not scored; the score is `P_total · 2^(|π_M| / size_ref)`, `P_total = Σ P_i`.
 3. A timed output that differs from the service run's is the entry's REJECT, naming the pass, the step
    and the first differing byte offset.
 4. The final output: rejected by acc, |π_M| above final_pi_cap, V_M above v_cap (after two more
@@ -19,7 +19,7 @@
    above v_cap, or an accepted canary of output 1 or 2: scored in `final` only, the reason recorded.
 5. The stream's cap reached is the entry's REJECT (no truncation).
 6. Calibration samples: before the service run's step 1, before each timed pass and a closing one.
-7. Two evaluations have the same shape and fresh starts.
+7. Two evaluations have the same shape and fresh seeds.
 8. The track `every` never fails the run: a crashed check of intermediate outputs or of the canaries
    of outputs 1 and 2, or an intermediate rejected when timed again, costs only the track; the final
    output is checked on its own, and a crash there (or its rejection when timed again) is a REJECT;
@@ -85,14 +85,14 @@ def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok
     V = V or {}
     b = Bench.__new__(Bench)
     b.p, b.log, b.samples, b.deadline, b.req_root = p, (lambda m: None), [], None, None
-    b.service_bin = None                     # the chains are short: digest.py hashes them in Python
+    b.service_bin = None                     # the leaves are small: digest.py hashes them in Python
     b.work = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.store = os.path.join(b.work, "store")
     b.calls, b.reqs, b.svc, b.verify_calls = [], {}, FakeSvc(mism), []
     b.service = lambda name: b.svc
     b.stop = lambda svc, rec: rec.update(service_stats=stats or {"signatures": 7 * M, "replays": 7 * M * p.timed_runs,
                                                                  "mismatches": 0})
-    b.sample = lambda before: b.samples.append({"before": before, "calib_ns": p.calib_ref_ns, "triv_ns": 1000})
+    b.sample = lambda before: b.samples.append({"before": before, "calib_ns": p.calib_ref_ns})
 
     def verify(items, what, timeout, warm=False):
         b.verify_calls.append((what, [os.path.basename(rel) for _, _, rel in items]))
@@ -158,44 +158,42 @@ def main():
     p = b.p
     k1, in1 = b.reqs["service1"]
     k2, in2 = b.reqs["service2"]
-    chains = [f"chain{j}.json" for j in range(4)]
-    check(k1 == "first" and sorted(in1) == chains and k2 == "step"
-          and sorted(in2) == chains + ["prev.bin", "prev.stmt"] and in2["prev.bin"] == proof(1),
-          "the service run: step 1 gets four chains; step 2 the previous output, its statement and four chains; no key")
-    ld = [bytes.fromhex(d) for d in rec["leaf_digests"]]
-    X = [digest.node_stmt(digest.node_stmt(ld[4 * i], ld[4 * i + 1]), digest.node_stmt(ld[4 * i + 2], ld[4 * i + 3]))
-         for i in range(4)]
-    c = [X[0]]
-    for x in X[1:]:
+    leaf = ["leaf.json"]
+    check(k1 == "first" and sorted(in1) == leaf and k2 == "step"
+          and sorted(in2) == leaf + ["prev.bin", "prev.stmt"] and in2["prev.bin"] == proof(1),
+          "the service run: step 1 gets its leaf; step 2 the previous output, its statement and its leaf; no key")
+    seeds = [bytes.fromhex(s) for s in rec["seeds"]]
+    L = [digest.leaf_stmt(digest.leaf_value(s, p.n), p.n) for s in seeds]
+    c = [L[0]]
+    for x in L[1:]:
         c.append(digest.node_stmt(c[-1], x))
-    check(rec["statements"] == [x.hex() for x in c] and rec["step_statements"] == [x.hex() for x in X]
+    check(rec["leaf_digests"] == [x.hex() for x in L] and rec["statements"] == [x.hex() for x in c]
           and in2["prev.stmt"] == (c[0].hex() + "\n").encode(),
-          "the statements: X_i = nodeStmt (nodeStmt L1 L2) (nodeStmt L3 L4), c_1 = X_1, c_i = nodeStmt c_{i-1} X_i")
-    starts = rec["starts"]
-    check(len(starts) == 16 and all(json.loads(b.reqs[f"service{i}"][1][f"chain{j}.json"])
-                                    == {"n": p.n, "start": starts[4 * (i - 1) + j]} for i in range(1, 5) for j in range(4))
-          and all(s["n"] == 4 * p.n for s in st) and rec["shape"] == {"M": 4, "chains": 4, "n": p.n},
-          f"4 · M fresh starts, every chain of the season's n = {p.n}, n_i = 4 n")
+          "the statements: L_i = leafStmt (leafValue s_i n) n, c_1 = L_1, c_i = nodeStmt c_{i-1} L_i")
+    check(len(seeds) == 4 and all(json.loads(b.reqs[f"service{i}"][1]["leaf.json"]) == {"n": p.n, "seed": rec["seeds"][i - 1]}
+                                  for i in range(1, 5))
+          and all(s["n"] == p.n for s in st) and rec["shape"] == {"M": 4, "n": p.n},
+          f"M fresh seeds, one per step, every leaf of the season's n = {p.n}, n_i = n")
     t1 = [b.reqs[f"timed1-step{i}"] for i in range(1, 5)]
     check(b.calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2) for i in range(1, 5)]
           and b.svc.replays == 2
           and all(ins["oracle.key"] == (KEY + "\n").encode() for _, ins in t1)
           and t1[2][1]["prev.bin"] == proof(2) and t1[0][0] == "first"
-          and sorted(t1[1][1]) == sorted(chains + ["prev.bin", "prev.stmt", "oracle.key"]),
+          and sorted(t1[1][1]) == sorted(leaf + ["prev.bin", "prev.stmt", "oracle.key"]),
           "two timed passes after a replay each; a timed request gets oracle.key and the service run's previous output")
     check([s["P_s"] for s in st] == [0.010, 0.018, 0.003, 0.040] and [s["P_service_s"] for s in st] == [0.5, 0.6, 0.7, 0.8]
           and st[3]["P_timed_s"] == [0.040, 0.050],
           f"P_i is the minimum of the timed passes; the service run's times are recorded: {[s['P_s'] for s in st]}")
     sc = score(p, rec)
-    Pbar = p.n_ref / (4 * p.n) * (sum(x ** 3 for x in (0.010, 0.018, 0.003, 0.040)) / 4) ** (1 / 3)
-    check(abs(sc["P_bar"] - Pbar) < 1e-12 and sc["final_pi_bytes"] == 100
-          and abs(sc["S"] - Pbar * 2 ** (100 / 2 ** 20)) < 1e-12
+    Ptot = 0.010 + 0.018 + 0.003 + 0.040
+    check(abs(sc["P_total_s"] - Ptot) < 1e-12 and sc["final_pi_bytes"] == 100
+          and abs(sc["S"] - Ptot * 2 ** (100 / 2 ** 20)) < 1e-12 and "P_bar" not in sc and "n_ref" not in sc
           and sc["tracks"] == {"final": "S", "every": "S"} and "tracks_reason" not in sc,
-          f"S = P̄ · 2^(|π_M| / size_ref), both tracks: {sc['S']:.6g}, {sc['tracks']}")
+          f"S = P_total · 2^(|π_M| / size_ref), both tracks: {sc['S']:.6g}, {sc['tracks']}")
     check([x["before"] for x in b.samples] == ["service run, step 1", "timed pass 1", "timed pass 2", "closing"],
           f"calibration samples: {[x['before'] for x in b.samples]}")
-    check(sorted(b.canary_targets) == [1, 2, 4] and st[0]["canaries_accepted"] == [] and rec["canaries"] == 6,
-          "statement canaries of outputs 1, 2 and M (stmt-bit and first-child each)")
+    check(sorted(b.canary_targets) == [1, 2, 4] and st[0]["canaries_accepted"] == [] and rec["canaries"] == 5,
+          "statement canaries of outputs 1, 2 and M (stmt-bit each, first-child for outputs 2 and M: output 1 is a leaf)")
 
     def fails_with(what, want, **kw):
         try:
@@ -317,8 +315,8 @@ def main():
           "the warm-up's time is recorded for every request of the service run and the timed passes")
 
     recs = [make().stream_run() for _ in range(2)]
-    check(recs[0]["shape"] == recs[1]["shape"] and len(set(recs[0]["starts"] + recs[1]["starts"])) == 2 * 16,
-          "two evaluations: the same shape, fresh chain starts each")
+    check(recs[0]["shape"] == recs[1]["shape"] and len(set(recs[0]["seeds"] + recs[1]["seeds"])) == 2 * 4,
+          "two evaluations: the same shape, fresh seeds each")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

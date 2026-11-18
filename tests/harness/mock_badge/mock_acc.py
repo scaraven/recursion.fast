@@ -8,7 +8,7 @@ import struct
 import wots_ref as W
 import signed
 
-CHAIN_CAP, QUERY_CAP = 1 << 20, 1 << 20
+LEAF_CAP, QUERY_CAP = 1 << 22, 1 << 20
 WORD = 1 << 64          # no proof cap; |π| must fit a word
 
 
@@ -17,10 +17,15 @@ def H(b):
 
 
 @functools.lru_cache(maxsize=None)
-def chain_end(s, n):
-    for _ in range(n):
-        s = H(b"C" + s)
-    return s
+def leaf_value(s, n):
+    """The XOR of leafItem s j = H(0x48 ‖ s ‖ enc64 j) over j < n."""
+    acc = 0
+    for lo in range(0, n, 1 << 16):
+        msgs = [b"H" + s + struct.pack("<Q", j) for j in range(lo, min(n, lo + (1 << 16)))]
+        hs = W.H_many(msgs) if W.c_lib() else [H(m) for m in msgs]
+        for h in hs:
+            acc ^= int.from_bytes(h, "little")
+    return acc.to_bytes(32, "little")
 
 
 def leaf_stmt(h, n):
@@ -87,7 +92,7 @@ def check(vk, c, pi):
     if w is None:
         return False
     if w[0] == "leaf":
-        return w[2] <= CHAIN_CAP and c == leaf_stmt(chain_end(w[1], w[2]), w[2])
+        return w[2] <= LEAF_CAP and c == leaf_stmt(leaf_value(w[1], w[2]), w[2])
     return c == node_stmt(w[1], w[2]) and acc_signed(vk, w[1], w[3]) and acc_signed(vk, w[2], w[4])
 
 

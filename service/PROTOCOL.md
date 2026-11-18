@@ -43,7 +43,7 @@ PRF_k(q)  = Keccak-256(k ‖ q)                              the oracle; q as gi
 sk_i(j)   = Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖ byte i)     chain start i < 133 of one-time key j < 2^16 (42 bytes)
 ```
 
-(`enc64 n` = 8 bytes little-endian.) Every public hash of the contract (the chain step, the
+(`enc64 n` = 8 bytes little-endian.) Every public hash of the contract (the leaf item, the
 statements, the trace digest, the WOTS chain step, leaf and node) is the unkeyed Keccak-256 of an
 input that starts with a one-byte domain tag; a keyed input starts with the 32 secret key bytes.
 What separates the keyed hashes from the public ones, and the two keyed functions from each other,
@@ -198,7 +198,7 @@ The service keeps, in memory, the trace digest it signed at each one-time key in
 of them, 2 MiB), and nothing else of what it was asked. It never writes the queries it evaluates:
 nothing in an evaluation checks an extractor against a log of queries, since the extractor's
 correctness is the kernel-checked `Computes`. Apart from the two serving modes there is only the
-chain hasher of §7, which holds no secret.
+leaf hasher of §7, which holds no secret.
 
 ## 6. Lifecycle (informative; the runner's)
 
@@ -228,24 +228,26 @@ into the result, so that a prover that fails on a cap can see which one. Keys ar
 disk. The signing seed never leaves the process; `k` leaves it only on stdout after `replay`, when
 every output of the service run is fixed. The process is non-dumpable (`PR_SET_DUMPABLE = 0`).
 
-## 7. The chain hasher (`--leaves`; the runner's, not for provers)
+## 7. The leaf hasher (`--leaves`; the runner's, not for provers)
 
 ```
 rf-oracle --leaves [--threads N]
 ```
 
-hashes chains for the runner, which computes every chain digest it checks a proof against from its
-own starts. It draws no key, opens no socket and holds no secret. It reads stdin to end of file, one
+hashes leaves for the runner, which computes every leaf digest it checks a proof against from its
+own seeds. It draws no key, opens no socket and holds no secret. It reads stdin to end of file, one
 line per leaf, `<s: 64 lowercase hex> <n: decimal>`, and writes one line per input line, in input
-order, `<leafStmt (chainEnd s n) n: 64 lowercase hex>`, where
+order, `<leafStmt (leafValue s n) n: 64 lowercase hex>`, where
 
 ```
-chainStep d   = Keccak-256(0x43 ‖ d)              33 bytes, one permutation
-chainEnd s n  = chainStep applied n times to s
-leafStmt h n  = Keccak-256(0x4C ‖ h ‖ enc64 n)    41 bytes
+leafItem s j   = Keccak-256(0x48 ‖ s ‖ enc64 j)              41 bytes, one permutation
+leafValue s n  = leafItem s 0 ⊕ … ⊕ leafItem s (n − 1)       the zero digest for n = 0
+leafStmt h n   = Keccak-256(0x4C ‖ h ‖ enc64 n)              41 bytes
 ```
 
-(`RecursionFast/Contract/Relation.lean`). The lines are distributed over `N` threads (default: all
-CPUs). It exits 0 at end of input; a malformed line (not exactly a 64-character lowercase hex
-string, one space and a decimal 64-bit integer) is reported on stderr, nothing is written to
-stdout, and the exit code is 2. `n` above `chainCap = 2^20` is accepted (it is only work).
+(`RecursionFast/Contract/Relation.lean`). The hashes of all lines are cut into chunks of `2^14`
+consecutive indices `j` of one leaf, which `N` threads (default: all CPUs) take in turn, so one
+leaf of `2^22` hashes is spread over every thread (about 0.4 s per such leaf on 8 threads of an
+organiser workstation). It exits 0 at end of input; a malformed line (not exactly a 64-character
+lowercase hex string, one space and a decimal 64-bit integer) is reported on stderr, nothing is
+written to stdout, and the exit code is 2. `n` above `leafCap = 2^22` is accepted (it is only work).

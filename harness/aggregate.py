@@ -13,7 +13,7 @@ entries provisionally.
                                   stopped on the organiser's side before any benchmark
 
 **Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine), `lengths`
-(the stream's shape, `M`, `chains` and the chain length `n`, is not the season's, or the season
+(the stream's shape, `M` and the leaf size `n`, is not the season's, or the season
 file's `[stream]` shape is malformed; the name is kept from the chain-length list of earlier
 seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
 cache was missing). They never count against the author in the bot's fair order; `harness` (the
@@ -26,7 +26,7 @@ mismatched part, or parts that disagree on the season or the harness commit, mak
 ERROR and the result not comparable, so a job lost to its time limit or to a runner failure never
 yields an ACCEPT. The benchmark is **one job**: the calibration and the one stream (with
 its interleaved samples and its timed passes; `split` is kept as a name for callers and is the same
-one job). The score (`S = P̄ · 2^(|π_M| / size_ref)`, AGENTS.md §7) and the tracks the run is in
+one job). The score (`S = P_total · 2^(|π_M| / size_ref)`, AGENTS.md §7) and the tracks the run is in
 (`final`, and `every` when its conditions hold) are recomputed here from the stream's per-step records
 with `rfh.bench.score`, the definition the runner used; whatever score a part recorded is replaced. Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
@@ -35,10 +35,10 @@ not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. The r
 flag is kept, always false since season rules v6). A benchmark whose machine fingerprint
 (`machine.fingerprint`, `rfh.bench.fingerprint`) is missing, unreadable or not the season's
 `[machine] fingerprint` is an organiser ERROR, whatever the entry did (`"any"`: the smoke's, any
-machine); the reason says which. Likewise a stream whose shape (`stream.shape`: `M`, `chains`, `n`)
+machine); the reason says which. Likewise a stream whose shape (`stream.shape`: `M`, `n`)
 is not the season's is an organiser ERROR (`lengths`): its score is not comparable with any other
-evaluation's. A season file whose `[stream]` shape is malformed (`M`, `chains`, `n` not positive
-integers, `chains` not 4, `n` above `chainCap = 2^20`, `timed_runs` not a positive integer) is named
+evaluation's. A season file whose `[stream]` shape is malformed (`M`, `n` not positive
+integers, `n` above `leafCap = 2^22`, `timed_runs` not a positive integer) is named
 the same way in every mode: `--check-machine` prints it as the organiser's problem (so the setup job
 stops the evaluation), and `--organiser-error` and `--plan` then write an ERROR result named
 `lengths`, whatever kind the workflow passed, since a malformed shape is the cause of anything else

@@ -1,19 +1,18 @@
-"""The runner's digests (TRUSTED RUNTIME): chain ends, leaf and node statements, the tree root and
-the stream's statements, byte for byte as the contract (`Relation.lean`, `Tree.lean`, hashed with
-Keccak-256):
+"""The runner's digests (TRUSTED RUNTIME): leaf values, leaf and node statements and the stream's
+statements, byte for byte as the contract (`Relation.lean`, hashed with Keccak-256):
 
-  chainStep d     = Keccak-256(0x43 ‖ d)                 33 bytes, one permutation
+  leafItem s j    = Keccak-256(0x48 ‖ s ‖ enc64 j)       41 bytes, one permutation
+  leafValue s n   = leafItem s 0 ⊕ … ⊕ leafItem s (n−1)  (the zero digest for n = 0)
   leafStmt h n    = Keccak-256(0x4C ‖ h ‖ enc64 n)       41 bytes
   nodeStmt c1 c2  = Keccak-256(0x4E ‖ c1 ‖ c2)           65 bytes
-  treeRoot cs     = adjacent pairs hashed by nodeStmt, level by level (an odd last digest is carried
-                    up; one digest is its own root; the empty list has the zero digest)
-  the stream      X_i = treeRoot [L_i1, …, L_iC]  (C = 4: nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)),
-                  c_1 = X_1, c_i = nodeStmt c_{i-1} X_i
+  the stream      L_i = leafStmt (leafValue s_i n) n,  c_1 = L_1,  c_i = nodeStmt c_{i-1} L_i
 
-Keccak-256 is Ethereum's (`rfh/keccak.py`). The chains (millions of permutations per run) are hashed
-by the trusted service binary's `rf-oracle --leaves` mode (no key, no socket; `service/src/main.rs`);
-the few statement hashes here in pure Python. The runner computes every digest it checks a proof
-against from its own secret starts; it never takes a digest from a prover.
+Keccak-256 is Ethereum's (`rfh/keccak.py`). The leaves (millions of permutations per run) are hashed
+by the trusted service binary's `rf-oracle --leaves` mode (no key, no socket; `service/src/main.rs`),
+the hashes of one leaf spread over its threads; a tiny total and the few statement hashes here in
+pure Python, which is also the reference the service's known-answer tests are pinned to. The runner
+computes every digest it checks a proof against from its own secret seeds; it never takes a digest
+from a prover.
 """
 import os
 import subprocess
@@ -21,6 +20,7 @@ import subprocess
 from .keccak import keccak256
 
 ZERO = bytes(32)
+LEAF_CAP = 1 << 22        # the contract's leafCap
 
 
 def enc64(n: int) -> bytes:
@@ -28,12 +28,16 @@ def enc64(n: int) -> bytes:
     return (n % 2 ** 64).to_bytes(8, "little")
 
 
-def chain_end(s: bytes, n: int) -> bytes:
-    """`chainEnd s n`: `chainStep` applied `n` times to `s` (pure Python, for small `n`)."""
-    d = s
-    for _ in range(n):
-        d = keccak256(b"C" + d)
-    return d
+def leaf_item(s: bytes, j: int) -> bytes:
+    return keccak256(b"H" + s + enc64(j))
+
+
+def leaf_value(s: bytes, n: int) -> bytes:
+    """`leafValue s n`: the XOR of `leafItem s j` over `j < n` (pure Python, for small `n`)."""
+    acc = 0
+    for j in range(n):
+        acc ^= int.from_bytes(leaf_item(s, j), "little")
+    return acc.to_bytes(32, "little")
 
 
 def leaf_stmt(h: bytes, n: int) -> bytes:
@@ -44,70 +48,48 @@ def node_stmt(c1: bytes, c2: bytes) -> bytes:
     return keccak256(b"N" + c1 + c2)
 
 
+def leaf_digest(s: bytes, n: int) -> bytes:
+    """`leafStmt (leafValue s n) n` in pure Python."""
+    return leaf_stmt(leaf_value(s, n), n)
+
+
 ORACLE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                       "service", "target", "release", "rf-oracle")
 
 
-def leaf_digests(starts, n, oracle=None, threads: int = 0, timeout=None):
-    """`leafStmt (chainEnd s n) n` for every start; `n` is one length for every start or a list of
-    lengths, one per start. Computed by `oracle --leaves` (the service binary: the argument, else the
-    environment's `RF_ORACLE_BIN`, else `service/target/release/rf-oracle` of this repository; not
-    `RF_ORACLE`, which is the prover's socket) on `threads` threads (default: the binary's), within
-    `timeout` seconds (default `max(60, 4 · Σn / 10^6)`; a breach raises); a tiny total (fewer than
-    2^12 chain steps) in Python."""
-    ns = list(n) if isinstance(n, (list, tuple)) else [n] * len(starts)
-    if len(ns) != len(starts) or any(type(k) is not int or k < 0 for k in ns):
-        raise ValueError("leaf_digests: one non-negative integer length per start")
+def leaf_digests(seeds, n, oracle=None, threads: int = 0, timeout=None):
+    """`leafStmt (leafValue s n) n` for every seed; `n` is one count for every seed or a list, one per
+    seed. Computed by `oracle --leaves` (the service binary: the argument, else the environment's
+    `RF_ORACLE_BIN`, else `service/target/release/rf-oracle` of this repository; not `RF_ORACLE`,
+    which is the prover's socket) on `threads` threads (default: the binary's), within `timeout`
+    seconds (default `max(60, 4 · Σn / 10^6)`; a breach raises); a tiny total (fewer than 2^12
+    hashes) in Python."""
+    ns = list(n) if isinstance(n, (list, tuple)) else [n] * len(seeds)
+    if len(ns) != len(seeds) or any(type(k) is not int or k < 0 for k in ns):
+        raise ValueError("leaf_digests: one non-negative integer count per seed")
     if sum(ns) < 1 << 12:
-        return [leaf_stmt(chain_end(s, k), k) for s, k in zip(starts, ns)]
+        return [leaf_digest(s, k) for s, k in zip(seeds, ns)]
     cmd = [oracle or os.environ.get("RF_ORACLE_BIN") or ORACLE, "--leaves"] + (["--threads", str(threads)] if threads else [])
     if timeout is None:
         timeout = max(60.0, 4 * sum(ns) / 1e6)
     try:
-        p = subprocess.run(cmd, input="".join(f"{s.hex()} {k}\n" for s, k in zip(starts, ns)), capture_output=True,
+        p = subprocess.run(cmd, input="".join(f"{s.hex()} {k}\n" for s, k in zip(seeds, ns)), capture_output=True,
                            text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{cmd[0]} --leaves: no answer within {timeout:.0f} s for {sum(ns)} chain steps") from None
+        raise RuntimeError(f"{cmd[0]} --leaves: no answer within {timeout:.0f} s for {sum(ns)} hashes") from None
     out = p.stdout.split()
-    if p.returncode != 0 or len(out) != len(starts) or any(len(x) != 64 for x in out):
-        raise RuntimeError(f"{cmd[0]} --leaves: exit {p.returncode}, {len(out)} of {len(starts)} digests: {p.stderr[-500:]}")
+    if p.returncode != 0 or len(out) != len(seeds) or any(len(x) != 64 for x in out):
+        raise RuntimeError(f"{cmd[0]} --leaves: exit {p.returncode}, {len(out)} of {len(seeds)} digests: {p.stderr[-500:]}")
     return [bytes.fromhex(x) for x in out]
 
 
-def tree_levels(cs):
-    """`[cs, treeLevel cs, treeLevel (treeLevel cs), …]` down to one digest."""
-    levels = [list(cs)]
-    while len(levels[-1]) > 1:
-        cur = levels[-1]
-        nxt = [node_stmt(cur[i], cur[i + 1]) for i in range(0, len(cur) - 1, 2)]
-        if len(cur) % 2:
-            nxt.append(cur[-1])
-        levels.append(nxt)
-    return levels
-
-
-def tree_root(cs) -> bytes:
-    """`treeRoot cs`."""
-    return tree_levels(cs)[-1][0] if cs else ZERO
-
-
-def stream_statements(leaves, chains):
-    """The stream's statements from its leaf statements, `chains` per step in step order:
-    `(X, c, first)`, lists over the steps `i = 1 … M`: `X_i = treeRoot` of step `i`'s leaves (for 4
-    chains `nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)`), the output statements `c_1 = X_1`,
-    `c_i = nodeStmt c_{i-1} X_i`, and the first child of each `c_i` (the statement canary
-    `first-child`): `c_{i-1}` for `i ≥ 2`; for `i = 1` the first digest of the level below `X_1`
-    (`nodeStmt L_11 L_12` for 4 chains), None for one chain."""
-    if chains < 1 or len(leaves) % chains:
-        raise ValueError("stream_statements: a whole number of steps of `chains` leaves each")
-    X, c, first = [], [], []
-    for i in range(len(leaves) // chains):
-        levels = tree_levels(leaves[chains * i:chains * (i + 1)])
-        X.append(levels[-1][0])
-        if i == 0:
-            c.append(X[0])
-            first.append(levels[-2][0] if len(levels) > 1 else None)
-        else:
-            c.append(node_stmt(c[-1], X[-1]))
-            first.append(c[-2])
-    return X, c, first
+def stream_statements(leaves):
+    """The stream's statements from its leaf statements `L_1 … L_M`, one per step: `(c, first)`,
+    lists over the steps: the output statements `c_1 = L_1`, `c_i = nodeStmt c_{i-1} L_i`, and the
+    first child of each `c_i` (the statement canary `first-child`): `c_{i-1}` for `i ≥ 2`, None
+    for `i = 1` (a leaf has no child)."""
+    c, first = [], []
+    for i, L in enumerate(leaves):
+        first.append(c[-1] if i else None)
+        c.append(node_stmt(c[-1], L) if i else L)
+    return c, first

@@ -55,12 +55,14 @@ namespaces and module loading. When a request ends, every process the prover sta
 ## 3. Invocations
 
 All paths below are relative to `/work` unless absolute. Statements and keys are 64 lowercase hex
-characters plus an optional newline; `vk.hex` is the service's public key. A chain file is
-`{"n": N, "start": "HEX"}`: the chain of `N` steps from the 32-byte start. The public hashes are
-Ethereum's Keccak-256 (rate 136 bytes, padding `0x01 … 0x80`, not SHA3-256) of tagged inputs:
-`chainStep d = Keccak-256(0x43 ‖ d)` (one Keccak-f[1600] permutation),
+characters plus an optional newline; `vk.hex` is the service's public key. A leaf file is
+`{"n": N, "seed": "HEX"}`: the leaf of `N` parallel hashes of the 32-byte seed. The public hashes
+are Ethereum's Keccak-256 (rate 136 bytes, padding `0x01 … 0x80`, not SHA3-256) of tagged inputs:
+`leafItem s j = Keccak-256(0x48 ‖ s ‖ u64 j)` (41 bytes, one Keccak-f[1600] permutation),
+`leafValue s n` = the XOR of `leafItem s j` over `j < n` (the zero digest for `n = 0`),
 `leafStmt h n = Keccak-256(0x4C ‖ h ‖ u64 n)`, `nodeStmt c1 c2 = Keccak-256(0x4E ‖ c1 ‖ c2)`
-(`RecursionFast/Contract/Relation.lean`; `u64` little-endian).
+(`RecursionFast/Contract/Relation.lean`; `u64` little-endian). A leaf's `n` hashes are independent:
+they can be computed in any order, on any number of threads.
 
 ### `prover setup /setup` (optional, untimed)
 
@@ -78,30 +80,29 @@ more, timed, against its replay (below). Every step is a fresh process in a fres
 `/work`, fresh `/tmp`, read-only `/setup`); nothing survives a request except the proof the runner
 copies, so **state between steps travels only inside `π`**.
 
-Every step proves four fresh chains of exactly `n` steps (`n = 2^20`, the contract's `chainCap`, in
-season 1; 32 in the smoke), `n_i = 4n` permutations per step:
+Every step proves one fresh leaf of exactly `n` hashes (`n = 2^22`, the contract's `leafCap`, in
+season 1; 64 in the smoke), `n_i = n` permutations per step:
 
 ```
-L_ij = leafStmt (chainEnd s_ij n) n                                   j = 1 … 4
-X_i  = nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)
-c_1  = X_1,        c_i = nodeStmt c_{i-1} X_i                         (i = 2 … M)
+L_i = leafStmt (leafValue s_i n) n
+c_1 = L_1,        c_i = nodeStmt c_{i-1} L_i                          (i = 2 … M)
 ```
 
-- **Step 1** (`prover first /work`): inputs `chain0.json` … `chain3.json` (the chains `s_11 … s_14`).
-  Output `proof.bin`: a signed proof of `c_1 = X_1`.
+- **Step 1** (`prover first /work`): input `leaf.json` (`n` and the seed `s_1`). Output
+  `proof.bin`: a signed proof of `c_1 = L_1`.
 - **Step i ≥ 2** (`prover step /work`): inputs `prev.stmt` (`c_{i-1}`), `prev.bin` (the previous
-  step's output, exactly as the runner received it in the service run) and `chain0.json` …
-  `chain3.json`. Output `proof.bin`: a signed proof of `c_i = nodeStmt c_{i-1} X_i`.
+  step's output, exactly as the runner received it in the service run) and `leaf.json` (`s_i`).
+  Output `proof.bin`: a signed proof of `c_i = nodeStmt c_{i-1} L_i`.
 
 A step may make any number of `SIGN` requests within the lifetime's budget of `2^16` signatures (a
 node needs signed proofs of its children as its witness). The runner computes every statement
 itself and checks outputs against them (below).
 
 **What is fixed, what is drawn, and what is told** (AGENTS.md §6). The shape is **fixed and
-published**: `M`, the four chains per step and their one length `n` (`[stream]` of
-`harness/season.toml`; `harness/smoke.toml` has its own), the same for every evaluation and every
-entry. The chain **starts** (`4 · M` of them) are fresh secret draws per evaluation from the OS
-CSPRNG, published only after the run; a step learns its chains' starts only when its inputs arrive.
+published**: `M` and the one leaf size `n` (`[stream]` of `harness/season.toml`;
+`harness/smoke.toml` has its own), the same for every evaluation and every entry. The **seeds**
+(one per step) are fresh secret draws per evaluation from the OS CSPRNG, published only after the
+run; a step learns its seed only when its inputs arrive.
 
 **The two runs** (AGENTS.md §6).
 
@@ -114,7 +115,7 @@ CSPRNG, published only after the run; a step learns its chains' starts only when
    `k`, resets its one-time-key counter to 0, and from then on answers `SIGN` at index `j` only if
    the trace digest equals the one it signed at index `j` in the service run (it returns that same
    signature), else it refuses with status 4 `MISMATCH` (`service/PROTOCOL.md`); `QUERY` is served
-   unchanged. Each pass runs steps `1 … M` again, each a fresh sandbox, with the same chains, the
+   unchanged. Each pass runs steps `1 … M` again, each a fresh sandbox, with the same leaf, the
    runner's `prev.stmt`, the **service run's** output of step `i − 1` as `prev.bin`, and one more
    input, **`oracle.key`**: `k` as 64 lowercase hex characters and a newline, staged with the other
    inputs, so it appears in `/work` only when the clock runs (every `k`-dependent computation is
@@ -171,7 +172,7 @@ files the runner cannot remove, the filesystem left fuller after cleanup.
   entry's REJECT;
 - the track **`every`** additionally needs every intermediate output accepted with `V_i ≤ v_cap`
   (timed twice more above it, the minimum) and the statement canaries of outputs 1 and 2 rejected
-  (output 1's first child is `nodeStmt L_11 L_12`). An entry that meets `final` but not `every` is
+  (output 1, a leaf, has no first child: only its flipped statement). An entry that meets `final` but not `every` is
   scored in `final` only, the result saying why (`score.tracks_reason`); intermediate outputs need
   not be proofs at all. A crash or timeout of an intermediate check, or of the canaries of outputs
   1 and 2, costs only the track `every` (such a badge run is bounded by 60 s plus 2 `v_cap` per
@@ -187,16 +188,16 @@ REJECT.
 **The score** (AGENTS.md §7; one score, both tracks; lower is better, seconds):
 
 ```
-S   = P̄ · 2^(|π_M| / 1 MiB)
-P̄   = 2^18 · ( Σ_i n_i · (P_i/n_i)^3 / Σ_i n_i )^(1/3)      = (mean_i P_i^3)^(1/3) / 16 at n_i = 2^22
-P_i = the minimum of step i's two timed times
+S       = P_total · 2^(|π_M| / 1 MiB)
+P_total = Σ_i P_i                       the stream's wall time
+P_i     = the minimum of step i's two timed times
 ```
 
 `|π_M|` the bytes of the final output's `π` alone. `V` is not scored (it is capped), nor the size of
-any intermediate output (capped), nor the service run's times. The cubic mean prices deferral:
-moving all work into the last step multiplies `P̄` by `M^(2/3) = 4`. The per-step records
+any intermediate output (capped), nor the service run's times. Only the total counts: moving work
+between steps (deferring it to the last one included) changes nothing. The per-step records
 (`WORK/stream.jsonl`, and `stream.steps` in the result) give the service run's time, both timed
-times, `|π|`, `V` and each step's share of the cubic sum.
+times, `|π|`, `V` and each step's share of `P_total`.
 
 ## 4. The oracle
 

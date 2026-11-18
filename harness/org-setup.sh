@@ -3,7 +3,7 @@
 #   1. build the organiser's Lean targets (contract, library, controls, and CompPoly's BF64/Ext3
 #      field with its byte codec) in ORG (Mathlib from its cache on CI: `lake exe cache get`
 #      happens before this script, never on a shared tree; CompPoly builds from source);
-#   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, chaincheck);
+#   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, tokensweep);
 #   3. write the import allowlist (gate rule 6: the import closure of the organiser's roots) and the
 #      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
 #   4. build, once and outside any sandbox, what Lake links into every badge executable: the
@@ -39,7 +39,7 @@ t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
 step "1 organiser build ($TARGETS)"
 (cd "$ORG" && timeout 300 lake build $TARGETS) > "$LOG/build.log" 2>&1 || { tail -20 "$LOG/build.log"; exit 1; }
 step "2 harness tools"
-(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit chaincheck tokensweep) > "$LOG/tools.log" 2>&1 \
+(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit tokensweep) > "$LOG/tools.log" 2>&1 \
   || { tail -20 "$LOG/tools.log"; exit 1; }
 step "3 allowlist and olean manifest"
 (cd "$ORG" && timeout 90 lake env "$HERE/lean-tools/.lake/build/bin/gate" --closure "$ROOTS" "$ORG/.lake/rf/allowlist.txt") \

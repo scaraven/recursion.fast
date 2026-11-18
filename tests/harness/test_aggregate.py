@@ -16,7 +16,7 @@ counting as its worst, and ranks only from three evaluations.
 AGENTS.md §6: with a season that names a machine fingerprint, a benchmark on another machine, or with a
 missing or unreadable fingerprint, is an organiser ERROR whatever the entry did (the reason says
 which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts any machine. The score does not depend on `c_P` (AGENTS.md §6), and the result records the runner (AGENTS.md §8) and no CPU model. A stream whose shape
-(`M`, `chains`, `n`) is not the season's (one of them changed, none recorded) is an organiser ERROR
+(`M`, `n`) is not the season's (one of them changed, none recorded) is an organiser ERROR
 named `lengths`, whatever the entry did; a rejected certificate stays REJECT. A season file whose
 `[stream]` shape is malformed is named `lengths` by `--check-machine`, `--organiser-error` (whatever
 kind the workflow passed) and `--plan`.
@@ -37,8 +37,8 @@ PLAN = json.loads(subprocess.run([sys.executable, "-I", AGG, "--print-matrix", "
 
 FP = "f" * 64
 _S = tomllib.load(open(SEASON, "rb"))["stream"]
-SHAPE = {"M": _S["M"], "chains": _S["chains"], "n": _S["n"]}      # the smoke's shape
-N = 4 * SHAPE["n"]                                                # n_i
+SHAPE = {"M": _S["M"], "n": _S["n"]}      # the smoke's shape
+N = SHAPE["n"]                            # n_i
 
 
 def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP, c_P=1.0, fp_status=None,
@@ -53,7 +53,7 @@ def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP
                                                      "runner_labels": ["rf-bench"]}, "prover": {"binary_sha256": "h"},
          "score": {"S": 999.0, "tracks": {"final": "S", "every": "S"}},
          "stream": {"steps": steps, "truncated": truncated, "shape": shape,
-                    "calibration": {"c_P": c_P, "T_triv_ns": 1.778e9}}}
+                    "calibration": {"c_P": c_P}}}
     return r
 
 
@@ -91,15 +91,16 @@ def main():
     r = run(tmp, full)
     check(r, "ACCEPT", "the planned part")
     sc = r.get("score", {})
-    one = 2 ** 18 / N            # P̄ of two steps of 1 s at n_i = 4 n: n_ref / n_i
-    holds(abs(sc.get("S", 0) - one) < 1e-9 and sc.get("tracks") == {"final": "S", "every": "S"} and sc.get("M") == 2,
-          f"the score is recomputed from the steps (two steps of 1 s, |π_M| = 0: S = P̄ = n_ref / n_i = {one}, not the "
+    one = 2.0                    # P_total of two steps of 1 s
+    holds(abs(sc.get("S", 0) - one) < 1e-12 and sc.get("P_total_s") == 2.0 and sc.get("tracks") == {"final": "S", "every": "S"}
+          and sc.get("M") == 2,
+          f"the score is recomputed from the steps (two steps of 1 s, |π_M| = 0: S = P_total = 2 s, not the "
           f"part's 999), both tracks: {sc.get('S')}, {sc.get('tracks')}")
-    # steps of 1 s and 2 s at n_i = 4 n, |π_M| = 512 KiB: P̄ = (n_ref / n_i) · ((1 + 8)/2)^(1/3), S = P̄ · √2
+    # steps of 1 s and 2 s, |π_M| = 512 KiB: P_total = 3 s, S = 3 √2
     vec = part("calibrate,stream", pi=(0, 512 << 10))
     vec["stream"]["steps"][1]["P_s"] = 2.0
     sc = run(tmp, [vec]).get("score", {})
-    want = one * 4.5 ** (1 / 3) * 2 ** 0.5
+    want = 3 * 2 ** 0.5
     holds(abs(sc.get("S", 0) - want) < 1e-9 * want and sc.get("final_pi_bytes") == 512 << 10
           and abs(sc.get("size_factor", 0) - 2 ** 0.5) < 1e-12,
           f"the aggregation agrees with the hand-computed vector: S {sc.get('S')} = {want}")
@@ -167,7 +168,7 @@ def main():
     check(run(tmp, [part(A, fp="e" * 64)]), "ACCEPT", "the smoke season (\"any\") accepts any fingerprint")
     # the season's stream shape: a stream of another shape is the organiser's ERROR, never comparable
     for sh, what in ((dict(SHAPE, n=SHAPE["n"] + 1), "n changed"), (dict(SHAPE, M=SHAPE["M"] - 1), "one step fewer"),
-                     (dict(SHAPE, chains=2), "two chains"), (None, "none recorded")):
+                     (dict(SHAPE, chains=4), "an extra key (v6's four chains)"), (None, "none recorded")):
         for bench in ("pass", "fail"):
             r = run(tmp, [part(A, benchmark=bench, shape=sh)])
             check(r, "ERROR", f"a stream shape not the season's ({what}; benchmark {bench}): the organiser's ERROR")
@@ -177,8 +178,8 @@ def main():
           "a rejected certificate stays REJECT whatever the stream's shape")
     # a malformed [stream] shape in the season file: named `lengths` in every mode, never a crash
     smoke_text = open(SEASON).read()
-    for what, text in (("n above chainCap", smoke_text.replace("\nn = 32 ", "\nn = 1048577 ")),
-                       ("three chains", smoke_text.replace("\nchains = 4\n", "\nchains = 3\n")),
+    for what, text in (("n above leafCap", smoke_text.replace("\nn = 64 ", "\nn = 4194305 ")),
+                       ("n zero", smoke_text.replace("\nn = 64 ", "\nn = 0 ")),
                        ("no M", smoke_text.replace("\nM = 4\n", "\n"))):
         assert text != smoke_text
         bad = os.path.join(tmp, f"bad-{len(os.listdir(tmp))}.toml")

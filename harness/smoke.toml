@@ -1,9 +1,8 @@
-# recursion.fast: the CI smoke shape (a short stream of 4 steps of 4 chains of 32 steps). Same
+# recursion.fast: the CI smoke shape (a short stream of 4 steps, one leaf of 64 hashes each). Same
 # keys as season.toml.
 name = "smoke"
 
 [score]
-n_ref = 262144    # 2^18 permutations
 size_ref = 1048576
 
 [certificate]     # the certificate job's Lean steps, as in the season
@@ -31,8 +30,7 @@ claim_bytes = 65536       # claim.json, the renderer's input
 
 [stream]
 M = 4
-chains = 4
-n = 32            # the smoke's chains: 4 · 32 = 128 permutations per step
+n = 64            # the smoke's leaves: 64 hashes per step
 ready_s = 10
 step_s = 60
 stream_s = 300
@@ -47,17 +45,14 @@ runs_per_sample = 3
 ref_ns = 50000000
 ref_provisional = true   # the smoke runs on any machine: c_P's drift is recorded, never enforced
 c_P_drift = 0.05
-triv_chains = 4
-triv_n = 16
 service_s = 1
 
-[caps]            # as the season's, but v_cap
+[caps]            # as the season's
 pi_cap = 1048576
 final_pi_cap = 524288
-v_cap_ms = 2000   # the toy's witness-sending V grows with the stream's history (each node checks its
-                  # children's signatures again): 43, 131, 253, 402 ms over the 4 steps with the
-                  # compiled badge on an organiser workstation, so the season's 128 ms would REJECT it
-                  # from step 2 on; the smoke checks that REJECT separately (tests/harness/smoke.py)
+v_cap_ms = 128    # the toy's witness-sending V grows with the stream's history (each node checks its
+                  # children again): 0.6, 10, 25, 64 ms over the 4 steps with the compiled badge on an
+                  # organiser workstation; the smoke checks the cap's REJECT at 8 ms (tests/harness/smoke.py)
 file_cap = 67108864
 setup_s = 240
 setup_cap = 4294967296

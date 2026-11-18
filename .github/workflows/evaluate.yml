@@ -32,7 +32,7 @@
 #                whether a slow build fits can depend on the cache hitting.
 #   benchmark    prover build, setup, the runs, the checks, the score; untrusted code runs only
 #                inside the sandbox. **One job**: the calibration and the one IVC stream
-#                (interleaved `c_P` and `T_triv` samples, the re-timing); one run, no repeats.
+#                (interleaved `c_P` samples, the service run and its two timed passes); one run, no repeats.
 #                The input `split` is kept for callers and selects the same one job. The parts are defined once, in `harness/aggregate.py` (the `plan` job
 #                prints them), and the aggregation requires exactly that set: a missing, duplicated
 #                or mismatched part is ERROR, never ACCEPT. The VM provides the machine
@@ -65,7 +65,7 @@
 # §6).
 #
 # What runs here: only what is about the entry, and the organiser's environment it runs in
-# (the package tree and its olean-manifest check, the comparator, the service, `T_triv,best`; the
+# (the package tree and its olean-manifest check, the comparator, the service; the
 # result records the environment's commit and its manifest's and allowlist's hashes). Every
 # check whose subject is organiser code (the contract's `acc`, the file parser, the service, the
 # sandbox, the badge template, the extractor interpreter, the harness) runs in this repository's
@@ -351,7 +351,7 @@ jobs:
       # planned part (a missing one is ERROR)
       fail-fast: false
       matrix:
-        # the job calibrates c_P, T_triv and the service on its own machine
+        # the job calibrates c_P and the service on its own machine
         part: ${{ fromJSON(needs.plan.outputs.parts) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4

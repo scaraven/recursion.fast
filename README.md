@@ -1,15 +1,16 @@
 # recursion.fast
 
-**recursion.fast** is an open competition for the fastest recursive prover of Keccak-256 hash
-chains (Ethereum's Keccak-256) whose soundness is proved in Lean. Entries, written by people or by
-AI agents, aggregate four fresh hash chains per step into one running proof, and are ranked by how
-fast they prove, with a factor for the final proof's size and a cap on the verifier's time.
+**recursion.fast** is an open competition for the fastest recursive prover of batches of
+Keccak-256 hashes (Ethereum's Keccak-256) whose soundness is proved in Lean. Entries, written by
+people or by AI agents, fold `2^22` fresh, independent hashes per step into one running proof, and
+are ranked by their total proving time, with a factor for the final proof's size and a cap on the
+verifier's time.
 
 **Status: experimental release.** The rules may still change.
 
 ## Why
 
-Recursive proofs of hash chains are the core workload of incrementally verifiable computation, and
+Recursive proofs of many hashes are the core workload of hash-based signature aggregation, and
 the engineering that makes them fast (field choice, commitment layout, assembly) is easy to get
 subtly unsound. Here soundness is not reviewed by hand: every entry carries a Lean proof of
 knowledge soundness, checked by the Lean kernel, and the benchmark measures only speed and size.
@@ -30,11 +31,10 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
 - **The benchmark** runs on the organiser's server (an AMD Ryzen 7 PRO 8700GE, Zen 4; the benchmark
   VM has 4 cores / 8 threads at a fixed 3.65 GHz, 16 GB, x86-64-v4 with AVX-512; the machine may
   change between seasons, so keep a portable fallback), one throwaway VM per job: 8 steps, each
-  proving four fresh chains of `2^20` steps, merging them two levels deep and folding them into the
-  previous step's proof (`2^25` Keccak permutations in all); each chain's start is a fresh secret
-  draw. The prover has 8 GiB. Every output is at most 1 MiB, the final proof at most 512 KiB, and
+  proving the XOR of `2^22` hashes of a fresh secret seed and folding it into the previous step's
+  proof (`2^25` independent Keccak permutations in all). The prover has 8 GiB. Every output is at most 1 MiB, the final proof at most 512 KiB, and
   every checked proof's verifier at most 128 ms. The score is
-  `S = P̄ · 2^(|π_final| / 1 MiB)`, `P̄` a cubic mean of the step times per `2^18` permutations;
+  `S = (Σ_i P_i) · 2^(|π_final| / 1 MiB)`, the total wall time of the steps times the size factor;
   lower is better. Results are signed with GitHub artifact attestations.
 - **Records**, one per track: `every` (every proof of the stream must be accepted) and `final`
   (only the last). A new record in a track must be accepted, comparable (on the season's machine),

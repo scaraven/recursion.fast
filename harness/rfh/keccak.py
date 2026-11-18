@@ -6,7 +6,7 @@ is the normative definition.
 
 Written from FIPS 202 §3.2 (the step mappings) and §5.1 (`pad10*1`); the lane of `A[x, y]` is
 `x + 5y`, a lane is the little-endian 64-bit word of 8 state bytes. About 0.2 ms per permutation:
-the runner hashes its chains through `rf-oracle --leaves` (`rfh/digest.py`), never here.
+the runner hashes its leaves through `rf-oracle --leaves` (`rfh/digest.py`), never here.
 """
 
 M64 = (1 << 64) - 1

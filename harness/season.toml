@@ -7,9 +7,8 @@
 name = "season-1"
 
 [score]           # AGENTS.md §7: one score for both tracks (`final`, `every`), seconds, lower is better:
-                  # S = P̄ · 2^(|π_M| / size_ref), P̄ = n_ref · (Σ_i n_i (P_i/n_i)³ / Σ_i n_i)^(1/3)
-n_ref = 262144    # 2^18: P̄ is per n_ref permutations (a chain step is one Keccak-f[1600]); at
-                  # n_i = 4 · 2^20 on every step, P̄ = (mean_i P_i³)^(1/3) / 16
+                  # S = P_total · 2^(|π_M| / size_ref), P_total = Σ_i P_i (the stream's wall time,
+                  # P_i the least of step i's timed times)
 size_ref = 1048576   # 1 MiB: the final output's |π| multiplies S by 2^(|π_M| / size_ref) (×1.19 at
                      # 256 KiB, ×1.41 at final_pi_cap); no other size and no verifier time is scored
 
@@ -41,11 +40,10 @@ claim_bytes = 65536       # claim.json, the renderer's input
                   # process each, run once against the service (the service run, untimed), then
                   # timed_runs times against its replay (the timed passes)
 M = 8             # steps per stream: one published constant, the same for every entry
-chains = 4        # fresh chains per step: X_i = nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4),
-                  # c_1 = X_1, c_i = nodeStmt c_{i-1} X_i (the starts are fresh secret draws per
-                  # evaluation, 4 · M of them)
-n = 1048576       # 2^20, the contract's chainCap: the length of every chain of every step, evaluation
-                  # and entry, so n_i = chains · n = 2^22 permutations per step, 2^25 per stream
+n = 4194304       # 2^22, the contract's leafCap: every step proves one leaf of n parallel hashes,
+                  # L_i = leafStmt (leafValue s_i n) n, leafValue s n = ⊕_{j<n} Keccak-256(0x48 ‖ s ‖
+                  # enc64 j), one permutation each; c_1 = L_1, c_i = nodeStmt c_{i-1} L_i. The seeds
+                  # s_i are fresh secret draws per evaluation; 2^25 permutations per stream
 ready_s = 10      # seconds from a request's process start to its `ready` line
 step_s = 60       # seconds per request from its inputs to the death of its last process
 stream_s = 3000   # wall seconds for the whole benchmark from its first calibration sample: the service
@@ -72,9 +70,6 @@ c_P_drift = 0.065       # AGENTS.md §6: |c_P - 1| above it is an organiser ERRO
                         # in its calibrated state); about 4 standard deviations of one c_P sample at
                         # the higher measured spread on the evaluation machine (1.55 %), far more of
                         # the median that is judged
-triv_chains = 64        # the chain checker's instance: 64 chains of 2^18 steps (2^24 permutations);
-                        # its time T_triv is published, never scored
-triv_n = 262144
 service_s = 2           # seconds per service throughput measurement (published, not scored)
 
 [caps]            # AGENTS.md §6, §7: the size and verifier caps (acc itself only requires |π| to fit a

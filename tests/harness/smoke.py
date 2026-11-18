@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of 4 chains of 32 steps, its service
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 64 hashes, its service
 run and its two timed passes).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
@@ -13,14 +13,14 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
 1. `evaluate.py bench` of that entry through every part (the calibration, the stream: its service run
    with its interleaved samples, its checks and its statement canaries on π_1, π_2 and π_M, then two
    timed passes against the service's replay mode, every output byte-identical; the score) with the
-   compiled `accF` badge: verdict ACCEPT in both tracks (the smoke's `v_cap_ms` is above the toy's
-   verifier time, which grows with the stream's history), and REJECT under the season's
-   `v_cap_ms = 128` (the final output's V above the cap); then the organiser's canaries
+   compiled `accF` badge: verdict ACCEPT in both tracks under the season's `v_cap_ms = 128`, and
+   REJECT under `v_cap_ms = 8`, below the toy's final verifier time (about 64 ms: it grows with the
+   stream's history), the final output's V above the cap; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
 2. seven deliberately broken provers, built from the same C source with one option each, through
-   the stream with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
+   the stream with the same badge: a leaf from a wrong seed (`BROKEN_LEAF`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
    compiled into the binary): each REJECT, the final output rejected by `acc`; a query above
    the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal; unbounded allocation
@@ -183,12 +183,12 @@ def main():
     header = "static const unsigned char stale_sig[4772] = {" + ",".join(str(b) for b in body) + "};\n"
     smoke_M = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]["M"]
     broken_entries = [(flag.split("=")[0], broken(tmp, flag, hdr)) for flag, hdr in
-                      (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
+                      (("BROKEN_LEAF", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
                        ("BROKEN_CAP", None), ("BROKEN_OOM", None), ("BROKEN_NONDET", None), ("BROKEN_PROBE", None),
                        (f"FINAL_ONLY={smoke_M}", None))]
     # what each broken prover's rejection must say (FINAL_ONLY is not broken: its check is below)
     final_rejected = f"the final output (step {smoke_M}) is rejected by acc"
-    expect = {"BROKEN_CHAIN": final_rejected, "BROKEN_UNSIGNED": final_rejected, "BROKEN_STALE": final_rejected,
+    expect = {"BROKEN_LEAF": final_rejected, "BROKEN_UNSIGNED": final_rejected, "BROKEN_STALE": final_rejected,
               "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # named
               # the cgroup kills it; under the prlimit fallback the allocation fails, exit 1
               "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "service1: exit 1",
@@ -205,7 +205,7 @@ def main():
     if a.mock:
         badge = os.path.join(tmp, "badge")
         os.makedirs(badge)
-        for f in os.listdir(os.path.join(HERE, "mock_badge")):
+        for f in sorted(x for x in os.listdir(os.path.join(HERE, "mock_badge")) if os.path.isfile(os.path.join(HERE, "mock_badge", x))):
             shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
         shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
         shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)
@@ -291,10 +291,10 @@ def main():
             r = load(out)
             check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
             results["honest"] = r
-            def vcap():      # the season's verifier cap: the toy's final check is far above it
+            def vcap():      # a verifier cap below the toy's final check (about 64 ms): REJECT
                 vc = os.path.join(tmp, "smoke-vcap.toml")
                 text = open(os.path.join(ROOT, "harness", "smoke.toml")).read()
-                new = re.sub(r"(?m)^v_cap_ms = \d+ ", "v_cap_ms = 128 ", text, count=1)
+                new = re.sub(r"(?m)^v_cap_ms = \d+ ", "v_cap_ms = 8 ", text, count=1)
                 assert new != text
                 open(vc, "w").write(new)
                 out = os.path.join(tmp, "result-vcap.json")
@@ -302,8 +302,8 @@ def main():
                          "--season", vc, "--parts", "calibrate,stream")
                 rv = load(out)
                 why = " ".join(rv.get("reasons", []))
-                check(rv.get("verdict") == "REJECT" and "above v_cap = 128 ms" in why and "the final output" in why,
-                      f"the honest toy under the season's v_cap = 128 ms: {rv.get('verdict')}: {why[:200]}")
+                check(rv.get("verdict") == "REJECT" and "above v_cap = 8 ms" in why and "the final output" in why,
+                      f"the honest toy under v_cap = 8 ms (below its final V): {rv.get('verdict')}: {why[:200]}")
             step("the season's verifier cap", vcap)
 
             def organiser():
@@ -380,19 +380,19 @@ def main():
     if r.get("benchmark") == "pass":
         sc, st = r["score"], r["stream"]
         smoke_stream = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]
-        check(all(k in sc for k in ("S", "P_bar", "size_factor", "final_pi_bytes", "tracks", "c_P", "M"))
+        check(all(k in sc for k in ("S", "P_total_s", "size_factor", "final_pi_bytes", "tracks", "c_P", "M"))
               and sc.get("tracks") == {"final": "S", "every": "S"} and "tracks_reason" not in sc
               and sc["M"] == st["M"] == smoke_stream["M"] and not st["truncated"],
-              f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, size factor {sc.get('size_factor')} at "
+              f"score components: S {sc.get('S')}, P_total {sc.get('P_total_s')} s, size factor {sc.get('size_factor')} at "
               f"|π_M| {sc.get('final_pi_bytes')} B, tracks {sc.get('tracks')}, M {sc.get('M')}")
-        check(st["shape"] == {k: smoke_stream[k] for k in ("M", "chains", "n")} and len(st["starts"]) == 4 * smoke_stream["M"],
-              f"the stream ran the smoke's shape {st['shape']} with 4 · M fresh starts")
+        check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"],
+              f"the stream ran the smoke's shape {st['shape']} with M fresh seeds")
         check(all(all(k in s for k in ("P_s", "P_service_s", "P_timed_s", "V_ns", "pi_bytes", "accepted", "startup_s", "kill_s"))
                   and len(s["P_timed_s"]) == smoke_stream["timed_runs"] and s["P_s"] == min(s["P_timed_s"]) and s["accepted"]
                   for s in st["steps"]),
               f"every step records its service-run time, its timed times (P = their minimum), V, |π|, acceptance, "
               f"start-up and kill latency: {sorted(st['steps'][0])}")
-        check(st["canaries"] >= 6 and len(st["calibration"]["samples"]) >= 2 + smoke_stream["timed_runs"],
+        check(st["canaries"] >= 5 and len(st["calibration"]["samples"]) >= 2 + smoke_stream["timed_runs"],
               f"statement canaries on π_1, π_2, π_M rejected ({st['canaries']}); calibration sampled "
               f"{len(st['calibration']['samples'])} times")
     fo = results.get("FINAL_ONLY", {})

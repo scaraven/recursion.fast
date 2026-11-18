@@ -13,12 +13,12 @@ what is checked, and the disagreement is a bug to report.
 
 ## 1. What is contested
 
-The fastest **recursive prover for Keccak-256 hash chains** whose soundness is proved in Lean. An
-entry is a hash-based non-interactive argument for one relation over 32-byte digests: a leaf digest
-commits to a Keccak-256 chain from a secret start, a node digest to two accepted children. The
-benchmark is a stream of 8 steps; each step aggregates four fresh chains of `2^20` steps (two levels
-of 2→1 merges) and folds them into the running proof. One score ranks it, the prover's wall time
-with a factor for the final proof's size (§7), in two tracks with their own records: `every`, where
+The fastest **recursive prover for batches of Keccak-256 hashes** whose soundness is proved in
+Lean. An entry is a hash-based non-interactive argument for one relation over 32-byte digests: a
+leaf digest commits to the XOR of `n` independent Keccak-256 hashes of a secret seed and their
+indices, a node digest to two accepted children. The benchmark is a stream of 8 steps; each step
+proves one fresh leaf of `2^22` hashes and folds it into the running proof. One score ranks it, the
+prover's total wall time with a factor for the final proof's size (§7), in two tracks with their own records: `every`, where
 every proof of the stream must be accepted, and `final`, where only the last one must. The
 verifier is capped, not scored. Soundness is not measured: it is a kernel-checked theorem,
 knowledge soundness in the random-oracle model, and the oracle is deployed as a secret-keyed
@@ -65,34 +65,34 @@ competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
 `prover/prover.s`. It passes the certificate and runs through the benchmark at the smoke's shape
 ([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed: its `V`
-re-checks every chain of the stream so far (about 1.1–1.2 µs per permutation of history on the
-evaluation machine, so about 40 s for the final proof's `2^25` permutations), far above the
-verifier cap of 128 ms (§6). It shows the format, not a design.
+re-computes every leaf of the stream so far (`2^25` hashes for the final proof, tens of seconds),
+far above the verifier cap of 128 ms (§6). It shows the format, not a design.
 
 ## 3. The relation and acceptance
 
-*Intuition.* A statement is a digest. A leaf statement says "I know a start whose chain of `n`
-steps ends here"; a node statement says "I know accepted proofs of these two children". A child is
+*Intuition.* A statement is a digest. A leaf statement says "I know a seed whose `n` hashes XOR
+to this value"; a node statement says "I know accepted proofs of these two children". A child is
 judged by a *signed proof* `(π, tr, σ)`: the proof, the oracle answers its verifier reads (the
 trace), and the service's signature on the trace. Checking a child therefore never evaluates the
 secret-keyed oracle: it checks a signature and runs `V` on the trace.
 
-- **Relation** `Rel acc` ([`Relation.lean#L128-L133`](RecursionFast/Contract/Relation.lean#L128-L133)):
-  `c = leafStmt (chainEnd s n) n` with `n ≤ chainCap = 2^20`
-  ([`#L54-L55`](RecursionFast/Contract/Relation.lean#L54-L55)), or
+- **Relation** `Rel acc` ([`Relation.lean#L138-L143`](RecursionFast/Contract/Relation.lean#L138-L143)):
+  `c = leafStmt (leafValue s n) n` with `n ≤ leafCap = 2^22`
+  ([`#L57-L58`](RecursionFast/Contract/Relation.lean#L57-L58)), or
   `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`.
 - **Byte layouts** (normative; the contract, the service and the runner hash the same bytes):
-  `chainStep d = Keccak-256(0x43 ‖ d)`, `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)`,
+  `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)`, `leafValue s n` the XOR of `leafItem s j` over
+  `j < n` (the zero digest for `n = 0`), `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)`,
   `nodeStmt c₁ c₂ = Keccak-256(0x4E ‖ c₁ ‖ c₂)`, `enc64` = 8 bytes little-endian; Keccak-256 is
   Ethereum's: FIPS 202's sponge over `Keccak-f[1600]`, rate 136 bytes, padding `0x01 … 0x80` (not
   SHA3-256's `0x06`), 32-byte output ([`Hash/Keccak.lean`](RecursionFast/Contract/Hash/Keccak.lean));
-  a chain step is 33 bytes, one permutation
-  ([`Relation.lean#L61-L95`](RecursionFast/Contract/Relation.lean#L61-L95)); the trace digest and
+  a leaf item is 41 bytes, one permutation
+  ([`Relation.lean#L64-L105`](RecursionFast/Contract/Relation.lean#L64-L105)); the trace digest and
   the signature ([`Signature.lean#L18-L33`](RecursionFast/Contract/Signature.lean#L18-L33)).
 - **Acceptance** `Submission.acc S vk c p`
   ([`Certificate.lean#L96-L104`](RecursionFast/Contract/Certificate.lean#L96-L104)), in this order:
   `|π| < 2^64`; `|tr| ≤ qV`; every query in `tr` at most `queryCap = 2^20` bytes
-  ([`Relation.lean#L51-L52`](RecursionFast/Contract/Relation.lean#L51-L52));
+  ([`Relation.lean#L54-L55`](RecursionFast/Contract/Relation.lean#L54-L55));
   `SigOk vk (traceDigest tr) σ` ([`Signature.lean#L98-L103`](RecursionFast/Contract/Signature.lean#L98-L103));
   and `(V vk c π).runSeq tr = some true`: `V`'s `i`-th query is answered by the `i`-th entry of
   `tr`, which must be for that query, and the trace is used up exactly
@@ -150,7 +150,7 @@ has four fields, and `CertificateR declared S`
 | `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L180-L181`](RecursionFast/Contract/Extractor.lean#L180-L181) |
 | `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L129-L131`](RecursionFast/Contract/Security.lean#L129-L131) |
 | `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L177-L178`](RecursionFast/Contract/Extractor.lean#L177-L178) |
-| `queryCap`, `chainCap` | `2^20` bytes, `2^20` steps | [`Relation.lean#L51-L55`](RecursionFast/Contract/Relation.lean#L51-L55) |
+| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L54-L58`](RecursionFast/Contract/Relation.lean#L54-L58) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
 kernel-checked) offers routes and parts: a potential on logs, `KState`, with its bridge
@@ -207,29 +207,27 @@ key.
 
 ## 6. The benchmark
 
-*Intuition.* One stream of 8 steps. Each step receives four fresh chains of `2^20` steps (a
-`2^22`-permutation step) and outputs a proof that aggregates them and extends the running proof. The
-stream runs first against the oracle service, which fixes and checks every output. Then the oracle's
-key is handed to the prover and the stream is run twice more on the clock; each of those outputs
-must be the service run's, byte for byte. So the timed passes measure the prover without the
-service, and every accepted proof comes from a run in which the prover never had the key.
+*Intuition.* One stream of 8 steps. Each step receives a fresh seed and must prove the XOR of its
+`2^22` hashes, folded into the running proof. The stream runs first against the oracle service,
+which fixes and checks every output. Then the oracle's key is handed to the prover and the stream is
+run twice more on the clock; each of those outputs must be the service run's, byte for byte. So the
+timed passes measure the prover without the service, and every accepted proof comes from a run in
+which the prover never had the key.
 
-- **Statements.** Step `i` gets chains `s_i1 … s_i4` of `n = 2^20` steps each, with leaves
-  `L_ij = leafStmt (chainEnd s_ij n) n`, and
+- **Statements.** Step `i` gets a seed `s_i` and `n = 2^22`, with the leaf
+  `L_i = leafStmt (leafValue s_i n) n`, and
   ```
-  X_i = nodeStmt (nodeStmt L_i1 L_i2) (nodeStmt L_i3 L_i4)
-  c_1 = X_1,      c_i = nodeStmt c_(i-1) X_i      (i = 2 … M, M = 8)
+  c_1 = L_1,      c_i = nodeStmt c_(i-1) L_i      (i = 2 … M, M = 8)
   ```
-  so a step needs signed proofs of its four leaves and of the two inner nodes and `X_i` as
-  witnesses. Step 1, `prover first`: chains `chain0.json … chain3.json`, output a signed proof of
-  `c_1`. Step `i ≥ 2`, `prover step`: also `prev.stmt` and `prev.bin` (the previous statement and
-  the service run's output for it), output for `c_i`. `n_i = 4 · 2^20 = 2^22` permutations in every
-  step, `2^25` in the stream. The interface and the files are in
+  Step 1, `prover first`: `leaf.json` (`{"n": N, "seed": "HEX"}`), output a signed proof of `c_1`.
+  Step `i ≥ 2`, `prover step`: also `prev.stmt` and `prev.bin` (the previous statement and the
+  service run's output for it), output for `c_i`. `2^22` hashes (one permutation each) in every
+  step, `2^25` in the stream, all independent. The interface and the files are in
   [`harness/PROVER.md`](harness/PROVER.md) §3 and [`harness/FORMAT.md`](harness/FORMAT.md).
-- **Starts and keys.** The `4 · M` chain starts (32 bytes each) and the service's keys are fresh
-  secret draws per evaluation from the OS CSPRNG; a step learns its chains' starts only when its
-  inputs arrive. After the run the result publishes the starts, the leaf digests, the statements
-  and `vk`. The signing seed is never written or published.
+- **Seeds and keys.** The `M` seeds (32 bytes each) and the service's keys are fresh secret draws
+  per evaluation from the OS CSPRNG; a step learns its seed only when its inputs arrive. After the
+  run the result publishes the seeds, the leaf digests, the statements and `vk`. The signing seed
+  is never written or published.
 - **1. The service run.** Steps 1 … M, a fresh process each, against the service, with no key in
   the sandbox. Its times are recorded, not scored. Then, with no entry process alive, the runner
   checks outputs with the compiled `acc` against its own statements: the final output (step `M`)
@@ -240,13 +238,13 @@ service, and every accepted proof comes from a run in which the prover never had
   timed twice more and the least of the three counts.
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
-  and 2 also.
+  (a leaf: only the flipped statement) and 2 also.
 - **The tracks.** An entry is REJECTed if the final output is rejected, breaks a cap or a final
   canary is accepted, or any output breaks `pi_cap`. It is scored in the track `final` if not. It is
   also scored in `every` if every intermediate output is accepted, within both caps, and its
   canaries are rejected; otherwise the result says why (`tracks_reason`), and that is not a failure.
 - **2. The timed passes.** The runner switches the service to replay mode (§5) and runs the
-  stream `timed_runs` = 2 more times. Each step is a fresh process with the same chains, the runner's
+  stream `timed_runs` = 2 more times. Each step is a fresh process with the same seed, the runner's
   statement, the service run's previous output as `prev.bin`, and the file `oracle.key` (`k` as 64
   hex characters), all renamed into `/work` when the clock starts. Every output must be
   byte-identical to the service run's output of that step; a difference is the entry's REJECT, with
@@ -263,10 +261,9 @@ service, and every accepted proof comes from a run in which the prover never had
   of `stream_s` remain), always
   with no entry process alive: three runs of the organiser's prover-shaped workload `calib`
   ([`harness/tools/calib.c`](harness/tools/calib.c), portable C: interleaved Keccak-256 chains and a
-  memory sweep on every CPU) and the organiser's chain checker on `2^24` permutations.
-  `c_P = median(calib) / ref_ns` is a health check of the machine, not part of the score: once
-  `ref_ns` is measured, `|c_P − 1| > c_P_drift` makes the run an organiser ERROR (recorded with its
-  reason). `T_triv`, the chain checker's median, is published for scale and not scored.
+  memory sweep on every CPU). `c_P = median(calib) / ref_ns` is a health check of the machine, not
+  part of the score: once `ref_ns` is measured, `|c_P − 1| > c_P_drift` makes the run an organiser
+  ERROR (recorded with its reason).
 - **The machine.** Every job of an evaluation runs on the organiser's server, an AMD Ryzen 7 PRO
   8700GE (Zen 4, 8 cores / 16 threads), in a throwaway VM per job, one evaluation at a time. The
   benchmark VM has 4 cores / 8 threads pinned at a fixed 3.65 GHz and 16 GB, with the host CPU
@@ -290,32 +287,30 @@ service, and every accepted proof comes from a run in which the prover never had
 One score, the same in both tracks, in seconds; lower is better.
 
 ```
-S   = P̄ · 2^( |π_M| / 1 MiB )
-P̄   = n_ref · ( Σ_i n_i · (P_i / n_i)^3 / Σ_i n_i )^(1/3)      = (mean_i P_i^3)^(1/3) / 16
+S   = P_total · 2^( |π_M| / 1 MiB ),      P_total = Σ_i P_i
 ```
 
-`P_i` the step's time (§6, the least of its two timed passes), `n_i = 2^22` its permutations,
-`n_ref = 2^18`, so `P̄` is a cubic mean of the step time per `2^18` permutations; `|π_M|` the bytes
-of the final output's `π` alone (not the trace or signature).
+`P_i` the step's wall time (§6, the least of its two timed passes), `|π_M|` the bytes of the final
+output's `π` alone (not the trace or signature).
 
-- **The cubic mean prices uneven work.** Moving work from one step into another costs more than it
-  saves: an entry that defers all eight steps' work to the last one quadruples `P̄`. This matters in
-  `final`, where intermediate outputs need not be proofs.
+- **Wall time, nothing else.** How the work is spread over the steps is the entry's choice: in
+  `final`, where intermediate outputs need not be proofs, an entry may leave all hashing to the last
+  step, within `step_s` and the memory cap.
 - **The size factor** is ×1.19 at 256 KiB and ×1.41 at the 512 KiB cap: halving the final proof
   from 512 to 256 KiB is worth about 16 % of prover time.
 - **The verifier is not scored.** It is capped at 128 ms per checked proof (§6).
 
 `score` in [`harness/rfh/bench.py`](harness/rfh/bench.py) computes it and
-[`harness/aggregate.py`](harness/aggregate.py) recomputes it; the result's `score` holds `S`, `P_bar`,
-`size_factor`, `final_pi_bytes` and `tracks = {"final": "S", "every": "S"}` (without `every` when
-the entry is scored in `final` only). Every result also publishes the per-step records
-(`stream.jsonl`: the service run's time, both timed times, `|π_i|`, `V_i` where checked).
+[`harness/aggregate.py`](harness/aggregate.py) recomputes it; the result's `score` holds `S`,
+`P_total_s`, `size_factor`, `final_pi_bytes` and `tracks = {"final": "S", "every": "S"}` (without
+`every` when the entry is scored in `final` only, with the reason in `tracks_reason`). Every result
+also publishes the per-step records (`stream.jsonl`: the service run's time, both timed times,
+`|π_i|`, `V_i` where checked).
 
 | Symbol | Value | Meaning |
 |---|---|---|
 | `M` | 8 | stream steps, the same for every entry |
-| `n_i` | `2^22` | permutations per step: four chains of `n = 2^20` |
-| `n_ref` | `2^18` | `P̄` is per this many permutations |
+| `n` | `2^22` | hashes per step (one leaf) |
 | size scale | 1 MiB | the final proof's size doubles `S` per MiB |
 | `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
 
@@ -428,7 +423,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 
 ## 11. What is trusted
 
-- **The contract**: 10 Lean files, 328 code lines at this commit (`scripts/loc.py`; CI enforces at
+- **The contract**: 10 Lean files, 332 code lines at this commit (`scripts/loc.py`; CI enforces at
   most 500), Lean core and Mathlib only, no theorem.
 - **One kernel**: Lean v4.34.1's, replayed by the comparator (`leanprover/comparator` at `d03acab`
   with lean4export `076e8e5`, pinned and built by
@@ -439,7 +434,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   never the challenge, and the kernel still replays every proof. A candidate's build stays under
   `build_s`, so a slow build may fit only when the cache hits.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
-  on the seven tagged domains, one-wayness of the chain step, and `Keccak-256(k ‖ ·)` with a secret
+  on the seven tagged domains, and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF. The signature's unforgeability (EUF-CMA, each index used once)
   follows from these (on paper). The composition across the tree needs EUF-CMA and collision
   resistance only. A signed trace the log does not hold is reduced, for any tree shape, to an
@@ -483,8 +478,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **Retiring a record leaves no record standing in that track**: the record it beat is not
   restored, and that record's prover binary, like every record's, can never take a record of either
   track again.
-- **The end of the stream is known** (`M = 8`). The verifier cap (128 ms) bounds what can be left
-  to it: at the chain checker's speed about `2^17` permutations, under 0.4 % of the stream.
+- **The end of the stream is known** (`M = 8`), and an entry may defer work to the last step
+  (§7). The verifier cap (128 ms) bounds what can be left to the verifier itself.
+- **The leaf is a cube sum.** The `2^22` inputs of a leaf differ only in the index, so `leafValue`
+  is a sum over a 22-variable cube of Keccak-f[1600]'s output bits; computing it faster than the
+  hashes themselves would need a cube attack on the full 24 rounds (the best known reach about 7).
 - **The timed passes trust isolation and determinism.** The timed passes are only a stopwatch:
   every accepted output comes from the service run, in which the prover never had `k`. A timed
   pass could reproduce an output without proving only through a channel from the service run's
@@ -506,7 +504,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   the runner's, so `acc` itself accepts larger proofs); per-signature digit vectors drawn per run;
   a public, unkeyed hash in place of the signed oracle, which is how leanVM deploys and would need a
   new contract.
-- **The score's constants** (the power 3 of `P̄`, the size scale of 1 MiB, the caps) are the
+- **The score's constants** (the size scale of 1 MiB, the caps) are the
   owner's choices for this season, set from the first recursive entries and leanVM's published
   proof sizes (209–294 KiB), not from entries measured at this shape.
 - **Malformed and crafted inputs are not tested, and `acc` has no time bound.** The benchmark
@@ -551,8 +549,9 @@ are indicative only, except where a bullet says "on the machine".
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
   `import Mathlib` does not fit.
-- **Every step is four chains of `2^20`** within `step_s = 60 s`, in the service run too (where
-  every answer is a round trip). Test the service run's time, not only the timed one.
+- **Every step is `2^22` hashes** within `step_s = 60 s`, in the service run too (where every
+  answer is a round trip), and more if you defer work. Test the service run's time, not only the
+  timed one.
 - **`queryCap` is per query**: a transcript that absorbs a long message in one query (a Ligero row
   of 1.57 MB at `n = 2^18`) is refused by the service and the proof fails. Absorb in pieces.
 - **A signed child restates every byte its verifier hashed**: a signed `n = 16` leaf was 538,698
@@ -575,8 +574,8 @@ are indicative only, except where a bullet says "on the machine".
   portable fallback; a `SIGILL` fails the run.
 - **Memory**: the 8 GiB cap counts `/tmp` and `/work` (a Spartan+Ligero leaf prover peaked at
   15.1 GiB at `n = 2^16`, 2.47 GiB after restructuring; an lvm2-style GKR prover peaked at 8.2 GiB
-  at `n = 2^20` under the old 11 GiB cap). Prove the four leaves one at a time if they do not fit
-  together.
+  at `2^20` hashes under the old 11 GiB cap). Stream the leaf's hashes in batches if they do not
+  fit.
 - **Fiat–Shamir must bind the statement**: the canaries flip a statement bit and substitute other
   statements.
 
@@ -603,8 +602,7 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 ```
 
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
-small shape (4 steps of four chains of 32, with a verifier cap of 2 s so that the toy example of
-§2 passes); `harness/season.toml` is the real one, and it runs only
+small shape (4 steps of 64 hashes, the season's caps); `harness/season.toml` is the real one, and it runs only
 on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an organiser ERROR
 before the prover is built, and its `c_P` drift check would too. To run the season's shape on your
 own machine, generate a local copy and pass it to `--season`:

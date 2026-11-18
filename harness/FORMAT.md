@@ -72,6 +72,6 @@ against is always the runner's own digest.
 ## A worked size
 
 The toy prover's signed leaf proof (`π` the 48-byte witness-sending encoding of a leaf, no query) is
-`8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes; its first stream step (`X_1`: two levels of nodes over four
-such leaves, carried whole) is 33,952 bytes, and every further step adds 38,816 (measured on the
-smoke: 33,952, 72,768, 111,584, 150,400).
+`8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes, its first stream step's output; every further step (a node of
+the previous output and the step's leaf, both carried whole) adds 9,704 (measured on the smoke:
+4,840, 14,544, 24,248, 33,952).

@@ -61,8 +61,8 @@ def declared : Declared where
 theorem ws_certificateR : CertificateR declared submission :=
   ⟨certificate, le_rfl, le_rfl, le_rfl, fun t => ⟨le_rfl, certificate.cap.2.2.2.1 t⟩⟩
 
-theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
-    submission.acc (Signer.pk (Signer.chainStart seed)) (leafStmt (chainEnd s n) n)
+theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    submission.acc (Signer.pk (Signer.chainStart seed)) (leafStmt (leafValue s n) n)
       (Controls.Relation.leafSigned (Signer.chainStart seed) 0 s n) = true :=
   Controls.Relation.acc_leafSigned _ (by decide) s hn
 

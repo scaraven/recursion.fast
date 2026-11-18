@@ -17,8 +17,9 @@
    32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
 6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
 7. shutdown on stdin end of file: exit 0, socket removed, statistics printed;
-8. `rf-oracle --leaves`: leaf digests of chains against the references, in input order, on 1 and
-   several threads; a malformed line exits 2;
+8. `rf-oracle --leaves`: leaf digests `leafStmt (leafValue s n) n` against the references, in input
+   order, on 1 and several threads, many small leaves and one leaf of 2^20 hashes spread over the
+   threads; a malformed line exits 2;
 9. replay mode: after the control line `replay` the service prints `key <hex k>` and `replay ready`;
    `SIGN` of the service run's traces in order returns byte-identical responses, any other trace at
    an index (never signed, or signed with another digest) is refused with status 4 `MISMATCH`;
@@ -101,11 +102,15 @@ VECTORS = [  # Keccak-256 (Ethereum), published values
 ]
 
 
-def chain_leaf(s, n):
-    """`leafStmt (chainEnd s n) n` by the C reference."""
-    for _ in range(n):
-        s = W.keccak_c(b"C" + s)
-    return W.keccak_c(b"L" + s + W.enc64(n))
+def par_leaf(s, n):
+    """`leafStmt (leafValue s n) n` by the C reference: leafValue s n = the XOR of
+    `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)` over `j < n`."""
+    acc = 0
+    for lo in range(0, n, 1 << 16):
+        hs = W.H_many([b"H" + s + W.enc64(j) for j in range(lo, min(n, lo + (1 << 16)))])
+        for h in hs:
+            acc ^= int.from_bytes(h, "little")
+    return W.keccak_c(b"L" + acc.to_bytes(32, "little") + W.enc64(n))
 
 
 def replay(p):
@@ -176,16 +181,24 @@ def test_replay(tmp):
 
 def test_leaves(binary):
     rnd = random.Random(2)
-    jobs = [(bytes(rnd.getrandbits(8) for _ in range(32)), rnd.choice([0, 1, 2, 7, 100, 1000])) for _ in range(300)]
+    jobs = [(bytes(rnd.getrandbits(8) for _ in range(32)), rnd.choice([0, 1, 2, 7, 100, 1000, 16384, 16385]))
+            for _ in range(300)]
     stdin = "".join(f"{s.hex()} {n}\n" for s, n in jobs)
-    want = "".join(chain_leaf(s, n).hex() + "\n" for s, n in jobs)
-    check(chain_leaf(bytes(range(32)), 5) == pykeccak.keccak256(
-        b"L" + functools.reduce(lambda d, _: pykeccak.keccak256(b"C" + d), range(5), bytes(range(32))) + W.enc64(5)),
-        "leaf digest: the C reference equals the pure-Python reference on a 5-step chain")
+    want = "".join(par_leaf(s, n).hex() + "\n" for s, n in jobs)
+    check(par_leaf(bytes(range(32)), 5) == pykeccak.keccak256(
+        b"L" + functools.reduce(lambda a, j: bytes(x ^ y for x, y in zip(a, pykeccak.keccak256(b"H" + bytes(range(32)) + W.enc64(j)))),
+                                range(5), bytes(32)) + W.enc64(5)),
+        "leaf digest: the C reference equals the pure-Python reference on a leaf of 5 hashes")
     for threads in ([], ["--threads", "1"], ["--threads", "7"]):
         r = subprocess.run([binary, "--leaves"] + threads, input=stdin, capture_output=True, text=True, timeout=120)
         check(r.returncode == 0 and r.stdout == want,
-              f"--leaves {' '.join(threads)}: {len(jobs)} chains (n up to 1000) equal the reference, in input order")
+              f"--leaves {' '.join(threads)}: {len(jobs)} leaves (n up to 16385) equal the reference, in input order")
+    big = bytes(range(32, 64))
+    want_big = par_leaf(big, 1 << 20).hex() + "\n"
+    for threads in (["--threads", "1"], ["--threads", "8"]):
+        r = subprocess.run([binary, "--leaves"] + threads, input=f"{big.hex()} {1 << 20}\n", capture_output=True, text=True,
+                           timeout=120)
+        check(r.returncode == 0 and r.stdout == want_big, f"--leaves {' '.join(threads)}: one leaf of 2^20 hashes equals the reference")
     r = subprocess.run([binary, "--leaves"], input="", capture_output=True, text=True, timeout=60)
     check(r.returncode == 0 and r.stdout == "", "--leaves on empty input: exit 0, no output")
     for bad in [stdin + "zz\n", f"{jobs[0][0].hex().upper()} 3\n", f"{jobs[0][0].hex()} -1\n", "\n"]:
@@ -394,7 +407,7 @@ def main():
     stats = s1.stop()
     check(stats.get("signatures") == 1 << 16, f"service statistics: {stats}")
 
-    # 8. the runner's chain hasher
+    # 8. the runner's leaf hasher
     test_leaves(RELEASE if os.path.exists(RELEASE) else BIN)
 
     # 9. replay mode
