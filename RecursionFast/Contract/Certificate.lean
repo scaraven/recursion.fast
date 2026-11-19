@@ -13,7 +13,7 @@ entries (the submission's declared query bound), every query of `tr` at most `qu
 with its queries answered in order by `tr`, used up exactly (`OProg.runSeq`). The conjuncts are in
 order of cheapest rejection; compiled `&&` stops at the first `false`.
 This one predicate is the node clause of the relation, the harness's check of every proof it is
-given (every step of the stream, its re-runs, the canaries), and the check any
+given (every output of the stream, its statement canaries), and the check any
 third party runs later with the published `vk`. It never evaluates the oracle and needs no service.
 
 **The certificate.** Knowledge soundness for the relation of the submission's own `acc`,
@@ -25,9 +25,9 @@ knowledge content is the named extractor `E` with its program and budget (`Secur
   hold the secret key, so a verifier that accepts what carries a valid signature is not
   certifiable (`Controls/Certificate.lean`, `sigTrust_no_certificate`), and a certificate never
   rests on unforgeability. Unforgeability is used once, outside the certificate: the composition
-  argument across the tree (`Library/Compose.lean`) returns a forgery when a signed trace in
+  argument across the stream (`Library/Compose.lean`) returns a forgery when a signed trace in
   the extraction tree is not in the run's one oracle log, an EUF-CMA forgery against the
-  service's signed traces or a collision (`walkSigned`).
+  service's signed traces or a collision (`walkStreamSigned`; `walkSigned` for trees).
 * *Why the trace is used up exactly and its queries capped.* Completeness is
   required for every witness of the relation, and a node witness carries its children's traces.
   If a trace could carry entries after the verifier's last query, or queries of any length, the

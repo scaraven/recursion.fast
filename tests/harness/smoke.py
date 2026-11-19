@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 6 steps with the smoke's own fixed chain lengths
-in [16, 128]).
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 64 hashes, its service
+run and its two timed passes).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
   python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
@@ -10,18 +10,25 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    the toy prover (`harness/toy-prover/honest/prover.s`, C compiled to x86-64 assembly) goes
    through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
    certified;
-1. `evaluate.py bench` of that entry through every part (the calibration, the stream with its
-   interleaved samples, its statement canaries on π_1, π_2 and π_M and its re-timing, the score)
-   with the compiled `accF` badge: verdict ACCEPT; then the organiser's canaries
+1. `evaluate.py bench` of that entry through every part (the calibration, the stream: its service run
+   with its interleaved samples, its checks and its statement canaries on π_1, π_2 and π_M, then two
+   timed passes against the service's replay mode, every output byte-identical; the score) with the
+   compiled `accF` badge: verdict ACCEPT in both tracks under the season's `v_cap_ms = 128`, and
+   REJECT under `v_cap_ms = 8`, below the toy's final verifier time (about 64 ms: it grows with the
+   stream's history), the final output's V above the cap; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
-2. five deliberately broken provers, built from the same C source with one option each, through
-   the stream with the same badge: a wrong chain end (`BROKEN_CHAIN`), an unsigned trace
+2. seven deliberately broken provers, built from the same C source with one option each, through
+   the stream with the same badge: a leaf from a wrong seed (`BROKEN_LEAF`), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
-   compiled into the binary): each REJECT, the first step's output rejected by `acc`; a query above
+   compiled into the binary): each REJECT, the final output rejected by `acc`; a query above
    the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal; unbounded allocation
-   under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory;
+   under a 256 MiB cap (`BROKEN_OOM`): REJECT as killed out of memory; an output that changes in
+   the timed passes (`BROKEN_NONDET`): REJECT naming the first differing byte; a SIGN that differs
+   in the timed passes (`BROKEN_PROBE`, a replay MISMATCH read as a bit): REJECT; and one variant
+   that is not broken, intermediate outputs that are not signed proofs (`FINAL_ONLY=4`): ACCEPT in
+   the track `final` only, the reason recorded;
 3. the same entry with `certified := sorry`: PROVISIONAL, not comparable;
 4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built;
 5. the entry's module that `Solution` does not import is never built, and a Lean-kernel run
@@ -35,6 +42,7 @@ prover's build.
 """
 import argparse
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -75,7 +83,9 @@ def entry_from(src_s, d):
 
 
 def broken(tmp, flag, extra_header=None):
-    d = os.path.join(tmp, f"src-{flag}")
+    """An entry of the toy prover built with `-D{flag}` (`NAME` or `NAME=VALUE`)."""
+    name = flag.split("=")[0]
+    d = os.path.join(tmp, f"src-{name}")
     os.makedirs(d)
     if extra_header:
         with open(os.path.join(d, "stale_sig.h"), "w") as f:
@@ -84,7 +94,7 @@ def broken(tmp, flag, extra_header=None):
     subprocess.run(["gcc", "-S", "-O2", f"-D{flag}", "-I", d, "-o", raw, os.path.join(TOY, "toy.c")], check=True)
     # as the committed honest prover: accepted by the reference image's binutils 2.42
     subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "tools", "asm-compat.py"), raw, s], check=True)
-    return entry_from(s, os.path.join(tmp, f"entry-{flag}"))
+    return entry_from(s, os.path.join(tmp, f"entry-{name}"))
 
 
 def load(path):
@@ -171,24 +181,31 @@ def main():
     c.close()
     other.stop()
     header = "static const unsigned char stale_sig[4772] = {" + ",".join(str(b) for b in body) + "};\n"
-    broken_entries = [(flag, broken(tmp, flag, hdr)) for flag, hdr in
-                      (("BROKEN_CHAIN", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
-                       ("BROKEN_CAP", None), ("BROKEN_OOM", None))]
-    # what each broken prover's rejection must say
-    expect = {"BROKEN_CHAIN": "step 1 rejected by acc", "BROKEN_UNSIGNED": "step 1 rejected by acc",
-              "BROKEN_STALE": "step 1 rejected by acc",
+    smoke_M = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]["M"]
+    broken_entries = [(flag.split("=")[0], broken(tmp, flag, hdr)) for flag, hdr in
+                      (("BROKEN_LEAF", None), ("BROKEN_UNSIGNED", None), ("BROKEN_STALE", header),
+                       ("BROKEN_CAP", None), ("BROKEN_OOM", None), ("BROKEN_NONDET", None), ("BROKEN_PROBE", None),
+                       (f"FINAL_ONLY={smoke_M}", None))]
+    # what each broken prover's rejection must say (FINAL_ONLY is not broken: its check is below)
+    final_rejected = f"the final output (step {smoke_M}) is rejected by acc"
+    expect = {"BROKEN_LEAF": final_rejected, "BROKEN_UNSIGNED": final_rejected, "BROKEN_STALE": final_rejected,
               "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # named
               # the cgroup kills it; under the prlimit fallback the allocation fails, exit 1
-              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "step1: exit 1"}
+              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "service1: exit 1",
+              "BROKEN_NONDET": "timed pass 1, step 1: the output differs from the service run's output of the step, "
+                               "first at byte offset",
+              "BROKEN_PROBE": "timed pass 1: a SIGN in a timed pass differed from the service run's"}
     lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
-    open(lowmem, "w").write(open(os.path.join(ROOT, "harness", "smoke.toml")).read().replace('prover = "11G"', 'prover = "256M"'))
+    smoke_text = open(os.path.join(ROOT, "harness", "smoke.toml")).read()
+    assert 'prover = "8G"' in smoke_text
+    open(lowmem, "w").write(smoke_text.replace('prover = "8G"', 'prover = "256M"'))
     season_of = lambda flag: lowmem if flag == "BROKEN_OOM" else os.path.join(ROOT, "harness", "smoke.toml")  # noqa: E731
     honest_s = os.path.join(TOY, "honest", "prover.s")
 
     if a.mock:
         badge = os.path.join(tmp, "badge")
         os.makedirs(badge)
-        for f in os.listdir(os.path.join(HERE, "mock_badge")):
+        for f in sorted(x for x in os.listdir(os.path.join(HERE, "mock_badge")) if os.path.isfile(os.path.join(HERE, "mock_badge", x))):
             shutil.copy(os.path.join(HERE, "mock_badge", f), badge)
         shutil.copy(os.path.join(ROOT, "tests", "service", "wots_ref.py"), badge)
         shutil.copy(os.path.join(ROOT, "harness", "rfh", "signed.py"), badge)
@@ -274,6 +291,21 @@ def main():
             r = load(out)
             check(r.get("verdict") == "ACCEPT", f"honest toy prover with the compiled accF badge: {r.get('verdict')} {r.get('reasons')}")
             results["honest"] = r
+            def vcap():      # a verifier cap below the toy's final check (about 64 ms): REJECT
+                vc = os.path.join(tmp, "smoke-vcap.toml")
+                text = open(os.path.join(ROOT, "harness", "smoke.toml")).read()
+                new = re.sub(r"(?m)^v_cap_ms = \d+ ", "v_cap_ms = 8 ", text, count=1)
+                assert new != text
+                open(vc, "w").write(new)
+                out = os.path.join(tmp, "result-vcap.json")
+                evaluate("bench", "--entry", entry, "--cert", cert, "--work", os.path.join(tmp, "work-vcap"), "--out", out,
+                         "--season", vc, "--parts", "calibrate,stream")
+                rv = load(out)
+                why = " ".join(rv.get("reasons", []))
+                check(rv.get("verdict") == "REJECT" and "above v_cap = 8 ms" in why and "the final output" in why,
+                      f"the honest toy under v_cap = 8 ms (below its final V): {rv.get('verdict')}: {why[:200]}")
+            step("the season's verifier cap", vcap)
+
             def organiser():
                 n, wrong = organiser_check(cj["badge_dir"], os.path.join(tmp, "work-honest"), r)
                 check(n > 0 and not wrong, f"organiser canaries (core CI only): {n} mutations of π_1 and π_M "
@@ -340,30 +372,38 @@ def main():
         check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
               f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')}")
         mine, agg_sc = r.get("score") or {}, whole.get("score") or {}
-        check(all(k in mine and abs(agg_sc.get(k, -1) - mine[k]) <= 1e-12 * max(1.0, abs(mine[k])) for k in ("S", "S_product")),
-              f"aggregate recomputes both scores as the runner did: S {agg_sc.get('S')} = {mine.get('S')}, "
-              f"S× {agg_sc.get('S_product')} = {mine.get('S_product')}")
+        check("S" in mine and abs(agg_sc.get("S", -1) - mine["S"]) <= 1e-12 * max(1.0, abs(mine["S"]))
+              and agg_sc.get("tracks") == mine.get("tracks"),
+              f"aggregate recomputes the score and the tracks as the runner did: S {agg_sc.get('S')} = {mine.get('S')}, "
+              f"tracks {agg_sc.get('tracks')}")
     step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
         sc, st = r["score"], r["stream"]
-        check(all(k in sc for k in ("S", "P_bar", "V_bar", "S_product", "g", "V_mean_s", "x_bar", "pi_mean_bytes", "c_P",
-                                    "v_ref_ns", "M", "marginal", "fit"))
-              and sc.get("tracks") == {"sum": "S", "product": "S_product"} and sc["M"] == st["M"]
-              and not st["truncated"],
-              f"score components: S {sc.get('S')}, P̄ {sc.get('P_bar')}, V̄ {sc.get('V_bar')}, S× {sc.get('S_product')}, "
-              f"g {sc.get('g')}, M {sc.get('M')} of {st.get('M_drawn')}")
         smoke_stream = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]
-        fixed = smoke_stream["lengths"]
-        check(st["M_drawn"] == smoke_stream["M"] and len(fixed) == smoke_stream["M"] + 1 and st["lengths"] == fixed,
-              f"the stream ran the smoke's M = {smoke_stream['M']} steps over its fixed list of M + 1 = {len(fixed)} "
-              f"lengths: {st['lengths']}")
-        check(all(all(k in s for k in ("P_s", "V_ns", "pi_bytes", "x", "startup_s", "kill_s")) for s in st["steps"]),
-              f"every step records P, V, |π|, x, start-up and kill latency: {sorted(st['steps'][0])}")
-        check(st["canaries"] >= 4, f"statement canaries on π_1, π_2, π_M rejected: {st['canaries']}")
-        check("retime" in st and len(st["calibration"]["samples"]) >= 2,
-              f"re-timing ran ({st.get('retime', {}).get('rerun')}) and calibration was sampled "
+        check(all(k in sc for k in ("S", "P_total_s", "size_factor", "final_pi_bytes", "tracks", "c_P", "M"))
+              and sc.get("tracks") == {"final": "S", "every": "S"} and "tracks_reason" not in sc
+              and sc["M"] == st["M"] == smoke_stream["M"] and not st["truncated"],
+              f"score components: S {sc.get('S')}, P_total {sc.get('P_total_s')} s, size factor {sc.get('size_factor')} at "
+              f"|π_M| {sc.get('final_pi_bytes')} B, tracks {sc.get('tracks')}, M {sc.get('M')}")
+        check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"],
+              f"the stream ran the smoke's shape {st['shape']} with M fresh seeds")
+        check(all(all(k in s for k in ("P_s", "P_service_s", "P_timed_s", "V_ns", "pi_bytes", "accepted", "startup_s", "kill_s"))
+                  and len(s["P_timed_s"]) == smoke_stream["timed_runs"] and s["P_s"] == min(s["P_timed_s"]) and s["accepted"]
+                  for s in st["steps"]),
+              f"every step records its service-run time, its timed times (P = their minimum), V, |π|, acceptance, "
+              f"start-up and kill latency: {sorted(st['steps'][0])}")
+        check(st["canaries"] >= 5 and len(st["calibration"]["samples"]) >= 2 + smoke_stream["timed_runs"],
+              f"statement canaries on π_1, π_2, π_M rejected ({st['canaries']}); calibration sampled "
               f"{len(st['calibration']['samples'])} times")
+    fo = results.get("FINAL_ONLY", {})
+    fsc = fo.get("score") or {}
+    check(fo.get("benchmark") == "pass" and fo.get("verdict", "ACCEPT") == "ACCEPT" and fsc.get("tracks") == {"final": "S"}
+          and "output 1 rejected by acc" in (fsc.get("tracks_reason") or {}).get("every", ""),
+          f"FINAL_ONLY: intermediate outputs that are not proofs: {fo.get('verdict', fo.get('benchmark'))}, tracks "
+          f"{fsc.get('tracks')}, {(fsc.get('tracks_reason') or {}).get('every', '')[:200]} {fo.get('reasons')}")
     for flag, _ in broken_entries:
+        if flag not in expect:
+            continue
         rb = results.get(flag, {})
         why = " ".join(rb.get("reasons", []))
         check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and expect[flag] in why,

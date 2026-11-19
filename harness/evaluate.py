@@ -38,7 +38,7 @@ kernel's, which leaves the certificate unchecked):
   5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
   6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
      in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
-     import closure lies inside the verified one); the organiser's `chaincheck` copied beside it.
+     import closure lies inside the verified one).
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
   result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
@@ -190,7 +190,7 @@ class Org:
         rf = os.path.join(self.dir, ".lake", "rf")
         self.manifest, self.allowlist = os.path.join(rf, "manifest.sha256"), os.path.join(rf, "allowlist.txt")
         self.tools = os.path.join(REPO, "harness", "lean-tools", ".lake", "build", "bin")
-        for p in (self.manifest, self.allowlist, os.path.join(self.tools, "gate"), os.path.join(self.tools, "chaincheck")):
+        for p in (self.manifest, self.allowlist, os.path.join(self.tools, "gate")):
             if not os.path.exists(p):
                 raise SystemExit(f"evaluate: {p} missing (run harness/org-setup.sh first)")
 
@@ -437,7 +437,7 @@ def cert_job(a):
 def build_badge(org, tree, log, timeout, res):
     """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
     solution module) and build it in the sandbox within `timeout`, recording its duration as
-    `res["badge_s"]`; returns the directory holding `verify` and the organiser's `chaincheck`."""
+    `res["badge_s"]`; returns the directory holding `verify`."""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
     for name in ("Common", "Verify"):
@@ -467,7 +467,6 @@ def build_badge(org, tree, log, timeout, res):
     out = os.path.join(os.path.dirname(tree), "badge")
     os.makedirs(out)
     shutil.copy(os.path.join(tree, ".lake", "build", "bin", "verify"), out)
-    shutil.copy(os.path.join(org.tools, "chaincheck"), out)
     return out
 
 

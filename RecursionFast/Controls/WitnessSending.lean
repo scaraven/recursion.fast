@@ -13,11 +13,11 @@ Verifier (negative), for every key and statement:
   every honest proof;
 * `appended_rejected`: anything appended to an accepted proof is rejected (decoding ignores
   trailing words, the canonical-encoding check does not);
-* `bad_tag_rejected` (an unknown tag word), `leaf_over_chainCap_rejected` (a chain longer than
-  `chainCap`, before any hash), `stmt_unique` (a proof is accepted under at most one statement:
-  the flipped-bit and swapped-child canaries), `node_children_word` (an accepted node's children's
-  proof lengths fit a word: no lower cap), `node_children_untraced` (an accepted node's
-  children carry empty traces).
+* `bad_tag_rejected` (an unknown tag word), `leaf_over_leafCap_rejected` (a leaf of more than
+  `leafCap` hashes, before any hash), `stmt_unique` (a proof is accepted under at most one
+  statement: the flipped-bit and swapped-child canaries), `node_children_word` (an accepted
+  node's children's proof lengths fit a word: no lower cap), `node_children_untraced` (an
+  accepted node's children carry empty traces).
 Verifier (positive): `leaf_zero_accepted`, `check_iff` (the library's characterisation).
 Linear-time code: `decodeF_eq`, `encodeF_eq` (the twins equal the specifications for every
 proof and witness), and the word-level hashes of `Library/Fast.lean`.
@@ -31,7 +31,7 @@ open RecursionFast.Controls.Extractor (nodeKat nodeKatWords witWords_node_kat)
 /-- The digest whose bytes are all `b`. -/
 abbrev dg (b : UInt8) : Digest := Vector.replicate 32 b
 
-/-- A small leaf witness: start `01…01`, length 16. -/
+/-- A small leaf witness: seed `01…01`, 16 hashes. -/
 abbrev w₀ : Wit := .leaf (dg 1) 16
 
 theorem encode_leaf_kat : encode w₀ = ⟨#[0, 0, 0, 0, 0, 0, 0, 0,
@@ -108,11 +108,11 @@ theorem bad_tag_rejected (vk c : Digest) :
   rw [check_eq, show decode ⟨#[2, 0, 0, 0, 0, 0, 0, 0] ++ (encode w₀).data.extract 8 48⟩ = none
     by decide +kernel]
 
-/-- A leaf proof of a chain of `chainCap + 1` steps is rejected, before any hash. -/
-theorem leaf_over_chainCap_rejected (vk c : Digest) :
-    check vk c (encode (.leaf (dg 1) (chainCap + 1))) = false := by
-  rw [check_eq, decode_encode (.leaf (dg 1) (chainCap + 1)) (show chainCap + 1 < 2 ^ 64 by decide)]
-  simp [chainCap]
+/-- A leaf proof of `leafCap + 1` hashes is rejected, before any hash. -/
+theorem leaf_over_leafCap_rejected (vk c : Digest) :
+    check vk c (encode (.leaf (dg 1) (leafCap + 1))) = false := by
+  rw [check_eq, decode_encode (.leaf (dg 1) (leafCap + 1)) (show leafCap + 1 < 2 ^ 64 by decide)]
+  simp [leafCap]
 
 /-- **A proof is accepted under at most one statement**, under each key. -/
 theorem stmt_unique {vk c c' : Digest} {π : Proof} (h : check vk c π = true)
@@ -142,9 +142,9 @@ theorem node_children_untraced {vk c c₁ c₂ : Digest} {π : Proof} {p₁ p₂
   simp only [acc_eq, Bool.and_eq_true, List.isEmpty_iff] at h₁ h₂
   exact ⟨h₁.2.1, h₂.2.1⟩
 
-/-- The honest proof of a zero-step leaf is accepted, under every key. -/
+/-- The honest proof of a leaf of zero hashes is accepted, under every key. -/
 theorem leaf_zero_accepted (vk s : Digest) :
-    check vk (leafStmt (chainEnd s 0) 0) (encode (.leaf s 0)) = true :=
+    check vk (leafStmt (leafValue s 0) 0) (encode (.leaf s 0)) = true :=
   check_encode (show Rel _ _ (.leaf s 0) from ⟨Nat.zero_le _, rfl⟩)
 
 example (vk c : Digest) (π : Proof) : check vk c π = true ↔

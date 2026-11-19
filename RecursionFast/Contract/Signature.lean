@@ -9,10 +9,10 @@ per key, under a Merkle tree of `2^16` one-time keys whose root is the public ke
 below is public Keccak-256 under its own tag (`Relation.lean`).
 
 **Why this scheme.** Hash-based, so the contract has no group and no field;
-Keccak-256, so a node circuit needs one hash gadget for chains, statements, traces and signatures;
-`w = 4`, which minimises the in-circuit cost of one check (about 200 chain steps on average, 32
-permutations for the leaf, 16 for the path). Stateful: the service uses each index once and
-refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
+Keccak-256, so a node circuit needs one hash gadget for leaf items, statements, traces and
+signatures; `w = 4`, which minimises the in-circuit cost of one check (about 200 chain steps on
+average, 32 permutations for the leaf, 16 for the path). Stateful: the service uses each index
+once and refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 
 **Layouts.**
 * `traceDigest tr = Keccak-256(tagTrace ‖ item₀ ‖ item₁ ‖ …)`, `itemᵢ = enc64 |qᵢ| ‖ qᵢ ‖ aᵢ`.
@@ -33,11 +33,17 @@ refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 
 **What is not here.** Key generation, the secret chain starts and signing are the service's (a
 Lean reference signer and the theorem that its signatures pass `SigOk` are in
-`Library/Signer.lean`). Unforgeability (EUF-CMA of this scheme with each index used once) is an
-assumption of the design argued on paper, not a theorem of the contract; the composition walk
-(`Library/Compose.lean`, `walkSigned`) returns an explicit EUF-CMA forgery against the service's
-signed traces, or a collision, when it is what fails. Security against signature-only forgery
-(Chiesa–Tromer, ICS 2010) is not needed: the walk matches signed traces by message.
+`Library/Signer.lean`). Unforgeability (EUF-CMA of this scheme, one message per index) is not
+in the contract. It is reduced in the kernel (`Library/WotsReduce.lean`, `wotsReduce`) to a
+Keccak-256 collision or a chain inversion: a forged chain value equal to the honest one at a
+position below every position the reference signer revealed of that chain. On paper remain that
+the chain starts (`chainStart`) are pseudorandom, and the probability that an adversary outputs
+the honest chain value at such a position (tweakable multi-target one-wayness of the chain step
+with pseudorandom starts; a forger that knows the starts reaches it). The composition walk
+(`Library/Compose.lean`, `walkStreamSigned`, `walkSigned`) returns an explicit EUF-CMA forgery
+against the service's signed traces, or a collision, when it is what fails. Security against
+signature-only forgery (Chiesa–Tromer, ICS 2010) is not needed: the walk matches signed traces by
+message.
 -/
 import RecursionFast.Contract.Relation
 

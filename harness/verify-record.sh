@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks a result's provenance, its runner and its verdict, or says why not (TRUSTED;
 # AGENTS.md §8). It is a necessary condition for a record, not the record rule: the submissions bot
-# applies that rule per track (`S_t < (1 - margin) · S_t,record`, the sum and the product, against
+# applies that rule per track (`S_t < (1 - margin) · S_t,record`, the tracks `final` and `every`, against
 # the track's standing record at the pin) on a result this script accepted. Needs `gh` ≥ 2.49 and
 # a GitHub token able to read the attestations of the submissions repository.
 #
@@ -23,7 +23,7 @@
 #    wrote, not evidence (the labels prove nothing; 1 is the evidence);
 # 4. the verdict is ACCEPT and the result is comparable (all planned parts present, the stream not
 #    truncated; a machine that is not the season's is an ERROR, never an ACCEPT);
-# 5. the stream's chain lengths (`stream.lengths`) are the season's fixed `[stream] lengths`, read
+# 5. the stream's shape (`stream.shape`: `M`, `n`) is the season's `[stream]` shape, read
 #    from `season.toml` beside this script (run it from the core checked out at `harness_commit`).
 # The trust anchor is the organiser's server: GitHub attests the workflow, the commit and the
 # self-hosted environment (1-2), and a third party can check only those.
@@ -60,10 +60,11 @@ if not (run.get("environment") == "self-hosted" and isinstance(name, str) and na
              "is not the organiser's rf-bench runner")
 if r.get("verdict") != "ACCEPT" or not r.get("comparable"):
     sys.exit(f"verify-record: verdict {r.get('verdict')}, comparable {r.get('comparable')}: not a record")
-want = tomllib.load(open(season, "rb"))["stream"]["lengths"]
+s = tomllib.load(open(season, "rb"))["stream"]
+want = {k: s.get(k) for k in ("M", "n")}
 st = r.get("stream") if isinstance(r.get("stream"), dict) else {}
-if st.get("lengths") != want:
-    sys.exit(f"verify-record: the stream's chain lengths are not the season's [stream] lengths (harness/season.toml): not comparable")
+if st.get("shape") != want:
+    sys.exit(f"verify-record: the stream's shape {st.get('shape')} is not the season's {want} (harness/season.toml): not comparable")
 print(f"verify-record: OK, attested by {sorted(uris)[0]}, harness {commit}, runner {name}, verdict ACCEPT, "
-      "comparable, the season's chain lengths (the record rule is the bot's)")
+      "comparable, the season's stream shape (the record rule is the bot's)")
 PY

@@ -24,6 +24,8 @@ pub const ST_BAD: u8 = 1;
 pub const ST_CAP: u8 = 2;
 /// All `2^16` one-time signing keys are used.
 pub const ST_EXHAUSTED: u8 = 3;
+/// Replay mode: no trace digest was signed at this index in the service run, or another one was.
+pub const ST_MISMATCH: u8 = 4;
 
 /// Largest query: 2^20 bytes (`queryCap`: `acc` rejects a trace with a longer query).
 pub const MAX_QUERY_BYTES: u32 = 1 << 20;

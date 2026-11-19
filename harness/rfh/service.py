@@ -1,8 +1,12 @@
 """The oracle service's lifecycle, and a Python client of its wire protocol (`service/PROTOCOL.md`).
 
-TRUSTED RUNTIME (`Service`): one service process per timed run. `start` launches `rf-oracle` with
-its socket in a fresh directory, under its own memory cap, and waits for `ready`; `stop` closes its
-stdin, which makes it wipe its keys and exit, and returns its statistics. The client (`Client`) is
+TRUSTED RUNTIME (`Service`): one service process per stream (the service run and its timed passes)
+and one for the calibration. `start` launches `rf-oracle` with its socket in a fresh directory,
+under its own memory cap, and waits for `ready`; `replay` puts it in replay mode for one timed pass
+(the line `replay` on its stdin: it prints `key <hex k>`, its PRF key, resets its one-time-key
+counter and then re-issues only the signatures it made, at the same indices, for the same trace
+digests; `service/PROTOCOL.md`); `stop` closes its stdin, which makes it wipe its keys and exit, and
+returns its statistics. The client (`Client`) is
 used by tests and by the smoke's deliberately broken provers, not by the benchmark.
 """
 import os
@@ -28,6 +32,7 @@ class Service:
         self.binary, self.sock_dir, self.wrap = binary, sock_dir, list(wrap)
         self.stderr_path = stderr_path or os.path.join(sock_dir + ".service.log")
         self.proc, self.vk, self.info = None, None, {}
+        self._rest = b""                    # stdout read past the last line the runner waited for
 
     @property
     def socket_path(self):
@@ -65,6 +70,41 @@ class Service:
         self.vk = vk
         return self
 
+    def _lines_until(self, word, deadline):
+        """Read stdout until the line `word`; the lines before it."""
+        buf = self._rest
+        while word.encode() not in buf.split(b"\n")[:-1]:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([self.proc.stdout], [], [], left)[0]:
+                raise ServiceError(f"the service printed no `{word}` line in time")
+            chunk = os.read(self.proc.stdout.fileno(), 4096)
+            if not chunk:
+                raise ServiceError(f"the service exited before `{word}` (code {self.proc.wait()})")
+            buf += chunk
+        lines = buf.split(b"\n")
+        k = lines.index(word.encode())
+        self._rest = b"\n".join(lines[k + 1:])
+        return [l.decode(errors="replace") for l in lines[:k]]
+
+    def replay(self, timeout=60):
+        """Replay mode for one timed pass: write `replay` on the service's stdin, read its stdout up
+        to the line `replay ready`; the PRF key `k` from its line `key <64 hex>`, as lowercase hex.
+        The service then resets its one-time-key counter to 0 and signs at index `j` only the trace
+        digest it signed at `j` in the service run (the same signature), refusing any other with
+        status 4 `MISMATCH`; `QUERY` is served unchanged."""
+        if self.proc is None or self.proc.poll() is not None:
+            raise ServiceError("the service is not running")
+        try:
+            self.proc.stdin.write(b"replay\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError) as e:
+            raise ServiceError(f"the service's control pipe is closed ({e})")
+        lines = self._lines_until("replay ready", time.monotonic() + timeout)
+        keys = [l.split()[1] for l in lines if l.startswith("key ") and len(l.split()) == 2]
+        if len(keys) != 1 or len(keys[0]) != 64 or any(c not in "0123456789abcdef" for c in keys[0]):
+            raise ServiceError(f"the service's replay answer has no one `key <64 lowercase hex>` line ({len(keys)} key line(s) of {len(lines)})")
+        return keys[0]
+
     def stop(self, timeout=120):
         """Close stdin (the service wipes its keys and exits); its `stats` as a dict. `communicate`
         closes stdin itself (closing it first fails on Python 3.12: flush of a closed file)."""
@@ -77,7 +117,7 @@ class Service:
             raise ServiceError("service did not exit")
         self._err.close()
         stats = {}
-        for line in out.decode().splitlines():
+        for line in (self._rest + out).decode(errors="replace").splitlines():
             if line.startswith("stats "):
                 stats = {k: int(v) for k, v in (kv.split("=") for kv in line.split()[1:])}
         code, self.proc = self.proc.returncode, None
@@ -92,6 +132,14 @@ class Service:
         except OSError:
             return []
         return [l for l in lines if l.startswith("rf-oracle: refused")][:limit]
+
+    def mismatches(self):
+        """Every replay `MISMATCH` refusal (status 4) the service logged so far, from its stderr."""
+        try:
+            lines = open(self.stderr_path, errors="replace").read().splitlines()
+        except OSError:
+            return []
+        return [l for l in lines if l.startswith("rf-oracle: refused (status 4)")]
 
     def kill(self):
         if self.proc is not None:

@@ -10,7 +10,8 @@
   * Monotonicity: `expect_mono`, `prob_mono`, and along an invariant of the table that every
     fresh answer keeps (`expect_mono_of_inv`, `prob_mono_of_inv`; the composition uses the log's
     functionality).
-  * **The union bound** (`prob_exists_le`), through linearity (`expect_sum`).
+  * **The union bound** (`prob_exists_le`; for two events `prob_or_le`), through linearity
+    (`expect_sum`).
   * **Sequential composition**: `expect_bind`, `prob_bind` (`p.bind f` is `p`, then `f` on its
     output from the table `p` ended with); `prob_bind_of_runLog` (a program that the table
     already answers asks nothing fresh, so it changes nothing).
@@ -200,6 +201,16 @@ theorem prob_exists_le {ι : Type} (s : Finset ι) (B : ι → α → Log → Pr
   refine expect_mono (fun x L => ind_le fun ⟨i, hi, hb⟩ => ?_) p L
   rw [← ind_of (B := B i) hb]
   exact Finset.single_le_sum (f := fun j => ind (B j) x L) (fun _ _ => bot_le) hi
+
+/-- **The union bound for two events.** -/
+theorem prob_or_le (B₁ B₂ : α → Log → Prop) (p : OProg α) (L : Log) :
+    prob (fun x L => B₁ x L ∨ B₂ x L) p L ≤ prob B₁ p L + prob B₂ p L := by
+  have h := prob_exists_le {true, false} (fun b => if b then B₁ else B₂) p L
+  rw [Finset.sum_pair (by decide)] at h
+  refine (prob_mono (fun x L hx => ?_) p L).trans h
+  rcases hx with hx | hx
+  · exact ⟨true, by simp, hx⟩
+  · exact ⟨false, by simp, hx⟩
 
 theorem prob_bind (B : β → Log → Prop) (p : OProg α) (f : α → OProg β) (L : Log) :
     prob B (p.bind f) L = expect (fun x L' => prob B (f x) L') p L := by

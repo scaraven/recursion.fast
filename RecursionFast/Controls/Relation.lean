@@ -4,25 +4,28 @@
 Known answers are decided by the kernel (`decide +kernel` on the word-level twins of
 `Library/Fast.lean`, proved equal to the contract's hashes); each expected digest is the output of
 the `python3 -I` command in its docstring, run from the repository root (`harness/rfh/keccak.py`,
-the runner's Keccak-256, itself checked against OpenSSL's `keccak-256`). The start of every chain is `s0 = 00 01 … 1f`. Signed
-children are built with the Lean reference signer (`Library/Signer.lean`) for **every** secret
-function `sk`, and their signatures are proved valid symbolically (`sigOk_sign`, no hash
-evaluated).
+the runner's Keccak-256, itself checked against OpenSSL's `keccak-256`). The seed of every leaf
+is `s0 = 00 01 … 1f`. Signed children are built with the Lean reference signer
+(`Library/Signer.lean`) for **every** secret function `sk`, and their signatures are proved valid
+symbolically (`sigOk_sign`, no hash evaluated).
 
 Positive:
-* `chain1_kat`, `chain2_kat`, `chain16_kat`, `leafStmt_kat`, `nodeStmt_kat`: the byte layouts.
+* `item0_kat`, `item1_kat`, `value2_kat` (the XOR of the first two), `value16_kat`, `leafStmt_kat`,
+  `nodeStmt_kat`: the byte layouts.
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
   `pk sk`, a node digest of two leaf digests is in the relation with the two signed leaf proofs
-  as its witness, for every secret function, two starts and lengths up to `chainCap`;
-  `node_of_two_leaves_ref` with the reference derivation of the chain starts.
-* `leaf_at_chainCap`: a chain of exactly `chainCap` steps is in the relation.
+  as its witness, for every secret function, two seeds and sizes up to `leafCap`;
+  `node_of_two_leaves_ref` with the reference derivation of the WOTS chain starts.
+* `leaf_at_leafCap`: a leaf of exactly `leafCap` hashes is in the relation.
 * `tags_separate`: the seven tags are distinct bytes, and each hash input of the contract starts
   with its own tag.
 
 Negative:
-* `wrong_end`, `leaf_over_chainCap` (every `acc`).
+* `wrong_value` (the seed in place of the value), `wrong_seed` (another seed),
+  `wrong_count` (one hash dropped), `extra_item` (one hash added), `leaf_over_leafCap` (every
+  `acc`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
@@ -62,62 +65,73 @@ open RecursionFast.Controls.Keccak (hex)
 /-- The digest written by a hex string. -/
 def ofHex (s : String) : Digest := Vector.ofFn fun i => (hex s).getD i 0
 
-/-- The chain start `00 01 … 1f`. -/
+/-- The seed `00 01 … 1f`. -/
 def s0 : Digest := Vector.ofFn fun i => i.val.toUInt8
+
+/-- Another seed, `01 02 … 20`. -/
+def s1 : Digest := Vector.ofFn fun i => (i.val + 1).toUInt8
 
 /-! ## Known answers -/
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-print(K(b'C'+bytes(range(32))).hex())"` -/
-theorem chain1_kat : (chainEnd s0 1).toList =
-    hex "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97" := by
-  rw [← chainEndF_eq]
+print(K(b'H'+bytes(range(32))+(0).to_bytes(8,'little')).hex())"` -/
+theorem item0_kat : (leafItem s0 0).toList =
+    hex "da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11" := by
+  rw [← leafItemF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-H=lambda b: K(b'C'+b); print(H(H(bytes(range(32)))).hex())"` -/
-theorem chain2_kat : (chainEnd s0 2).toList =
-    hex "b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c" := by
-  rw [← chainEndF_eq]
+print(K(b'H'+bytes(range(32))+(1).to_bytes(8,'little')).hex())"` -/
+theorem item1_kat : (leafItem s0 1).toList =
+    hex "422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f" := by
+  rw [← leafItemF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; d=bytes(range(32))
-for _ in range(16): d=K(b'C'+d)
-print(d.hex())"` -/
-theorem chain16_kat : (chainEnd s0 16).toList =
-    hex "00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617" := by
-  rw [← chainEndF_eq]
+/-- The XOR of `item0_kat` and `item1_kat`: `python3 -I -c "import sys; sys.path.insert(0,
+'harness'); from rfh.keccak import keccak256 as K; I=lambda j: K(b'H'+bytes(range(32))+j.to_bytes(8,
+'little')); print(bytes(a^b for a,b in zip(I(0),I(1))).hex())"` -/
+theorem value2_kat : (leafValue s0 2).toList =
+    hex "987811b1565b57a5360e5a6fbe442fab425363ce2a9326cf512e5aeec7eba08e" := by
+  rw [← leafValueF_eq]
+  decide +kernel
+
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; v=bytes(32)
+for j in range(16): v=bytes(a^b for a,b in zip(v,K(b'H'+bytes(range(32))+j.to_bytes(8,'little'))))
+print(v.hex())"` -/
+theorem value16_kat : (leafValue s0 16).toList =
+    hex "d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458" := by
+  rw [← leafValueF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-h=bytes.fromhex('00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617');
-print(K(b'L'+h+(16).to_bytes(8,'little')).hex())"` -/
+h=bytes.fromhex('d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458');
+print(K(b'L'+h+(16).to_bytes(8,'little')).hex())"` (the value of `value16_kat`) -/
 theorem leafStmt_kat :
-    (leafStmt (ofHex "00cfd51138d7dbe766365683bf29258e4dee56261fdf80794f651d0731200617")
+    (leafStmt (ofHex "d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458")
       16).toList =
-      hex "4e27fc7ae3cb89e514c8902eca3caf4e80b197376b668788dbd85927511ced22" := by
+      hex "73e4f8a699e3bde6cc6bfecd0fc2370a0e0503bd29f06554ad8a32d81caeb2f9" := by
   rw [← leafStmtF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-a=bytes.fromhex('db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97');
-b=bytes.fromhex('b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c');
-print(K(b'N'+a+b).hex())"` (the digests of `chain1_kat`, `chain2_kat`) -/
+a=bytes.fromhex('da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11');
+b=bytes.fromhex('422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f');
+print(K(b'N'+a+b).hex())"` (the digests of `item0_kat`, `item1_kat`) -/
 theorem nodeStmt_kat :
-    (nodeStmt (ofHex "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97")
-      (ofHex "b03c207aad497f3e254ffc60f20123d5bf797f60c4c0f6175866421a6edeb08c")).toList =
-      hex "314851ba95772530f7cab5dacff61ca36788fa45b50f663d9378bd1ebf6cf119" := by
+    (nodeStmt (ofHex "da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11")
+      (ofHex "422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f")).toList =
+      hex "955f38142d22184c40620a09850718e312df8622264ea4c6c7dc4983e8f5df9b" := by
   rw [← nodeStmtF_eq]
   decide +kernel
 
 /-! ## Tags -/
 
 /-- **Tags separate**: the seven tags are distinct bytes, and each hash input of the contract
-starts with its own tag (the chain step, the leaf and node statements, the trace digest, the
+starts with its own tag (the leaf item, the leaf and node statements, the trace digest, the
 WOTS chain step and leaf, the signature's Merkle node). -/
 theorem tags_separate (d h c₁ c₂ x : Digest) (n j i s : ℕ) (tr : Trace) (ends : List Digest) :
-    [tagChain, tagLeaf, tagNode, tagTrace, tagWots, tagWotsLeaf, tagSigNode].Nodup ∧
-    chainStep d = keccakDigest (tagChain :: d.toList) ∧
+    [tagItem, tagLeaf, tagNode, tagTrace, tagWots, tagWotsLeaf, tagSigNode].Nodup ∧
+    leafItem d n = keccakDigest (tagItem :: (d.toList ++ enc64 n)) ∧
     leafStmt h n = keccakDigest (tagLeaf :: (h.toList ++ enc64 n)) ∧
     nodeStmt c₁ c₂ = keccakDigest (tagNode :: (c₁.toList ++ c₂.toList)) ∧
     traceDigest tr = keccakDigest (tagTrace :: traceBytes tr) ∧
@@ -128,24 +142,46 @@ theorem tags_separate (d h c₁ c₂ x : Digest) (n j i s : ℕ) (tr : Trace) (e
 
 /-! ## Leaves -/
 
-/-- A chain of exactly `chainCap` steps is in the relation. -/
-theorem leaf_at_chainCap (acc : Digest → Signed → Bool) (s : Digest) :
-    Rel acc (leafStmt (chainEnd s chainCap) chainCap) (.leaf s chainCap) := ⟨le_rfl, rfl⟩
+/-- A leaf of exactly `leafCap` hashes is in the relation. -/
+theorem leaf_at_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
+    Rel acc (leafStmt (leafValue s leafCap) leafCap) (.leaf s leafCap) := ⟨le_rfl, rfl⟩
 
-/-- **Over the chain bound**: a chain of `chainCap + 1` steps is not in the relation. -/
-theorem leaf_over_chainCap (acc : Digest → Signed → Bool) (s : Digest) :
-    ¬ Rel acc (leafStmt (chainEnd s (chainCap + 1)) (chainCap + 1)) (.leaf s (chainCap + 1)) :=
+/-- **Over the leaf bound**: a leaf of `leafCap + 1` hashes is not in the relation. -/
+theorem leaf_over_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
+    ¬ Rel acc (leafStmt (leafValue s (leafCap + 1)) (leafCap + 1)) (.leaf s (leafCap + 1)) :=
   fun h => absurd h.1 (by omega)
 
-/-- The statement of the chain's start is not the statement of its end (`s0`, `n = 1`). -/
-theorem start_ne_end : leafStmt s0 1 ≠ leafStmt (chainEnd s0 1) 1 := by
-  rw [← leafStmtF_eq, ← chainEndF_eq]
+/-- The statement of the seed is not the statement of its leaf's value (`s0`, `n = 1`). -/
+theorem seed_ne_value : leafStmt s0 1 ≠ leafStmt (leafValue s0 1) 1 := by
+  rw [← leafStmtF_eq, ← leafValueF_eq]
   decide +kernel
 
-/-- **Wrong chain end**: the leaf statement committing to the start is not witnessed by the
-start, under every `acc`. -/
-theorem wrong_end (acc : Digest → Signed → Bool) : ¬ Rel acc (leafStmt s0 1) (.leaf s0 1) :=
-  fun h => start_ne_end h.2
+/-- **Wrong value**: the leaf statement committing to the seed itself is not witnessed by the
+seed, under every `acc`. -/
+theorem wrong_value (acc : Digest → Signed → Bool) : ¬ Rel acc (leafStmt s0 1) (.leaf s0 1) :=
+  fun h => seed_ne_value h.2
+
+/-- **Wrong seed**: the statement of the leaf of `s0` with one hash is not witnessed by another
+seed `s1` with one hash, under every `acc`. -/
+theorem wrong_seed (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (leafValue s0 1) 1) (.leaf s1 1) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← leafValueF_eq]
+  decide +kernel
+
+/-- **One hash dropped**: the statement of the leaf of `s0` with two hashes is not witnessed by
+`s0` with one hash, under every `acc`. -/
+theorem wrong_count (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (leafValue s0 2) 2) (.leaf s0 1) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← leafValueF_eq]
+  decide +kernel
+
+/-- **One hash added**: the statement of the leaf of `s0` with one hash, and the value of one
+hash committed with the count `2`, are not witnessed by `s0` with two hashes, under every
+`acc`. -/
+theorem extra_item (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (leafValue s0 1) 1) (.leaf s0 2) ∧
+      ¬ Rel acc (leafStmt (leafValue s0 1) 2) (.leaf s0 2) := by
+  constructor <;> rw [Rel, ← leafStmtF_eq, ← leafValueF_eq] <;> decide +kernel
 
 /-! ## Signed leaf proofs -/
 
@@ -162,39 +198,40 @@ theorem leafSigned_sig (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sig
 theorem acc_leafSigned_iff (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (c s : Digest)
     {n : ℕ} (hn : n < 2 ^ 64) :
     submission.acc (Signer.pk sk) c (leafSigned sk j s n) =
-      (decide (n ≤ chainCap) && decide (c = leafStmt (chainEnd s n) n)) := by
+      (decide (n ≤ leafCap) && decide (c = leafStmt (leafValue s n) n)) := by
   rw [acc_eq, leafSigned_sig sk hj, ← check_leaf' c s hn]
   simp [leafSigned, size_encode_leaf]
 where
   check_leaf' (c s : Digest) {n : ℕ} (hn : n < 2 ^ 64) :
       check (Signer.pk sk) c (encode (.leaf s n)) =
-        (decide (n ≤ chainCap) && decide (c = leafStmt (chainEnd s n) n)) := by
+        (decide (n ≤ leafCap) && decide (c = leafStmt (leafValue s n) n)) := by
     rw [check_eq, decode_encode (.leaf s n) hn]; simp
 
 /-- **A signed leaf proof is accepted** under the signer's key. -/
 theorem acc_leafSigned (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (s : Digest)
-    {n : ℕ} (hn : n ≤ chainCap) :
-    submission.acc (Signer.pk sk) (leafStmt (chainEnd s n) n) (leafSigned sk j s n) = true := by
+    {n : ℕ} (hn : n ≤ leafCap) :
+    submission.acc (Signer.pk sk) (leafStmt (leafValue s n) n) (leafSigned sk j s n) = true := by
   rw [acc_leafSigned_iff sk hj _ s (hn.trans_lt (by decide))]; simp [hn]
 
 /-! ## Nodes -/
 
 /-- **A node with two signed leaf children** is in the relation under the signer's key, for
-every secret function, starts and lengths up to `chainCap`. -/
+every secret function, seeds and sizes up to `leafCap`. -/
 theorem node_of_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
-    (h₁ : n₁ ≤ chainCap) (h₂ : n₂ ≤ chainCap) :
+    (h₁ : n₁ ≤ leafCap) (h₂ : n₂ ≤ leafCap) :
     Rel (submission.acc (Signer.pk sk))
-      (nodeStmt (leafStmt (chainEnd s₁ n₁) n₁) (leafStmt (chainEnd s₂ n₂) n₂))
-      (.node (leafStmt (chainEnd s₁ n₁) n₁) (leafStmt (chainEnd s₂ n₂) n₂)
+      (nodeStmt (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂))
+      (.node (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂)
         (leafSigned sk 0 s₁ n₁) (leafSigned sk 1 s₂ n₂)) :=
   ⟨rfl, acc_leafSigned sk (by decide) s₁ h₁, acc_leafSigned sk (by decide) s₂ h₂⟩
 
-/-- The node control with the reference derivation of the chain starts, for every seed. -/
+/-- The node control with the reference derivation of the WOTS chain starts, for every signer
+seed. -/
 theorem node_of_two_leaves_ref (seed : List UInt8) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
-    (h₁ : n₁ ≤ chainCap) (h₂ : n₂ ≤ chainCap) :
+    (h₁ : n₁ ≤ leafCap) (h₂ : n₂ ≤ leafCap) :
     Rel (submission.acc (Signer.pk (Signer.chainStart seed)))
-      (nodeStmt (leafStmt (chainEnd s₁ n₁) n₁) (leafStmt (chainEnd s₂ n₂) n₂))
-      (.node (leafStmt (chainEnd s₁ n₁) n₁) (leafStmt (chainEnd s₂ n₂) n₂)
+      (nodeStmt (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂))
+      (.node (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂)
         (leafSigned (Signer.chainStart seed) 0 s₁ n₁)
         (leafSigned (Signer.chainStart seed) 1 s₂ n₂)) :=
   node_of_two_leaves _ s₁ s₂ h₁ h₂
@@ -204,8 +241,8 @@ theorem node_of_two_leaves_ref (seed : List UInt8) (s₁ s₂ : Digest) {n₁ n�
 theorem node_needs_statement (acc : Digest → Signed → Bool) {c c₁ c₂ : Digest} (p₁ p₂ : Signed)
     (h : c ≠ nodeStmt c₁ c₂) : ¬ Rel acc c (.node c₁ c₂ p₁ p₂) := fun hR => h hR.1
 
-/-- The correct leaf digest of the chain of one step from `s0`, and the wrong one. -/
-abbrev cOk : Digest := leafStmt (chainEnd s0 1) 1
+/-- The correct leaf digest of one hash of `s0`, and the wrong one (committing to `s0`). -/
+abbrev cOk : Digest := leafStmt (leafValue s0 1) 1
 abbrev cBad : Digest := leafStmt s0 1
 
 /-- **Statement mismatch** (an instance): two accepted children under their own leaf statement,
@@ -213,13 +250,13 @@ which is not their `nodeStmt`, under every `acc`. -/
 theorem node_statement_mismatch (acc : Digest → Signed → Bool) (p₁ p₂ : Signed) :
     ¬ Rel acc cOk (.node cOk cOk p₁ p₂) := by
   refine node_needs_statement _ _ _ ?_
-  rw [cOk, ← leafStmtF_eq, ← chainEndF_eq, ← nodeStmtF_eq]
+  rw [cOk, ← leafStmtF_eq, ← leafValueF_eq, ← nodeStmtF_eq]
   decide +kernel
 
 theorem acc_bad (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) :
     submission.acc (Signer.pk sk) cBad (leafSigned sk j s0 1) = false := by
   rw [acc_leafSigned_iff sk hj _ s0 (by decide)]
-  simp [show cBad ≠ leafStmt (chainEnd s0 1) 1 from start_ne_end]
+  simp [show cBad ≠ leafStmt (leafValue s0 1) 1 from seed_ne_value]
 
 /-- **A node whose first child is rejected**: validly signed, but its proof is for another
 statement. -/
@@ -316,7 +353,7 @@ theorem acc_two_entries_rejected (sk : ℕ → ℕ → Digest) (a c : Digest) (�
 
 /-- A tree of `k` levels over one leaf: the digest. -/
 def deepStmt : ℕ → Digest
-  | 0 => leafStmt (chainEnd s0 0) 0
+  | 0 => leafStmt (leafValue s0 0) 0
   | k + 1 => nodeStmt (deepStmt k) (deepStmt k)
 
 /-- A tree of `k` levels over one leaf: the witness-sending proof, children signed with key `0`

@@ -5,9 +5,11 @@ Keccak (known answers and FIPS 202's constants) · Relation (signed children, th
 signer) · Oracle (with `runSeq`) · Security · Completeness · Potential · Machine · Extractor (the
 output format) · LogScan · WitnessSending · Tree · Certificate (the key quantifier) · Backdoor
 (certified in the model, harmless under the keyed deployment) · Unforgeability (the forgery
-events and the service's signed traces) · Compose (the composition walk, its reduction to EUF-CMA
-and collisions, and its probability) · Signature (trace digest, WOTS digits, chain, leaf, node,
-root, `SigOk`).
+events and the service's signed traces) · Compose (the composition walks over trees and the
+stream, their reduction to EUF-CMA and collisions, and their probability) · Signature (trace
+digest, WOTS digits, chain, leaf, node, root, `SigOk`) · WotsReduce (EUF-CMA reduced to a
+collision or a chain inversion: reached by a forger that knows the key, unsatisfiable by revealed
+values or with two messages at one index; reached through the composition walks).
 Security holds the direct controls of the textbook `KS`; Security and Potential hold the
 potential controls as facts about the library's `KState`.
 -/
@@ -27,3 +29,4 @@ import RecursionFast.Controls.Certificate
 import RecursionFast.Controls.Backdoor
 import RecursionFast.Controls.Unforgeability
 import RecursionFast.Controls.Compose
+import RecursionFast.Controls.WotsReduce

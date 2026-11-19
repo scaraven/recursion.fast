@@ -8,9 +8,6 @@ Badge executables (`harness/badge/`, built by `evaluate.py`; the command-line co
                              `accept NS` or `reject NS`, NS the nanoseconds of parsing the file's
                              bytes and evaluating `acc` (a monotonic clock in the process, which runs
                              pinned to one core, so it bounds the check's CPU time); exit 0.
-  chaincheck LEAVES ROOT_HEX the organiser's compiled-Lean interleaved chain checker: recompute the
-                             leaf statements of LEAVES (`leaves.json`) and their tree root; prints
-                             `ok NS` if it equals ROOT_HEX, else `mismatch NS`.
 
 `verify` runs the entry's compiled verifier, so it runs in the sandbox, pinned to one core.
 
@@ -91,26 +88,16 @@ class Badge:
                              "timeout" if code == "timeout" else "crash")
         return res
 
-    def chaincheck(self, leaves_json, root):
-        d = os.path.dirname(leaves_json)
-        code, out, err = self._run(["chaincheck", f"/in/{os.path.basename(leaves_json)}", root.hex()],
-                                   [("ro", d, "/in")], 120)
-        w = out.split()
-        if code != 0 or len(w) < 2 or w[0] != "ok":
-            raise RuntimeError(f"chaincheck: exit {code}, output {out[:200]!r} {err[-300:]!r}")
-        return int(w[1])
-
 
 # ---- canaries -------------------------------------------------------------------------------------
 
 def canaries(stmt: bytes, others=()):
     """The statement canaries (AGENTS.md §6) of a proof accepted for `stmt`: the
     statements it must be rejected for, as (name, statement): `stmt` with its first bit flipped, and
-    each (name, statement) of `others` that differs from `stmt` (in the stream: the statement of the
-    leaf the next step adds, `next-leaf`, and the step's first child, `first-child`)."""
+    each (name, statement) of `others` that differs from `stmt` (in the stream: the output's first
+    child, `first-child`: `c_{i-1}` for a step `i ≥ 2`; step 1's output, a leaf, has none)."""
     flip = bytearray(stmt)
     flip[0] ^= 1
     out = [("stmt-bit", bytes(flip))]
     out += [(name, c) for name, c in others if c is not None and c != stmt]
     return out
-

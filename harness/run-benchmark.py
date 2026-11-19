@@ -5,20 +5,20 @@
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
       [--parts calibrate,stream] [--provisional]
 
-ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
-`chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; the calibration
+ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` (`evaluate.py` builds it). The order: machine and toolchain record; the calibration
 workload `calib` built from `harness/tools/calib.c` with the runner's `gcc` (before any entry code
 runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, its directory within
-`setup_cap`); the calibration instance and the service calibration; the stream (its own service; every
-step a fresh process, every output checked, the statement canaries, interleaved `c_P` and `T_triv`
-samples, the re-timing); the two scores (`rfh.bench.score`: the sum and the product). One stream
-per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and into
-the result. The first failure ends the run with `benchmark: fail` and its reason; a truncated stream
-(its cap reached) is scored over its completed steps and flagged, never ranked. A machine whose
-fingerprint is missing, unreadable or not the season's (AGENTS.md §6) ends the run before the
-prover's build with `benchmark: error`, and a `c_P` that drifted beyond the season's `c_P_drift`
-(AGENTS.md §6) ends the run with `benchmark: error`: the machine was not in its calibrated state,
-the organiser's failure, never a score change.
+`setup_cap`); the service calibration; the stream (its own service:
+the service run, every step a fresh process, every output checked, the final output's caps and
+statement canaries, the track `every`'s conditions; then `timed_runs` timed passes against the
+service's replay mode, every output byte-identical to the service run's; interleaved `c_P`
+samples); the score (`rfh.bench.score`: `S = P_total · 2^(|π_M| / size_ref)`, the tracks the run is
+in). One stream per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and
+into the result. The first failure ends the run with `benchmark: fail` and its reason; so does
+reaching `stream_s`. A machine whose fingerprint is missing, unreadable or not the season's
+(AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and a `c_P` that
+drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
+machine was not in its calibrated state, the organiser's failure, never a score change.
 """
 import argparse
 import glob
@@ -83,12 +83,12 @@ def main():
         logf.write(line + "\n")
         logf.flush()
 
-    res = {"schema": "recursion.fast/v4/result-1", "season": p.name, "season_sha256": sha256(a.season),
+    res = {"schema": "recursion.fast/v6/result-1", "season": p.name, "season_sha256": sha256(a.season),
            "params": {k: v for k, v in vars(p).items()}, "parts": parts, "provisional": a.provisional,
            "comparable": not a.provisional, "machine": machine(),
            "harness": {"commit": harness_commit(), "service_sha256": sha256(a.service),
                        "bench_sha256": sha256(a.bench),
-                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify", "chaincheck")}},
+                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify",)}},
            "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "pass", "reasons": []}
     srcs = sorted(glob.glob(os.path.join(a.entry, "prover", "*.s")))
     h = hashlib.sha256()
@@ -145,22 +145,20 @@ def main():
         if "calibrate" in parts:
             save("calibration")
             res["calibration"] = bench.calibrate()
-            log(f"calibration instance: {res['calibration']['triv_permutations']} permutations; "
-                f"service {res['calibration']['service']}")
+            log(f"calibration: service {res['calibration']['service']}")
         if "stream" in parts:
             save("stream")
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
-            log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), T_triv = {cal['T_triv_ns'] / 1e6:.3f} ms, v_ref = {cal['v_ref_ns'] / 1e6:.3f} ms")
+            log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), (a health check)")
             res["score"] = score(p, res["stream"])
             with open(os.path.join(work, "stream.jsonl"), "w") as f:
                 for s in res["stream"]["steps"]:
                     f.write(json.dumps(s) + "\n")
-            log(f"score: S = {res['score']['S']:.4f} (P̄ {res['score']['P_bar']:.4f}, V̄ {res['score']['V_bar']:.4f}), "
-                f"S× = {res['score']['S_product']:.4f} (g {res['score']['g']:.4f}), "
-                f"M = {res['score']['M']}" + (", TRUNCATED" if res["stream"]["truncated"] else ""))
-            if res["stream"]["truncated"]:
-                res["comparable"] = False
+            sc = res["score"]
+            log(f"score: S = {sc['S']:.4f} (P_total {sc['P_total_s']:.4f} s, size factor {sc['size_factor']:.4f} at "
+                f"|π_M| = {sc['final_pi_bytes']} B), tracks {sorted(sc['tracks'])}"
+                + (f"; not in `every`: {sc['tracks_reason']['every'][:300]}" if "tracks_reason" in sc else ""))
             if not cal["c_P_ok"]:
                 raise Drift(f"organiser ERROR: c_P = {cal['c_P']:.4f} drifted by {cal['c_P_drift']:.4f} from the "
                             f"season's ref_ns, beyond c_P_drift = {cal['c_P_drift_cap']}: the machine was not "

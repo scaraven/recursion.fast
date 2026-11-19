@@ -94,16 +94,18 @@ here says that an honest proof verifies under the one deployed oracle (keyed Kec
 harness's concrete checks of `acc` do.
 
 **Why `2^-40`.** A completeness failure is no security event: it costs only its entrant, as one
-rejected proof and a failed run. An evaluation's prover makes at most about 106 proofs (the
-stream's 96 steps and at most 10 % re-runs), so at `2^-40` each a run fails this way with
-probability about `2^-33`. Grinding to difficulty `2^g` meets
+rejected proof and a failed run. An evaluation's prover makes 8 output proofs (the service run's 8
+steps; the timed passes only reproduce them byte for byte), so at `2^-40` each a run fails this way
+with probability about `2^-37`. Grinding to difficulty `2^g` meets
 the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2^-128`).
 
 **Why `errorCap = 2^-128`.** 128 bits per fresh query. A design over GF(2^128) does not fit as it
 stands (a degree-2 sumcheck round costs `2^-127`): it must draw its challenges from a larger field
 or repeat. Composing the stream from single-output knowledge soundness takes a union bound over
-the extracted proofs: for the at most about 106 proofs of one evaluation at `2^30` queries,
-about `106 · 2^30 · 2^-128 ≈ 2^-91`.
+the extracted proofs (`Library/Compose.lean`, `compose_prob_stream`): the final output of the
+8-step stream and the proofs extracted from it, its `2 · 8 - 1 = 15` members (7 nodes, 8 leaves),
+at `Q + qV = 2^30` cost at most `15 · 2^30 · 2^-128 < 2^-94`; walking each of the 8 outputs,
+`Σ (2i - 1) = 64` members, `2^6 · 2^30 · 2^-128 = 2^-92`.
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs

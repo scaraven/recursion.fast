@@ -2,19 +2,15 @@
 # reads nothing else; `smoke.toml` is the CI smoke's copy at a small shape.
 # Job limits are in .github/workflows/evaluate.yml (AGENTS.md §9): the certificate job 50 minutes, the benchmark
 # job 70 minutes, every other job at most 30. The caps below are nested inside those limits, so no
-# job is killed: a request, build or setup over its cap is the entry's REJECT with the reason; a
-# stream that reaches stream_s (a slow or hung check included) is truncated and not comparable,
-# or REJECTed if no step was checked.
+# job is killed: a request, build or setup over its cap is the entry's REJECT with the reason, and
+# so is a benchmark that reaches stream_s (a slow or hung check included).
 name = "season-1"
 
-[score]           # AGENTS.md §7, two tracks, seconds per 2^18-permutation step: the sum
-                  # S = P̄ + V̄, V̄ = κ · mean(x_i); the product S× = P̄ · (1 + (mean V_i / v_ref)²)
-K = 5             # the sum's verifier weight; kappa = K · v0 is what the score uses
-kappa = 3.2975    # seconds of S per unit of x: K · v0, v0 = 659.5 ms, the v_ref (T_triv / R)
-                  # measured on the evaluation machine
-n_ref = 262144    # 2^18: P̄ is per n_ref permutations (a chain step is one Keccak-f[1600])
-s_ref = 2097152   # 2 MiB: x_i = V_i / v_ref + |π_i| / s_ref
-R = 10            # v_ref = T_triv / R (the verifier scale of both tracks, not a gate)
+[score]           # AGENTS.md §7: one score for both tracks (`final`, `every`), seconds, lower is better:
+                  # S = P_total · 2^(|π_M| / size_ref), P_total = Σ_i P_i (the stream's wall time,
+                  # P_i the least of step i's timed times)
+size_ref = 1048576   # 1 MiB: the final output's |π| multiplies S by 2^(|π_M| / size_ref) (×1.19 at
+                     # 256 KiB, ×1.41 at final_pi_cap); no other size and no verifier time is scored
 
 [certificate]     # the certificate job's Lean steps, on the evaluation VM; a breach is the
                   # entry's REJECT, except the kernel's, which leaves the certificate unchecked
@@ -41,47 +37,28 @@ prover_bytes = 268435456  # 256 MiB
 claim_bytes = 65536       # claim.json, the renderer's input
 
 [stream]          # the one IVC stream (AGENTS.md §6): PROVER first, then PROVER step, a fresh
-                  # process each
-M = 96            # steps per stream: one published constant, the same for every entry
-n_lo = 131072     # every chain length is in [n_lo, n_hi] = [2^17, 2^20] (the lengths are below)
-n_hi = 1048576    # the season's range; a later season may set another
+                  # process each, run once against the service (the service run, untimed), then
+                  # timed_runs times against its replay (the timed passes)
+M = 8             # steps per stream: one published constant, the same for every entry
+n = 4194304       # 2^22, the contract's leafCap: every step proves one leaf of n parallel hashes,
+                  # L_i = leafStmt (leafValue s_i n) n, leafValue s n = ⊕_{j<n} Keccak-256(0x48 ‖ s ‖
+                  # enc64 j), one permutation each; c_1 = L_1, c_i = nodeStmt c_{i-1} L_i. The seeds
+                  # s_i are fresh secret draws per evaluation; 2^25 permutations per stream
 ready_s = 10      # seconds from a request's process start to its `ready` line
 step_s = 60       # seconds per request from its inputs to the death of its last process
-stream_s = 3000   # wall seconds for the whole stream from its first calibration sample: every
-                  # request, check, canary, calibration sample and re-run (no check has a cap of its
-                  # own). The witness-sending example (AGENTS.md §2; every check recomputes the
-                  # stream's history, about 1.2 µs per permutation) needs about 2,100 s for its
-                  # checks with the warm-ups and canaries, and about 2,350 s for the stream, on the
-                  # evaluation machine, the re-timing excluded (a cap reached there keeps the first
-                  # times). A later season may set another
-check_every = 8   # outputs checked in batches of this many, between steps (no entry process alive)
-retime_factor = 1.3   # AGENTS.md §6: a step above 1.3 × the fit's prediction is run once more ...
-retime_frac = 0.1     # ... at most 10% of the steps, largest ratio first
-# The chain lengths: one fixed, published sequence, the same for every evaluation, every entry and every
-# core commit until the owner changes it (the chain starts are fresh secret draws per evaluation). M + 1
-# values: step 1's two chains, then one per step. Derived once, with no choice of seed and no draw
-# discarded (rfh.draws.published_lengths; tests/harness/test_tv.py re-derives and checks it): for
-# k = 0 … M, u_k = (the first 8 bytes of SHA-256("recursion.fast chain lengths" ‖ k as 8 bytes
-# big-endian), big-endian, >> 11) / 2^53, and n_k = round(1 / (1/n_lo − u_k · (1/n_lo − 1/n_hi))), the
-# inverse CDF of the density ∝ 1/n² on [n_lo, n_hi] (equal expected work per octave), in doubles, rounded
-# to the nearest integer, a tie to the even one (Python's round), then clamped to [n_lo, n_hi]. No value
-# is within 0.009 of a tie, so any rounding rule gives this list (the test checks 1e-6 with exact
-# rationals). Σ n = 32,060,318.
-lengths = [
-    202109, 151388, 556082, 207817, 394830, 542490, 355707, 348583, 331757, 353644,
-    279314, 263002, 545955, 314021, 152163, 159823, 145404, 176242, 186633, 224157,
-    174590, 287231, 165190, 164913, 197040, 150598, 167100, 136058, 292052, 236696,
-    491493, 298824, 489211, 404649, 254274, 186064, 201614, 580522, 329791, 750780,
-    149611, 146725, 986256, 684942, 195865, 270010, 202428, 324889, 501473, 260038,
-    238449, 448940, 298915, 370193, 204450, 446253, 432030, 522345, 278618, 155263,
-    158119, 237412, 442472, 284980, 162386, 210558, 148933, 641165, 980030, 791452,
-    133460, 429685, 251011, 182656, 301491, 151149, 181150, 194910, 205798, 1011610,
-    346439, 597766, 389391, 656622, 403982, 153100, 149058, 319683, 155616, 638315,
-    237618, 218729, 328702, 662587, 377019, 150940, 206820,
-]
+stream_s = 3000   # wall seconds for the whole benchmark from its first calibration sample: the service
+                  # run, its checks and canaries, the timed passes and the calibration samples (no
+                  # check has a cap of its own); reaching it is the entry's REJECT. The timed passes
+                  # repeat the service run's requests, so about 3 × the stream's proving time is
+                  # needed. A later season may set another
+check_every = 8   # the service run's intermediate outputs checked in batches of this many, between
+                  # steps (no entry process alive); the final output is checked on its own after them
+timed_runs = 2    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
+                  # service run's; P_i = the minimum of step i's times (no re-timing fit)
 
 [calibration]     # AGENTS.md §6: interleaved samples with no entry process alive, medians used
-every = 8         # one sample before step 1 and every 8 steps after
+every = 8         # one sample before the service run's step 1 and every 8 steps after, one before each
+                  # timed pass and a closing one if 30 s of stream_s remain
 idle_s = 2.0      # the idle gap before a sample (1 s left residual load)
 rounds = 32       # the work of one `calib` run (harness/tools/calib.c)
 runs_per_sample = 3     # a sample is the median of this many short runs
@@ -93,19 +70,25 @@ c_P_drift = 0.065       # AGENTS.md §6: |c_P - 1| above it is an organiser ERRO
                         # in its calibrated state); about 4 standard deviations of one c_P sample at
                         # the higher measured spread on the evaluation machine (1.55 %), far more of
                         # the median that is judged
-triv_chains = 64        # the chain checker's instance: 64 chains of 2^18 steps (2^24 permutations)
-triv_n = 262144
 service_s = 2           # seconds per service throughput measurement (published, not scored)
 
-[caps]            # no proof cap: |π| is priced by s_ref, and acc only requires it to fit a word
+[caps]            # AGENTS.md §6, §7: the size and verifier caps (acc itself only requires |π| to fit a
+                  # word); a breach of a final cap is the entry's REJECT, of an intermediate one its
+                  # exclusion from the track `every`
+pi_cap = 1048576        # 1 MiB: every output, its |π| if it parses as a signed proof that acc accepts,
+                        # else its file size (a breach is the entry's REJECT, whichever step)
+final_pi_cap = 524288   # 512 KiB: the final output's |π| (both tracks)
+v_cap_ms = 128          # one acc check of a checked proof (parse included), one pinned core, after a
+                        # warm-up; above it the check is timed twice more and the minimum counts (a
+                        # badge run of intermediate checks is bounded by 60 s + 2 v_cap per check)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB
 work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size
 build_s = 120           # the prover's build
 
-[memory]          # cgroup caps (13 GB for prover and service together)
-prover = "11G"
+[memory]          # cgroup caps (10 GiB for prover and service together; the VM has 16 GB)
+prover = "8G"
 service = "2G"
 badge = "4G"
 

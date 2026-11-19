@@ -2,14 +2,17 @@
 
 This is the interface between a prover and `rf-oracle`, the oracle and signing service of
 recursion.fast (the signed random oracle; the rules are in [`AGENTS.md`](../AGENTS.md)). One service process lives for
-one timed run (the stream; the calibration has its own). It holds a fresh secret PRF key `k` and a fresh signing key pair
-`(sk, vk)`; neither ever leaves the process.
+one evaluation of the stream: the service run and then the timed passes, which it serves in replay mode (§5); the
+calibration has its own. It holds a fresh secret PRF key `k` and a fresh signing key pair `(sk, vk)`. The signing seed
+never leaves the process; `k` leaves it only after the runner's `replay` line (§6), that is, after every output of the
+service run is fixed.
 
 ## 1. Transport
 
 - A Unix stream socket. Its path is in the environment variable **`RF_ORACLE`** of every prover
   process (inside the sandbox it is `/run/rf/oracle.sock`). The socket is the only way to reach the
-  service.
+  service, and it exists in a request's sandbox only from the request's `go` on
+  (`harness/PROVER.md` §3): connect after `go`.
 - A connection carries any number of requests, answered in order. The service reads the next
   request only after it has written the response to the previous one, so a client may pipeline
   (write a request before reading the previous response) only if it keeps reading responses while
@@ -41,7 +44,7 @@ PRF_k(q)  = Keccak-256(k ‖ q)                              the oracle; q as gi
 sk_i(j)   = Keccak-256(seed ‖ 0x53 ‖ enc64 j ‖ byte i)     chain start i < 133 of one-time key j < 2^16 (42 bytes)
 ```
 
-(`enc64 n` = 8 bytes little-endian.) Every public hash of the contract (the chain step, the
+(`enc64 n` = 8 bytes little-endian.) Every public hash of the contract (the leaf item, the
 statements, the trace digest, the WOTS chain step, leaf and node) is the unkeyed Keccak-256 of an
 input that starts with a one-byte domain tag; a keyed input starts with the 32 secret key bytes.
 What separates the keyed hashes from the public ones, and the two keyed functions from each other,
@@ -113,7 +116,12 @@ query again at signing; budget for it.
 The one-time key index is taken by one atomic step before the signature is computed and is never
 reused, even if the request fails afterwards. The index of a signature is visible to the
 prover and reveals how many signatures were made before it in this service lifetime (a 16-bit
-counter); it carries no other state.
+counter); it carries no other state. A prover that signs from several threads at once gets the
+indices in the order its requests arrive; the timed passes (§5) must ask for the same traces in the
+same order, so sign in an order fixed by the inputs.
+
+This is `SIGN` in the service run. In replay mode (§5) the request and the answers are the same, but
+`SIGN` only re-issues the service run's signatures.
 
 ### 2.3 `VK` (op = 3)
 
@@ -128,6 +136,7 @@ root of the 2^16 one-time public keys). The runner also writes it to `DIR/vk.hex
 | 1 `BAD` | unknown op, non-zero reserved bytes, `VK` with a body, item lengths that do not add up to `body_len` |
 | 2 `CAP` | `body_len > 2^24`; a query above `2^20` bytes; `QUERY` with `count > 2^18`; `SIGN` with `count > 2^16`; more than 32 connections |
 | 3 `EXHAUSTED` | `SIGN` after all 2^16 one-time keys are used |
+| 4 `MISMATCH` | replay mode (§5): `SIGN` whose trace digest is not the one signed at its index `j` in the service run (nothing was signed at `j`, or another digest was) |
 
 An error response has `count = 0` and a body holding a UTF-8 message. The connection is closed
 after it. A refused call has no answers: a prover that needs them cannot produce an accepted proof
@@ -160,42 +169,86 @@ kills the prover first.
 - Each request is computed on the connection's thread; use several connections to use several
   cores.
 
-## 5. No logging mode
+## 5. Replay mode (the timed runs)
 
-The service has one serving mode (and the chain hasher of §7, which holds no secret), and it never
-writes the queries it evaluates: nothing in an evaluation checks an extractor against a log of
-queries, since the extractor's correctness is the kernel-checked `Computes`.
+An evaluation runs the stream against one service process: first the **service run**, in the
+normal mode described above, to completion; then, once every output of the service run is fixed and
+checked, the **timed passes**, in replay mode. The runner switches the service to replay mode with
+the control line `replay` (§6), once before each timed pass.
+
+- **The key.** Replay mode starts by printing `k` to the runner, which stages the same `k` with each
+  step's inputs as the file `oracle.key` in `/work` (64 lowercase hex characters, renamed into
+  place when the clock starts). A prover can then compute `PRF_k(q) = Keccak-256(k ‖ q)` itself
+  (§2.0) instead of asking `QUERY`. One prover binary serves both runs; it may branch on whether
+  `/work/oracle.key` exists. The signing seed is never revealed.
+- **`QUERY` and `VK`** are served unchanged.
+- **`SIGN`** takes the same request and computes the answers and the trace digest as in §2.2, but
+  it signs nothing new. It takes the next replay index `j` by one atomic step (each `replay` resets
+  it to 0). If the service run signed exactly this trace digest at index `j`, it returns exactly the
+  response `SIGN` returned then: the same answers, `idx = j`, the same `ots` and `path` (WOTS
+  signing is deterministic in the seed, `j` and the digest). Otherwise it refuses with status 4
+  `MISMATCH`, whose message names `j` and says whether nothing was signed at `j` or another digest
+  was; the refusal is counted and logged like any other (§6), and the connection is closed.
+
+So a timed pass gets its signatures back only if it asks for the service run's traces in the
+service run's order. Replay mode never produces a signature on a digest that was not signed at that
+index in the service run, so no one-time key signs a second message, and every accepted proof is
+one the service run produced without `k`.
+
+The service keeps, in memory, the trace digest it signed at each one-time key index (at most `2^16`
+of them, 2 MiB), and nothing else of what it was asked. It never writes the queries it evaluates:
+nothing in an evaluation checks an extractor against a log of queries, since the extractor's
+correctness is the kernel-checked `Computes`. Apart from the two serving modes there is only the
+leaf hasher of §7, which holds no secret.
 
 ## 6. Lifecycle (informative; the runner's)
 
-The runner starts the service with `--socket PATH` and its stdin on a pipe. The service draws `k`
-and the signing seed from `getrandom`, generates the `2^16` one-time keys and the tree
-(multi-threaded), binds the socket and prints `vk <hex>`, `keygen_ms <ms>`, `simd scalar` (the one
-implementation) and `ready`. When the runner closes the pipe, the service waits for in-flight requests, overwrites its
-keys, prints `stats requests=… queries=… query_bytes=… signatures=… refusals=…`, removes the socket
-and exits 0. The first 32 refusals of a lifetime are written to its stderr (`rf-oracle: refused
-(status S): MESSAGE`); the runner copies them into the result, so that a prover that fails on a cap
-can see which one. Keys are never written to disk; the process is non-dumpable
-(`PR_SET_DUMPABLE = 0`).
+The runner starts the service with `--socket PATH` and its stdin on a pipe, the control pipe. The
+service draws `k` and the signing seed from `getrandom`, generates the `2^16` one-time keys and the
+tree (multi-threaded), binds the socket and prints `vk <hex>`, `keygen_ms <ms>`, `simd scalar` (the
+one implementation) and `ready`.
 
-## 7. The chain hasher (`--leaves`; the runner's, not for provers)
+After the service run the runner writes the line `replay` (the bytes `replay\n`) on the pipe. The
+service waits for in-flight requests to finish, enters replay mode (or stays in it), resets the
+replay index to 0, and prints two lines, flushed:
+
+```
+key <k: 64 lowercase hex>
+replay ready
+```
+
+The runner sends `replay` before each timed pass and reads up to `replay ready`. Any other line on
+the pipe is ignored, with a note on stderr.
+
+When the runner closes the pipe, the service waits for in-flight requests, overwrites its keys,
+prints `stats requests=… queries=… query_bytes=… signatures=… refusals=… replays=… mismatches=…`
+(`signatures` made in the service run, `replays` re-issued in replay mode, `mismatches` the status-4
+refusals, which `refusals` also counts), removes the socket and exits 0. The first 32 refusals of a
+lifetime are written to its stderr (`rf-oracle: refused (status S): MESSAGE`); the runner copies them
+into the result, so that a prover that fails on a cap can see which one. Keys are never written to
+disk. The signing seed never leaves the process; `k` leaves it only on stdout after `replay`, when
+every output of the service run is fixed. The process is non-dumpable (`PR_SET_DUMPABLE = 0`).
+
+## 7. The leaf hasher (`--leaves`; the runner's, not for provers)
 
 ```
 rf-oracle --leaves [--threads N]
 ```
 
-hashes chains for the runner, which computes every chain digest it checks a proof against from its
-own starts. It draws no key, opens no socket and holds no secret. It reads stdin to end of file, one
+hashes leaves for the runner, which computes every leaf digest it checks a proof against from its
+own seeds. It draws no key, opens no socket and holds no secret. It reads stdin to end of file, one
 line per leaf, `<s: 64 lowercase hex> <n: decimal>`, and writes one line per input line, in input
-order, `<leafStmt (chainEnd s n) n: 64 lowercase hex>`, where
+order, `<leafStmt (leafValue s n) n: 64 lowercase hex>`, where
 
 ```
-chainStep d   = Keccak-256(0x43 ‖ d)              33 bytes, one permutation
-chainEnd s n  = chainStep applied n times to s
-leafStmt h n  = Keccak-256(0x4C ‖ h ‖ enc64 n)    41 bytes
+leafItem s j   = Keccak-256(0x48 ‖ s ‖ enc64 j)              41 bytes, one permutation
+leafValue s n  = leafItem s 0 ⊕ … ⊕ leafItem s (n − 1)       the zero digest for n = 0
+leafStmt h n   = Keccak-256(0x4C ‖ h ‖ enc64 n)              41 bytes
 ```
 
-(`RecursionFast/Contract/Relation.lean`). The lines are distributed over `N` threads (default: all
-CPUs). It exits 0 at end of input; a malformed line (not exactly a 64-character lowercase hex
-string, one space and a decimal 64-bit integer) is reported on stderr, nothing is written to
-stdout, and the exit code is 2. `n` above `chainCap = 2^20` is accepted (it is only work).
+(`RecursionFast/Contract/Relation.lean`). The hashes of all lines are cut into chunks of `2^14`
+consecutive indices `j` of one leaf, which `N` threads (default: all CPUs) take in turn, so one
+leaf of `2^22` hashes is spread over every thread (about 0.4 s per such leaf on 8 threads of an
+organiser workstation). It exits 0 at end of input; a malformed line (not exactly a 64-character
+lowercase hex string, one space and a decimal 64-bit integer) is reported on stderr, nothing is
+written to stdout, and the exit code is 2. `n` above `leafCap = 2^22` is accepted (it is only work).

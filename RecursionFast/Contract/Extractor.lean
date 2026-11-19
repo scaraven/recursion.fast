@@ -19,8 +19,8 @@ linear twin proved equal.
 
 **Output (normative).** The output words **denote** a witness
 through the decoder `decodeWit`, which reads fields in order from the front of the output:
-* the tag (1 word): `0` a leaf, then its start (4 words) and length (1 word); `1` a node, then
-  the two child digests (4 words each) and the two children's signed proofs, each as
+* the tag (1 word): `0` a leaf, then its seed (4 words) and number of hashes (1 word); `1` a node,
+  then the two child digests (4 words each) and the two children's signed proofs, each as
   * the proof: a length word, then its packed bytes;
   * the trace, written exactly as a log on the input tape (`logWords`);
   * the signature: the index (1 word), then the `wotsLen = 133` chain values and the
@@ -154,8 +154,8 @@ def readSig : Reader Sig := do
 /-- A signed proof: the proof (a byte string), its trace, its signature. -/
 def readSigned : Reader Signed := do return ⟨← readString, ← readTrace, ← readSig⟩
 
-/-- A witness: tag `0` and a leaf's start and length, or tag `1` and a node's two child digests
-and two signed proofs. -/
+/-- A witness: tag `0` and a leaf's seed and number of hashes, or tag `1` and a node's two child
+digests and two signed proofs. -/
 def readWit : Reader Wit := do
   match ← readNat with
   | 0 => return .leaf (← readDigest) (← readNat)
