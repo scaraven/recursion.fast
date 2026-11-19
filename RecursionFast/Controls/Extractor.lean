@@ -24,7 +24,8 @@ Positive:
 * Format known answers (for the runner's Python twins; the expected words are those of the
   module header's format): `extractorInput_kat` (a 3-byte proof and a log of one 9-byte
   query: padding, length words, answer), `wordBytes_layout` and `wordBytes_kat` (a word's bytes,
-  little-endian), `decodeWit_leaf_kat`, and for a node with two signed
+  little-endian), `decodeWit_leaf_kat` (a leaf of two blocks: the count, then the blocks),
+  `decodeWit_leaf_empty` (the leaf of no block), and for a node with two signed
   children `decodeWit_node_kat`, `witWords_node_kat` (`nodeKatWords`: two proofs, a one-entry and
   an empty trace, two signatures), `decodeWit_trailing` (words after the fields are ignored).
 
@@ -49,7 +50,9 @@ Negative:
   the budget**, whatever its specification and declared fuel (on a 6-word tape `B` is about
   `2^48`, and the count needs `2^65` steps, `Controls/Machine.lean`, `count_short`).
 * Malformed outputs denote nothing (strict reading): `decodeWit_bad_tag`, `decodeWit_empty`,
-  `decodeWit_short_leaf` (a missing word is not read as `0`), `decodeWit_long_proof` (a 10-word
+  `decodeWit_short_leaf` (a missing word is not read as `0`), `decodeWit_truncated_leaf` (a leaf
+  declaring two blocks whose second block is cut short), `decodeWit_long_leaf` (a leaf declaring
+  `2^63` blocks), `decodeWit_long_proof` (a 10-word
   output declaring a `2^63`-byte proof), **`decodeWit_long_trace`** (a trace declaring `2^63`
   entries), `decodeWit_short_sig` (a signature one digest short).
 -/
@@ -104,16 +107,16 @@ theorem halt_computes : Computes haltProg (fun _ _ _ => none) fun _ => 1 :=
 /-- **Wrong output**: it does not compute the witness-sending extractor. -/
 theorem halt_not_ws : ¬ Computes haltProg E fun _ => 1 := by
   intro h
-  have hs := size_encode_leaf (Vector.replicate 32 0) 0
-  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) (encode (.leaf (Vector.replicate 32 0) 0)) []
+  have hs := size_encode_leaf []
+  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) (encode (.leaf [])) []
     (by rw [hs]; decide) (by simp)
     (by simp [extractorInput_eq, packBytes_length, hs, logWords])
   cases (halt_run _ 0).symm.trans ho
-  exact nomatch hd.trans (decode_encode (.leaf _ 0) (by decide : (0 : ℕ) < 2 ^ 64))
+  exact nomatch hd.trans (decode_encode (.leaf []) (show (0 : ℕ) < 2 ^ 64 by decide))
 
 /-- The extractor that returns a leaf witness exactly on proofs longer than `outCap` bytes. -/
 def Ebig (_ : Digest) (π : Proof) (_ : Log) : Option Wit :=
-  if outCap < π.size then some (.leaf (Vector.replicate 32 0) 0) else none
+  if outCap < π.size then some (.leaf []) else none
 
 /-- **The domain reaches `8 · outCap` bytes**: on a proof of more than `outCap` and at most
 `8 · outCap` bytes the one-statement program outputs nothing, which does not denote `Ebig`'s
@@ -132,7 +135,7 @@ theorem halt_not_big (π : Proof) (h₁ : outCap < π.size) (h₂ : π.size ≤ 
 /-- The extractor that returns a leaf witness exactly on logs with a query of at least `2^64 − 1`
 bytes. -/
 def Equery (_ : Digest) (_ : Proof) (L : Log) : Option Wit :=
-  if ∃ e ∈ L, 2 ^ 64 - 1 ≤ e.1.size then some (.leaf (Vector.replicate 32 0) 0) else none
+  if ∃ e ∈ L, 2 ^ 64 - 1 ≤ e.1.size then some (.leaf []) else none
 
 /-- **The domain reaches queries of `2^64 − 1` bytes**: on a log with one such query the
 one-statement program outputs nothing, which does not denote `Equery`'s witness. -/
@@ -150,7 +153,7 @@ theorem halt_not_longQuery (q : ByteArray) (a : Digest) (h : q.size = 2 ^ 64 - 1
 
 /-- The extractor that returns a leaf witness exactly on tapes of more than `2^63` words. -/
 def Etape (c : Digest) (π : Proof) (L : Log) : Option Wit :=
-  if 2 ^ 63 < (extractorInput c π L).length then some (.leaf (Vector.replicate 32 0) 0) else none
+  if 2 ^ 63 < (extractorInput c π L).length then some (.leaf []) else none
 
 /-- **The domain reaches tapes of `2^64` words**: on a tape of more than `2^63` and at most `2^64`
 words the one-statement program outputs nothing, which does not denote `Etape`'s witness. -/
@@ -382,11 +385,16 @@ theorem wordBytes_layout (w : Word) :
 /-- The bytes of `0x0807060504030201` are `01 02 … 08`, low byte first. -/
 theorem wordBytes_kat : wordBytes 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
 
-/-- A leaf: tag `0`, the seed `01…01` (4 words), the number of hashes `16`. -/
+/-- A leaf: tag `0`, the number of blocks `2`, then the blocks `01…01` and `02…02` (4 words
+each). -/
 theorem decodeWit_leaf_kat :
-    decodeWit [0, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
-        0x0101010101010101, 16] = some (.leaf (Vector.replicate 32 1) 16) := by
+    decodeWit [0, 2, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
+        0x0101010101010101, 0x0202020202020202, 0x0202020202020202, 0x0202020202020202,
+        0x0202020202020202] = some (.leaf [Vector.replicate 32 1, Vector.replicate 32 2]) := by
   decide +kernel
+
+/-- The leaf of no block: tag `0`, the count `0`. -/
+theorem decodeWit_leaf_empty : decodeWit [0, 0] = some (.leaf []) := by decide +kernel
 
 /-- The words of a digest whose bytes are all `b` (`b` repeated eight times per word). -/
 def dw (b : Word) : List Word := List.replicate 4 (b * 0x0101010101010101)
@@ -440,8 +448,19 @@ theorem decodeWit_bad_tag : decodeWit [2, 0, 0, 0, 0, 0] = none := by decide +ke
 /-- The empty output. -/
 theorem decodeWit_empty : decodeWit [] = none := rfl
 
-/-- **Strict reading**: a leaf without its length word denotes nothing (it is not read as `0`). -/
+/-- **Strict reading**: a leaf declaring one block with three of its four words denotes nothing
+(a missing word is not read as `0`). -/
 theorem decodeWit_short_leaf : decodeWit [0, 1, 1, 1, 1] = none := by decide +kernel
+
+/-- **Strict reading**: a leaf declaring two blocks whose second block is one word short denotes
+nothing. -/
+theorem decodeWit_truncated_leaf :
+    decodeWit [0, 2, 1, 1, 1, 1, 2, 2, 2] = none := by decide +kernel
+
+/-- **A declared count beyond the output**: a leaf declaring `2^63` blocks, with one block's
+words, denotes nothing. -/
+theorem decodeWit_long_leaf : decodeWit [0, 0x8000000000000000, 1, 1, 1, 1] = none := by
+  decide +kernel
 
 /-- **A declared length beyond the output**: ten words cannot denote a
 `2^63`-byte proof. -/

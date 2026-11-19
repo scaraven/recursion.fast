@@ -10,14 +10,16 @@
   * `traceDigestF` (the trace's bytes built in a byte array) = `traceDigest`;
   * `wotsStepF`, `wotsChainF`, `wotsEndsF`, `wotsLeafF`, `sigNodeF`, `sigRootF`, `SigOkF` =
     their contract counterparts;
-  * `leafItemF`, `leafValueF` (tail-recursive), `leafStmtF`, `nodeStmtF` = the relation's hashes
-    (a verifier that recomputes leaves, such as the witness-sending one, runs these);
+  * `leafItemF`, `dataNodeF`, `dataLevelF` (tail-recursive), `dataRootF` (level by level, stopping
+    at one digest: linear in the number of blocks), `leafStmtF`, `nodeStmtF` = the relation's
+    hashes (a verifier that recomputes leaves, such as the witness-sending one, runs these);
   * **`Submission.accF`** = `Submission.acc` (`accF_eq`): the harness may run `accF` and the
     record is about `acc`.
   Measured numbers: `scripts/speed/Speed.lean`.
 -/
 import RecursionFast.Contract.Certificate
 import RecursionFast.Library.KeccakFast
+import RecursionFast.Library.Tree
 
 namespace RecursionFast
 open Keccak
@@ -152,17 +154,33 @@ theorem SigOkF_eq : SigOkF = SigOk := by
 /-! ## The relation's hashes -/
 
 /-- `leafItem` through the byte-array path. -/
-def leafItemF (s : Digest) (j : ℕ) : Digest :=
-  digestB (pushU64 (pushDigest ((ByteArray.emptyWithCapacity 41).push tagItem) s) j)
+def leafItemF (x : Digest) : Digest :=
+  digestB (pushDigest ((ByteArray.emptyWithCapacity 33).push tagItem) x)
 
-/-- `leafValueF.go s k j h`: `h` XORed with the `k` hashes `leafItemF s j`, …,
-`leafItemF s (j + k - 1)`, in that order (tail-recursive). -/
-def leafValueF.go (s : Digest) : ℕ → ℕ → Digest → Digest
-  | 0, _, h => h
-  | k + 1, j, h => go s k (j + 1) (digestXor h (leafItemF s j))
+/-- `dataNode` through the byte-array path. -/
+def dataNodeF (l r : Digest) : Digest :=
+  digestB (pushDigest (pushDigest ((ByteArray.emptyWithCapacity 65).push tagData) l) r)
 
-/-- `leafValue` with `leafItemF`, by the tail-recursive loop `leafValueF.go`. -/
-def leafValueF (s : Digest) (n : ℕ) : Digest := leafValueF.go s n 0 (Vector.replicate 32 0)
+/-- `dataLevelF.go ds acc`: the digests of `acc` in reverse order, then the level above `ds`
+with `dataNodeF` (tail-recursive). -/
+def dataLevelF.go : List Digest → List Digest → List Digest
+  | a :: b :: t, acc => go t (dataNodeF a b :: acc)
+  | t, acc => acc.reverseAux t
+
+/-- `dataLevel` with `dataNodeF`, by the tail-recursive loop `dataLevelF.go`. -/
+def dataLevelF (ds : List Digest) : List Digest := dataLevelF.go ds []
+
+/-- `dataRootF.go k ds`: at most `k` levels above `ds` with `dataLevelF`, stopping at one digest,
+then the first digest (the zero digest for none). -/
+def dataRootF.go : ℕ → List Digest → Digest
+  | _, [] => Vector.replicate 32 0
+  | _, [d] => d
+  | 0, d :: _ => d
+  | k + 1, ds => go k (dataLevelF ds)
+
+/-- `dataRoot` with `leafItemF` and `dataLevelF`, level by level until one digest remains: linear
+in the number of blocks. -/
+def dataRootF (xs : List Digest) : Digest := dataRootF.go xs.length (xs.map leafItemF)
 
 /-- `leafStmt` through the byte-array path. -/
 def leafStmtF (h : Digest) (n : ℕ) : Digest :=
@@ -173,22 +191,42 @@ def nodeStmtF (c₁ c₂ : Digest) : Digest :=
   digestB (pushDigest (pushDigest ((ByteArray.emptyWithCapacity 65).push tagNode) c₁) c₂)
 
 theorem leafItemF_eq : leafItemF = leafItem := by
-  funext s j
-  simp [leafItemF, leafItem, digestB_eq, pushU64_data, pushDigest_data, ByteArray.data_push]
+  funext x
+  simp [leafItemF, leafItem, digestB_eq, pushDigest_data, ByteArray.data_push]
 
-/-- The loop from index `j` on the value of the first `j` hashes is the value of `j + k`. -/
-theorem leafValueF_go (s : Digest) (k j : ℕ) :
-    leafValueF.go s k j (leafValue s j) = leafValue s (j + k) := by
-  induction k generalizing j with
-  | zero => rfl
-  | succ k ih =>
-    rw [leafValueF.go, leafItemF_eq, show digestXor (leafValue s j) (leafItem s j) =
-      leafValue s (j + 1) from rfl, ih, Nat.add_right_comm, Nat.add_assoc]
+theorem dataNodeF_eq : dataNodeF = dataNode := by
+  funext l r
+  simp [dataNodeF, dataNode, digestB_eq, pushDigest_data, ByteArray.data_push]
 
-theorem leafValueF_eq : leafValueF = leafValue := by
-  funext s n
-  rw [leafValueF, show Vector.replicate 32 (0 : UInt8) = leafValue s 0 from rfl, leafValueF_go,
-    Nat.zero_add]
+/-- The loop is the reversed accumulator, then the level. -/
+theorem dataLevelF_go : ∀ ds acc : List Digest,
+    dataLevelF.go ds acc = acc.reverse ++ dataLevel ds
+  | a :: b :: t, acc => by
+    rw [dataLevelF.go, dataLevelF_go t, dataLevel, dataNodeF_eq]; simp
+  | [], acc => by simp [dataLevelF.go, dataLevel, List.reverseAux_eq]
+  | [_], acc => by simp [dataLevelF.go, dataLevel, List.reverseAux_eq]
+
+theorem dataLevelF_eq : dataLevelF = dataLevel := by
+  funext ds
+  rw [dataLevelF, dataLevelF_go]; rfl
+
+/-- The loop's `k` levels, stopping at one digest, are `k` levels of `dataLevel`. -/
+theorem dataRootF_go : ∀ (k : ℕ) (ds : List Digest),
+    dataRootF.go k ds = (dataLevel^[k] ds).headD (Vector.replicate 32 0)
+  | k, [] => by
+    rw [show dataLevel = level dataNode from funext dataLevel_eq,
+      iterate_level_of_length_le_one _ (by simp)]; cases k <;> rfl
+  | k, [d] => by
+    rw [show dataLevel = level dataNode from funext dataLevel_eq,
+      iterate_level_of_length_le_one _ (by simp)]; cases k <;> rfl
+  | 0, _ :: _ :: _ => rfl
+  | k + 1, a :: b :: t => by
+    show dataRootF.go k (dataLevelF (a :: b :: t)) = _
+    rw [dataRootF_go k, dataLevelF_eq, Function.iterate_succ_apply]
+
+theorem dataRootF_eq : dataRootF = dataRoot := by
+  funext xs
+  rw [dataRootF, leafItemF_eq, dataRootF_go, dataRoot]
 
 theorem leafStmtF_eq : leafStmtF = leafStmt := by
   funext h n

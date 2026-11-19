@@ -12,8 +12,10 @@
   * **The output format.** `witWords` writes a witness in the format `decodeWit` reads
     (`sigWords`, `signedWords` for its parts), and `decodeWit_witWords` reads it back when every
     number fits in a word and the signatures have their fixed counts (`Wit.Fits`), with the words
-    after it ignored (`readWit_witWords`). The readers are proved one by one (`readNat_toWord`,
+    after it ignored (`readWit_witWords`). A leaf is written as its tag, its number of blocks and
+    its blocks (`2 + 4n` words). The readers are proved one by one (`readNat_toWord`,
     `readBytes_packBytes`, `readString_bytesWords`, `readDigest_packBytes`, `readList_flatMap`,
+    `readList_digests` (any number of digests),
     `readTrace_logWords`, `readSig_sigWords`, `readSigned_signedWords`). `witWords` is the encoder
     an extractor program implements; the contract needs only the decoder.
   * **Linear-time twins.** The compiled code of the contract's `packBytes` is
@@ -164,7 +166,7 @@ def signedWords (p : Signed) : List Word :=
 
 /-- The output words of a witness, in the format `decodeWit` reads. -/
 def witWords : Wit → List Word
-  | .leaf s n => toWord 0 :: packBytes s.toList ++ [toWord n]
+  | .leaf xs => toWord 0 :: toWord xs.length :: xs.flatMap fun d => packBytes d.toList
   | .node c₁ c₂ p₁ p₂ => toWord 1 :: packBytes c₁.toList ++ packBytes c₂.toList ++
       signedWords p₁ ++ signedWords p₂
 
@@ -174,9 +176,10 @@ def Signed.Fits (p : Signed) : Prop :=
   p.π.size < 2 ^ 64 ∧ p.tr.length < 2 ^ 64 ∧ (∀ e ∈ p.tr, e.1.size < 2 ^ 64) ∧
     p.σ.idx < 2 ^ 64 ∧ p.σ.ots.length = wotsLen ∧ p.σ.path.length = sigHeight
 
-/-- A witness fits the output format: a leaf's length below `2^64`, a node's children fit. -/
+/-- A witness fits the output format: a leaf's number of blocks below `2^64`, a node's children
+fit. -/
 def Wit.Fits : Wit → Prop
-  | .leaf _ n => n < 2 ^ 64
+  | .leaf xs => xs.length < 2 ^ 64
   | .node _ _ p₁ p₂ => p₁.Fits ∧ p₂.Fits
 
 theorem packBytes_digest_length (d : Digest) : (packBytes d.toList).length = 4 := by
@@ -231,6 +234,14 @@ theorem readList_flatMap {α : Type} (r : Reader α) (enc : α → List Word) (P
       StateT.run_pure]
     rfl
 
+/-- **`n` digests, read back**, for every count `n` (the leaf's blocks; the signature's two
+fixed counts are instances). -/
+theorem readList_digests (xs : List Digest) (o : List Word) :
+    (readList readDigest xs.length).run ((xs.flatMap fun d => packBytes d.toList) ++ o) =
+      some (xs, o) :=
+  readList_flatMap readDigest (fun d => packBytes d.toList) (fun _ => True)
+    (fun d _ o => readDigest_packBytes d o) xs (fun _ _ => trivial) o
+
 theorem readEntry_run (e : ByteArray × Digest) (h : e.1.size < 2 ^ 64) (o : List Word) :
     readEntry.run (bytesWords e.1.data.toList ++ packBytes e.2.toList ++ o) = some (e, o) := by
   simp only [readEntry, List.append_assoc, StateT.run_bind, readString_bytesWords _ h,
@@ -267,11 +278,10 @@ theorem readSigned_signedWords (p : Signed) (h : p.Fits) (o : List Word) :
 theorem readWit_witWords (w : Wit) (h : w.Fits) (o : List Word) :
     readWit.run (witWords w ++ o) = some (w, o) := by
   cases w with
-  | leaf s n =>
-    simp only [witWords, List.cons_append, List.append_assoc, readWit,
-      StateT.run_bind, readNat_toWord (show 0 < 2 ^ 64 by norm_num), Option.bind_eq_bind,
-      Option.bind_some, readDigest_packBytes, readNat_toWord (show n < 2 ^ 64 from h),
-      StateT.run_pure]
+  | leaf xs =>
+    simp only [witWords, List.cons_append, readWit, StateT.run_bind,
+      readNat_toWord (show 0 < 2 ^ 64 by norm_num), Option.bind_eq_bind, Option.bind_some,
+      readNat_toWord (show xs.length < 2 ^ 64 from h), readList_digests, StateT.run_pure]
     rfl
   | node c₁ c₂ p₁ p₂ =>
     simp only [witWords, List.cons_append, List.append_assoc, readWit, StateT.run_bind,
@@ -319,7 +329,7 @@ def signedWordsF (p : Signed) : List Word :=
 
 /-- `witWords` with `packFast`. -/
 def witWordsF : Wit → List Word
-  | .leaf s n => toWord 0 :: packFast s.toList ++ [toWord n]
+  | .leaf xs => toWord 0 :: toWord xs.length :: xs.flatMap fun d => packFast d.toList
   | .node c₁ c₂ p₁ p₂ => toWord 1 :: packFast c₁.toList ++ packFast c₂.toList ++
       signedWordsF p₁ ++ signedWordsF p₂
 

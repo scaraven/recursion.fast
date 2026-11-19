@@ -6,7 +6,11 @@
   agrees with it on that entry: on a leaf proof, on a node proof over two signed children (one with
   a trace entry) and on a proof one byte short, `ext` halts within the declared fuel with at most
   `outCap` words, and its output denotes exactly the extractor specification's result `E`; on a node
-  proof cut short, that result is nothing.
+  proof cut short, that result is nothing. (A leaf proof one byte short still decodes: its last
+  word is zero-padded, so only its last block's last byte changes.) The decoder's `readList` is not
+  tail-recursive, one frame per block: the leaves here have at most about a thousand blocks, and
+  a witness-sent leaf within `pi_cap` at most `2^15`; a cap-sized leaf (`2^20` blocks) would need
+  `2^20` frames.
 
     lake -f scripts/speed/lakefile.toml build extract && .lake/build/bin/extract [seed]
 -/
@@ -43,9 +47,9 @@ def main (args : List String) : IO UInt32 := do
   let dig (i : Nat) : Digest := Vector.ofFn fun j => (i * 37 + j.val + seed).toUInt8
   let sig (i : Nat) : Sig :=
     ⟨i, List.replicate wotsLen (dig (i + 1)), List.replicate sigHeight (dig (i + 2))⟩
-  let p₁ : Signed := ⟨encodeF (.leaf (dig 2) 5), [], sig 3⟩
-  let p₂ : Signed := ⟨encodeF (.leaf (dig 4) 6), [(⟨#[1, 2, 3]⟩, dig 5)], sig 6⟩
-  let πl := encodeF (.leaf (dig 1) (1000 + seed))
+  let p₁ : Signed := ⟨encodeF (.leaf [dig 2, dig 10, dig 11]), [], sig 3⟩
+  let p₂ : Signed := ⟨encodeF (.leaf [dig 4]), [(⟨#[1, 2, 3]⟩, dig 5)], sig 6⟩
+  let πl := encodeF (.leaf ((List.range (1000 + seed)).map fun i => dig (i + 12)))
   let πn := encodeF (.node (dig 7) (dig 8) p₁ p₂)
   let c := dig 9
   let rs ← [("leaf", πl, true), ("node over two signed children", πn, true),

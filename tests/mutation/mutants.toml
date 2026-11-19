@@ -12,19 +12,118 @@
 [[mutant]]
 id = "rel-no-leafcap"
 file = "Relation.lean"
-original = '''| c, .leaf s n => n ≤ leafCap ∧ c = leafStmt (leafValue s n) n'''
-replacement = '''| c, .leaf s n => c = leafStmt (leafValue s n) n'''
-breaks = "a leaf witness of any size is in the relation (no leafCap bound)"
+original = '''| c, .leaf xs => xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length'''
+replacement = '''| c, .leaf xs => c = leafStmt (dataRoot xs) xs.length'''
+breaks = "a leaf witness of any number of blocks is in the relation (no leafCap bound)"
 expect = "Controls.Relation.leaf_over_leafCap"
 
 [[mutant]]
-id = "rel-leafcap-2^23"
+id = "rel-leafcap-2^21"
 file = "Relation.lean"
-original = '''def leafCap : ℕ := 2 ^ 22'''
-replacement = '''def leafCap : ℕ := 2 ^ 23'''
-breaks = "the leaf bound is 2^23, not the season's 2^22"
-expect = "Controls.Relation.leaf_over_season (added after this mutant survived an earlier version)"
+original = '''def leafCap : ℕ := 2 ^ 20'''
+replacement = '''def leafCap : ℕ := 2 ^ 21'''
+breaks = "the leaf bound is 2^21 blocks, not 2^20 (a leaf at the cap would not fit outCap with its node)"
+expect = "Controls.Relation.leaf_over_2pow20"
+
+[[mutant]]
+id = "rel-leafcap-2^19"
+file = "Relation.lean"
+original = '''def leafCap : ℕ := 2 ^ 20'''
+replacement = '''def leafCap : ℕ := 2 ^ 19'''
+breaks = "the leaf bound is 2^19 blocks: completeness is no longer asked up to 2^20"
+expect = "Controls.Relation.leaf_at_2pow20"
+
+[[mutant]]
+id = "rel-leafitem-no-tag"
+file = "Relation.lean"
+original = '''keccakDigest (tagItem :: x.toList)'''
+replacement = '''keccakDigest x.toList'''
+breaks = "a block's hash carries no domain tag"
+expect = "Controls.Relation.item_kat / tags_separate"
+
+[[mutant]]
+id = "rel-datanode-swap"
+file = "Relation.lean"
+original = '''keccakDigest (tagData :: l.toList ++ r.toList)'''
+replacement = '''keccakDigest (tagData :: r.toList ++ l.toList)'''
+breaks = "a data node hashes its children in the wrong order"
+expect = "Controls.Relation.root2_kat"
+
+[[mutant]]
+id = "rel-tagdata-eq-tagnode"
+file = "Relation.lean"
+original = '''def tagData : UInt8 := 0x44'''
+replacement = '''def tagData : UInt8 := 0x4E'''
+breaks = "data nodes and node statements share a domain tag"
+expect = "Controls.Relation.tags_separate / root2_kat"
+
+[[mutant]]
+id = "rel-datalevel-pair-swap"
+file = "Relation.lean"
+original = '''| a :: b :: t => dataNode a b :: dataLevel t'''
+replacement = '''| a :: b :: t => dataNode b a :: dataLevel t'''
+breaks = "a level pairs adjacent digests in the wrong order"
+expect = "Controls.Relation.root2_kat"
+
+[[mutant]]
+id = "rel-datalevel-carry-dup"
+file = "Relation.lean"
+original = '''  | t => t'''
+replacement = '''  | [a] => [dataNode a a]
+  | t => t'''
+breaks = "an odd last digest is paired with itself instead of carried up"
+expect = "Controls.Relation.root1_kat / root3_kat / carry_not_duplicated"
+
+[[mutant]]
+id = "rel-datalevel-carry-drop"
+file = "Relation.lean"
+original = '''  | t => t'''
+replacement = '''  | _ => []'''
+breaks = "an odd last digest is dropped instead of carried up"
+expect = "Controls.Relation.root1_kat / root3_kat"
+
+[[mutant]]
+id = "rel-dataroot-half-levels"
+file = "Relation.lean"
+original = '''(dataLevel^[xs.length] (xs.map leafItem))'''
+replacement = '''(dataLevel^[xs.length / 2] (xs.map leafItem))'''
+breaks = "the root takes |xs| / 2 levels, too few at three blocks"
+expect = "Controls.Relation.root3_kat"
+
+[[mutant]]
+id = "rel-dataroot-levels-minus-one"
+file = "Relation.lean"
+original = '''(dataLevel^[xs.length] (xs.map leafItem))'''
+replacement = '''(dataLevel^[xs.length - 1] (xs.map leafItem))'''
+breaks = "nothing: |xs| - 1 levels still reach one digest (|xs| - 1 ≥ ⌈log2 |xs|⌉ for |xs| ≥ 1)"
+expect = "survives (equivalent), unless a library proof depends on the count"
 calibrate = "survive"
+equivalent = true
+
+[[mutant]]
+id = "rel-dataroot-empty-one"
+file = "Relation.lean"
+original = '''(dataLevel^[xs.length] (xs.map leafItem)).headD (Vector.replicate 32 0)'''
+replacement = '''(dataLevel^[xs.length] (xs.map leafItem)).headD (Vector.replicate 32 1)'''
+breaks = "the root of no block is not the zero digest"
+expect = "Controls.Relation.leafStmt_empty_kat"
+
+[[mutant]]
+id = "rel-dataroot-no-items"
+file = "Relation.lean"
+original = '''(dataLevel^[xs.length] (xs.map leafItem))'''
+replacement = '''(dataLevel^[xs.length] xs)'''
+breaks = "the tree is built over the blocks themselves, not their hashes"
+expect = "Controls.Relation.root1_kat / wrong_root"
+
+[[mutant]]
+id = "rel-leaf-count-zero"
+file = "Relation.lean"
+original = '''xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length'''
+replacement = '''xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) 0'''
+breaks = "the relation's leaf statement does not bind the number of blocks"
+expect = "Controls.Relation.rel_root4"
+
 
 [[mutant]]
 id = "rel-querycap-2^21"
@@ -49,7 +148,7 @@ file = "Relation.lean"
 original = '''def tagItem : UInt8 := 0x48'''
 replacement = '''def tagItem : UInt8 := 0x4C'''
 breaks = "leaf items and leaf statements share a domain tag"
-expect = "Controls.Relation.tags_separate / item0_kat"
+expect = "Controls.Relation.tags_separate / item_kat"
 
 [[mutant]]
 id = "rel-enc64-big-endian"
@@ -57,40 +156,17 @@ file = "Relation.lean"
 original = '''List.ofFn fun i : Fin 8 => (n / 256 ^ i.val).toUInt8'''
 replacement = '''List.ofFn fun i : Fin 8 => (n / 256 ^ (7 - i.val)).toUInt8'''
 breaks = "enc64 is big-endian, not Rust's u64::to_le_bytes"
-expect = "Controls.Relation.item1_kat"
+expect = "Controls.Relation.leafStmt_season_kat / enc64_season"
 
-[[mutant]]
-id = "rel-leafvalue-shift"
-file = "Relation.lean"
-original = '''| n + 1 => digestXor (leafValue s n) (leafItem s n)'''
-replacement = '''| n + 1 => digestXor (leafValue s n) (leafItem s (n + 1))'''
-breaks = "the leaf value XORs items 1 … n, dropping item 0 and adding item n"
-expect = "Controls.Relation.value2_kat"
 
-[[mutant]]
-id = "rel-leafvalue-nonzero-start"
-file = "Relation.lean"
-original = '''  | 0 => Vector.replicate 32 0
-  | n + 1 => digestXor'''
-replacement = '''  | 0 => Vector.replicate 32 1
-  | n + 1 => digestXor'''
-breaks = "the leaf value starts from a nonzero digest"
-expect = "Controls.Relation.value2_kat"
 
-[[mutant]]
-id = "rel-xor-or"
-file = "Relation.lean"
-original = '''Vector.zipWith (· ^^^ ·) a b'''
-replacement = '''Vector.zipWith (· ||| ·) a b'''
-breaks = "the leaf value combines items by OR, not XOR"
-expect = "Controls.Relation.value2_kat"
 
 [[mutant]]
 id = "rel-leafstmt-no-count"
 file = "Relation.lean"
 original = '''keccakDigest (tagLeaf :: h.toList ++ enc64 n)'''
 replacement = '''keccakDigest (tagLeaf :: h.toList)'''
-breaks = "the leaf statement does not commit to the number of hashes"
+breaks = "the leaf statement does not commit to the number of blocks"
 expect = "Controls.Relation.leafStmt_kat"
 
 [[mutant]]
@@ -112,8 +188,8 @@ expect = "Controls.Relation.node_of_two_leaves / second_child_rejected"
 [[mutant]]
 id = "rel-docstring-only"
 file = "Relation.lean"
-original = '''/-- The most hashes a leaf statement may cover: `2^22`. -/'''
-replacement = '''/-- The most hashes a leaf statement may cover (a mutated docstring). -/'''
+original = '''/-- The most blocks a leaf statement may cover: `2^20` (the module header says why). -/'''
+replacement = '''/-- The most blocks a leaf statement may cover (a mutated docstring). -/'''
 breaks = "nothing: only a docstring changes"
 expect = "survives (equivalent)"
 calibrate = "survive"
@@ -622,11 +698,19 @@ equivalent = true
 [[mutant]]
 id = "ext-tag-swap"
 file = "Extractor.lean"
-original = '''  | 0 => return .leaf (← readDigest) (← readNat)
+original = '''  | 0 => return .leaf (← readList readDigest (← readNat))
   | 1 => return .node'''
-replacement = '''  | 1 => return .leaf (← readDigest) (← readNat)
+replacement = '''  | 1 => return .leaf (← readList readDigest (← readNat))
   | 0 => return .node'''
 breaks = "the output's tags 0 and 1 are swapped"
+expect = "Controls.Extractor.decodeWit_leaf_kat"
+
+[[mutant]]
+id = "ext-leaf-one-block"
+file = "Extractor.lean"
+original = '''.leaf (← readList readDigest (← readNat))'''
+replacement = '''.leaf (← readList readDigest 1)'''
+breaks = "a leaf's count word is not read: every leaf decodes as one block"
 expect = "Controls.Extractor.decodeWit_leaf_kat"
 
 [[mutant]]

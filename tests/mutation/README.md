@@ -13,7 +13,11 @@ on it.
   written (an equivalent change, or a constant no check pinned); `equivalent = true` one that
   changes no meaning.
 * `accepted.toml`: survivors accepted as such, each with its reason (an equivalent mutant).
-* `run.py`: the runner; `results.json` and `results.md`: the last results (generated);
+* `run.py`: the runner; `results.json` and `results.md`: the last results (generated). **Pending:**
+  the committed `results.*` and `targeted.*` are the last full run's, over the earlier seed leaf
+  (99 mutants, base `377b489`); the committed-data leaf replaced its six leaf mutants by fifteen
+  (`rel-leafcap-2^21` … `rel-leaf-count-zero`) and added `ext-leaf-one-block`, and the run over
+  all 109 is still to be made (its slots need `systemd-run --user` scopes);
   `targeted.json`, `targeted.md`: the controls added by this suite, each run alone against its
   mutant (`--targets <control module> --every`).
 
@@ -43,9 +47,9 @@ A mutant that passes every stage **SURVIVES**. A surviving mutant that changes t
 gap: it gets a control (in the matching `RecursionFast/Controls/*.lean`) and is run again; an
 equivalent one is listed in `accepted.toml` with the reason.
 
-A kill by a library proof can be incidental, a proof that unfolds a constant (the
-`rel-leafcap-2^23` mutant is killed by a `Library/Compose.lean` term that unfolds `leafCap` to
-`2^22`). Where the property is load-bearing, a control states it directly, and
+A kill by a library proof can be incidental, a proof that unfolds a constant or closes by `rfl`
+(the `rel-dataroot-empty-one` mutant breaks `Library/Tree.lean`'s `dataRoot_nil`, proved by
+`rfl`, before any control is built). Where the property is load-bearing, a control states it directly, and
 `--targets RecursionFast.Controls.X --every --out DIR` checks that the control alone kills the
 mutant (`targeted.md`). Many kills are by `Library/Fast.lean`, `Library/KeccakFast.lean` and
 `Library/Words.lean`, whose word-level twins restate the contract's layouts independently and are
@@ -66,7 +70,7 @@ python3 -I tests/mutation/run.py --check                 # every original text o
 python3 -I tests/mutation/run.py                         # all mutants, 3 in parallel
 python3 -I tests/mutation/run.py --only rel-no-leafcap,sig-root-swap
 python3 -I tests/mutation/run.py --file Signature.lean --harness
-python3 -I tests/mutation/run.py --only rel-leafcap-2^23 --targets RecursionFast.Controls.Relation \
+python3 -I tests/mutation/run.py --only rel-leafcap-2^21 --targets RecursionFast.Controls.Relation \
   --scratch /path/to/other/scratch --out /path/to/other/out --jobs 1
 ```
 
@@ -79,7 +83,7 @@ directory). Every command runs as `systemd-run --user --scope -p MemoryMax=16G t
 timeout 1500 …` with `LEAN_NUM_THREADS=4`; the default cores are `16-20`, `21-25` and `26-31`, one
 range per job (`--cores`, `--jobs`, `--threads`). Build logs are in `<scratch>/logs/`.
 
-A run of every mutant (99) takes about 30 minutes with 3 jobs on 16 cores (77 minutes of build
+A run of every mutant (109; 99 before the committed-data leaf) takes about 30 minutes with 3 jobs on 16 cores (77 minutes of build
 time in all, median 32 s per mutant): most are killed within a minute (the first failing module is
 reached early and the build is stopped), and a survivor costs a rebuild of everything that imports
 its file (about 3 to 4 minutes). It is not part of the CI (too slow

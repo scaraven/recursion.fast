@@ -10,8 +10,8 @@ id = "keccak-blocklane-xor"
 reason = "equivalent (the eight shifted bytes are disjoint, so OR and XOR agree); killed only because Library/KeccakFast.lean unfolds blockLane by rfl to the OR form"
 
 [[accepted]]
-id = "rel-leafcap-2^23"
-reason = "the first kill is incidental (a Library/Compose.lean term unfolds leafCap to 2^22); Controls.Relation.leaf_over_season kills it on its own"
+id = "rel-dataroot-levels-minus-one"
+reason = "equivalent: |xs| - 1 levels still reach one digest (|xs| - 1 >= ceil(log2 |xs|) for |xs| >= 1, and no level for no block); a kill is incidental (a library proof that rewrites the count |xs|)"
 
 [[accepted]]
 id = "keccak-out-31"

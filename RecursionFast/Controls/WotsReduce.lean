@@ -167,37 +167,41 @@ theorem transcript_nil : Transcript sk [] := ⟨nofun, nofun⟩
 /-- **Through the stream walk**: on the one-leaf stream, with the empty log and a service that
 signed nothing, the walk's EUF-CMA forgery (`queryLeaf`, signed with key `0`) reduces to a chain
 inversion. -/
-theorem walkStreamSigned_queryLeaf_inversion (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
-    (walkStreamSigned [] [] ⟨nofun, nofun⟩ n hn [leafValue s n] (queryLeaf sk s a n)
-      (acc_queryLeaf sk s a n)).IsWotsInversion (transcript_nil sk) :=
-  have hacc := acc_queryLeaf sk s a n
+theorem walkStreamSigned_queryLeaf_inversion (xs : List Digest) (a : Digest)
+    (hn : xs.length ≤ leafCap) :
+    (walkStreamSigned [] [] ⟨nofun, nofun⟩ xs.length hn [dataRoot xs] (queryLeaf sk xs a)
+      (acc_queryLeaf sk xs a hn)).IsWotsInversion (transcript_nil sk) :=
+  have hacc := acc_queryLeaf sk xs a hn
   Outcome.isWotsInversion_reduce_forgery _ _
-    ⟨queryLeaf sk s a n, (acc_parts hacc).2.1, (acc_parts hacc).2.2.1,
+    ⟨queryLeaf sk xs a, (acc_parts hacc).2.1, (acc_parts hacc).2.2.1,
       fun h => List.not_mem_nil (h _ (List.mem_singleton_self _))⟩ _ _ _ nofun (by decide) rfl
 
 /-- **The chain-inversion term of `compose_prob_stream_wots` is reached**: against a service that
 signed nothing, the adversary that holds the key, asks nothing and outputs `queryLeaf` makes it
 certain. -/
-theorem queryLeaf_inversion_prob (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
-    prob (fun p L => ∃ hacc : (oneQuery qMax).acc (pk sk) (streamStmt n [leafValue s n]) p = true,
-      (walkStreamSigned L [] ⟨nofun, nofun⟩ n hn [leafValue s n] p hacc).IsWotsInversion
-        (transcript_nil sk)) (.ret (queryLeaf sk s a n)) [] = 1 :=
-  (prob_ret _ _ _).trans (ind_of ⟨_, walkStreamSigned_queryLeaf_inversion sk s a hn⟩)
+theorem queryLeaf_inversion_prob (xs : List Digest) (a : Digest) (hn : xs.length ≤ leafCap) :
+    prob (fun p L => ∃ hacc : (oneQuery qMax).acc (pk sk)
+        (streamStmt xs.length [dataRoot xs]) p = true,
+      (walkStreamSigned L [] ⟨nofun, nofun⟩ xs.length hn [dataRoot xs] p hacc).IsWotsInversion
+        (transcript_nil sk)) (.ret (queryLeaf sk xs a)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, walkStreamSigned_queryLeaf_inversion sk xs a hn⟩)
 
 /-- **Through the tree walk**: the same on the one-leaf tree. -/
-theorem walkSigned_queryLeaf_inversion (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
-    (walkSigned [] [] ⟨nofun, nofun⟩ n hn 0 [leafValue s n] rfl (queryLeaf sk s a n)
-      (acc_queryLeaf sk s a n)).IsWotsInversion (transcript_nil sk) := by
+theorem walkSigned_queryLeaf_inversion (xs : List Digest) (a : Digest)
+    (hn : xs.length ≤ leafCap) :
+    (walkSigned [] [] ⟨nofun, nofun⟩ xs.length hn 0 [dataRoot xs] rfl (queryLeaf sk xs a)
+      (acc_queryLeaf sk xs a hn)).IsWotsInversion (transcript_nil sk) := by
   unfold walkSigned walk walkFrom
   rw [extract_forgery (L := []) _ fun h => List.not_mem_nil (h _ (List.mem_singleton_self _))]
   exact Outcome.isWotsInversion_reduce_forgery _ _ _ _ _ _ nofun (by decide) rfl
 
 /-- **The chain-inversion term of `compose_prob_wots` is reached**, likewise. -/
-theorem queryLeaf_inversion_prob_tree (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+theorem queryLeaf_inversion_prob_tree (xs : List Digest) (a : Digest)
+    (hn : xs.length ≤ leafCap) :
     prob (fun p L => ∃ hacc : (oneQuery qMax).acc (pk sk)
-        (treeRoot ([leafValue s n].map fun h => leafStmt h n)) p = true,
-      (walkSigned L [] ⟨nofun, nofun⟩ n hn 0 [leafValue s n] rfl p hacc).IsWotsInversion
-        (transcript_nil sk)) (.ret (queryLeaf sk s a n)) [] = 1 :=
-  (prob_ret _ _ _).trans (ind_of ⟨_, walkSigned_queryLeaf_inversion sk s a hn⟩)
+        (treeRoot ([dataRoot xs].map fun h => leafStmt h xs.length)) p = true,
+      (walkSigned L [] ⟨nofun, nofun⟩ xs.length hn 0 [dataRoot xs] rfl p hacc).IsWotsInversion
+        (transcript_nil sk)) (.ret (queryLeaf sk xs a)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, walkSigned_queryLeaf_inversion sk xs a hn⟩)
 
 end RecursionFast.Controls.WotsReduce

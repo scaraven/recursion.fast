@@ -2,11 +2,11 @@
 # Contract: the stream's statement (the runner's) and the tree's root (the library's) (TRUSTED)
 
 **The stream's statement (the benchmark).** The benchmark is one stream of `M` steps (plain IVC)
-over the leaf values `h_1 … h_M` of size `n`, oldest first: `c_1 = L_1`,
-`c_i = nodeStmt c_(i-1) L_i` with `L_i = leafStmt h_i n` (`streamStmt`, the digest of the last
-step; each `c_i` is `streamStmt` of the first `i` leaves). The runner computes these digests from
-its own seeds (`harness/rfh/digest.py`, `stream_statements`), never from a digest a prover
-supplies; a known-answer control pins the two together (`Controls/Tree.lean`,
+over the leaf values `h_1 … h_M` of size `n`, oldest first (`h_i = dataRoot xs_i`, the root of
+step `i`'s data, `Relation.lean`): `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` with
+`L_i = leafStmt h_i n` (`streamStmt`, the digest of the last step; each `c_i` is `streamStmt` of
+the first `i` leaves). The runner computes these digests from its own data
+(`harness/rfh/digest.py`, `stream_statements`), never from a digest a prover supplies; a known-answer control pins the two together (`Controls/Tree.lean`,
 `streamStmt_kat`). The library's stream walk is stated over it (`Library/Compose.lean`,
 `walkStream`, `compose_prob_stream`).
 

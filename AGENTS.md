@@ -77,29 +77,38 @@ far above the verifier cap of 128 ms (§6). It shows the format, not a design.
 
 ## 3. The relation and acceptance
 
-*Intuition.* A statement is a digest. A leaf statement says "I know a seed whose `n` hashes XOR
-to this value"; a node statement says "I know accepted proofs of these two children". A child is
+*Intuition.* A statement is a digest. A leaf statement says "I know `n` 32-byte blocks whose
+Merkle root is this value" (the runner supplies the blocks and computes the root); a node
+statement says "I know accepted proofs of these two children". A child is
 judged by a *signed proof* `(π, tr, σ)`: the proof, the oracle answers its verifier reads (the
 trace), and the service's signature on the trace. Checking a child therefore never evaluates the
 secret-keyed oracle: it checks a signature and runs `V` on the trace.
 
-- **Relation** `Rel acc` ([`Relation.lean#L142-L147`](RecursionFast/Contract/Relation.lean#L142-L147)):
-  `c = leafStmt (leafValue s n) n` with `n ≤ leafCap = 2^22`
-  ([`#L61-L62`](RecursionFast/Contract/Relation.lean#L61-L62)), or
-  `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`.
+- **Relation** `Rel acc` ([`Relation.lean#L157-L162`](RecursionFast/Contract/Relation.lean#L157-L162)):
+  for a leaf witness `xs` (its blocks in order), `c = leafStmt (dataRoot xs) |xs|` with
+  `|xs| ≤ leafCap = 2^20` blocks
+  ([`#L69-L70`](RecursionFast/Contract/Relation.lean#L69-L70)), or
+  `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`. Completeness is asked for every leaf up
+  to `leafCap`, odd sizes and `n = 0` included
+  ([`Certificate.lean`](RecursionFast/Contract/Certificate.lean)), though the benchmark uses one
+  `n`.
 - **Byte layouts** (normative; the contract, the service and the runner hash the same bytes):
-  `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)`, `leafValue s n` the XOR of `leafItem s j` over
-  `j < n` (the zero digest for `n = 0`), `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)`,
+  `leafItem x = Keccak-256(0x48 ‖ x)` (33 bytes, one permutation),
+  `dataNode l r = Keccak-256(0x44 ‖ l ‖ r)` (65 bytes, one permutation), `dataLevel` (adjacent
+  digests paired by `dataNode`, an odd last digest carried up unhashed), `dataRoot xs` (`dataLevel`
+  applied `|xs|` times to the block hashes, then the first digest: the zero digest for no block,
+  `leafItem x` for one), `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)`,
   `nodeStmt c₁ c₂ = Keccak-256(0x4E ‖ c₁ ‖ c₂)`, `enc64` = 8 bytes little-endian; Keccak-256 is
   Ethereum's: FIPS 202's sponge over `Keccak-f[1600]`, rate 136 bytes, padding `0x01 … 0x80` (not
   SHA3-256's `0x06`), 32-byte output ([`Hash/Keccak.lean`](RecursionFast/Contract/Hash/Keccak.lean));
-  a leaf item is 41 bytes, one permutation
-  ([`Relation.lean#L68-L109`](RecursionFast/Contract/Relation.lean#L68-L109)); the trace digest and
+  eight tags, one per hash input: `H` item, `D` data node, `L` leaf, `N` node, `T` trace, `W`, `K`,
+  `M` the signature's
+  ([`Relation.lean#L76-L125`](RecursionFast/Contract/Relation.lean#L76-L125)); the trace digest and
   the signature ([`Signature.lean#L18-L32`](RecursionFast/Contract/Signature.lean#L18-L32)).
 - **Acceptance** `Submission.acc S vk c p`
   ([`Certificate.lean#L102-L110`](RecursionFast/Contract/Certificate.lean#L102-L110)), in this order:
   `|π| < 2^64`; `|tr| ≤ qV`; every query in `tr` at most `queryCap = 2^20` bytes
-  ([`Relation.lean#L58-L59`](RecursionFast/Contract/Relation.lean#L58-L59));
+  ([`Relation.lean#L66-L67`](RecursionFast/Contract/Relation.lean#L66-L67));
   `SigOk vk (traceDigest tr) σ` ([`Signature.lean#L105-L110`](RecursionFast/Contract/Signature.lean#L105-L110));
   and `(V vk c π).runSeq tr = some true`: `V`'s `i`-th query is answered by the `i`-th entry of
   `tr`, which must be for that query, and the trace is used up exactly
@@ -137,15 +146,15 @@ has four fields, and `CertificateR declared S`
   is rejected with probability at most `δ`. Grinding is admitted. It is required for **every**
   witness, node witnesses with any accepted children included.
 - **`computes : Computes S.ext S.E S.fuel`**
-  ([`Extractor.lean#L187-L195`](RecursionFast/Contract/Extractor.lean#L187-L195)): the program
+  ([`Extractor.lean#L198-L206`](RecursionFast/Contract/Extractor.lean#L198-L206)): the program
   `ext` of the contract's step-counting machine
   ([`Machine.lean#L95-L131`](RecursionFast/Contract/Machine.lean#L95-L131)), on the input tape
-  `extractorInput c π L` ([`Extractor.lean#L112-L115`](RecursionFast/Contract/Extractor.lean#L112-L115)),
+  `extractorInput c π L` ([`Extractor.lean#L123-L126`](RecursionFast/Contract/Extractor.lean#L123-L126)),
   halts within `fuel t` steps (`t` the tape's length in words) with at most `outCap` words that
-  denote `E c π L` through `decodeWit` ([`#L172-L174`](RecursionFast/Contract/Extractor.lean#L172-L174)).
+  denote `E c π L` through `decodeWit` ([`#L183-L185`](RecursionFast/Contract/Extractor.lean#L183-L185)).
   This holds for every statement, proof of at most `8 · outCap` bytes (128 MiB) and log whose
   queries are below `2^64` bytes and whose tape is at most `2^64` words. The tape and output formats
-  are normative ([`#L11-L31`](RecursionFast/Contract/Extractor.lean#L11-L31)). `E` takes no `vk`.
+  are normative ([`#L11-L32`](RecursionFast/Contract/Extractor.lean#L11-L32)). `E` takes no `vk`.
 - **`cap`**: the numbers below.
 
 | Cap | Value | Lean |
@@ -153,11 +162,11 @@ has four fields, and `CertificateR declared S`
 | `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L132-L133`](RecursionFast/Contract/Security.lean#L132-L133) |
 | `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L170-L171`](RecursionFast/Contract/Security.lean#L170-L171) |
 | `qV ≤` | `2^16` | [`Certificate.lean#L123`](RecursionFast/Contract/Certificate.lean#L123) |
-| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L178-L179`](RecursionFast/Contract/Extractor.lean#L178-L179) |
-| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L184-L185`](RecursionFast/Contract/Extractor.lean#L184-L185) |
+| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L189-L190`](RecursionFast/Contract/Extractor.lean#L189-L190) |
+| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L195-L196`](RecursionFast/Contract/Extractor.lean#L195-L196) |
 | `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L135-L137`](RecursionFast/Contract/Security.lean#L135-L137) |
-| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L181-L182`](RecursionFast/Contract/Extractor.lean#L181-L182) |
-| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L58-L62`](RecursionFast/Contract/Relation.lean#L58-L62) |
+| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L192-L193`](RecursionFast/Contract/Extractor.lean#L192-L193) |
+| `queryCap`, `leafCap` | `2^20` bytes, `2^20` blocks | [`Relation.lean#L66-L70`](RecursionFast/Contract/Relation.lean#L66-L70) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
 kernel-checked) offers routes and parts: a potential on logs, `KState`, with its bridge
@@ -169,11 +178,13 @@ of Keccak-256 and `SigOk` proved equal to the contract's
 ([`Library/Fast.lean`](RecursionFast/Library/Fast.lean),
 [`Library/KeccakFast.lean`](RecursionFast/Library/KeccakFast.lean)).
 
-**A node witness must fit `outCap`.** A child's signed file of `f` bytes with `m` trace entries
+**A node witness must fit `outCap`.** A leaf witness of `n` blocks takes `2 + 4n` output words
+(at most `2^22 + 2` at `leafCap`). A child's signed file of `f` bytes with `m` trace entries
 takes at most `(f + 7(m + 1))/8` words of output; with the previous step's output within the 64 MiB
-file cap, the leaf child may take up to about 64 MiB, but two children both within about
-458,800 bytes of the file cap may not fit (with word-aligned fields they fit up to 36 bytes below
-it) ([`Extractor.lean#L59-L71`](RecursionFast/Contract/Extractor.lean#L59-L71)). A certifiable
+file cap, the leaf child may take up to about 64 MiB (a leaf proof that sends its `2^20` blocks
+whole, `601 + 4n` words as a child, fits beside it: `2^23 + 2^22 + 57,954 < 2^24` words), but two
+children both within about 458,800 bytes of the file cap may not fit (with word-aligned fields
+they fit up to 36 bytes below it) ([`Extractor.lean#L60-L75`](RecursionFast/Contract/Extractor.lean#L60-L75)). A certifiable
 `V` bounds the children it accepts.
 
 ## 5. The deployment: the signed random oracle
@@ -466,7 +477,7 @@ would mean evicting and re-reading the setup from disk before every request.)
 
 ## 11. What is trusted
 
-- **The contract**: 10 Lean files, 335 code lines at this commit (`scripts/loc.py`; CI enforces at
+- **The contract**: 10 Lean files, 339 code lines at this commit (`scripts/loc.py`; CI enforces at
   most 500), Lean core and Mathlib only, no theorem.
 - **One kernel**: Lean v4.34.1's, replayed by the comparator (`leanprover/comparator` at `d03acab`
   with lean4export `076e8e5`, pinned and built by
@@ -477,7 +488,7 @@ would mean evicting and re-reading the setup from disk before every request.)
   never the challenge, and the kernel still replays every proof. A candidate's build stays under
   `build_s`, so a slow build may fit only when the cache hits.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
-  on the seven tagged domains, and `Keccak-256(k ‖ ·)` with a secret
+  on the eight tagged domains, and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF (also under the signing seed: the chain starts `chainStart` are
   pseudorandom), and **tweakable multi-target one-wayness of the WOTS chain step** `wotsStep`
   with pseudorandom starts: no adversary outputs *the honest* chain value at a position below
@@ -492,7 +503,9 @@ would mean evicting and re-reading the setup from disk before every request.)
   (`Transcript`: every signature the reference signer's `sign sk j (traceDigest tr)`, one message
   per index, replays allowed); an issued signature missing from it can be replayed and is then
   reported as an inversion. The inversion's probability stays on paper. The composition across
-  the stream needs collision resistance, the PRF and the chain's one-wayness only. A signed trace
+  the stream needs collision resistance, the PRF and the chain's one-wayness only. The leaves' data
+  the walk extracts are the runner's, or two block lists of one leaf, of one length and one root,
+  give an explicit collision over the data tree (`dataCollision`, `Outcome.data_or_collision`). A signed trace
   the log does not hold is reduced, for any tree shape, to an EUF-CMA forgery against the
   service's signed traces or an explicit collision
   ([`Library/Compose.lean`](RecursionFast/Library/Compose.lean), `Forgery.reduce`); the walk

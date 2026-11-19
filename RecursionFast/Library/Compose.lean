@@ -5,7 +5,7 @@
   (CGSY24 Thm 5.1's straight-line argument), from the contract's single-output knowledge
   soundness by a union bound over the extracted proofs. Fix a submission `S` and a public key
   `vk`. The leaves' digests are `leafStmt hᵢ n` (the runner computes them from the leaf values
-  `hᵢ` it knows, with `n ≤ leafCap`). The benchmark is a **stream** of `M` steps (plain IVC):
+  `hᵢ = dataRoot xsᵢ` of the data `xsᵢ` it drew, `n` blocks each, with `n ≤ leafCap`). The benchmark is a **stream** of `M` steps (plain IVC):
   `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` (`streamStmt`, `Contract/Tree.lean`), a left-leaning
   chain whose every node's second child is a leaf; `walkStream` and `compose_prob_stream` cover
   it. A **balanced tree** of `2^r` leaves has the root digest `treeRoot` of them; `walk` and
@@ -15,7 +15,9 @@
   **The walk** (deterministic and compiled; `walk`). Given one oracle log
   `L` and a root signed proof `p₀` that `S.acc vk` accepts, it returns, computed from `p₀`
   through `S.E` on `L` (`Outcome`):
-  * **the leaf seeds**: `sᵢ` with `leafValue sᵢ n = hᵢ` for every leaf;
+  * **the leaves' data**: `xsᵢ` of `n` blocks with `dataRoot xsᵢ = hᵢ` for every leaf (where the
+    runner drew the data `xssᵢ` with `hs = xss.map dataRoot`, the returned data is the runner's or
+    the data collision exhibits a Keccak-256 collision, `Outcome.data_or_collision`);
   * **a Keccak-256 collision** (`Collision`): the tagged preimages of a statement mismatch;
   * **a forgery in the extraction tree of `p₀`**: a signed proof `p` at a path `bs` of the tree
     (`InTree`: the root, or a child of a node witness `S.E` returns for a member) whose trace has
@@ -27,8 +29,8 @@
   At each member the walk checks the signed proof's trace against `L`; if it is contained it asks
   `S.E` on `L`, checks the witness (`Rel` is decidable), and compares its digests with the tree's.
   **The type `Outcome` is not the statement**: it is inhabited with no content (a Keccak-256
-  collision exists by pigeonhole, `Controls/Compose.lean`, `collision_nonempty`, and the leaf
-  seeds exist whenever the harness drew them). The content is the compiled definition of `walk`,
+  collision exists by pigeonhole, `Controls/Compose.lean`, `collision_nonempty`, and the leaves'
+  data exist whenever the harness drew them). The content is the compiled definition of `walk`,
   which computes its outcome from `p₀`, `S.E` and `L`, together with the kernel theorems about what
   it returns: `compose_prob`, `walk_not_escaped`, `extract_of_E`, `walkFrom_leaf`. That the
   definition computes, and so chooses no data classically, is the compiler's check, not a kernel
@@ -54,7 +56,7 @@
 
   **The stream walk** (`walkStream`, compiled and deterministic like `walk`). From an accepted
   signed proof of `streamStmt n hs` (`hs` the `M` leaf values, oldest first) it returns, as an
-  `Outcome` of depth `M - 1`, the seeds of **all `M` leaves**, a collision, a forgery in the
+  `Outcome` of depth `M - 1`, the data of **all `M` leaves**, a collision, a forgery in the
   extraction tree, or an escape in it. At a node it extracts the two children, checks that they
   are the digests of the stream without its last leaf and of that leaf (else a collision,
   `nodeCollision`), walks the second child as a one-leaf tree (`walkFrom` at `r = 0`) and the
@@ -63,12 +65,16 @@
   the second children `true :: [false]^j`, `j < M - 1` (the other leaves), `2M - 1` paths
   (`combPaths`, `card_combPaths`); an escape is at one of them (`walkStream_escapeIn`, carried by
   the walk's own result type). So `compose_prob_stream` bounds its escape by
-  `(2M - 1) · (Q + qV) · ε` (`escape_prob_le` over `combPaths M`; for `M = 8`, `15` members, where
-  depth alone would give `2^8 - 1`), and `walkStream_not_escaped` is its lossless form.
+  `(2M - 1) · (Q + qV) · ε` (`escape_prob_le` over `combPaths M`: `2M - 1` members, where
+  depth alone would give `2^M - 1`; `M` is the season's, `harness/season.toml`, and nothing here
+  fixes it), and `walkStream_not_escaped` is its lossless form.
   `walkStreamSigned`, `compose_prob_stream_signed` and `walkStreamSigned_not_escaped` are the
-  signed variants, through `Outcome.reduce`. Returned seeds are the leaves' seeds
-  (`Outcome.forall₂_of_seeds?`, `SignedOutcome.forall₂_of_seeds?`), so off the bounded events all
-  `M` seeds are extracted. `walkStreamFrom_one`, `walkStreamFrom_node`, `walkStreamFrom_succ_succ`
+  signed variants, through `Outcome.reduce`. Returned data are the leaves' data
+  (`Outcome.forall₂_of_data?`, `SignedOutcome.forall₂_of_data?`), so off the bounded events the
+  data of all `M` leaves are extracted, and they are the runner's or a collision is exhibited
+  (`Outcome.data_or_collision`, `SignedOutcome.data_or_collision`, through `dataCollision`: two
+  different block lists of one length and one `dataRoot` give a Keccak-256 collision of two
+  data-tree preimages, the carry-up included). `walkStreamFrom_one`, `walkStreamFrom_node`, `walkStreamFrom_succ_succ`
   and `walkStreamFrom_escape` read the walk on known extractor outputs.
 
   **The forgery outcome against the service's signed traces** (`Forgery.reduce`, `walkSigned`).
@@ -81,10 +87,10 @@
   * a **collision** of `traceBytes` encodings, when the service signed some trace of `T` with that
     digest: the two traces differ (one is in `L`, the other is not), and the encoding is injective
     on queries within `queryCap` (`traceBytes_inj`).
-  `walkSigned` is `walk` with its forgery so reduced: the leaf seeds, a collision, an EUF-CMA
+  `walkSigned` is `walk` with its forgery so reduced: the leaves' data, a collision, an EUF-CMA
   forgery in the extraction tree, or an escape. As for `walk`, its type `SignedOutcome` is not the
   statement (a collision inhabits it); the content is the compiled definition and the theorems
-  about it. `compose_prob_signed` bounds the probability that it returns no leaf seeds by the
+  about it. `compose_prob_signed` bounds the probability that it returns no leaf data by the
   escape bound plus the probabilities that it returns a collision and an EUF-CMA forgery;
   `walkSigned_not_escaped` is its lossless form. The reduction of one forgery
   (`Forgery.reduce`) does not depend on the tree's shape; the walks around it are for balanced
@@ -189,12 +195,13 @@ def Escape (S : Submission) (vk : Digest) (L : Log) (c : Digest) (p : Signed) : 
   S.acc vk c p = true ∧ (∀ e ∈ p.tr, e ∈ L) ∧ ¬ ∃ w, S.E c p.π L = some w ∧ Rel (S.acc vk) c w
 
 /-- **What the walk returns** for the leaf values `hs` of size `n`, the root `(c₀, p₀)` and
-the depth `d`: the leaf seeds, a collision, a forgery in the extraction tree of `S` on `L` from
+the depth `d`: the leaves' data, a collision, a forgery in the extraction tree of `S` on `L` from
 the root, or an escape in it within depth `d`. -/
 inductive Outcome (S : Submission) (vk : Digest) (L : Log) (n : ℕ) (hs : List Digest)
     (c₀ : Digest) (p₀ : Signed) (d : ℕ) where
-  /-- The leaf seeds: the `n` hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
-  | seeds (ss : List Digest) (h : List.Forall₂ (fun s h => leafValue s n = h) ss hs)
+  /-- The leaves' data: `xss[i]` has `n` blocks and the root `hs[i]`, for every leaf. -/
+  | data (xss : List (List Digest))
+      (h : List.Forall₂ (fun xs h => dataRoot xs = h ∧ xs.length = n) xss hs)
   /-- A Keccak-256 collision. -/
   | collision (col : Collision)
   /-- A forgery against the log, at the member `(c, f.p)` of the extraction tree. -/
@@ -203,13 +210,14 @@ inductive Outcome (S : Submission) (vk : Digest) (L : Log) (n : ℕ) (hs : List 
   | escape (c : Digest) (p : Signed) (bs : List Bool) (mem : InTree S L c₀ p₀ bs c p)
       (depth : bs.length ≤ d) (h : Escape S vk L c p)
 
-/-- The leaf seeds an outcome returns, if it returns them. -/
-def Outcome.seeds? {S : Submission} {vk : Digest} {L : Log} {n : ℕ} {hs : List Digest}
-    {c₀ : Digest} {p₀ : Signed} {d : ℕ} : Outcome S vk L n hs c₀ p₀ d → Option (List Digest)
-  | .seeds ss _ => some ss
+/-- The leaves' data an outcome returns, if it returns them. -/
+def Outcome.data? {S : Submission} {vk : Digest} {L : Log} {n : ℕ} {hs : List Digest}
+    {c₀ : Digest} {p₀ : Signed} {d : ℕ} :
+    Outcome S vk L n hs c₀ p₀ d → Option (List (List Digest))
+  | .data xss _ => some xss
   | _ => none
 
-/-- The outcome is an escape: not the leaf seeds, a collision or a forgery. -/
+/-- The outcome is an escape: not the leaves' data, a collision or a forgery. -/
 def Outcome.Escaped {S : Submission} {vk : Digest} {L : Log} {n : ℕ} {hs : List Digest}
     {c₀ : Digest} {p₀ : Signed} {d : ℕ} : Outcome S vk L n hs c₀ p₀ d → Prop
   | .escape .. => True
@@ -301,13 +309,13 @@ private theorem treeRoot_map_split {r : ℕ} {hs : List Digest} (hr : hs.length 
   exact treeRoot_append ((List.length_map _).trans (length_take_pow hr))
     ((List.length_map _).trans (length_drop_pow hr))
 
-/-- **Two leaf statements**, one digest, different leaf values or sizes (both at most
-`leafCap`): a collision of the tagged preimages. -/
+/-- **Two leaf statements**, one digest, different roots or sizes (both at most `leafCap`): a
+collision of the tagged preimages. -/
 private def leafCollision {h h' : Digest} {n m : ℕ} (hn : n ≤ leafCap) (hm : m ≤ leafCap)
     (hne : ¬ (h' = h ∧ m = n)) (heq : leafStmt h n = leafStmt h' m) : Collision :=
   ⟨tagLeaf :: h.toList ++ enc64 n, tagLeaf :: h'.toList ++ enc64 m, fun hxy => hne (by
     obtain ⟨h1, h2⟩ := List.append_inj hxy (by simp)
-    have hc : (2 : ℕ) ^ 22 < 2 ^ 64 := by norm_num
+    have hc : leafCap < 2 ^ 64 := by unfold leafCap; norm_num
     exact ⟨(Vector.toList_inj.mp (List.cons.inj h1).2).symm,
       (enc64_inj (lt_of_le_of_lt hn hc) (lt_of_le_of_lt hm hc) h2).symm⟩), heq⟩
 
@@ -325,9 +333,160 @@ private def nodeCollision {a b c₁ c₂ : Digest} (hne : ¬ (c₁ = a ∧ c₂ 
     exact ⟨(Vector.toList_inj.mp (List.cons.inj h1).2).symm, (Vector.toList_inj.mp h2).symm⟩),
     heq⟩
 
+/-! ## The data collision: one root, one length, two block lists -/
+
+/-- A preimage of the data tree: a block's hash input (`tagItem ‖ x`, `leafItem`) or a data node's
+(`tagData ‖ l ‖ r`, `dataNode`). -/
+def DataPreimage (b : List UInt8) : Prop :=
+  (∃ x : Digest, b = tagItem :: x.toList) ∨ ∃ l r : Digest, b = tagData :: l.toList ++ r.toList
+
+/-- Two different block lists whose block hashes agree: a collision of two `leafItem` preimages,
+at the first block where they differ. -/
+def itemCollision : (xs ys : List Digest) → xs ≠ ys → xs.map leafItem = ys.map leafItem →
+    Collision
+  | x :: xs, y :: ys, hne, h =>
+    if hxy : x = y then itemCollision xs ys (fun h' => hne (hxy ▸ h' ▸ rfl)) (List.cons.inj h).2
+    else ⟨tagItem :: x.toList, tagItem :: y.toList,
+      fun hb => hxy (Vector.toList_inj.mp (List.cons.inj hb).2), (List.cons.inj h).1⟩
+  | [], [], hne, _ => absurd rfl hne
+  | [], _ :: _, _, h => absurd h (by simp)
+  | _ :: _, [], _, h => absurd h (by simp)
+
+/-- Two different digest lists of one length with one level above them: a collision of two
+`dataNode` preimages, at the first pair where they differ (an odd last digest is carried up
+unchanged, so it cannot be where they differ). -/
+def levelCollision : (ds es : List Digest) → ds.length = es.length → ds ≠ es →
+    dataLevel ds = dataLevel es → Collision
+  | a :: b :: ds, c :: d :: es, hl, hne, h =>
+    if hab : a = c ∧ b = d then
+      levelCollision ds es (by simpa using hl) (fun h' => hne (by rw [hab.1, hab.2, h']))
+        (List.cons.inj h).2
+    else ⟨tagData :: a.toList ++ b.toList, tagData :: c.toList ++ d.toList, fun hb => hab (by
+      obtain ⟨h1, h2⟩ := List.append_inj hb (by simp)
+      exact ⟨Vector.toList_inj.mp (List.cons.inj h1).2, Vector.toList_inj.mp h2⟩),
+      (List.cons.inj h).1⟩
+  | [], [], _, hne, _ => absurd rfl hne
+  | [_], [_], _, hne, h => absurd h hne
+  | [], _ :: _, hl, _, _ => absurd hl (by simp)
+  | _ :: _, [], hl, _, _ => absurd hl (by simp)
+  | [_], _ :: _ :: _, hl, _, _ => absurd hl (by simp)
+  | _ :: _ :: _, [_], hl, _, _ => absurd hl (by simp)
+
+/-- Two different digest lists of one length that `k` levels bring to one list: a collision of
+two `dataNode` preimages, at the lowest level where they agree. -/
+def iterateCollision : (k : ℕ) → (ds es : List Digest) → ds.length = es.length → ds ≠ es →
+    dataLevel^[k] ds = dataLevel^[k] es → Collision
+  | 0, _, _, _, hne, h => absurd h hne
+  | k + 1, ds, es, hl, hne, h =>
+    if h1 : dataLevel ds = dataLevel es then levelCollision ds es hl hne h1
+    else iterateCollision k (dataLevel ds) (dataLevel es)
+      (by rw [length_dataLevel, length_dataLevel, hl]) h1
+      (by rwa [Function.iterate_succ_apply, Function.iterate_succ_apply] at h)
+
+/-- One root and one length: `|xs|` levels bring the two lists of block hashes to one list. -/
+theorem iterate_eq_of_dataRoot_eq {xs ys : List Digest} (hl : xs.length = ys.length)
+    (h : dataRoot xs = dataRoot ys) :
+    dataLevel^[xs.length] (xs.map leafItem) = dataLevel^[xs.length] (ys.map leafItem) := by
+  have hd : dataLevel = level dataNode := funext dataLevel_eq
+  rw [dataRoot, dataRoot, ← hl] at h
+  rw [hd] at h ⊢
+  have hlen := length_iterate_level_eq dataNode dataNode
+    (show (xs.map leafItem).length = (ys.map leafItem).length by simp [hl]) xs.length
+  have h1 := length_iterate_length_le_one' dataNode (xs.map leafItem)
+  rw [List.length_map] at h1
+  revert h hlen h1
+  generalize (level dataNode)^[xs.length] (xs.map leafItem) = A
+  generalize (level dataNode)^[xs.length] (ys.map leafItem) = B
+  intro h hlen h1
+  match A, B, hlen, h1 with
+  | [], [], _, _ => rfl
+  | [a], [b], _, _ => simpa using h
+
+/-- **The data collision**: two different block lists of one length and one `dataRoot` give a
+Keccak-256 collision of two data-tree preimages (`DataPreimage`, `dataCollision_preimages`):
+two blocks' `leafItem` inputs when the block hashes agree, else two `dataNode` inputs at the
+lowest level where the lists above agree (the carry-up of an odd last digest included). The
+statement binds the length (`leafStmt`), so the two trees have one shape. -/
+def dataCollision {xs ys : List Digest} (hne : xs ≠ ys) (hl : xs.length = ys.length)
+    (h : dataRoot xs = dataRoot ys) : Collision :=
+  if hm : xs.map leafItem = ys.map leafItem then itemCollision xs ys hne hm
+  else iterateCollision xs.length (xs.map leafItem) (ys.map leafItem) (by simp [hl]) hm
+    (iterate_eq_of_dataRoot_eq hl h)
+
+theorem itemCollision_preimages : ∀ (xs ys : List Digest) (hne : xs ≠ ys)
+    (h : xs.map leafItem = ys.map leafItem),
+    DataPreimage (itemCollision xs ys hne h).x ∧ DataPreimage (itemCollision xs ys hne h).y
+  | x :: xs, y :: ys, hne, h => by
+    unfold itemCollision
+    split
+    · exact itemCollision_preimages xs ys _ _
+    · exact ⟨.inl ⟨x, rfl⟩, .inl ⟨y, rfl⟩⟩
+  | [], [], hne, _ => absurd rfl hne
+  | [], _ :: _, _, h => absurd h (by simp)
+  | _ :: _, [], _, h => absurd h (by simp)
+
+theorem levelCollision_preimages : ∀ (ds es : List Digest) (hl : ds.length = es.length)
+    (hne : ds ≠ es) (h : dataLevel ds = dataLevel es),
+    DataPreimage (levelCollision ds es hl hne h).x ∧ DataPreimage (levelCollision ds es hl hne h).y
+  | a :: b :: ds, c :: d :: es, hl, hne, h => by
+    unfold levelCollision
+    split
+    · exact levelCollision_preimages ds es _ _ _
+    · exact ⟨.inr ⟨a, b, rfl⟩, .inr ⟨c, d, rfl⟩⟩
+  | [], [], _, hne, _ => absurd rfl hne
+  | [_], [_], _, hne, h => absurd h hne
+  | [], _ :: _, hl, _, _ => absurd hl (by simp)
+  | _ :: _, [], hl, _, _ => absurd hl (by simp)
+  | [_], _ :: _ :: _, hl, _, _ => absurd hl (by simp)
+  | _ :: _ :: _, [_], hl, _, _ => absurd hl (by simp)
+
+theorem iterateCollision_preimages : ∀ (k : ℕ) (ds es : List Digest) (hl : ds.length = es.length)
+    (hne : ds ≠ es) (h : dataLevel^[k] ds = dataLevel^[k] es),
+    DataPreimage (iterateCollision k ds es hl hne h).x ∧
+      DataPreimage (iterateCollision k ds es hl hne h).y
+  | 0, _, _, _, hne, h => absurd h hne
+  | k + 1, ds, es, hl, hne, h => by
+    unfold iterateCollision
+    split
+    · exact levelCollision_preimages _ _ _ _ _
+    · exact iterateCollision_preimages k _ _ _ _ _
+
+/-- **The data collision is over the data tree**: both its preimages are a block's hash input or a
+data node's. -/
+theorem dataCollision_preimages {xs ys : List Digest} (hne : xs ≠ ys)
+    (hl : xs.length = ys.length) (h : dataRoot xs = dataRoot ys) :
+    DataPreimage (dataCollision hne hl h).x ∧ DataPreimage (dataCollision hne hl h).y := by
+  unfold dataCollision
+  split
+  · exact itemCollision_preimages _ _ _ _
+  · exact iterateCollision_preimages _ _ _ _ _ _
+
+/-- **Returned data against the runner's**: data `yss` of `n` blocks per leaf with the roots of
+the runner's data `xss` (`n` blocks each) are the runner's data, or some leaf's two block lists
+differ with one length and one root, and `dataCollision` of them is a Keccak-256 collision of two
+data-tree preimages. -/
+theorem data_or_collision {n : ℕ} {xss yss : List (List Digest)}
+    (h : List.Forall₂ (fun ys h => dataRoot ys = h ∧ ys.length = n) yss (xss.map dataRoot))
+    (hlen : ∀ xs ∈ xss, xs.length = n) :
+    yss = xss ∨ ∃ (ys xs : List Digest) (hne : ys ≠ xs) (hl : ys.length = xs.length)
+      (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ yss.zip xss ∧
+        DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y := by
+  induction xss generalizing yss with
+  | nil => rw [List.map_nil, List.forall₂_nil_right_iff] at h; exact .inl h
+  | cons xs xss ih =>
+    rw [List.map_cons] at h
+    obtain ⟨ys, yss, ⟨hr, hn⟩, h', rfl⟩ := List.forall₂_cons_right_iff.mp h
+    have hl : ys.length = xs.length := hn.trans (hlen xs (List.mem_cons_self ..)).symm
+    by_cases hyx : ys = xs
+    · rcases ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) with he | ⟨a, b, hne, hl', hr', hm, hp⟩
+      · exact .inl (by rw [hyx, he])
+      · exact .inr ⟨a, b, hne, hl', hr', by simp [List.zip_cons_cons, hm], hp⟩
+    · exact .inr ⟨ys, xs, hyx, hl, hr, by simp [List.zip_cons_cons],
+        dataCollision_preimages hyx hl hr⟩
+
 /-- Membership of the relation is decidable: digests, leaf sizes and acceptance are. -/
 instance decRel (acc : Digest → Signed → Bool) (c : Digest) : (w : Wit) → Decidable (Rel acc c w)
-  | .leaf s n => inferInstanceAs (Decidable (n ≤ leafCap ∧ c = leafStmt (leafValue s n) n))
+  | .leaf xs => inferInstanceAs (Decidable (xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length))
   | .node c₁ c₂ p₁ p₂ =>
     inferInstanceAs (Decidable (c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true ∧ acc c₂ p₂ = true))
 
@@ -365,9 +524,8 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p₀ : Si
     match extract L _ p hacc with
     | .inr (.inl ⟨f, hf⟩) => .forgery f _ bs (hf ▸ hmem)
     | .inr (.inr ⟨he⟩) => .escape _ p bs hmem (by omega) he
-    | .inl ⟨.leaf s m, hw, _⟩ =>
-      if he : leafValue s m = h ∧ m = n then
-        .seeds [s] (.cons (he.2 ▸ he.1) .nil)
+    | .inl ⟨.leaf xs, hw, _⟩ =>
+      if he : dataRoot xs = h ∧ xs.length = n then .data [xs] (.cons he .nil)
       else .collision (leafCollision (h := h) (n := n) hn hw.1 he hw.2)
     | .inl ⟨.node _ _ _ _, hw, _⟩ => .collision (leafNodeCollision (h := h) (n := n) hw.1)
   | 0, [], hr, _, _, _, _, _ => absurd hr (by simp)
@@ -377,7 +535,7 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p₀ : Si
     match extract L _ p hacc with
     | .inr (.inl ⟨f, hf⟩) => .forgery f _ bs (hf ▸ hmem)
     | .inr (.inr ⟨he⟩) => .escape _ p bs hmem (by omega) he
-    | .inl ⟨.leaf _ _, hw, _⟩ => .collision (leafNodeCollision (hw.2.symm.trans hroot))
+    | .inl ⟨.leaf _, hw, _⟩ => .collision (leafNodeCollision (hw.2.symm.trans hroot))
     | .inl ⟨.node c₁ c₂ p₁ p₂, hw, hE⟩ =>
       if he : c₁ = treeRoot ((hs.take (2 ^ r)).map fun h => leafStmt h n) ∧
           c₂ = treeRoot ((hs.drop (2 ^ r)).map fun h => leafStmt h n) then
@@ -387,18 +545,18 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p₀ : Si
           walkFrom L n hn c₀ p₀ d r (hs.drop (2 ^ r)) (length_drop_pow hr) p₂ (true :: bs)
             (by simp only [List.length_cons]; omega) (he.2 ▸ hw.2.2)
             (he.2 ▸ InTree.right hmem hE) with
-        | .seeds ss₁ h₁, .seeds ss₂ h₂ =>
-          .seeds (ss₁ ++ ss₂) (List.take_append_drop (2 ^ r) hs ▸ List.rel_append h₁ h₂)
+        | .data xss₁ h₁, .data xss₂ h₂ =>
+          .data (xss₁ ++ xss₂) (List.take_append_drop (2 ^ r) hs ▸ List.rel_append h₁ h₂)
         | .collision col, _ => .collision col
         | .forgery f c bs' m, _ => .forgery f c bs' m
         | .escape c q bs' m hd' h', _ => .escape c q bs' m hd' h'
-        | .seeds _ _, .collision col => .collision col
-        | .seeds _ _, .forgery f c bs' m => .forgery f c bs' m
-        | .seeds _ _, .escape c q bs' m hd' h' => .escape c q bs' m hd' h'
+        | .data _ _, .collision col => .collision col
+        | .data _ _, .forgery f c bs' m => .forgery f c bs' m
+        | .data _ _, .escape c q bs' m hd' h' => .escape c q bs' m hd' h'
       else .collision (nodeCollision he (hroot.symm.trans hw.1))
 
 /-- **The walk over a balanced tree**: from the log `L` and an accepted root signed
-proof, the root's leaf seeds, an explicit collision, an explicit capped forgery in the extraction
+proof, the root's leaf data, an explicit collision, an explicit capped forgery in the extraction
 tree of the root signed proof, or an escape in it within depth `r`, computed from it through `S.E`
 on `L`. Its type `Outcome` is not the statement (a collision inhabits it); the content is this
 compiled definition and the theorems about what it returns (`compose_prob`, `walk_not_escaped`,
@@ -425,7 +583,7 @@ theorem Escape.not_of_kstate (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : 
   fun h => h.2.2 (k.final L c p.π hlen hμ (Escape.wins hL h).1)
 
 /-- **The meter's composition** (lossless): from a knowledge state and one functional log within
-`logCap` of potential below `1`, the walk does not escape: it returns the leaf seeds, a
+`logCap` of potential below `1`, the walk does not escape: it returns the leaves' data, a
 collision, or a capped forgery in the extraction tree of the root signed proof. -/
 theorem walk_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : Log}
     (hL : L.Functional) (hlen : L.length ≤ logCap) (hμ : k.μ L < 1) (n : ℕ) (hn : n ≤ leafCap)
@@ -500,7 +658,7 @@ theorem escape_prob_le (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (c₀ : Di
 /-- **The composition theorem with probabilities**: for an adversary `A` asking
 at most `Q` queries and outputting the root signed proof, with `Q + qV ≤ logCap`, the probability
 over one lazily sampled random oracle that `acc` accepts the root and the walk on `A`'s final log
-ends in an escape, returning none of the leaf seeds, a collision, or a forgery in the extraction
+ends in an escape, returning none of the leaves' data, a collision, or a forgery in the extraction
 tree, is at most `(2^(r+1) - 1) · (Q + qV) · ε`. -/
 theorem compose_prob (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ) (hn : n ≤ leafCap)
     (r : ℕ) (hs : List Digest) (hr : hs.length = 2 ^ r) (A : OProg Signed) {Q : ℕ}
@@ -552,13 +710,14 @@ theorem Forgery.euf_or_collision {L : Log} {T : List (Trace × Sig)} (hT : Hones
   | .inl ⟨h⟩ => .inl h
   | .inr ⟨col, x, hx, h⟩ => .inr ⟨x, hx, col, h⟩
 
-/-- **What the walk returns against signed traces `T`**: the leaf seeds, a collision, an
+/-- **What the walk returns against signed traces `T`**: the leaves' data, a collision, an
 EUF-CMA forgery against the signing record of `T` in the extraction tree, or an escape in it
 within depth `d`. -/
 inductive SignedOutcome (S : Submission) (vk : Digest) (L : Log) (T : List (Trace × Sig)) (n : ℕ)
     (hs : List Digest) (c₀ : Digest) (p₀ : Signed) (d : ℕ) where
-  /-- The leaf seeds: the `n` hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
-  | seeds (ss : List Digest) (h : List.Forall₂ (fun s h => leafValue s n = h) ss hs)
+  /-- The leaves' data: `xss[i]` has `n` blocks and the root `hs[i]`, for every leaf. -/
+  | data (xss : List (List Digest))
+      (h : List.Forall₂ (fun xs h => dataRoot xs = h ∧ xs.length = n) xss hs)
   /-- A Keccak-256 collision. -/
   | collision (col : Collision)
   /-- An EUF-CMA forgery against the signing record of `T`, at the member `(c, q)` of the
@@ -573,9 +732,9 @@ namespace SignedOutcome
 variable {L : Log} {T : List (Trace × Sig)} {n : ℕ} {hs : List Digest} {c₀ : Digest} {p₀ : Signed}
   {d : ℕ}
 
-/-- The leaf seeds the outcome returns, if it returns them. -/
-def seeds? : SignedOutcome S vk L T n hs c₀ p₀ d → Option (List Digest)
-  | .seeds ss _ => some ss
+/-- The leaves' data the outcome returns, if it returns them. -/
+def data? : SignedOutcome S vk L T n hs c₀ p₀ d → Option (List (List Digest))
+  | .data xss _ => some xss
   | _ => none
 
 /-- The outcome is a collision. -/
@@ -593,21 +752,32 @@ def Escaped : SignedOutcome S vk L T n hs c₀ p₀ d → Prop
   | .escape .. => True
   | _ => False
 
-/-- An outcome with no leaf seeds is a collision, an EUF-CMA forgery or an escape. -/
-theorem cases_of_seeds?_none {o : SignedOutcome S vk L T n hs c₀ p₀ d} (h : o.seeds? = none) :
+/-- An outcome with no leaf data is a collision, an EUF-CMA forgery or an escape. -/
+theorem cases_of_data?_none {o : SignedOutcome S vk L T n hs c₀ p₀ d} (h : o.data? = none) :
     o.IsCollision ∨ o.IsEuf ∨ o.Escaped := by
   cases o with
-  | seeds => exact absurd h (by simp [seeds?])
+  | data => exact absurd h (by simp [data?])
   | collision => exact .inl trivial
   | euf => exact .inr (.inl trivial)
   | escape => exact .inr (.inr trivial)
 
-/-- **Returned seeds are the leaves' seeds**: if the outcome returns the seeds `ss`, the `n`
-hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
-theorem forall₂_of_seeds? {o : SignedOutcome S vk L T n hs c₀ p₀ d} {ss : List Digest}
-    (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
+/-- **Returned data are the leaves' data**: if the outcome returns the data `xss`, `xss[i]` has
+`n` blocks and the root `hs[i]`, for every leaf. -/
+theorem forall₂_of_data? {o : SignedOutcome S vk L T n hs c₀ p₀ d} {xss : List (List Digest)}
+    (h : o.data? = some xss) :
+    List.Forall₂ (fun xs h => dataRoot xs = h ∧ xs.length = n) xss hs := by
   cases o <;> cases h
   assumption
+
+/-- **The extracted data are the runner's, or a collision is exhibited** (against signed
+traces). -/
+theorem data_or_collision {xss : List (List Digest)} {o : SignedOutcome S vk L T n
+    (xss.map dataRoot) c₀ p₀ d} {yss : List (List Digest)} (h : o.data? = some yss)
+    (hlen : ∀ xs ∈ xss, xs.length = n) :
+    yss = xss ∨ ∃ (ys xs : List Digest) (hne : ys ≠ xs) (hl : ys.length = xs.length)
+      (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ yss.zip xss ∧
+        DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y :=
+  Compose.data_or_collision (forall₂_of_data? h) hlen
 
 end SignedOutcome
 
@@ -616,7 +786,7 @@ by `Forgery.reduce` to an EUF-CMA forgery or a collision; the other outcomes are
 def Outcome.reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
     {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} :
     Outcome S vk L n hs c₀ p₀ d → SignedOutcome S vk L T n hs c₀ p₀ d
-  | .seeds ss h => .seeds ss h
+  | .data xss h => .data xss h
   | .collision col => .collision col
   | .forgery f c bs m =>
     match f.reduce T hT with
@@ -650,18 +820,18 @@ theorem Outcome.escaped_reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest 
     split <;> simp [SignedOutcome.Escaped]
   | _ => simp [Outcome.reduce, Outcome.Escaped, SignedOutcome.Escaped]
 
-/-- Reducing a forgery keeps the leaf seeds. -/
-theorem Outcome.seeds?_reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
+/-- Reducing a forgery keeps the leaves' data. -/
+theorem Outcome.data?_reduce {L : Log} {T : List (Trace × Sig)} (hT : Honest T L) {n : ℕ}
     {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ} (o : Outcome S vk L n hs c₀ p₀ d) :
-    (o.reduce hT).seeds? = o.seeds? := by
+    (o.reduce hT).data? = o.data? := by
   cases o with
   | forgery f c bs m =>
-    simp only [Outcome.reduce, Outcome.seeds?]
+    simp only [Outcome.reduce, Outcome.data?]
     split <;> rfl
   | _ => rfl
 
 /-- **The walk against the service's signed traces**: from the log `L`, signed traces `T` that
-`L` accounts for, and an accepted root signed proof, the root's leaf seeds, an explicit
+`L` accounts for, and an accepted root signed proof, the root's leaf data, an explicit
 collision, an explicit EUF-CMA forgery against the signing record of `T` in the extraction tree
 of the root signed proof, or an escape in it within depth `r`. Its type `SignedOutcome` is not the
 statement (a collision inhabits it); the content is this compiled definition and the theorems
@@ -675,7 +845,7 @@ def walkSigned (L : Log) (T : List (Trace × Sig)) (hT : Honest T L) (n : ℕ) (
 
 /-- **No escape below the potential** for the walk against signed traces (lossless): from a
 knowledge state and one functional log within `logCap` of potential below `1`, the walk returns
-the leaf seeds, a collision or an EUF-CMA forgery against the signing record. -/
+the leaves' data, a collision or an EUF-CMA forgery against the signing record. -/
 theorem walkSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L : Log}
     (hL : L.Functional) (hlen : L.length ≤ logCap) (hμ : k.μ L < 1) (T : List (Trace × Sig))
     (hT : Honest T L) (n : ℕ) (hn : n ≤ leafCap) (r : ℕ) (hs : List Digest)
@@ -688,7 +858,7 @@ theorem walkSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L 
 adversary `A` asking at most `Q` queries and outputting the root signed proof, with
 `Q + qV ≤ logCap`, and signed traces `T p L` of each run (output `p`, final log `L`) that the
 log accounts for, the probability that `acc` accepts the root and the walk against `T p L`
-returns no leaf seeds is at most `(2^(r+1) - 1) · (Q + qV) · ε` plus the probabilities that it
+returns no leaf data is at most `(2^(r+1) - 1) · (Q + qV) · ε` plus the probabilities that it
 returns a collision and that it returns an EUF-CMA forgery against the signing record of `T p L`.
 (`hT` costs nothing here: `accounted` restricts any signed traces to those the log accounts for,
 and changes nothing on a run where they all are, `accounted_of_honest`. It is not free for the
@@ -700,7 +870,7 @@ theorem compose_prob_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : 
     {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
     (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L) :
     prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
-      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).seeds? = none) A [] ≤
+      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).data? = none) A [] ≤
       (2 ^ (r + 1) - 1 : ℕ) * ((Q + qV) * ε) +
       prob (fun p L => ∃ hacc : S.acc vk (treeRoot (hs.map fun h => leafStmt h n)) p = true,
         (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsCollision) A [] +
@@ -709,7 +879,7 @@ theorem compose_prob_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : 
   refine (prob_mono (fun p L ⟨hacc, hno⟩ => ?_) A []).trans
     ((prob_or_le _ _ A []).trans (add_le_add ((prob_or_le _ _ A []).trans
       (add_le_add_left (compose_prob hks n hn r hs hr A hA hQ) _)) le_rfl))
-  rcases SignedOutcome.cases_of_seeds?_none hno with h | h | h
+  rcases SignedOutcome.cases_of_data?_none hno with h | h | h
   · exact .inl (.inr ⟨hacc, h⟩)
   · exact .inr ⟨hacc, h⟩
   · exact .inl (.inl ⟨hacc, (Outcome.escaped_reduce (hT p L) _).mp h⟩)
@@ -743,8 +913,8 @@ theorem extract_forgery {L : Log} {c : Digest} {p : Signed} (hacc : S.acc vk c p
   rw [dite_eq_right_of_eq_false (eq_false hnot)]
 
 /-- **The walk at a leaf**: on a one-leaf subtree whose signed proof's trace is in the log and
-which the extractor opens to the leaf witness `(s, n)` with `leafValue s n` the leaf's value,
-the walk's outcome `o` is the seed `s`. -/
+which the extractor opens to the leaf witness `xs` of `n` blocks with `dataRoot xs` the leaf's
+value, the walk's outcome `o` is the data `xs`. -/
 theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {p₀ : Signed} {d : ℕ}
     {hs : List Digest} {h : Digest} (hh : hs = [h]) {hr : hs.length = 2 ^ 0} {p : Signed}
     {bs : List Bool} {hd : bs.length + 0 ≤ d}
@@ -752,13 +922,13 @@ theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {
     {hmem : InTree S L c₀ p₀ bs (treeRoot (hs.map fun h => leafStmt h n)) p}
     {o : Outcome S vk L n hs c₀ p₀ d}
     (ho : walkFrom L n hn c₀ p₀ d 0 hs hr p bs hd hacc hmem = o) (hin : ∀ e ∈ p.tr, e ∈ L)
-    {s : Digest} (hE : S.E (treeRoot (hs.map fun h => leafStmt h n)) p.π L = some (.leaf s n))
-    (hend : leafValue s n = h) : o.seeds? = some [s] := by
+    {xs : List Digest} (hE : S.E (treeRoot (hs.map fun h => leafStmt h n)) p.π L = some (.leaf xs))
+    (hend : dataRoot xs = h) (hlen : xs.length = n) : o.data? = some [xs] := by
   subst hh ho
-  have hR : Rel (S.acc vk) (treeRoot ([h].map fun h => leafStmt h n)) (.leaf s n) :=
-    ⟨hn, show leafStmt h n = leafStmt (leafValue s n) n by rw [hend]⟩
+  have hR : Rel (S.acc vk) (treeRoot ([h].map fun h => leafStmt h n)) (.leaf xs) :=
+    ⟨hlen ▸ hn, show leafStmt h n = leafStmt (dataRoot xs) xs.length by rw [hend, hlen]⟩
   unfold walkFrom
-  simp only [extract_of_E hacc hin hE hR, hend, and_self, dite_true, Outcome.seeds?]
+  simp only [extract_of_E hacc hin hE hR, hend, hlen, and_self, dite_true, Outcome.data?]
 
 /-! ## The stream: `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` -/
 
@@ -824,26 +994,38 @@ theorem Outcome.Escaped.exists_in {L : Log} {n : ℕ} {hs : List Digest} {c₀ :
   | escape c q bs m _ he => exact ⟨bs, hP, c, q, m, he⟩
   | _ => exact h.elim
 
-/-- **Returned seeds are the leaves' seeds**: if the outcome returns the seeds `ss`, the `n`
-hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
-theorem Outcome.forall₂_of_seeds? {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Digest}
-    {p₀ : Signed} {d : ℕ} {o : Outcome S vk L n hs c₀ p₀ d} {ss : List Digest}
-    (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
+/-- **Returned data are the leaves' data**: if the outcome returns the data `xss`, `xss[i]` has
+`n` blocks and the root `hs[i]`, for every leaf. -/
+theorem Outcome.forall₂_of_data? {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} {o : Outcome S vk L n hs c₀ p₀ d} {xss : List (List Digest)}
+    (h : o.data? = some xss) :
+    List.Forall₂ (fun xs h => dataRoot xs = h ∧ xs.length = n) xss hs := by
   cases o <;> cases h
   assumption
 
-/-- **Two outcomes over adjacent leaf ranges, joined**: the seeds of both, or the first outcome
-that is not the seeds. -/
+/-- **The extracted data are the runner's, or a collision is exhibited**: if the outcome over the
+roots of the runner's data `xss` (`n` blocks each) returns the data `yss`, then `yss = xss`, or
+two different block lists of one leaf, of one length and one root, give `dataCollision`. -/
+theorem Outcome.data_or_collision {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} {o : Outcome S vk L n (xss.map dataRoot) c₀ p₀ d}
+    {yss : List (List Digest)} (h : o.data? = some yss) (hlen : ∀ xs ∈ xss, xs.length = n) :
+    yss = xss ∨ ∃ (ys xs : List Digest) (hne : ys ≠ xs) (hl : ys.length = xs.length)
+      (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ yss.zip xss ∧
+        DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y :=
+  Compose.data_or_collision (Outcome.forall₂_of_data? h) hlen
+
+/-- **Two outcomes over adjacent leaf ranges, joined**: the data of both, or the first outcome
+that is not data. -/
 def Outcome.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest} {p₀ : Signed}
     {d : ℕ} (hsplit : hs₁ ++ hs₂ = hs) :
     Outcome S vk L n hs₁ c₀ p₀ d → Outcome S vk L n hs₂ c₀ p₀ d → Outcome S vk L n hs c₀ p₀ d
-  | .seeds ss₁ h₁, .seeds ss₂ h₂ => .seeds (ss₁ ++ ss₂) (hsplit ▸ List.rel_append h₁ h₂)
+  | .data xss₁ h₁, .data xss₂ h₂ => .data (xss₁ ++ xss₂) (hsplit ▸ List.rel_append h₁ h₂)
   | .collision col, _ => .collision col
   | .forgery f c bs m, _ => .forgery f c bs m
   | .escape c q bs m hd h, _ => .escape c q bs m hd h
-  | .seeds _ _, .collision col => .collision col
-  | .seeds _ _, .forgery f c bs m => .forgery f c bs m
-  | .seeds _ _, .escape c q bs m hd h => .escape c q bs m hd h
+  | .data _ _, .collision col => .collision col
+  | .data _ _, .forgery f c bs m => .forgery f c bs m
+  | .data _ _, .escape c q bs m hd h => .escape c q bs m hd h
 
 theorem Outcome.EscapeIn.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {P : List Bool → Prop} {hsplit : hs₁ ++ hs₂ = hs}
@@ -860,11 +1042,11 @@ theorem Outcome.Escaped.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest
   | escape => exact ⟨trivial, hP⟩
   | _ => exact h.elim
 
-theorem Outcome.seeds?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
+theorem Outcome.data?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {hsplit : hs₁ ++ hs₂ = hs}
-    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d} {ss₁ ss₂ : List Digest}
-    (h₁ : o₁.seeds? = some ss₁) (h₂ : o₂.seeds? = some ss₂) :
-    (o₁.append hsplit o₂).seeds? = some (ss₁ ++ ss₂) := by
+    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d} {xss₁ xss₂ : List (List Digest)}
+    (h₁ : o₁.data? = some xss₁) (h₂ : o₂.data? = some xss₂) :
+    (o₁.append hsplit o₂).data? = some (xss₁ ++ xss₂) := by
   cases o₁ <;> cases h₁
   cases o₂ <;> cases h₂
   rfl
@@ -889,7 +1071,7 @@ def walkStreamFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p�
       S.acc vk (streamStmt n hs) p = true →
       InTree S L c₀ p₀ (List.replicate j false) (streamStmt n hs) p →
       {o : Outcome S vk L n hs c₀ p₀ (M - 1) // o.EscapeIn (· ∈ combPaths M)}
-  | 0, [], _, _, _, _, _, _ => ⟨.seeds [] .nil, trivial⟩
+  | 0, [], _, _, _, _, _, _ => ⟨.data [] .nil, trivial⟩
   | 0, _ :: _, hk, _, _, _, _, _ => absurd hk (by simp)
   | 1, [h], _, j, hj, p, hacc, hmem =>
     ⟨walkFrom L n hn c₀ p₀ (M - 1) 0 [h] rfl p _ (by simp only [List.length_replicate]; omega)
@@ -905,7 +1087,7 @@ def walkStreamFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p�
     | .inr (.inr ⟨he⟩) =>
       ⟨.escape _ p _ hmem (by simp only [List.length_replicate]; omega) he,
         mem_combPaths_left (by omega)⟩
-    | .inl ⟨.leaf _ _, hw, _⟩ => ⟨.collision (leafNodeCollision (hw.2.symm.trans hst)), trivial⟩
+    | .inl ⟨.leaf _, hw, _⟩ => ⟨.collision (leafNodeCollision (hw.2.symm.trans hst)), trivial⟩
     | .inl ⟨.node c₁ c₂ p₁ p₂, hw, hE⟩ =>
       if he : c₁ = streamStmt n hs.dropLast ∧ c₂ = leafStmt (hs.getLast hne) n then
         let o₁ := walkStreamFrom L n hn c₀ p₀ M (k + 1) hs.dropLast (by simp [hk]) (j + 1)
@@ -920,7 +1102,7 @@ def walkStreamFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p�
       else ⟨.collision (nodeCollision he (hst.symm.trans hw.1)), trivial⟩
 
 /-- **The walk over the stream**: from the log `L` and an accepted signed proof of the stream's
-digest over the leaf values `hs`, the seeds of all its leaves, an explicit collision, an
+digest over the leaf values `hs`, the data of all its leaves, an explicit collision, an
 explicit capped forgery in the extraction tree of the signed proof, or an escape in it within
 depth `|hs| - 1`, at a path of `combPaths |hs|` (`walkStream_escapeIn`), computed from it through
 `S.E` on `L`. -/
@@ -948,8 +1130,8 @@ theorem walkStream_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L 
 at most `Q` queries and outputting a signed proof of the stream's digest, with
 `Q + qV ≤ logCap`, the probability that `acc` accepts it and the stream walk on `A`'s final log
 ends in an escape is at most `(2|hs| - 1) · (Q + qV) · ε`: a union bound over the stream's
-`|hs| - 1` nodes and `|hs|` leaves. Off that event the walk returns the seeds of all `|hs|`
-leaves (`Outcome.forall₂_of_seeds?`), a collision or a forgery in the extraction tree. -/
+`|hs| - 1` nodes and `|hs|` leaves. Off that event the walk returns the data of all `|hs|`
+leaves (`Outcome.forall₂_of_data?`), a collision or a forgery in the extraction tree. -/
 theorem compose_prob_stream (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
     (hn : n ≤ leafCap) (hs : List Digest) (A : OProg Signed) {Q : ℕ}
     (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap) :
@@ -960,7 +1142,7 @@ theorem compose_prob_stream (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : 
     A []).trans (escape_prob_le hks (streamStmt n hs) A hA hQ (combPaths hs.length))
 
 /-- **The stream walk against the service's signed traces**: `walkStream` with its forgery
-reduced by `Forgery.reduce`: the seeds of all the stream's leaves, a collision, an EUF-CMA
+reduced by `Forgery.reduce`: the data of all the stream's leaves, a collision, an EUF-CMA
 forgery against the signing record of `T` in the extraction tree, or an escape in it. -/
 def walkStreamSigned (L : Log) (T : List (Trace × Sig)) (hT : Honest T L) (n : ℕ)
     (hn : n ≤ leafCap) (hs : List Digest) (p : Signed)
@@ -978,16 +1160,17 @@ theorem walkStreamSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E �
 
 /-- **The composition theorem over the stream with probabilities, against the service's signed
 traces**: the probability that `acc` accepts the adversary's signed proof of the stream's digest
-and the stream walk against `T p L` returns no leaf seeds is at most
+and the stream walk against `T p L` returns no leaf data is at most
 `(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision and that it
 returns an EUF-CMA forgery against the signing record of `T p L`. Off these events the walk
-returns the seeds of all `|hs|` leaves (`SignedOutcome.forall₂_of_seeds?`). -/
+returns the data of all `|hs|` leaves (`SignedOutcome.forall₂_of_data?`), the runner's or a
+collision (`SignedOutcome.data_or_collision`). -/
 theorem compose_prob_stream_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
     (hn : n ≤ leafCap) (hs : List Digest) (A : OProg Signed) {Q : ℕ}
     (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
     (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L) :
     prob (fun p L => ∃ hacc : S.acc vk (streamStmt n hs) p = true,
-      (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).seeds? = none) A [] ≤
+      (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).data? = none) A [] ≤
       (2 * hs.length - 1 : ℕ) * ((Q + qV) * ε) +
       prob (fun p L => ∃ hacc : S.acc vk (streamStmt n hs) p = true,
         (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsCollision) A [] +
@@ -996,21 +1179,22 @@ theorem compose_prob_stream_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV
   refine (prob_mono (fun p L ⟨hacc, hno⟩ => ?_) A []).trans
     ((prob_or_le _ _ A []).trans (add_le_add ((prob_or_le _ _ A []).trans
       (add_le_add_left (compose_prob_stream hks n hn hs A hA hQ) _)) le_rfl))
-  rcases SignedOutcome.cases_of_seeds?_none hno with h | h | h
+  rcases SignedOutcome.cases_of_data?_none hno with h | h | h
   · exact .inl (.inr ⟨hacc, h⟩)
   · exact .inr ⟨hacc, h⟩
   · exact .inl (.inl ⟨hacc, (Outcome.escaped_reduce (hT p L) _).mp h⟩)
 
 /-- **The stream walk at its oldest leaf**: on a one-leaf stream whose signed proof's trace is in
-the log and which the extractor opens to `(s, n)` with `leafValue s n = h`, the seed `s`. -/
+the log and which the extractor opens to `xs` of `n` blocks with `dataRoot xs = h`, the data
+`xs`. -/
 theorem walkStreamFrom_one {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {p₀ : Signed}
     {M : ℕ} {h : Digest} {hk : [h].length = 1} {j : ℕ} {hj : j + 1 = M} {p : Signed}
     {hacc : S.acc vk (streamStmt n [h]) p = true}
     {hmem : InTree S L c₀ p₀ (List.replicate j false) (streamStmt n [h]) p}
-    (hin : ∀ e ∈ p.tr, e ∈ L) {s : Digest} (hE : S.E (leafStmt h n) p.π L = some (.leaf s n))
-    (hend : leafValue s n = h) :
-    (walkStreamFrom L n hn c₀ p₀ M 1 [h] hk j hj p hacc hmem).1.seeds? = some [s] :=
-  walkFrom_leaf hn (hr := rfl) rfl rfl hin hE hend
+    (hin : ∀ e ∈ p.tr, e ∈ L) {xs : List Digest} (hE : S.E (leafStmt h n) p.π L = some (.leaf xs))
+    (hend : dataRoot xs = h) (hlen : xs.length = n) :
+    (walkStreamFrom L n hn c₀ p₀ M 1 [h] hk j hj p hacc hmem).1.data? = some [xs] :=
+  walkFrom_leaf hn (hr := rfl) rfl rfl hin hE hend hlen
 
 /-- **The stream walk at a node, unfolded**: if the signed proof's trace is in the log and the
 extractor opens it to a node witness of the relation whose children are the statements of the
@@ -1036,8 +1220,9 @@ theorem walkStreamFrom_node {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Dig
 
 /-- **The stream walk at a node**: if the signed proof's trace is in the log, the extractor
 opens it to a node witness whose children are the statements of the stream without its last
-leaf and of that leaf, the walk over the shorter stream returns the seeds `ss`, and the last
-leaf's signed proof is opened to `(s, n)` with its value, the walk returns `ss ++ [s]`. -/
+leaf and of that leaf, the walk over the shorter stream returns the data `xss`, and the last
+leaf's signed proof is opened to `xs` of `n` blocks with its value, the walk returns
+`xss ++ [xs]`. -/
 theorem walkStreamFrom_succ_succ {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest}
     {p₀ : Signed} {M k : ℕ} {hs : List Digest} (hne : hs ≠ []) {hk : hs.length = k + 2} {j : ℕ}
     {hj : j + (k + 2) = M} {p : Signed} {hacc : S.acc vk (streamStmt n hs) p = true}
@@ -1047,16 +1232,17 @@ theorem walkStreamFrom_succ_succ {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ 
       (.node (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) p₁ p₂))
     (hR : Rel (S.acc vk) (streamStmt n hs)
       (.node (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) p₁ p₂))
-    {ss : List Digest}
+    {xss : List (List Digest)}
     (hrec : ∀ hk' hj' hacc' hmem', (walkStreamFrom (S := S) (vk := vk) L n hn c₀ p₀ M (k + 1)
-      hs.dropLast hk' (j + 1) hj' p₁ hacc' hmem').1.seeds? = some ss)
-    (hin₂ : ∀ e ∈ p₂.tr, e ∈ L) {s : Digest}
-    (hE₂ : S.E (leafStmt (hs.getLast hne) n) p₂.π L = some (.leaf s n))
-    (hend : leafValue s n = hs.getLast hne) :
-    (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.seeds? = some (ss ++ [s]) := by
+      hs.dropLast hk' (j + 1) hj' p₁ hacc' hmem').1.data? = some xss)
+    (hin₂ : ∀ e ∈ p₂.tr, e ∈ L) {xs : List Digest}
+    (hE₂ : S.E (leafStmt (hs.getLast hne) n) p₂.π L = some (.leaf xs))
+    (hend : dataRoot xs = hs.getLast hne) (hlen : xs.length = n) :
+    (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.data? =
+      some (xss ++ [xs]) := by
   rw [walkStreamFrom_node hn hne hin hE hR]
-  exact Outcome.seeds?_append (hsplit := List.dropLast_append_getLast _) (hrec _ _ _ _)
-    (walkFrom_leaf hn (hr := rfl) rfl rfl hin₂ hE₂ hend)
+  exact Outcome.data?_append (hsplit := List.dropLast_append_getLast _) (hrec _ _ _ _)
+    (walkFrom_leaf hn (hr := rfl) rfl rfl hin₂ hE₂ hend hlen)
 
 /-- **The stream walk escapes at a node** whose signed proof's trace is in the log and which the
 extractor opens to no witness of the relation: an escape at that node's path. -/

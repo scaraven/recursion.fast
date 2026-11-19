@@ -10,16 +10,22 @@ the number of entries, and for each entry the query's length word, from which it
 statement. The proof uses the domain's bound on query lengths (`Computes`): a length
 word is a number's low 64 bits, so without it no program could tell where an entry ends.
 
-* `findE c π L`: the leaf witness `(c, j)` for the first entry `j` whose answer is `c`, or none.
+* `findE c π L`: the one-block leaf witness `[c]` if some entry's answer is `c` (the first such
+  entry's answer, which is the statement), or none. The program emits `0, 1, c`: the leaf tag,
+  one block, the block's 4 words (`Contract/Extractor.lean`'s output format; with the leaf's data
+  as a list of blocks this replaces the v6 control's leaf `(c, j)`, the entry's index, which no
+  leaf witness carries any more).
 * `scan`: 16 memory words (`memPerWord = 0`: one pass needs no memory proportional to the tape),
   106 statements (`XStmt.size`). Set-up 42 steps, then 50 steps per entry passed over, 59 on the
   matching entry and 4 at the end of the log; an entry has at least 5 words, so `16 · t` covers it.
+  (The counts are those of the earlier leaf `(c, j)`: the match still runs 7 statements, now
+  emitting the block count `1` where it emitted the index.)
 
 Positive:
 * `scan_computes`: **`Computes scan findE (16 · t)`**, on the contract's whole domain, and
   `scan_fuel_le`: `16 · t ≤ B t`.
-* `scan_kat`: on a two-entry log whose second answer is the statement, the output is the leaf
-  `(c, 1)` (the kernel runs the program).
+* `scan_kat`: on a two-entry log whose second answer is the statement, the output is the
+  one-block leaf `[c]`, the words `0, 1, c` (the kernel runs the program).
 
 Negative:
 * `scan_fuel_short`: not within `10 · t` steps: on the 6-word tape of the empty log the program
@@ -32,10 +38,10 @@ import RecursionFast.Library.WitnessSending
 namespace RecursionFast.Controls.LogScan
 open RecursionFast XStmt
 
-/-- **The specification**: the leaf witness `(c, j)` for the first log entry `j` whose answer is
-the statement `c`, or none. -/
+/-- **The specification**: the one-block leaf witness `[c]` when some log entry's answer is the
+statement `c` (the first such entry's answer), or none. -/
 def findE (c : Digest) (_ : Proof) (L : Log) : Option Wit :=
-  (L.findIdx? fun e => e.2 = c).map (.leaf c)
+  (L.findIdx? fun e => e.2 = c).map fun _ => .leaf [c]
 
 /-! ## The program
 
@@ -60,8 +66,8 @@ def head : XStmt := seqs (.input 8 4)
    .op .add 8 8 9, .input 14 8, .op .eq 14 14 2, .op .and 13 13 14,
    .op .add 8 8 9, .input 14 8, .op .eq 14 14 3, .op .and 13 13 14]
 
-/-- A match: output the leaf `(c, i)` and stop. -/
-def found : XStmt := seqs (.out 15) [.out 0, .out 1, .out 2, .out 3, .out 6, .const 7 0]
+/-- A match: output the one-block leaf `[c]` (tag `0`, count `1`, the block's words) and stop. -/
+def found : XStmt := seqs (.out 15) [.out 9, .out 0, .out 1, .out 2, .out 3, .const 7 0]
 
 /-- No match: move to the next entry. -/
 def next : XStmt := seqs (.op .add 4 4 12) [.op .add 6 6 9, .op .sub 5 5 9]
@@ -76,7 +82,7 @@ def scan : XProg := ⟨16, 0, .seq pre (.loop 7 body)⟩
 
 `st` is the memory at the start of an iteration. The set-up block reaches it (`pre_exec`); an
 iteration passes over an entry whose answer is not the statement in 50 steps (`iter_next`), outputs
-the leaf on a match in 58 steps and stops (`iter_found`), and stops at the end of the log
+the one-block leaf on a match in 58 steps and stops (`iter_found`), and stops at the end of the log
 (`iter_end`). `scan_loop` runs the loop over the log by induction, within `50` steps per entry
 and `9` more. -/
 
@@ -205,7 +211,7 @@ theorem iter_found (I : Array Word) (cw aw : List Word) {p n i ℓ : ℕ} (x acc
       aw.getD 2 0 = cw.getD 2 0 ∧ aw.getD 3 0 = cw.getD 3 0)
     (f : ℕ) (o : Array Word) :
     exec I (f + 59) (st cw p n i x acc y) o [.loop 7 body] =
-      some (o.toList ++ [0, cw.getD 0 0, cw.getD 1 0, cw.getD 2 0, cw.getD 3 0, toWord i]) := by
+      some (o.toList ++ [0, 1, cw.getD 0 0, cw.getD 1 0, cw.getD 2 0, cw.getD 3 0]) := by
   rw [show f + 59 = (f + 1 + 13 + 1 + 41 + 1) + 1 + 1 by omega, exec_loop_ne (by simp [st]), body,
     exec_ite_ne (st_n_ne x acc y hn0 hn), exec_seq, head_exec I cw aw x acc y hℓ hp hq ha,
     exec_ite_ne (by
@@ -219,10 +225,11 @@ theorem iter_end (I : Array Word) (cw : List Word) {p i : ℕ} (x acc y : Word) 
 /-- An entry's words on the tape: the query, length-prefixed, then the answer. -/
 def ew (e : ByteArray × Digest) : List Word := bytesWords e.1.data.toList ++ packBytes e.2.toList
 
-/-- The output of the scan from index `i` on, for the result `r` of the search. -/
-def outW (cw : List Word) (i : ℕ) : Option ℕ → List Word
+/-- The output of the scan from index `i` on, for the result `r` of the search: the one-block
+leaf of the statement's words `cw` on a match. -/
+def outW (cw : List Word) (_ : ℕ) : Option ℕ → List Word
   | none => []
-  | some j => 0 :: cw ++ [toWord (i + j)]
+  | some _ => 0 :: 1 :: cw
 
 theorem ew_length (e : ByteArray × Digest) :
     (ew e).length = 1 + (e.1.size + 7) / 8 + 4 := by
@@ -294,19 +301,21 @@ theorem scan_loop (c : Digest) (T : List Word) (hT : T.length ≤ 2 ^ 64) :
     · rw [show f + 50 * (L.length + 1) + 9 = (f + 50 * L.length) + 59 by ring,
         iter_found T.toArray _ _ x acc y (by simp) (by simp at hi; omega) hℓ hp hq0 ha
           ((words_eq_iff _ _).mpr hc)]
-      simp only [hc, decide_true, ↓reduceIte, outW, Nat.add_zero]
+      simp only [hc, decide_true, ↓reduceIte, outW]
       conv_rhs => rw [four _ (packBytes_digest_length c)]
-      rfl
     · rw [show f + 50 * (L.length + 1) + 9 = (f + 50 * L.length + 9) + 50 by ring,
         iter_next T.toArray _ _ x acc y (by simp) (by simp at hi; omega) hℓ hp hq0 ha
           (mt (words_eq_iff _ _).mp hc), Nat.add_sub_cancel, ← hlA,
         ih (A ++ ew e) (i + 1) _ _ _ o f hA' (fun e' he' => hq e' (by simp [he']))
           (by simp at hi; omega)]
-      cases h : L.findIdx? (fun e => e.2 = c) <;> simp [hc, outW, Nat.add_right_comm, Nat.add_assoc]
+      cases h : L.findIdx? (fun e => e.2 = c) <;> simp [hc, outW]
 
-theorem decode_outW (c : Digest) {i j : ℕ} (hj : i + j < 2 ^ 64) :
-    decodeWit (outW (packBytes c.toList) i (some j)) = some (.leaf c (i + j)) :=
-  decodeWit_witWords (.leaf c (i + j)) hj
+theorem decode_outW (c : Digest) (i j : ℕ) :
+    decodeWit (outW (packBytes c.toList) i (some j)) = some (.leaf [c]) := by
+  have := decodeWit_witWords (.leaf [c]) (show [c].length < 2 ^ 64 by simp)
+  simp only [witWords, List.length_singleton, List.flatMap_cons, List.flatMap_nil,
+    List.append_nil] at this
+  exact this
 
 /-- **The log scan computes `findE` within `16 · t` steps**, on every input of the domain. -/
 theorem scan_computes : Computes scan findE fun t => 16 * t := by
@@ -353,9 +362,7 @@ theorem scan_computes : Computes scan findE fun t => 16 * t := by
   · unfold findE
     cases h : L.findIdx? (fun e => e.2 = c) with
     | none => rfl
-    | some j =>
-      have hj := (List.findIdx?_eq_some_iff_findIdx_eq.mp h).1
-      simpa using decode_outW c (i := 0) (j := j) (by omega)
+    | some j => simpa using decode_outW c 0 j
 /-! ## Known answers and negatives -/
 
 /-- The statement `01…01`, the proof `aa bb cc`, a log of a 9-byte query answered `02…02` and an
@@ -366,10 +373,10 @@ def katLog : Log :=
 /-- The tape of the known answer. -/
 def katTape : List Word := extractorInput (Vector.replicate 32 1) ⟨#[0xaa, 0xbb, 0xcc]⟩ katLog
 
-/-- The leaf `(01…01, 1)`: the second entry's answer is the statement. -/
+/-- The one-block leaf `[01…01]`: the second entry's answer is the statement. -/
 theorem scan_kat : scan.run katTape (16 * katTape.length) =
-    some [0, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
-      1] := by
+    some [0, 1, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
+      0x0101010101010101] := by
   decide +kernel
 
 /-- The fuel is within the budget's linear term. -/

@@ -9,11 +9,13 @@
 
   * **Proof format.** `encode w` is the bytes of the extractor output words of `w` (`witWords`,
     `Library/Words.lean`), so a proof packs back to exactly the words that denote its witness
-    (`decode_encode`). A node proof carries its two children's **signed proofs** (proof, trace,
-    signature).
+    (`decode_encode`). The format is forced, since the extractor copies the proof's packed words:
+    a leaf proof is `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)`, the tag, the number of blocks and the
+    blocks, `16 + 32n` bytes (`size_encode_leaf`). A node proof carries its two children's
+    **signed proofs** (proof, trace, signature).
   * **Verifier (strict).** `check vk c π`: `π` is the canonical encoding of a leaf
-    witness of at most `leafCap` hashes (checked before any hash) whose value and size the
-    statement commits to, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
+    witness of at most `leafCap` blocks (checked before any hash) whose data's root (`dataRootF`,
+    recomputed) and size the statement commits to, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
     children `acc vk` accepts: each child's proof length within a word, its trace within `qV = 0`
     entries and its queries within `queryCap`, its signature valid on its trace's digest,
     and, since this verifier asks no query, its trace **empty** (exact consumption) and its
@@ -71,8 +73,10 @@ theorem size_encode (w : Wit) : (encode w).size = 8 * (witWords w).length :=
 
 theorem size_eq_length (π : Proof) : π.size = π.data.toList.length := Array.length_toList.symm
 
-theorem size_encode_leaf (s : Digest) (n : ℕ) : (encode (.leaf s n)).size = 48 := by
-  simp [size_encode, witWords, packBytes_digest_length]
+/-- A leaf proof has `16 + 32n` bytes: two words, then the `n` blocks. -/
+theorem size_encode_leaf (xs : List Digest) : (encode (.leaf xs)).size = 16 + 32 * xs.length := by
+  simp [size_encode, witWords, List.length_flatMap, packBytes_digest_length]
+  ring
 
 /-- `decode` in linear time (`decodeF_eq`). -/
 def decodeF (π : Proof) : Option Wit := decodeWit (packFast π.data.toList)
@@ -96,15 +100,16 @@ theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
 /-! ## The argument -/
 
 /-- **The strict witness-sending decision** under the key `vk`: `π` is the canonical encoding of
-a leaf witness of `c` (its size within `leafCap`, checked before any hash), or of a node
+a leaf witness of `c` (its number of blocks within `leafCap`, checked before any hash, and its
+data's root recomputed), or of a node
 witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof
 length within a word, trace length (`qV = 0`) and queries capped, signature valid, trace empty,
 proof accepted recursively). -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decodeF π with
-  | some (.leaf s n) =>
-    decide (encodeF (.leaf s n) = π) && decide (n ≤ leafCap) &&
-      decide (c = leafStmtF (leafValueF s n) n)
+  | some (.leaf xs) =>
+    decide (encodeF (.leaf xs) = π) && decide (xs.length ≤ leafCap) &&
+      decide (c = leafStmtF (dataRootF xs) xs.length)
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encodeF (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmtF c₁ c₂) &&
@@ -173,16 +178,16 @@ theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
 /-- `check`, with the specification functions. -/
 theorem check_eq (vk c : Digest) (π : Proof) : check vk c π =
     match decode π with
-    | some (.leaf s n) =>
-      decide (encode (.leaf s n) = π) && decide (n ≤ leafCap) &&
-        decide (c = leafStmt (leafValue s n) n)
+    | some (.leaf xs) =>
+      decide (encode (.leaf xs) = π) && decide (xs.length ≤ leafCap) &&
+        decide (c = leafStmt (dataRoot xs) xs.length)
     | some (.node c₁ c₂ p₁ p₂) =>
       if encode (.node c₁ c₂ p₁ p₂) = π then
         decide (c = nodeStmt c₁ c₂) && submission.acc vk c₁ p₁ && submission.acc vk c₂ p₂
       else false
     | none => false := by
   rw [check, decodeF_eq]
-  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, leafValueF_eq, nodeStmtF_eq,
+  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, dataRootF_eq, nodeStmtF_eq,
     SigOkF_eq, traceDigestF_eq]
 
 /-- An accepted proof is the canonical encoding of a witness of the relation it decodes to. -/
@@ -190,9 +195,9 @@ private theorem exists_of_check {vk c : Digest} {π : Proof} (h : check vk c π 
     ∃ w, decode π = some w ∧ encode w = π ∧ Rel (submission.acc vk) c w := by
   rw [check_eq] at h
   split at h
-  next s n hd =>
+  next xs hd =>
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    exact ⟨.leaf s n, hd, h.1.1, h.1.2, h.2⟩
+    exact ⟨.leaf xs, hd, h.1.1, h.1.2, h.2⟩
   next c₁ c₂ p₁ p₂ hd =>
     split at h
     · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
@@ -221,7 +226,7 @@ theorem fits_of_acc {vk c : Digest} {p : Signed} (h : submission.acc vk c p = tr
 /-- Every witness of the relation fits the output format. -/
 theorem fits_of_rel {vk c : Digest} {w : Wit} (h : Rel (submission.acc vk) c w) : w.Fits := by
   cases w with
-  | leaf s n => exact h.1.trans_lt (by decide)
+  | leaf xs => exact h.1.trans_lt (by decide)
   | node c₁ c₂ p₁ p₂ => exact ⟨fits_of_acc h.2.1, fits_of_acc h.2.2⟩
 
 /-- **The honest proof of a witness of the relation is accepted.** -/

@@ -20,7 +20,7 @@ statement it executes, so a proved fuel bound is a proved step bound (`Extractor
   `mem + memPerWord · t` zero-initialised words on a tape of `t` words, two numbers given as data,
   and `run` charges one step per word before the first statement, so steps bound memory. Memory
   that grows with the tape lets an extractor index the log it reads (`Extractor.lean`'s budget),
-  and a short tape (a leaf's) gets a small memory.
+  and a short tape gets a small memory.
 
 **State.** The memory `M` is an array of `mem + memPerWord · t` words, named by indices. A read
 outside it is `0` and a write outside it is lost. The input tape `I` is read-only (a read past its

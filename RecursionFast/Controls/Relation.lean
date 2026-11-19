@@ -4,33 +4,43 @@
 Known answers are decided by the kernel (`decide +kernel` on the word-level twins of
 `Library/Fast.lean`, proved equal to the contract's hashes); each expected digest is the output of
 the `python3 -I` command in its docstring, run from the repository root (`harness/rfh/keccak.py`,
-the runner's Keccak-256, itself checked against OpenSSL's `keccak-256`). The seed of every leaf
-is `s0 = 00 01 … 1f`. Signed children are built with the Lean reference signer
+the runner's Keccak-256, itself checked against OpenSSL's `keccak-256`), following the byte layouts
+of `Contract/Relation.lean`: `B(j)` is the block `blk j` (bytes `32j, …, 32j + 31` mod 256),
+`L` one level of the data tree (pairs under `D`, an odd last digest carried up) and `R(n)` the root
+of the blocks `blk 0, …, blk (n − 1)`: the data pattern and the vectors the runner's Python
+reference, the service (Rust) and the toy prover (C) are checked against (`b_i = i mod 256`
+over the `32n` bytes). Signed children are built with the Lean reference signer
 (`Library/Signer.lean`) for **every** secret function `sk`, and their signatures are proved valid
 symbolically (`sigOk_sign`, no hash evaluated).
 
 Positive:
-* `item0_kat`, `item1_kat`, `value2_kat` (the XOR of the first two), `value16_kat`, `leafStmt_kat`,
-  `nodeStmt_kat`: the byte layouts; `itemBig_kat` (the index `0x123456`) and `leafStmt_season_kat`
-  (the count `2^22`, the season's `n`) with `enc64` beyond its first byte (`enc64_season`,
-  `enc64_kat`: 8 bytes, little-endian).
-* `leafStmt_zero_seed`: at `n = 0` the leaf statement does not depend on the seed (the runner
-  enforces `1 ≤ n`).
+* `item_kat`, `item1_kat` (`leafItem` of the first two blocks), `root1_kat` (one block: its hash), `root2_kat`,
+  `root3_kat` (an odd level: the third hash is carried up), `root4_kat` (two full levels),
+  `leafStmt_kat` (the statement of `root4_kat`'s root, `n = 4`), `rel_root4` (that statement is
+  in the relation with the four blocks as its witness), `nodeStmt_kat`: the byte layouts;
+  `leafStmt_season_kat` (the count `2^18`, the season's `n`) with `enc64` beyond its first byte
+  (`enc64_season`, `enc64_kat`: 8 bytes, little-endian).
+* `leafStmt_empty_kat`, `leaf_empty`, `leaf_empty_unique`: at `n = 0` the statement
+  `leafStmt zero 0` is public and its one witness is `[]` (the runner enforces `1 ≤ n`).
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
   `pk sk`, a node digest of two leaf digests is in the relation with the two signed leaf proofs
-  as its witness, for every secret function, two seeds and sizes up to `leafCap`;
+  as its witness, for every secret function and two leaves' data of up to `leafCap` blocks;
   `node_of_two_leaves_ref` with the reference derivation of the WOTS chain starts.
-* `leaf_at_leafCap`: a leaf of exactly `leafCap` hashes is in the relation.
-* `tags_separate`: the seven tags are distinct bytes, and each hash input of the contract starts
+* `leaf_at_leafCap`, `leaf_at_2pow20`: a leaf of exactly `leafCap = 2^20` blocks is in the
+  relation (symbolic: no hash is evaluated).
+* `tags_separate`: the eight tags are distinct bytes, and each hash input of the contract starts
   with its own tag.
 
 Negative:
-* `wrong_value` (the seed in place of the value), `wrong_seed` (another seed),
-  `wrong_count` (one hash dropped), `extra_item` (one hash added), `leaf_over_leafCap` (every
-  `acc`); `leaf_over_season`: the bound is the season's `2^22` (a leaf of `2^22 + 1` hashes is
-  rejected under every `acc`; `tests/mutation`'s `rel-leafcap-2^23`).
+* `wrong_root` (the block in place of its hash), `wrong_block` (another block), `wrong_count`
+  (the right root, the wrong count), `dropped_block` (one block dropped), `extra_block` (one block
+  added), `swapped_blocks` (two blocks swapped: the tree is ordered), `carry_not_duplicated` (an
+  odd last digest is carried up, not paired with itself), `root_not_xor` and `xor_rejected` (the
+  root is not the XOR of the block hashes, the v6 leaf's combination), `leaf_over_leafCap` (every
+  `acc`); `leaf_over_2pow20`: the bound is `2^20` (a leaf of `2^20 + 1` blocks is rejected under
+  every `acc`; `tests/mutation`'s `rel-leafcap-2^21`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
@@ -72,58 +82,82 @@ open RecursionFast.Controls.Keccak (hex)
 /-- The digest written by a hex string. -/
 def ofHex (s : String) : Digest := Vector.ofFn fun i => (hex s).getD i 0
 
-/-- The seed `00 01 … 1f`. -/
-def s0 : Digest := Vector.ofFn fun i => i.val.toUInt8
+/-- The block `j`: the bytes `32j, 32j + 1, …, 32j + 31` (mod 256). -/
+def blk (j : ℕ) : Digest := Vector.ofFn fun i => (32 * j + i.val).toUInt8
 
-/-- Another seed, `01 02 … 20`. -/
-def s1 : Digest := Vector.ofFn fun i => (i.val + 1).toUInt8
+/-- The first block, `00 01 … 1f`. -/
+abbrev s0 : Digest := blk 0
+
+/-- The second block, `20 21 … 3f`. -/
+abbrev s1 : Digest := blk 1
+
+/-- The first `n` blocks. -/
+def blks (n : ℕ) : List Digest := (List.range n).map blk
 
 /-! ## Known answers -/
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-print(K(b'H'+bytes(range(32))+(0).to_bytes(8,'little')).hex())"` -/
-theorem item0_kat : (leafItem s0 0).toList =
-    hex "da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11" := by
+print(K(b'H'+bytes(range(32))).hex())"` -/
+theorem item_kat : (leafItem s0).toList =
+    hex "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69" := by
   rw [← leafItemF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-print(K(b'H'+bytes(range(32))+(1).to_bytes(8,'little')).hex())"` -/
-theorem item1_kat : (leafItem s0 1).toList =
-    hex "422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f" := by
+print(K(b'H'+bytes(range(32, 64))).hex())"` (the second block) -/
+theorem item1_kat : (leafItem s1).toList =
+    hex "bea32b562ceff4efb8e461d8068bc952e8a11b759db5b51b9fc9a335e311edee" := by
   rw [← leafItemF_eq]
   decide +kernel
 
-/-- The XOR of `item0_kat` and `item1_kat`: `python3 -I -c "import sys; sys.path.insert(0,
-'harness'); from rfh.keccak import keccak256 as K; I=lambda j: K(b'H'+bytes(range(32))+j.to_bytes(8,
-'little')); print(bytes(a^b for a,b in zip(I(0),I(1))).hex())"` -/
-theorem value2_kat : (leafValue s0 2).toList =
-    hex "987811b1565b57a5360e5a6fbe442fab425363ce2a9326cf512e5aeec7eba08e" := by
-  rw [← leafValueF_eq]
+/-- One block: the root is its hash (`item_kat`). `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(1).hex())"` -/
+theorem root1_kat : (dataRoot (blks 1)).toList =
+    hex "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69" := by
+  rw [← dataRootF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; v=bytes(32)
-for j in range(16): v=bytes(a^b for a,b in zip(v,K(b'H'+bytes(range(32))+j.to_bytes(8,'little'))))
-print(v.hex())"` -/
-theorem value16_kat : (leafValue s0 16).toList =
-    hex "d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458" := by
-  rw [← leafValueF_eq]
+/-- Two blocks: one data node over their hashes. `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(2).hex())"` -/
+theorem root2_kat : (dataRoot (blks 2)).toList =
+    hex "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020" := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- Three blocks, an odd level: the third hash is carried up, then paired with the first node.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(3).hex())"` -/
+theorem root3_kat : (dataRoot (blks 3)).toList =
+    hex "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b" := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- Four blocks, two full levels. `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(4).hex())"` -/
+theorem root4_kat : (dataRoot (blks 4)).toList =
+    hex "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1" := by
+  rw [← dataRootF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-h=bytes.fromhex('d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458');
-print(K(b'L'+h+(16).to_bytes(8,'little')).hex())"` (the value of `value16_kat`) -/
+h=bytes.fromhex('55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1');
+print(K(b'L'+h+(4).to_bytes(8,'little')).hex())"` (the root of `root4_kat`) -/
 theorem leafStmt_kat :
-    (leafStmt (ofHex "d6d13655281cf163636b2dd8aa4a0666566ddc04bf3b515c0462e54c98860458")
-      16).toList =
-      hex "73e4f8a699e3bde6cc6bfecd0fc2370a0e0503bd29f06554ad8a32d81caeb2f9" := by
+    (leafStmt (ofHex "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1")
+      4).toList =
+      hex "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f" := by
   rw [← leafStmtF_eq]
+  decide +kernel
+
+/-- **A leaf statement and its witness**: the statement of `leafStmt_kat` is in the relation with
+the four blocks of `root4_kat` as its witness, under every `acc` (the root and the count are the
+ones the statement commits to). -/
+theorem rel_root4 (acc : Digest → Signed → Bool) :
+    Rel acc (ofHex "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f")
+      (.leaf (blks 4)) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
 a=bytes.fromhex('da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11');
 b=bytes.fromhex('422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f');
-print(K(b'N'+a+b).hex())"` (the digests of `item0_kat`, `item1_kat`) -/
+print(K(b'N'+a+b).hex())"` (two digests: the items of the earlier v6 leaf) -/
 theorem nodeStmt_kat :
     (nodeStmt (ofHex "da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11")
       (ofHex "422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f")).toList =
@@ -132,157 +166,211 @@ theorem nodeStmt_kat :
   decide +kernel
 
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
-print(K(b'H'+bytes(range(32))+(0x123456).to_bytes(8,'little')).hex())"` (an index of three bytes) -/
-theorem itemBig_kat : (leafItem s0 0x123456).toList =
-    hex "4108d62c512e966239d26cd4c4aef290b39aa29163b76e29d2a84b033a15f7f4" := by
-  rw [← leafItemF_eq]
+h=bytes.fromhex('55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1');
+print(K(b'L'+h+(2**18).to_bytes(8,'little')).hex())"` (the root of `root4_kat` with the season's
+count `n = 2^18`) -/
+theorem leafStmt_season_kat :
+    (leafStmt (ofHex "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1")
+      (2 ^ 18)).toList =
+      hex "7fff63bbbaa1db5254cd9f32f6d51d8c5c574eee5dd95abe753128700ea48e94" := by
+  rw [← leafStmtF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; v=bytes(32)
-for j in range(16): v=bytes(a^b for a,b in zip(v,K(b'H'+bytes(range(32))+j.to_bytes(8,'little'))))
-print(K(b'L'+v+(2**22).to_bytes(8,'little')).hex())"` (the value of `value16_kat` with the season's
-count `n = 2^22`) -/
-theorem leafStmt_season_kat : (leafStmt (leafValue s0 16) (2 ^ 22)).toList =
-    hex "c2b4bbe1ba4ed9ca2dfbb3c8439bdd7f795b82cda72e44d726327f14eb90c817" := by
-  rw [← leafStmtF_eq, ← leafValueF_eq]
-  decide +kernel
-
-/-- The season's `n = 2^22` in 8 little-endian bytes: its one set bit is in the third byte. -/
-theorem enc64_season : enc64 (2 ^ 22) = [0, 0, 0x40, 0, 0, 0, 0, 0] := by decide
+/-- The season's `n = 2^18` in 8 little-endian bytes: its one set bit is in the third byte. -/
+theorem enc64_season : enc64 (2 ^ 18) = [0, 0, 0x04, 0, 0, 0, 0, 0] := by decide
 
 /-- `enc64` writes 8 bytes, low byte first. -/
 theorem enc64_kat : enc64 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
 
-/-- **At `n = 0` the leaf statement does not depend on the seed**: the value of no hashes is
-zero, whatever the seed. Harmless because the runner draws `n` with `1 ≤ n`. -/
-theorem leafStmt_zero_seed (s t : Digest) :
-    leafStmt (leafValue s 0) 0 = leafStmt (leafValue t 0) 0 := rfl
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'L'+bytes(32)+(0).to_bytes(8,'little')).hex())"`: the statement of no block, the zero
+root and the count `0` (`dataRoot []` is the zero digest). -/
+theorem leafStmt_empty_kat : (leafStmt (dataRoot []) 0).toList =
+    hex "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41" := by
+  rw [← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- **At `n = 0` the statement is public**: `leafStmt zero 0` is in the relation with `[]`, under
+every `acc`. Harmless because the runner draws `n` with `1 ≤ n`. -/
+theorem leaf_empty (acc : Digest → Signed → Bool) :
+    Rel acc (leafStmt (Vector.replicate 32 0) 0) (.leaf []) := ⟨Nat.zero_le _, rfl⟩
+
+/-- **The empty statement's one witness**: a leaf witness of no block witnesses only
+`leafStmt zero 0`. -/
+theorem leaf_empty_unique (acc : Digest → Signed → Bool) {c : Digest}
+    (h : Rel acc c (.leaf [])) : c = leafStmt (Vector.replicate 32 0) 0 := h.2
 
 /-! ## Tags -/
 
-/-- **Tags separate**: the seven tags are distinct bytes, and each hash input of the contract
-starts with its own tag (the leaf item, the leaf and node statements, the trace digest, the
-WOTS chain step and leaf, the signature's Merkle node). -/
+/-- **Tags separate**: the eight tags are distinct bytes, and each hash input of the contract
+starts with its own tag (the leaf item, the data node, the leaf and node statements, the trace
+digest, the WOTS chain step and leaf, the signature's Merkle node). -/
 theorem tags_separate (d h c₁ c₂ x : Digest) (n j i s : ℕ) (tr : Trace) (ends : List Digest) :
-    [tagItem, tagLeaf, tagNode, tagTrace, tagWots, tagWotsLeaf, tagSigNode].Nodup ∧
-    leafItem d n = keccakDigest (tagItem :: (d.toList ++ enc64 n)) ∧
+    [tagItem, tagData, tagLeaf, tagNode, tagTrace, tagWots, tagWotsLeaf, tagSigNode].Nodup ∧
+    leafItem d = keccakDigest (tagItem :: d.toList) ∧
+    dataNode c₁ c₂ = keccakDigest (tagData :: (c₁.toList ++ c₂.toList)) ∧
     leafStmt h n = keccakDigest (tagLeaf :: (h.toList ++ enc64 n)) ∧
     nodeStmt c₁ c₂ = keccakDigest (tagNode :: (c₁.toList ++ c₂.toList)) ∧
     traceDigest tr = keccakDigest (tagTrace :: traceBytes tr) ∧
     wotsStep j i s x = keccakDigest (tagWots :: (enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList)) ∧
     wotsLeaf j ends = keccakDigest (tagWotsLeaf :: (enc64 j ++ ends.flatMap Vector.toList)) ∧
     sigNode c₁ c₂ = keccakDigest (tagSigNode :: (c₁.toList ++ c₂.toList)) :=
-  ⟨by decide, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+  ⟨by decide, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-! ## Leaves -/
 
-/-- A leaf of exactly `leafCap` hashes is in the relation. -/
-theorem leaf_at_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
-    Rel acc (leafStmt (leafValue s leafCap) leafCap) (.leaf s leafCap) := ⟨le_rfl, rfl⟩
+/-- A leaf of exactly `leafCap` blocks is in the relation. -/
+theorem leaf_at_leafCap (acc : Digest → Signed → Bool) {xs : List Digest}
+    (h : xs.length = leafCap) : Rel acc (leafStmt (dataRoot xs) xs.length) (.leaf xs) :=
+  ⟨h.le, rfl⟩
 
-/-- **Over the leaf bound**: a leaf of `leafCap + 1` hashes is not in the relation. -/
-theorem leaf_over_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
-    ¬ Rel acc (leafStmt (leafValue s (leafCap + 1)) (leafCap + 1)) (.leaf s (leafCap + 1)) :=
-  fun h => absurd h.1 (by omega)
+/-- **The leaf bound is `2^20`**: a leaf of exactly `2^20` blocks is in the relation, under every
+`acc` (symbolic). -/
+theorem leaf_at_2pow20 (acc : Digest → Signed → Bool) {xs : List Digest}
+    (h : xs.length = 2 ^ 20) : Rel acc (leafStmt (dataRoot xs) xs.length) (.leaf xs) :=
+  ⟨h.trans_le (by decide), rfl⟩
 
-/-- **The leaf bound is the season's `2^22`**: a leaf of `2^22 + 1` hashes is not in the
-relation, under every `acc`. -/
-theorem leaf_over_season (acc : Digest → Signed → Bool) (s : Digest) :
-    ¬ Rel acc (leafStmt (leafValue s (2 ^ 22 + 1)) (2 ^ 22 + 1)) (.leaf s (2 ^ 22 + 1)) :=
-  fun h => absurd h.1 (by decide)
+/-- **Over the leaf bound**: a leaf of `leafCap + 1` blocks is not in the relation. -/
+theorem leaf_over_leafCap (acc : Digest → Signed → Bool) {xs : List Digest} (c : Digest)
+    (h : xs.length = leafCap + 1) : ¬ Rel acc c (.leaf xs) :=
+  fun hR => absurd hR.1 (by omega)
 
-/-- The statement of the seed is not the statement of its leaf's value (`s0`, `n = 1`). -/
-theorem seed_ne_value : leafStmt s0 1 ≠ leafStmt (leafValue s0 1) 1 := by
-  rw [← leafStmtF_eq, ← leafValueF_eq]
+/-- **The leaf bound is `2^20`, not more**: a leaf of `2^20 + 1` blocks is not in the relation,
+under every `acc` (`tests/mutation`'s `rel-leafcap-2^21`). -/
+theorem leaf_over_2pow20 (acc : Digest → Signed → Bool) {xs : List Digest} (c : Digest)
+    (h : xs.length = 2 ^ 20 + 1) : ¬ Rel acc c (.leaf xs) :=
+  fun hR => absurd (h ▸ hR.1) (by decide)
+
+/-- The statement committing to the block itself is not the statement of its leaf (`s0`, one
+block): the root is the block's hash. -/
+theorem block_ne_root : leafStmt s0 1 ≠ leafStmt (dataRoot [s0]) 1 := by
+  rw [← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
-/-- **Wrong value**: the leaf statement committing to the seed itself is not witnessed by the
-seed, under every `acc`. -/
-theorem wrong_value (acc : Digest → Signed → Bool) : ¬ Rel acc (leafStmt s0 1) (.leaf s0 1) :=
-  fun h => seed_ne_value h.2
+/-- **Wrong root**: the leaf statement committing to the block itself is not witnessed by the
+block, under every `acc`. -/
+theorem wrong_root (acc : Digest → Signed → Bool) : ¬ Rel acc (leafStmt s0 1) (.leaf [s0]) :=
+  fun h => block_ne_root h.2
 
-/-- **Wrong seed**: the statement of the leaf of `s0` with one hash is not witnessed by another
-seed `s1` with one hash, under every `acc`. -/
-theorem wrong_seed (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (leafValue s0 1) 1) (.leaf s1 1) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← leafValueF_eq]
-  decide +kernel
-
-/-- **One hash dropped**: the statement of the leaf of `s0` with two hashes is not witnessed by
-`s0` with one hash, under every `acc`. -/
-theorem wrong_count (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (leafValue s0 2) 2) (.leaf s0 1) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← leafValueF_eq]
-  decide +kernel
-
-/-- **One hash added**: the statement of the leaf of `s0` with one hash, and the value of one
-hash committed with the count `2`, are not witnessed by `s0` with two hashes, under every
+/-- **Wrong block**: the statement of the leaf `[s0]` is not witnessed by `[s1]`, under every
 `acc`. -/
-theorem extra_item (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (leafValue s0 1) 1) (.leaf s0 2) ∧
-      ¬ Rel acc (leafStmt (leafValue s0 1) 2) (.leaf s0 2) := by
-  constructor <;> rw [Rel, ← leafStmtF_eq, ← leafValueF_eq] <;> decide +kernel
+theorem wrong_block (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (dataRoot [s0]) 1) (.leaf [s1]) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- **Wrong count**: the root of `[s0, s1]` committed with the count `1` is not witnessed by
+`[s0, s1]`, under every `acc` (the statement binds the number of blocks). -/
+theorem wrong_count (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 1) (.leaf [s0, s1]) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- **One block dropped**: the statement of `[s0, s1]` is not witnessed by `[s0]`, under every
+`acc`. -/
+theorem dropped_block (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s0]) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- **One block added**: the statement of `[s0]`, and its root committed with the count `2`, are
+not witnessed by `[s0, s1]`, under every `acc`. -/
+theorem extra_block (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (dataRoot [s0]) 1) (.leaf [s0, s1]) ∧
+      ¬ Rel acc (leafStmt (dataRoot [s0]) 2) (.leaf [s0, s1]) := by
+  constructor <;> rw [Rel, ← leafStmtF_eq, ← dataRootF_eq] <;> decide +kernel
+
+/-- **Two blocks swapped**: the statement of `[s0, s1]` is not witnessed by `[s1, s0]`, under
+every `acc` (the data tree is ordered). -/
+theorem swapped_blocks (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s1, s0]) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- **The carry-up is not a duplication**: the root of three blocks is not the root of the four
+blocks with the last one repeated (an odd last digest is carried up unhashed, not paired with
+itself). -/
+theorem carry_not_duplicated : dataRoot (blks 3) ≠ dataRoot (blks 3 ++ [blk 2]) := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- The bytewise XOR of two digests (the v6 leaf's combination of its hashes). -/
+def xor2 (a b : Digest) : Digest := Vector.zipWith (· ^^^ ·) a b
+
+/-- **The root is not the XOR of the block hashes** (`[s0, s1]`). -/
+theorem root_not_xor : dataRoot [s0, s1] ≠ xor2 (leafItem s0) (leafItem s1) := by
+  rw [← dataRootF_eq, ← leafItemF_eq]
+  decide +kernel
+
+/-- **The XOR's statement is rejected**: the statement committing to the XOR of the two block
+hashes is not witnessed by the two blocks, under every `acc`. -/
+theorem xor_rejected (acc : Digest → Signed → Bool) :
+    ¬ Rel acc (leafStmt (xor2 (leafItem s0) (leafItem s1)) 2) (.leaf [s0, s1]) := fun h => by
+  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq, ← leafItemF_eq]
+  decide +kernel
 
 /-! ## Signed leaf proofs -/
 
-/-- The witness-sending signed proof of the leaf `(s, n)`: the proof, the empty trace, and the
+/-- The witness-sending signed proof of the leaf `xs`: the proof, the empty trace, and the
 reference signature with key `j` of the empty trace's digest. -/
-def leafSigned (sk : ℕ → ℕ → Digest) (j : ℕ) (s : Digest) (n : ℕ) : Signed :=
-  ⟨encode (.leaf s n), [], Signer.sign sk j (traceDigest [])⟩
+def leafSigned (sk : ℕ → ℕ → Digest) (j : ℕ) (xs : List Digest) : Signed :=
+  ⟨encode (.leaf xs), [], Signer.sign sk j (traceDigest [])⟩
 
-theorem leafSigned_sig (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (s : Digest)
-    (n : ℕ) : SigOk (Signer.pk sk) (traceDigest (leafSigned sk j s n).tr)
-      (leafSigned sk j s n).σ = true := Signer.sigOk_sign sk j hj _
+theorem leafSigned_sig (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (xs : List Digest) :
+    SigOk (Signer.pk sk) (traceDigest (leafSigned sk j xs).tr) (leafSigned sk j xs).σ = true :=
+  Signer.sigOk_sign sk j hj _
 
 /-- `acc` of a signed leaf proof: the leaf proof is accepted for the statement. -/
-theorem acc_leafSigned_iff (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (c s : Digest)
-    {n : ℕ} (hn : n < 2 ^ 64) :
-    submission.acc (Signer.pk sk) c (leafSigned sk j s n) =
-      (decide (n ≤ leafCap) && decide (c = leafStmt (leafValue s n) n)) := by
-  rw [acc_eq, leafSigned_sig sk hj, ← check_leaf' c s hn]
+theorem acc_leafSigned_iff (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (c : Digest)
+    {xs : List Digest} (hn : xs.length < 2 ^ 59) :
+    submission.acc (Signer.pk sk) c (leafSigned sk j xs) =
+      (decide (xs.length ≤ leafCap) && decide (c = leafStmt (dataRoot xs) xs.length)) := by
+  rw [acc_eq, leafSigned_sig sk hj, ← check_leaf' c (hn.trans (by decide))]
   simp [leafSigned, size_encode_leaf]
+  omega
 where
-  check_leaf' (c s : Digest) {n : ℕ} (hn : n < 2 ^ 64) :
-      check (Signer.pk sk) c (encode (.leaf s n)) =
-        (decide (n ≤ leafCap) && decide (c = leafStmt (leafValue s n) n)) := by
-    rw [check_eq, decode_encode (.leaf s n) hn]; simp
+  check_leaf' (c : Digest) {xs : List Digest} (hn : xs.length < 2 ^ 64) :
+      check (Signer.pk sk) c (encode (.leaf xs)) =
+        (decide (xs.length ≤ leafCap) && decide (c = leafStmt (dataRoot xs) xs.length)) := by
+    rw [check_eq, decode_encode (.leaf xs) hn]; simp
 
 /-- **A signed leaf proof is accepted** under the signer's key. -/
-theorem acc_leafSigned (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (s : Digest)
-    {n : ℕ} (hn : n ≤ leafCap) :
-    submission.acc (Signer.pk sk) (leafStmt (leafValue s n) n) (leafSigned sk j s n) = true := by
-  rw [acc_leafSigned_iff sk hj _ s (hn.trans_lt (by decide))]; simp [hn]
+theorem acc_leafSigned (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) (xs : List Digest)
+    (hn : xs.length ≤ leafCap) :
+    submission.acc (Signer.pk sk) (leafStmt (dataRoot xs) xs.length) (leafSigned sk j xs) =
+      true := by
+  rw [acc_leafSigned_iff sk hj _ (hn.trans_lt (by decide))]; simp [hn]
 
 /-! ## Nodes -/
 
 /-- **A node with two signed leaf children** is in the relation under the signer's key, for
-every secret function, seeds and sizes up to `leafCap`. -/
-theorem node_of_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
-    (h₁ : n₁ ≤ leafCap) (h₂ : n₂ ≤ leafCap) :
+every secret function and two leaves' data of up to `leafCap` blocks. -/
+theorem node_of_two_leaves (sk : ℕ → ℕ → Digest) (xs₁ xs₂ : List Digest)
+    (h₁ : xs₁.length ≤ leafCap) (h₂ : xs₂.length ≤ leafCap) :
     Rel (submission.acc (Signer.pk sk))
-      (nodeStmt (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂))
-      (.node (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂)
-        (leafSigned sk 0 s₁ n₁) (leafSigned sk 1 s₂ n₂)) :=
-  ⟨rfl, acc_leafSigned sk (by decide) s₁ h₁, acc_leafSigned sk (by decide) s₂ h₂⟩
+      (nodeStmt (leafStmt (dataRoot xs₁) xs₁.length) (leafStmt (dataRoot xs₂) xs₂.length))
+      (.node (leafStmt (dataRoot xs₁) xs₁.length) (leafStmt (dataRoot xs₂) xs₂.length)
+        (leafSigned sk 0 xs₁) (leafSigned sk 1 xs₂)) :=
+  ⟨rfl, acc_leafSigned sk (by decide) xs₁ h₁, acc_leafSigned sk (by decide) xs₂ h₂⟩
 
 /-- The node control with the reference derivation of the WOTS chain starts, for every signer
 seed. -/
-theorem node_of_two_leaves_ref (seed : List UInt8) (s₁ s₂ : Digest) {n₁ n₂ : ℕ}
-    (h₁ : n₁ ≤ leafCap) (h₂ : n₂ ≤ leafCap) :
+theorem node_of_two_leaves_ref (seed : List UInt8) (xs₁ xs₂ : List Digest)
+    (h₁ : xs₁.length ≤ leafCap) (h₂ : xs₂.length ≤ leafCap) :
     Rel (submission.acc (Signer.pk (Signer.chainStart seed)))
-      (nodeStmt (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂))
-      (.node (leafStmt (leafValue s₁ n₁) n₁) (leafStmt (leafValue s₂ n₂) n₂)
-        (leafSigned (Signer.chainStart seed) 0 s₁ n₁)
-        (leafSigned (Signer.chainStart seed) 1 s₂ n₂)) :=
-  node_of_two_leaves _ s₁ s₂ h₁ h₂
+      (nodeStmt (leafStmt (dataRoot xs₁) xs₁.length) (leafStmt (dataRoot xs₂) xs₂.length))
+      (.node (leafStmt (dataRoot xs₁) xs₁.length) (leafStmt (dataRoot xs₂) xs₂.length)
+        (leafSigned (Signer.chainStart seed) 0 xs₁)
+        (leafSigned (Signer.chainStart seed) 1 xs₂)) :=
+  node_of_two_leaves _ xs₁ xs₂ h₁ h₂
 
 /-- **The node clause needs its statement**: whatever the children, a statement other than their
 `nodeStmt` is not in the relation. -/
 theorem node_needs_statement (acc : Digest → Signed → Bool) {c c₁ c₂ : Digest} (p₁ p₂ : Signed)
     (h : c ≠ nodeStmt c₁ c₂) : ¬ Rel acc c (.node c₁ c₂ p₁ p₂) := fun hR => h hR.1
 
-/-- The correct leaf digest of one hash of `s0`, and the wrong one (committing to `s0`). -/
-abbrev cOk : Digest := leafStmt (leafValue s0 1) 1
+/-- The correct leaf digest of the one block `s0`, and the wrong one (committing to `s0`). -/
+abbrev cOk : Digest := leafStmt (dataRoot [s0]) 1
 abbrev cBad : Digest := leafStmt s0 1
 
 /-- **Statement mismatch** (an instance): two accepted children under their own leaf statement,
@@ -290,32 +378,32 @@ which is not their `nodeStmt`, under every `acc`. -/
 theorem node_statement_mismatch (acc : Digest → Signed → Bool) (p₁ p₂ : Signed) :
     ¬ Rel acc cOk (.node cOk cOk p₁ p₂) := by
   refine node_needs_statement _ _ _ ?_
-  rw [cOk, ← leafStmtF_eq, ← leafValueF_eq, ← nodeStmtF_eq]
+  rw [cOk, ← leafStmtF_eq, ← dataRootF_eq, ← nodeStmtF_eq]
   decide +kernel
 
 theorem acc_bad (sk : ℕ → ℕ → Digest) {j : ℕ} (hj : j < 2 ^ sigHeight) :
-    submission.acc (Signer.pk sk) cBad (leafSigned sk j s0 1) = false := by
-  rw [acc_leafSigned_iff sk hj _ s0 (by decide)]
-  simp [show cBad ≠ leafStmt (leafValue s0 1) 1 from seed_ne_value]
+    submission.acc (Signer.pk sk) cBad (leafSigned sk j [s0]) = false := by
+  rw [acc_leafSigned_iff sk hj _ (by decide)]
+  simp [show cBad ≠ leafStmt (dataRoot [s0]) 1 from block_ne_root]
 
 /-- **A node whose first child is rejected**: validly signed, but its proof is for another
 statement. -/
 theorem first_child_rejected (sk : ℕ → ℕ → Digest) :
     ¬ Rel (submission.acc (Signer.pk sk)) (nodeStmt cBad cOk)
-      (.node cBad cOk (leafSigned sk 0 s0 1) (leafSigned sk 1 s0 1)) := fun h =>
+      (.node cBad cOk (leafSigned sk 0 [s0]) (leafSigned sk 1 [s0])) := fun h =>
   absurd h.2.1 (by rw [acc_bad sk (by decide)]; decide)
 
 /-- **A node whose second child is rejected.** -/
 theorem second_child_rejected (sk : ℕ → ℕ → Digest) :
     ¬ Rel (submission.acc (Signer.pk sk)) (nodeStmt cOk cBad)
-      (.node cOk cBad (leafSigned sk 0 s0 1) (leafSigned sk 1 s0 1)) := fun h =>
+      (.node cOk cBad (leafSigned sk 0 [s0]) (leafSigned sk 1 [s0])) := fun h =>
   absurd h.2.2 (by rw [acc_bad sk (by decide)]; decide)
 
 /-- **A child signed under another key is rejected**, under every key other than the signer's. -/
 theorem child_other_key (sk : ℕ → ℕ → Digest) {vk : Digest} (hvk : vk ≠ Signer.pk sk)
-    (c₁ c₂ s : Digest) (n : ℕ) (p₂ : Signed) :
-    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ (leafSigned sk 0 s n) p₂) := fun h => by
-  have hs := Controls.Signature.sigOk_other_key (leafSigned_sig sk (j := 0) (by decide) s n) hvk
+    (c₁ c₂ : Digest) (xs : List Digest) (p₂ : Signed) :
+    ¬ Rel (submission.acc vk) (nodeStmt c₁ c₂) (.node c₁ c₂ (leafSigned sk 0 xs) p₂) := fun h => by
+  have hs := Controls.Signature.sigOk_other_key (leafSigned_sig sk (j := 0) (by decide) xs) hvk
   simpa [acc_eq, hs] using h.2.1
 
 /-- **A child carrying a trace is rejected** by the witness-sending `acc` (it asks no query, and
@@ -398,15 +486,15 @@ theorem acc_two_entries_rejected (sk : ℕ → ℕ → Digest) (a c : Digest) (�
       Signer.sign sk 0 (traceDigest [(qMax, a), (qMax, a)])⟩ = false :=
   acc_trace_over_qV _ _ _ _ (by simp [oneQuery])
 
-/-- A tree of `k` levels over one leaf: the digest. -/
+/-- A tree of `k` levels over one leaf (the one block `s0`, a 48-byte proof): the digest. -/
 def deepStmt : ℕ → Digest
-  | 0 => leafStmt (leafValue s0 0) 0
+  | 0 => leafStmt (dataRoot [s0]) 1
   | k + 1 => nodeStmt (deepStmt k) (deepStmt k)
 
 /-- A tree of `k` levels over one leaf: the witness-sending proof, children signed with key `0`
 of `sk`. -/
 def deepProof (sk : ℕ → ℕ → Digest) : ℕ → Proof
-  | 0 => encode (.leaf s0 0)
+  | 0 => encode (.leaf [s0])
   | k + 1 => encode (.node (deepStmt k) (deepStmt k)
       ⟨deepProof sk k, [], Signer.sign sk 0 (traceDigest [])⟩
       ⟨deepProof sk k, [], Signer.sign sk 0 (traceDigest [])⟩)
@@ -462,7 +550,7 @@ theorem deepProof_check (sk : ℕ → ℕ → Digest) (k : ℕ) (hk : k ≤ 51) 
   induction k with
   | zero =>
     rw [deepProof, deepStmt]
-    exact check_encode (show Rel _ _ (.leaf s0 0) from ⟨Nat.zero_le _, rfl⟩)
+    exact check_encode (show Rel _ _ (.leaf [s0]) from ⟨by decide, rfl⟩)
   | succ k ih => exact deepProof_check_succ sk (ih (by omega)) (deepProof_word sk (by omega))
 
 /-- **No cap below the word**: `acc` accepts the signed witness-sending proof of a tree

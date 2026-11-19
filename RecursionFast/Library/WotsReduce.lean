@@ -415,7 +415,7 @@ theorem compose_prob_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest
     (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L)
     (hS : ∀ p L, Transcript sk (T p L)) :
     prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
-      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).seeds? = none) A [] ≤
+      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).data? = none) A [] ≤
       (2 ^ (r + 1) - 1 : ℕ) * ((Q + qV) * ε) +
       prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
         (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsCollision) A [] +
@@ -429,7 +429,7 @@ theorem compose_prob_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest
 /-- **The composition theorem over the stream, down to Keccak-256 and the chains**: under the
 reference signer's public key `pk sk`, against the service's transcripts `T p L` (its signatures
 the reference signer's, one message per index, complete), the probability that `acc` accepts the
-adversary's signed proof of the stream's digest and the stream walk returns no leaf seeds is at
+adversary's signed proof of the stream's digest and the stream walk returns no leaf data is at
 most `(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision, that its
 EUF-CMA forgery reduces to a collision, and that it reduces to a chain inversion (`eufReduce`). -/
 theorem compose_prob_stream_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest)
@@ -438,7 +438,7 @@ theorem compose_prob_stream_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ →
     (hQ : Q + qV ≤ logCap) (T : Signed → Log → List (Trace × Sig))
     (hT : ∀ p L, Honest (T p L) L) (hS : ∀ p L, Transcript sk (T p L)) :
     prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
-      (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).seeds? = none) A [] ≤
+      (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).data? = none) A [] ≤
       (2 * hs.length - 1 : ℕ) * ((Q + qV) * ε) +
       prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
         (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsCollision) A [] +
