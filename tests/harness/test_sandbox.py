@@ -23,9 +23,20 @@
 9. a badge `verify` that gives one answer and hangs is killed at the batch's timeout (the only
    bound on a check): `BadgeError` of kind `timeout`, and none of its processes survives;
 10. the oracle socket exists only from `go` on: with `sock_at_go` (the benchmark's requests), a
-    connect to `RF_ORACLE` before `ready` fails (no such file) and one after `go` reaches the service.
+    connect to `RF_ORACLE` before `ready` fails (no such file) and one after `go` reaches the service;
+11. isolation (`isoprobe.c`), in a request, in `prover setup` and in a badge run: every top-level
+    /proc entry but the pid directories, `self` and `thread-self` reads as empty (a file) or lists
+    nothing (a directory), and so does everything in /sys/devices/system/cpu but its static
+    description; `socket`/`socketpair` fail with EPERM for every domain but AF_UNIX (UDP among them);
+    `mlock` of N pages in one request raises the host's `unevictable_pgs_mlocked` by N and the next
+    request sees none of it; a request's first inode number and /work's free counts do not depend on
+    how many files an earlier request made (with a shared tmpfs, the control, they do).
+
+The requests of 6.-8., 10. and 11. run as the benchmark's do, /work a private tmpfs (`request` with
+no host directory).
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,7 +46,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh.files import OutputError, read_output  # noqa: E402
-from rfh.prover import Run, build, request  # noqa: E402
+from rfh.prover import Run, build, remove_tree, request  # noqa: E402
 from rfh.sandbox import memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 
@@ -119,7 +130,7 @@ def main():
         subprocess.run(["gcc", "-static", "-O1", "-pthread", "-w", "-o", os.path.join(d, "bin", "prover"), os.path.join(d, "p.c")],
                        check=True)
         r = Run(os.path.join(d, "bin"), run.setup_dir, "256M")
-        return request(r, kind, os.path.join(d, "work"), svc.sock_dir, inputs or {"chain.json": b"{}"}, step, 1 << 20,
+        return request(r, kind, None, svc.sock_dir, inputs or {"chain.json": b"{}"}, step, 1 << 20,
                        ready_s=2, work_cap=work_cap)
     HS = 'static void hs(void){puts("ready");fflush(stdout);char b[8];if(!fgets(b,8,stdin))exit(9);}\n'
     r = req('int main(){sleep(100);}\n')
@@ -181,7 +192,7 @@ def main():
     r = req('int main(){_exit(0);}\n')
     check(r.status.startswith("no ready line") or "ended before" in r.status,
           f"a prover that exits at once is the entry's failure, never a harness error: {r.status}")
-    from rfh.prover import remove_tree, tree_bytes
+    from rfh.prover import tree_bytes
     t = os.path.join(tmp, "locked")
     os.makedirs(os.path.join(t, "a", "b"))
     open(os.path.join(t, "a", "b", "f"), "w").write("x")
@@ -208,14 +219,74 @@ def main():
     os.makedirs(link_dir)
     import errno
     for at_go in (True, False):
-        w = os.path.join(d, f"work-{at_go}")
-        os.makedirs(w)
-        r = request(Run(os.path.join(d, "bin"), run.setup_dir, "256M"), "step", w,
+        r = request(Run(os.path.join(d, "bin"), run.setup_dir, "256M"), "step", None,
                     link_dir if at_go else svc.sock_dir, {"leaf.json": b"{}"}, 5, 1 << 20, ready_s=2,
                     sock_at_go=svc.socket_path if at_go else None)
         want = f"pre={errno.ENOENT} post=0".encode() if at_go else b"pre=0 post=0"
         check(r.status == "ok" and r.proof == want,
               f"{'with' if at_go else 'without'} sock_at_go, connect before ready / after go: {r.status} {r.proof!r}")
+
+    # 11. isolation: the probe as a request, as `prover setup` and (below) as a badge
+    iso = os.path.join(tmp, "iso")
+    os.makedirs(os.path.join(iso, "bin"))
+    probe = os.path.join(iso, "bin", "prover")
+    subprocess.run(["gcc", "-static", "-O1", "-o", probe, os.path.join(HERE, "isoprobe.c")], check=True)
+    iso_run = Run(os.path.join(iso, "bin"), os.path.join(iso, "setup"), "256M")
+    os.makedirs(iso_run.setup_dir)
+
+    def iso_req(mode):
+        return request(iso_run, "step", None, svc.sock_dir, {"mode": mode.encode()}, 10, 1 << 20, ready_s=5,
+                       preset={"vk.hex": b"00" * 32 + b"\n"})
+
+    def report(what, text):
+        lines = text.splitlines()
+        bad = [l for l in lines if l.startswith("FAIL")]
+        check(lines and lines[-1] == "checks passed" and not bad,
+              f"{what}: masks and the socket rule hold ({'; '.join(l for l in lines if l.startswith('/'))}; "
+              f"links left in /proc: {[l[5:] for l in lines if l.startswith('link /proc/')]}; {bad[:5]})")
+    r = iso_req("probe")
+    report(f"a request ({r.status})", (r.proof or b"").decode(errors="replace"))
+    ok, _, slog = iso_run.setup(60)
+    rp = os.path.join(iso_run.setup_dir, "report.txt")
+    report(f"prover setup (ok={ok})", open(rp).read() if os.path.exists(rp) else slog)
+
+    def vmstat(key="unevictable_pgs_mlocked"):
+        for line in open("/proc/vmstat"):
+            k, _, v = line.partition(" ")
+            if k == key:
+                return int(v)
+        return None
+    N = 1024
+    m0 = vmstat()
+    r = iso_req(f"mlock {N}")
+    m1 = vmstat()
+    nxt = iso_req("probe")
+    text = (nxt.proof or b"").decode(errors="replace")
+    check(r.status == "ok" and b"mlocked" in (r.proof or b"") and m0 is not None and m1 - m0 >= N
+          and text.endswith("checks passed\n"),
+          f"mlock of {N} pages in one request raises the host's unevictable_pgs_mlocked by {m1 - m0 if m0 else '?'}; "
+          f"the next request reads every machine-wide /proc entry empty ({r.status}, {(r.proof or b'')[:40]!r})")
+
+    def ino_of(r):
+        kv = dict(w.split("=") for w in (r.proof or b"").decode().split())
+        return int(kv.get("ino", -1)), int(kv.get("ffree", -1)), int(kv.get("bfree", -1))
+    K = 3000
+    a, many, b = iso_req("ino 0"), iso_req(f"ino {K}"), iso_req("ino 0")
+    check(all(x.status == "ok" for x in (a, many, b)) and ino_of(a) == ino_of(b) == ino_of(many) and ino_of(a)[0] > 0,
+          f"a request's first inode number and /work's free inodes and blocks do not depend on an earlier request's "
+          f"{K} files: {ino_of(a)}, after {K} files {ino_of(b)}")
+    shm = "/dev/shm"                     # the control: two requests on one shared tmpfs
+    if os.path.isdir(shm) and os.access(shm, os.W_OK):
+        ctl = tempfile.mkdtemp(prefix="rf-ino-ctl-", dir=shm)
+        seen = []
+        for k in (K, 0):
+            w = os.path.join(ctl, f"w{k}")
+            os.makedirs(w)
+            iso_run.oneshot(f"ino{k}", w, None, 30)
+            seen.append(int(open(os.path.join(w, "ino.txt")).read().split()[0].split("=")[1]))
+        check(seen[1] - seen[0] > K, f"the control: on a shared tmpfs the next request's first inode number moves "
+                                     f"by the earlier one's {K} files ({seen[0]} then {seen[1]})")
+        remove_tree(ctl)
     svc.stop()
 
     # 5. the memory cap
@@ -256,6 +327,18 @@ def main():
             pass
     check(kind == "timeout" and dt < 15 and not left,
           f"a hanging badge check is killed at its timeout: {kind} after {dt:.1f} s, survivors {left}")
+
+    # 11. isolation in a badge run: the probe as `verify`, accepting only if every check passed
+    pdir = os.path.join(tmp, "iso-badge")
+    os.makedirs(pdir)
+    shutil.copy(probe, os.path.join(pdir, "verify"))
+    try:
+        res = Badge(pdir, "256M", os.path.join(tmp, "hang-scratch")).verify([(b"v" * 32, b"c" * 32, "p.bin")], store,
+                                                                            timeout=30)
+        why = res
+    except BadgeError as e:
+        res, why = None, str(e)[-400:]
+    check(res is not None and res[0][0], f"a badge run: masks and the socket rule hold ({why})")
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 

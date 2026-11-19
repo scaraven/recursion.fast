@@ -17,7 +17,6 @@ import shutil
 import stat
 import statistics
 import subprocess
-import tempfile
 import time
 import tomllib
 from dataclasses import dataclass
@@ -220,16 +219,6 @@ def build_calib(out_dir):
                  "binary_sha256": hashlib.sha256(open(out, "rb").read()).hexdigest()}
 
 
-def request_root():
-    """Where request directories live: a tmpfs (`/dev/shm`), whose pages a prover writes are
-    charged to its own memory cgroup, so a request cannot fill the runner's disk; else None (the
-    work directory)."""
-    d = "/dev/shm"
-    if os.path.isdir(d) and os.access(d, os.W_OK) and not os.environ.get("RF_NO_SHM"):
-        return tempfile.mkdtemp(prefix="rf-req-", dir=d)
-    return None
-
-
 class Bench:
     def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print):
         self.p, self.run, self.service_bin, self.bench_bin = p, run, service_bin, bench_bin
@@ -243,7 +232,6 @@ class Bench:
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
         self.samples = []                    # the interleaved calibration samples
-        self.req_root = None
 
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
@@ -448,40 +436,23 @@ class Bench:
     def one(self, svc, tag, kind, inputs):
         """One timed request, within `ready_s`, `step_s` and the stream's cap: its `Step` record.
         Every failure is the entry's: the request's own errors (`request`), the stream's cap reached
-        during it, a directory the runner cannot prepare or remove, and a filesystem left fuller
-        than before the request (bytes or inodes of the request directories' filesystem, after
-        cleanup). Before it the page cache of the setup and the binary is warmed (`warm_caches`). The
-        service's socket appears in the request's `/run/rf` only at `go`. The request's directory,
-        its staging directory and its socket directory are removed after it."""
-        root = self.req_root or os.path.join(self.work, "requests")
-        os.makedirs(root, exist_ok=True)
-        before = fs_free(root)
-        work = os.path.join(root, tag)
-        try:
-            fresh_dir(work)
-            with open(os.path.join(work, "vk.hex"), "w") as f:
-                f.write(svc.vk.hex() + "\n")
-        except OSError as e:          # only a previous request can have left the filesystem so
-            raise Fail(f"{tag}: the request directory cannot be prepared ({e.strerror or e}); "
-                       "the filesystem is in the state the prover's requests left it")
+        during it. Before it the page cache of the setup and the binary is warmed (`warm_caches`).
+        The request's /work is a private tmpfs of its own (`request` with no host directory), which
+        holds `vk.hex` when the prover starts and is gone with the request: no file, inode number or
+        free-space count of it reaches a later request. The service's socket appears in the
+        request's `/run/rf` only at `go`; the socket directory is removed after it."""
         # the request's own socket directory, on the service socket's filesystem (a hard link cannot
         # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
         sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", tag)
         fresh_dir(sock)
         dl = self.deadline[0] if self.deadline else None
         warm_s, warm_bytes = self.warm_caches()
-        r = request(self.run, kind, work, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
-                    ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path)
+        r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
+                    ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
+                    preset={"vk.hex": (svc.vk.hex() + "\n").encode()})
         r.warm_s, r.warm_bytes = warm_s, warm_bytes
         self.alive(svc)
         remove_tree(sock)
-        gone = remove_tree(work) & remove_tree(work + ".stage")
-        after = fs_free(root)
-        if r.status == "ok" and not gone:
-            r.status = "the prover left files in /work that the runner cannot remove"
-        elif r.status == "ok" and before and after and (before[0] - after[0] > FS_SLACK or before[1] - after[1] > 64):
-            r.status = (f"the prover left the filesystem fuller ({before[0] - after[0]} bytes, "
-                        f"{before[1] - after[1]} inodes after cleanup)")
         if r.status != "ok":
             if dl is not None and time.monotonic() >= dl - 1e-3 and r.status in ("timeout", "no ready line"):
                 raise Fail(f"{tag}: {self.deadline[1]} ({r.status})" + self.diag(svc, r.log))
@@ -536,13 +507,12 @@ class Bench:
         self.log(f"[{name}] computing {M} leaf digests (n = {p.n} blocks each)")
         ld = digest.leaf_digests(data, self.service_bin)   # all before the first request, from the runner's data
         stmts, first = digest.stream_statements(ld)
-        self.req_root = request_root()
         svc = self.service(name)
         rec = {"vk": svc.vk.hex(), "service": {k: v for k, v in svc.info.items() if k != "simd"}, "shape": p.shape(),
                "seeds": [s.hex() for s in seeds], "leaf_data": dict(draws.LEAF_DATA), "leaf_digests": [d.hex() for d in ld],
                "statements": [c.hex() for c in stmts], "steps": [],
                "truncated": False, "timed_runs": p.timed_runs,
-               "request_dir": "tmpfs (/dev/shm)" if self.req_root else "the work directory"}
+               "request_dir": "a private tmpfs per request"}
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
             self.service_run(svc, rec, data, stmts, first)
@@ -554,8 +524,6 @@ class Bench:
         finally:
             self.deadline = None
             self.stop(svc, rec)
-            if self.req_root:
-                shutil.rmtree(self.req_root, ignore_errors=True)
             shutil.rmtree(self.leafdata, ignore_errors=True)     # the seeds, published, regenerate it
         try:
             self.audit_replays(rec)
@@ -698,20 +666,6 @@ class Bench:
             raise Fail(f"the timed passes made {st['replays']} signatures, not timed_runs · signatures = {want} · "
                        f"{st['signatures']}: a timed pass must make exactly the service run's SIGN requests")
 
-    def purge_requests(self):
-        """Before the timed passes nothing of the service run's requests is left where a timed
-        request could reach it: each request's directory and its staging directory were removed after
-        it (`one`); here the request root must be empty (what is left is removed, or the entry fails).
-        The service run's outputs live only in the runner's store, which no request sees."""
-        root = self.req_root or os.path.join(self.work, "requests")
-        if not os.path.isdir(root):
-            return
-        for n in os.listdir(root):
-            remove_tree(os.path.join(root, n))
-        left = os.listdir(root)
-        if left:
-            raise Fail(f"the service run left {len(left)} entries in the request directory that the runner cannot remove")
-
     def timed(self, svc, rec, data, stmts):
         """The timed passes (AGENTS.md §6): `timed_runs` passes of steps `1 … M`, each a fresh
         sandbox as in the service run, after the service run's request directories are gone. Before
@@ -723,7 +677,6 @@ class Bench:
         finish (a request's failure, the stream's cap) is the entry's REJECT too. Each step records
         its `timed_runs` times in pass order (`P_timed_s`); `score` takes the median pass."""
         p, steps = self.p, rec["steps"]
-        self.purge_requests()
         for t in range(1, p.timed_runs + 1):
             self.sample(f"timed pass {t}")
             try:
@@ -757,7 +710,6 @@ class Bench:
             self.sample("closing")
 
 
-FS_SLACK = 1 << 20        # bytes the request directories' filesystem may lose to other processes
 INTERMEDIATE_SLACK_S = 60  # seconds a badge run of intermediate checks may take beyond 2 v_cap per check
 JUDGED_RUNS = 3           # the fresh badge runs that judge each checked proof; its V is their median
 

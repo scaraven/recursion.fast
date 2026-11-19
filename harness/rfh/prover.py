@@ -6,14 +6,15 @@ interface). Every step runs in `sandbox.Sandbox`.
   toolchain's versions and the binary's hash recorded.
 * `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
   read-only afterwards.
-* `request`: one `prover first /work` or `prover step /work` in a fresh process: the
-  process starts and prints `ready` (within `ready_s`, untimed); the runner writes the inputs to a
-  staging directory the prover cannot see; the clock starts; the runner links the service's socket
-  into the request's own socket directory (so `/run/rf/oracle.sock` exists only from `go` on),
-  renames the inputs into /work and sends `go`; at the prover's `done` line, its stdout's end or its exit the runner kills
-  the whole sandbox and **stops the clock when every process of it is dead** (`harness/PROVER.md`
-  §3); then `proof.bin` is read. A filesystem error in the request's directory is the entry's
-  failure.
+* `request`: one `prover first /work` or `prover step /work` in a fresh process, its /work a
+  private tmpfs (a superblock of its own, so inode numbers and free space carry nothing from one
+  request to the next): the process starts and prints `ready` (within `ready_s`, untimed); the
+  runner writes the inputs to unnamed files on that tmpfs, which the prover cannot see; the clock
+  starts; the runner links the service's socket into the request's own socket directory (so
+  `/run/rf/oracle.sock` exists only from `go` on), links the inputs into /work and sends `go`; at
+  the prover's `done` line, its stdout's end or its exit the runner kills the whole sandbox and
+  **stops the clock when every process of it is dead** (`harness/PROVER.md` §3); then `proof.bin`
+  is read. A filesystem error in the request's directory is the entry's failure.
 * `oneshot`: a program with no handshake, timed from exec to exit (the sandbox tests).
 """
 import glob
@@ -143,8 +144,9 @@ class Run:
         self.bin_dir, self.setup_dir, self.mem = bin_dir, setup_dir, mem
 
     def binds(self, work, sock_dir=None, setup_rw=False):
+        """The prover's mounts; `work` None: a private tmpfs at /work."""
         b = [("ro", self.bin_dir, "/prover"), ("rw" if setup_rw else "ro", self.setup_dir, "/setup"),
-             ("rw", work, "/work")]
+             ("rw", work, "/work") if work is not None else ("tmpfs", None, "/work")]
         if sock_dir:
             b.append(("ro", sock_dir, SOCK_IN))
         return b
@@ -214,9 +216,17 @@ class Step:
 
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
-            work_cap=None, sock_at_go=None):
-    """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `inputs`:
-    name → bytes, staged outside the sandbox and renamed into `work` once the clock runs. With
+            work_cap=None, sock_at_go=None, preset=None):
+    """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `work` None (the
+    benchmark's requests): /work is **a private tmpfs** of the sandbox's own (bubblewrap's
+    `--tmpfs`), holding at the start only `preset` (name → bytes, e.g. `vk.hex`), so its inode
+    numbers and free space depend on nothing an earlier request did; the runner reaches it through
+    the sandbox's init (`/proc/PID/root/work`) and keeps a descriptor on it, through which the
+    outputs are read after the sandbox is dead (the mount outlives its namespace while the
+    descriptor is open) and which frees it when closed. Else `work` is a host directory bound at
+    /work (the sandbox tests). `inputs`: name → bytes, staged where the prover cannot see them
+    (unnamed `O_TMPFILE` files on the private tmpfs, else a staging directory beside `work`) and
+    linked or renamed into /work, in constant time, once the clock runs. With
     `sock_at_go` (the service's socket), `sock_dir` is the request's own empty, runner-owned
     directory, bound read-only at `/run/rf`; once the clock runs, the socket is hard-linked into it
     as `oracle.sock` (a connect through the link reaches the service), so no process of the
@@ -234,11 +244,24 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     vanished, a sandbox that does not die, an exit status that is not reported, an unreadable
     output) is the entry's failure with its reason, never a harness error. `/work` may hold at most
     `work_cap` bytes when the prover is dead (sparse files counted at their size). Returns a `Step`."""
+    held = []                                   # the private tmpfs's descriptor and the staged files
+    try:
+        return _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap,
+                        sock_at_go, preset, held)
+    finally:
+        for fd in held:
+            os.close(fd)
+
+
+def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap, sock_at_go,
+             preset, held):
     import select
     cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
     r = Step()
     t_spawn = time.monotonic()
-    sb = Sandbox([PROVER, kind, "/work"], run.binds(work, sock_dir), run.mem, env=run.env(sock_dir),
+    private = work is None
+    binds = run.binds(work, sock_dir) + [("file", data, f"/work/{name}") for name, data in (preset or {}).items()]
+    sb = Sandbox([PROVER, kind, "/work"], binds, run.mem, env=run.env(sock_dir),
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, status=True)
     err = Drain(sb.proc.stderr)
     fd = sb.proc.stdout.fileno()
@@ -275,13 +298,28 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
         if w != "line":
             r.status = "no ready line" + ("" if w == "timeout" else f" (the prover ended: {w})")
             return r
-        # the inputs are written to a staging directory outside the sandbox before the clock
-        # starts, and only renamed into /work (constant time) once it runs
-        stage = work.rstrip("/") + ".stage"
-        os.makedirs(stage, exist_ok=True)
-        for name, data in inputs.items():
-            with open(os.path.join(stage, name), "wb") as f:
-                f.write(data)
+        # the inputs are written where the prover cannot see them before the clock starts, and
+        # only linked or renamed into /work (constant time) once it runs
+        if private:
+            # the sandbox's /work, reached through its init (bubblewrap's, not the prover's: it has
+            # pivoted into the sandbox's root before the prover ran, so before `ready`)
+            wfd = os.open(f"/proc/{sb.child_pid}/root/work", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            held.append(wfd)
+            work = f"/proc/self/fd/{wfd}/."     # a path through the descriptor, valid after the sandbox
+            staged = []
+            for name, data in inputs.items():
+                tfd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o644, dir_fd=wfd)
+                held.append(tfd)
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(tfd, view):]
+                staged.append((name, tfd, f".rf-input-{os.urandom(8).hex()}"))
+        else:
+            stage = work.rstrip("/") + ".stage"
+            os.makedirs(stage, exist_ok=True)
+            for name, data in inputs.items():
+                with open(os.path.join(stage, name), "wb") as f:
+                    f.write(data)
         t0 = time.monotonic()
         if sock_at_go:
             try:
@@ -289,10 +327,15 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
             except OSError as e:
                 raise HarnessError(f"linking the service's socket into the request's socket directory: {e}") from e
         try:
-            for name in inputs:
-                os.rename(os.path.join(stage, name), os.path.join(work, name))
+            if private:                     # linked under a fresh name, then renamed (as a rename would)
+                for name, tfd, tmp in staged:
+                    os.link(f"/proc/self/fd/{tfd}", tmp, dst_dir_fd=wfd)
+                    os.rename(tmp, name, src_dir_fd=wfd, dst_dir_fd=wfd)
+            else:
+                for name in inputs:
+                    os.rename(os.path.join(stage, name), os.path.join(work, name))
         except OSError as e:
-            raise EntryFailure(f"the prover made /work unusable (renaming the inputs into /work: {e.strerror or e})")
+            raise EntryFailure(f"the prover made /work unusable (moving the inputs into /work: {e.strerror or e})")
         try:
             sb.proc.stdin.write(b"go\n")
             sb.proc.stdin.flush()

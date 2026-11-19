@@ -4,13 +4,23 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
   * new user, pid, network, ipc, uts and cgroup namespaces, no further user namespaces
     (`--disable-userns`), all capabilities dropped, a new session, an empty environment;
   * a read-only root that is an empty tmpfs holding only what `binds` lists (for a prover: its binary
-    read-only at /prover, its own directory read-write at /work, the setup directory read-only at
-    /setup, the service's socket directory read-only at /run/rf), plus a fresh /dev, /proc of its
-    own pid namespace, a tmpfs /tmp and the CPU topology (/sys/devices/system/cpu, read-only);
+    read-only at /prover, the setup directory read-only at /setup, the service's socket directory
+    read-only at /run/rf, and a request's own private tmpfs at /work, `prover.request`), plus a
+    fresh /dev, /proc of its own pid namespace, a tmpfs /tmp and the CPU topology
+    (/sys/devices/system/cpu, read-only);
+  * **no machine-wide counter in /proc** (`proc_masks`): the host's /proc top level is listed when
+    the sandbox is built (the set depends on the kernel), and an empty file is bound over every file
+    and an empty directory over every directory of it but the pid directories, `self` and
+    `thread-self` (`/proc/stat`, `vmstat`, `meminfo`, `loadavg`, `interrupts`, `softirqs`,
+    `pressure`, `sys`, `cpuinfo`, … read empty). Symbolic links (`mounts`, `net`) cannot be bound
+    over and stay: they lead into `self`. The same is done in the bound CPU tree for everything but
+    its static topology (`sys_cpu_masks`: `cpuidle`, `cpufreq` and `power` hold live counters);
   * a seccomp filter that fails (EPERM) the system calls a prover never needs and that widen the
     kernel's attack surface or reach other processes (ptrace, process_vm_*, kcmp, pidfd_getfd, bpf,
     perf_event_open, userfaultfd, io_uring, keyrings, mounts, namespaces, module and kexec loading,
-    handle-based opens), and kills a process that uses another syscall ABI;
+    handle-based opens), fails `socket` and `socketpair` for every domain but `AF_UNIX` (the oracle's
+    socket is the only one a prover needs; an `AF_INET` datagram would raise machine-wide counters,
+    `/proc/self/net/softnet_stat`), and kills a process that uses another syscall ABI;
   * a memory cap on the whole process tree: a transient systemd scope with `MemoryMax` and no swap
     (`systemd-run --user --scope`), or, where no user systemd manager is reachable, an address-space
     limit (`prlimit --as`), which is recorded as the weaker method;
@@ -45,20 +55,106 @@ DENY = {
 }
 
 
+AF_UNIX = 1
+SOCKET = {"socket": 41, "socketpair": 53}       # allowed only for the domain (first argument) AF_UNIX
+
+
 def seccomp_program() -> bytes:
     """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`."""
     LD, JEQ, JGE, RET = 0x20, 0x15, 0x35, 0x06          # BPF_LD|W|ABS, BPF_JMP|JEQ|K, JGE, BPF_RET|K
-    nrs = sorted(DENY.values())
-    errno_at = 5 + len(nrs) + 1
     ins = [(LD, 0, 0, 4),                               # seccomp_data.arch
            (JEQ, 1, 0, 0xC000003E),                     # AUDIT_ARCH_X86_64
            (RET, 0, 0, 0x80000000),                     # SECCOMP_RET_KILL_PROCESS
            (LD, 0, 0, 0),                               # seccomp_data.nr
-           (JGE, errno_at - 5, 0, 0x40000000)]          # the x32 ABI
-    ins += [(JEQ, errno_at - (6 + k), 0, nr) for k, nr in enumerate(nrs)]
+           (JGE, "errno", 0, 0x40000000)]               # the x32 ABI
+    ins += [(JEQ, "errno", 0, nr) for nr in sorted(DENY.values())]
+    ins += [(JEQ, "socket", 0, nr) for nr in sorted(SOCKET.values())]
     ins += [(RET, 0, 0, 0x7FFF0000),                    # SECCOMP_RET_ALLOW
+            "socket",
+            (LD, 0, 0, 16),                             # seccomp_data.args[0], its low 32 bits: the
+            (JEQ, 0, "errno", AF_UNIX),                 # kernel reads the domain as an int
+            (RET, 0, 0, 0x7FFF0000),
+            "errno",
             (RET, 0, 0, 0x00050000 | 1)]                # SECCOMP_RET_ERRNO | EPERM
-    return b"".join(struct.pack("<HBBI", *x) for x in ins)
+    at, k = {}, 0
+    for x in ins:
+        if isinstance(x, str):
+            at[x] = k
+        else:
+            k += 1
+    code = [x for x in ins if not isinstance(x, str)]
+    rel = lambda j, i: at[j] - (i + 1) if isinstance(j, str) else j   # noqa: E731 (a jump is relative)
+    return b"".join(struct.pack("<HBBI", c, rel(jt, i), rel(jf, i), kk) for i, (c, jt, jf, kk) in enumerate(code))
+
+
+PROC_ALLOW = ("self", "thread-self")              # and every pid directory
+SYS_CPU = "/sys/devices/system/cpu"
+SYS_CPU_ALLOW = ("online", "possible", "present", "offline", "kernel_max", "isolated", "nohz_full", "enabled",
+                 "housekeeping", "smt", "vulnerabilities", "hotplug", "crash_hotplug", "modalias", "uevent")
+SYS_CPU_N_ALLOW = ("topology", "cache", "online", "cpu_capacity", "hotplug", "crash_notes", "crash_notes_size",
+                   "uevent")
+_MASK = None
+
+
+def mask_sources():
+    """(an empty read-only file, an empty read-only directory) on the host, made once per process:
+    what bubblewrap binds over a masked entry."""
+    global _MASK
+    if _MASK is None:
+        import atexit
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp(prefix="rf-mask-")
+        f, e = os.path.join(d, "empty"), os.path.join(d, "dir")
+        open(f, "wb").close()
+        os.mkdir(e)
+        os.chmod(f, 0o444)
+        os.chmod(e, 0o555)
+        atexit.register(lambda: (os.path.isdir(e) and os.chmod(e, 0o755), shutil.rmtree(d, ignore_errors=True)))
+        _MASK = (f, e)
+    return _MASK
+
+
+def masks(root, keep):
+    """bubblewrap arguments that bind the empty file over every file and the empty directory over
+    every directory directly in the host directory `root`, as listed now, except the names `keep`
+    accepts; symbolic links are left (a bind over a link would bind over its target)."""
+    f, e = mask_sources()
+    out = []
+    for ent in sorted(os.scandir(root), key=lambda x: x.name):
+        if keep(ent.name) or ent.is_symlink():
+            continue
+        try:
+            is_dir = ent.is_dir(follow_symlinks=False)
+        except OSError:
+            is_dir = False
+        out += ["--ro-bind", e if is_dir else f, os.path.join(root, ent.name)]
+    return out
+
+
+def proc_masks():
+    """The masks over the top level of the sandbox's /proc: every entry but the pid directories,
+    `self` and `thread-self`. The host's /proc is listed (the sandbox's is a fresh mount of the same
+    kernel's procfs, whose entries are the same but the pids); a host /proc that does not list its
+    machine-wide files (mounted with `subset=pid`) cannot be listed for them, and is refused."""
+    if not os.path.isfile("/proc/stat"):
+        raise RuntimeError("the host's /proc lists no /proc/stat (subset=pid?): its machine-wide entries "
+                           "cannot be enumerated to mask them in the sandbox")
+    return masks("/proc", lambda n: n.isdigit() or n in PROC_ALLOW)
+
+
+def sys_cpu_masks():
+    """The masks over the live parts of the bound CPU tree: everything but its static description
+    (`SYS_CPU_ALLOW`, and in each `cpuN` `SYS_CPU_N_ALLOW`); `cpuidle` (entries and residency per
+    idle state), `cpufreq` (current frequencies, transition counts) and `power` (runtime counters)
+    are masked, and whatever a kernel adds is masked by default."""
+    if not os.path.isdir(SYS_CPU):
+        return []
+    out = masks(SYS_CPU, lambda n: n in SYS_CPU_ALLOW or (n.startswith("cpu") and n[3:].isdigit()))
+    for ent in sorted(os.scandir(SYS_CPU), key=lambda x: x.name):
+        if ent.name.startswith("cpu") and ent.name[3:].isdigit() and ent.is_dir(follow_symlinks=False):
+            out += masks(ent.path, lambda n: n in SYS_CPU_N_ALLOW)
+    return out
 
 
 _MEMCAP = None
@@ -155,7 +251,9 @@ def kill_unit(unit: str):
 
 class Sandbox:
     """One sandboxed command. `binds`: (kind, host path, sandbox path) with kind `ro`, `rw` or `dev`
-    (a read-only bind that may be missing). `stdin`/`stdout`: `subprocess` arguments. With
+    (a read-only bind that may be missing), `tmpfs` (a fresh tmpfs of the sandbox's own, no host
+    path) or `file` (a regular file made in the sandbox, its bytes in place of the host path; after
+    the tmpfs it lies on). `stdin`/`stdout`: `subprocess` arguments. With
     `hold=True` the command is held before `exec` until `release()` (bubblewrap's `--block-fd`);
     `wait_ready()` returns once the sandbox exists and `wait_exit()` when the command exits
     (`--json-status-fd`), so that a timer between them counts the measured program, not the
@@ -175,20 +273,30 @@ class Sandbox:
         fds = [sc_r]
         args = ["bwrap", "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts",
                 "--unshare-cgroup-try", "--disable-userns", "--die-with-parent", "--new-session", "--clearenv",
-                "--cap-drop", "ALL", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
-                "--ro-bind-try", "/sys/devices/system/cpu", "/sys/devices/system/cpu"]
+                "--cap-drop", "ALL", "--dev", "/dev", "--proc", "/proc", *proc_masks(), "--tmpfs", "/tmp",
+                "--ro-bind-try", SYS_CPU, SYS_CPU, *sys_cpu_masks()]
         for p in extra_ro_root:              # host directories visible at the same path (the build's /usr)
             if os.path.islink(p):
                 args += ["--symlink", os.readlink(p), p]
             elif os.path.exists(p):
                 args += ["--ro-bind", p, p]
         for kind, host, inside in binds:
-            args += {"ro": ["--ro-bind"], "rw": ["--bind"], "dev": ["--ro-bind-try"]}[kind] + [host, inside]
+            if kind == "tmpfs":
+                args += ["--tmpfs", inside]
+            elif kind == "file":
+                fd, data = os.memfd_create("rf-file"), memoryview(host)
+                while data:
+                    data = data[os.write(fd, data):]
+                os.lseek(fd, 0, os.SEEK_SET)
+                fds.append(fd)
+                args += ["--file", str(fd), inside]
+            else:
+                args += {"ro": ["--ro-bind"], "rw": ["--bind"], "dev": ["--ro-bind-try"]}[kind] + [host, inside]
         for k, v in (env or {}).items():
             args += ["--setenv", k, v]
         args += ["--remount-ro", "/", "--chdir", cwd, "--seccomp", str(sc_r)]
         self.block_w = self.info_r = None
-        self.pidfd = self.cgdir = None
+        self.pidfd = self.cgdir = self.child_pid = None
         self.status = b""
         if hold:
             b_r, self.block_w = os.pipe()
@@ -243,13 +351,15 @@ class Sandbox:
             return -1, t
 
     def track(self, timeout=30):
-        """For a `status` sandbox: open a pidfd on the namespace's init and find the scope's cgroup
-        directory (systemd only); untimed, before a measurement starts. False if no pid came."""
+        """For a `status` sandbox: open a pidfd on the namespace's init (its host pid: `child_pid`)
+        and find the scope's cgroup directory (systemd only); untimed, before a measurement starts.
+        False if no pid came."""
         obj = self._read_status(b"child-pid", time.monotonic() + timeout)
         if obj is None:
             return False
         try:
-            self.pidfd = os.pidfd_open(int(json.loads(obj + "}")["child-pid"]))
+            self.child_pid = int(json.loads(obj + "}")["child-pid"])
+            self.pidfd = os.pidfd_open(self.child_pid)
         except (ValueError, KeyError, OSError):
             return False
         if memcap_method() == "systemd":
