@@ -601,9 +601,8 @@ theorem cases_of_seeds?_none {o : SignedOutcome S vk L T n hs c₀ p₀ d} (h : 
 hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
 theorem forall₂_of_seeds? {o : SignedOutcome S vk L T n hs c₀ p₀ d} {ss : List Digest}
     (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
-  cases o with
-  | seeds ss' h' => cases h; exact h'
-  | _ => cases h
+  cases o <;> cases h
+  assumption
 
 end SignedOutcome
 
@@ -769,13 +768,12 @@ theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {
 theorem streamStmt_append (n : ℕ) {hs : List Digest} (hne : hs ≠ []) (h : Digest) :
     streamStmt n (hs ++ [h]) = nodeStmt (streamStmt n hs) (leafStmt h n) := by
   obtain ⟨h₀, hs, rfl⟩ := List.exists_cons_of_ne_nil hne
-  simp [streamStmt, List.foldl_append]
+  exact List.foldl_append
 
 /-- A stream of at least two leaves: the node statement of all but the last and the last. -/
 theorem streamStmt_dropLast (n : ℕ) {hs : List Digest} (hne : hs ≠ []) (hne' : hs.dropLast ≠ []) :
-    streamStmt n hs = nodeStmt (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) := by
-  conv_lhs => rw [← List.dropLast_append_getLast hne]
-  exact streamStmt_append n hne' _
+    streamStmt n hs = nodeStmt (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) :=
+  (congrArg _ (List.dropLast_append_getLast hne)).symm.trans (streamStmt_append n hne' _)
 
 /-- **The paths of the members of a stream of `M` leaves** in its extraction tree: the left
 spine `[false]^j` for `j < M` (the `M - 1` nodes and the oldest leaf) and the second children
@@ -795,10 +793,9 @@ theorem mem_combPaths_right {M j : ℕ} (h : j + 1 < M) :
 theorem card_combPaths (M : ℕ) : (combPaths M).card = 2 * M - 1 := by
   have h : Disjoint ((Finset.range M).image (List.replicate · false))
       ((Finset.range (M - 1)).image (true :: List.replicate · false)) := by
-    rw [Finset.disjoint_left]
-    simp only [Finset.mem_image, Finset.mem_range]
+    simp only [Finset.disjoint_left, Finset.mem_image, Finset.mem_range]
     rintro _ ⟨j, -, rfl⟩ ⟨i, -, h⟩
-    cases j <;> simp [List.replicate_succ] at h
+    cases j <;> cases h
   rw [combPaths, Finset.card_union_of_disjoint h,
     Finset.card_image_of_injective _ (List.replicate_left_injective false),
     Finset.card_image_of_injective _ fun _ _ h =>
@@ -823,10 +820,10 @@ theorem Outcome.EscapeIn.mono {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Dig
 tree at such a path that escapes. -/
 theorem Outcome.Escaped.exists_in {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {P : List Bool → Prop} {o : Outcome S vk L n hs c₀ p₀ d}
-    (h : o.Escaped) (hP : o.EscapeIn P) : ∃ (c : Digest) (q : Signed) (bs : List Bool), P bs ∧
+    (h : o.Escaped) (hP : o.EscapeIn P) : ∃ bs, P bs ∧ ∃ c q,
       InTree S L c₀ p₀ bs c q ∧ Escape S vk L c q := by
   cases o with
-  | escape c q bs m _ he => exact ⟨c, q, bs, hP, m, he⟩
+  | escape c q bs m _ he => exact ⟨bs, hP, c, q, m, he⟩
   | _ => exact h.elim
 
 /-- **Returned seeds are the leaves' seeds**: if the outcome returns the seeds `ss`, the `n`
@@ -834,9 +831,8 @@ hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
 theorem Outcome.forall₂_of_seeds? {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {o : Outcome S vk L n hs c₀ p₀ d} {ss : List Digest}
     (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
-  cases o with
-  | seeds ss' h' => cases h; exact h'
-  | _ => cases h
+  cases o <;> cases h
+  assumption
 
 /-- **Two outcomes over adjacent leaf ranges, joined**: the seeds of both, or the first outcome
 that is not the seeds. -/
@@ -871,7 +867,9 @@ theorem Outcome.seeds?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest}
     {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d} {ss₁ ss₂ : List Digest}
     (h₁ : o₁.seeds? = some ss₁) (h₂ : o₂.seeds? = some ss₂) :
     (o₁.append hsplit o₂).seeds? = some (ss₁ ++ ss₂) := by
-  cases o₁ <;> cases o₂ <;> simp_all [Outcome.seeds?, Outcome.append]
+  cases o₁ <;> cases h₁
+  cases o₂ <;> cases h₂
+  rfl
 
 /-- The walk at a leaf escapes, if it does, at the leaf itself. -/
 theorem walkFrom_zero_escapeIn {L : Log} {n : ℕ} {hn : n ≤ leafCap} {c₀ : Digest} {p₀ : Signed}
@@ -960,10 +958,8 @@ theorem compose_prob_stream (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : 
     prob (fun p L => ∃ hacc : S.acc vk (streamStmt n hs) p = true,
       (walkStream L n hn hs p hacc).Escaped) A [] ≤ (2 * hs.length - 1 : ℕ) * ((Q + qV) * ε) := by
   rw [← card_combPaths]
-  refine (prob_mono (fun p L ⟨hacc, he⟩ => ?_) A []).trans
-    (escape_prob_le hks (streamStmt n hs) A hA hQ (combPaths hs.length))
-  obtain ⟨c, q, bs, hP, hmem, h⟩ := he.exists_in (walkStream_escapeIn L n hn hs p hacc)
-  exact ⟨bs, hP, c, q, hmem, h⟩
+  exact (prob_mono (fun p L ⟨hacc, he⟩ => he.exists_in (walkStream_escapeIn L n hn hs p hacc))
+    A []).trans (escape_prob_le hks (streamStmt n hs) A hA hQ (combPaths hs.length))
 
 /-- **The stream walk against the service's signed traces**: `walkStream` with its forgery
 reduced by `Forgery.reduce`: the seeds of all the stream's leaves, a collision, an EUF-CMA
@@ -1015,9 +1011,8 @@ theorem walkStreamFrom_one {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Dige
     {hmem : InTree S L c₀ p₀ (List.replicate j false) (streamStmt n [h]) p}
     (hin : ∀ e ∈ p.tr, e ∈ L) {s : Digest} (hE : S.E (leafStmt h n) p.π L = some (.leaf s n))
     (hend : leafValue s n = h) :
-    (walkStreamFrom L n hn c₀ p₀ M 1 [h] hk j hj p hacc hmem).1.seeds? = some [s] := by
-  unfold walkStreamFrom
-  exact walkFrom_leaf hn (hr := rfl) rfl rfl hin hE hend
+    (walkStreamFrom L n hn c₀ p₀ M 1 [h] hk j hj p hacc hmem).1.seeds? = some [s] :=
+  walkFrom_leaf hn (hr := rfl) rfl rfl hin hE hend
 
 /-- **The stream walk at a node, unfolded**: if the signed proof's trace is in the log and the
 extractor opens it to a node witness of the relation whose children are the statements of the
@@ -1038,10 +1033,8 @@ theorem walkStreamFrom_node {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Dig
       (walkFrom L n hn c₀ p₀ (M - 1) 0 [hs.getLast hne] rfl p₂ (true :: List.replicate j false)
         (by simp only [List.length_cons, List.length_replicate]; omega) hR.2.2
         (InTree.right hmem hE)) := by
-  conv_lhs => unfold walkStreamFrom
-  rw [extract_of_E hacc hin hE hR]
-  dsimp only
-  rw [dite_eq_left_of_eq_true (eq_true ⟨rfl, rfl⟩)]
+  rw [walkStreamFrom, extract_of_E hacc hin hE hR]
+  exact congrArg Subtype.val (dite_eq_left ⟨rfl, rfl⟩)
 
 /-- **The stream walk at a node**: if the signed proof's trace is in the log, the extractor
 opens it to a node witness whose children are the statements of the stream without its last
@@ -1078,8 +1071,7 @@ theorem walkStreamFrom_escape {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : D
     (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.Escaped ∧
       (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.EscapeIn
         (· = List.replicate j false) := by
-  unfold walkStreamFrom
-  rw [extract_escape hacc hin hno]
+  rw [walkStreamFrom, extract_escape hacc hin hno]
   exact ⟨trivial, rfl⟩
 
 end RecursionFast.Compose

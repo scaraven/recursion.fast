@@ -324,9 +324,8 @@ theorem walkSigned_queryLeaf_seeds (sk : ℕ → ℕ → Digest) (s a : Digest) 
 /-- **The stream walk on a one-leaf stream** returns the leaf's seed. -/
 theorem walkStream_one_leaf (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ leafCap) :
     (walkStream [] n hn [leafValue s n] (leafSigned sk 0 s n)
-      (acc_leafSigned sk (by decide) s hn)).seeds? = some [s] := by
-  unfold walkStream
-  exact walkStreamFrom_one (L := []) (p := leafSigned sk 0 s n) hn nofun
+      (acc_leafSigned sk (by decide) s hn)).seeds? = some [s] :=
+  walkStreamFrom_one (L := []) (p := leafSigned sk 0 s n) hn nofun
     (decode_encode (.leaf s n) (hn.trans_lt (by decide))) rfl
 
 /-- The signed node proof over two signed leaf proofs is accepted for the two-leaf stream's
@@ -344,7 +343,6 @@ theorem walkStream_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest)
       (acc_nodeSigned_stream sk s₁ s₂ hn)).seeds? = some [s₁, s₂] := by
   have hn64 : n < 2 ^ 64 := hn.trans_lt (by decide)
   have hR := Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn
-  unfold walkStream
   exact walkStreamFrom_succ_succ (L := []) (k := 0) (hs := [leafValue s₁ n, leafValue s₂ n])
     (p := nodeSigned sk s₁ s₂ n) hn (List.cons_ne_nil _ _) nofun
     (decode_encode _ (fits_of_rel hR)) hR
@@ -381,8 +379,8 @@ theorem acc_streamSigned (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest)
   have hsize : (encode (streamWit sk s₁ s₂ s₃ n)).size < 2 ^ 64 := by
     rw [size_encode]
     simp only [witWords, signedWords, bytesWords, logWords, List.length_cons, List.length_append,
-      packBytes_length, sigWords_sign_length, nodeSigned, leafSigned, ← size_eq_length]
-    simp [size_encode_leaf]
+      packBytes_length, sigWords_sign_length, nodeSigned, leafSigned, ← size_eq_length,
+      size_encode_leaf, Vector.length_toList, List.flatMap_nil, List.length_nil]
     omega
   rw [acc_eq, streamSigned, decide_eq_true hsize]
   simp [Signer.sigOk_sign sk 4 (by decide), check_encode (rel_streamWit sk s₁ s₂ s₃ hn)]
@@ -396,7 +394,6 @@ theorem walkStream_three_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : 
   have hn64 : n < 2 ^ 64 := hn.trans_lt (by decide)
   have hR := rel_streamWit sk s₁ s₂ s₃ hn
   have hR₂ := Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn
-  unfold walkStream
   exact walkStreamFrom_succ_succ (L := []) (k := 1)
     (hs := [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n]) (p := streamSigned sk s₁ s₂ s₃ n)
     hn (List.cons_ne_nil _ _) nofun (decode_encode _ (fits_of_rel hR)) hR
@@ -413,9 +410,8 @@ root. -/
 theorem noExt_walkStream_escaped (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
     (hn : n ≤ leafCap) :
     (walkStream (S := noExt) [] n hn [leafValue s₁ n, leafValue s₂ n] (nodeSigned sk s₁ s₂ n)
-      (acc_nodeSigned_stream sk s₁ s₂ hn)).Escaped := by
-  unfold walkStream
-  exact (walkStreamFrom_escape (S := noExt) (L := []) (k := 0)
+      (acc_nodeSigned_stream sk s₁ s₂ hn)).Escaped :=
+  (walkStreamFrom_escape (S := noExt) (L := []) (k := 0)
     (hs := [leafValue s₁ n, leafValue s₂ n]) (p := nodeSigned sk s₁ s₂ n) hn nofun
     (by simp [noExt])).1
 
