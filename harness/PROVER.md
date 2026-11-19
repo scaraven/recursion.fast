@@ -57,14 +57,27 @@ namespaces and module loading. When a request ends, every process the prover sta
 ## 3. Invocations
 
 All paths below are relative to `/work` unless absolute. Statements and keys are 64 lowercase hex
-characters plus an optional newline; `vk.hex` is the service's public key. A leaf file is
-`{"n": N, "seed": "HEX"}`: the leaf of `N` parallel hashes of the 32-byte seed. The public hashes
-are Ethereum's Keccak-256 (rate 136 bytes, padding `0x01 … 0x80`, not SHA3-256) of tagged inputs:
-`leafItem s j = Keccak-256(0x48 ‖ s ‖ u64 j)` (41 bytes, one Keccak-f[1600] permutation),
-`leafValue s n` = the XOR of `leafItem s j` over `j < n` (the zero digest for `n = 0`),
-`leafStmt h n = Keccak-256(0x4C ‖ h ‖ u64 n)`, `nodeStmt c1 c2 = Keccak-256(0x4E ‖ c1 ‖ c2)`
-(`RecursionFast/Contract/Relation.lean`; `u64` little-endian). A leaf's `n` hashes are independent:
-they can be computed in any order, on any number of threads.
+characters plus an optional newline; `vk.hex` is the service's public key. A leaf is two files:
+`leaf.json`, `{"n": N}`, and `leaf.bin`, its data: exactly `32 · N` bytes, the blocks
+`x_0 ‖ … ‖ x_(N−1)` of 32 bytes each. The public hashes are Ethereum's Keccak-256 (rate 136 bytes,
+padding `0x01 … 0x80`, not SHA3-256) of tagged inputs (`RecursionFast/Contract/Relation.lean`;
+`u64` little-endian):
+
+```
+leafItem x      = Keccak-256(0x48 ‖ x)                 33 bytes, one Keccak-f[1600] permutation
+dataNode l r    = Keccak-256(0x44 ‖ l ‖ r)             65 bytes, one permutation
+dataLevel ds    = adjacent digests paired by dataNode; an odd last digest is carried up unhashed
+dataRoot xs     = dataLevel applied |xs| times to map leafItem xs, then the first digest
+                  (the zero digest for no block, leafItem x for one block)
+leafStmt h n    = Keccak-256(0x4C ‖ h ‖ u64 n)         41 bytes
+nodeStmt c1 c2  = Keccak-256(0x4E ‖ c1 ‖ c2)           65 bytes
+```
+
+So a leaf of `n` blocks is a Merkle tree of `n` block hashes and `n − 1` nodes (`2n − 1`
+permutations); its shape is fixed by `n`, and the carry-up matters only when a level has an odd
+number of digests. Known answers: `tests/vectors/data_root.json`. The verifier sees only the
+statement, so the data has to be committed to and opened in the proof (a witness-sending proof of a
+leaf is `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)`, `16 + 32 n` bytes, above `pi_cap` at the season's `n`).
 
 ### `prover setup /setup` (optional, untimed)
 
@@ -83,19 +96,19 @@ more, timed, against its replay (below). Every step is a fresh process in a fres
 `/work`, fresh `/tmp`, read-only `/setup`); nothing survives a request except the proof the runner
 copies, so **state between steps travels only inside `π`**.
 
-Every step proves one fresh leaf of exactly `n` hashes (`n = 2^22`, the contract's `leafCap`, in
-season 1; 64 in the smoke), `n_i = n` permutations per step:
+Every step proves one fresh leaf of exactly `n` blocks (`n = 2^18`, 8 MiB of data, in season 1, at
+most the contract's `leafCap = 2^20`; 64 in the smoke), about `2n` permutations per step:
 
 ```
-L_i = leafStmt (leafValue s_i n) n
+L_i = leafStmt (dataRoot xs_i) n          xs_i the step's data (leaf.bin)
 c_1 = L_1,        c_i = nodeStmt c_{i-1} L_i                          (i = 2 … M)
 ```
 
-- **Step 1** (`prover first /work`): input `leaf.json` (`n` and the seed `s_1`). Output
-  `proof.bin`: a signed proof of `c_1 = L_1`.
+- **Step 1** (`prover first /work`): inputs `leaf.json` (`n`) and `leaf.bin` (the data `xs_1`).
+  Output `proof.bin`: a signed proof of `c_1 = L_1`.
 - **Step i ≥ 2** (`prover step /work`): inputs `prev.stmt` (`c_{i-1}`), `prev.bin` (the previous
-  step's output, exactly as the runner received it in the service run) and `leaf.json` (`s_i`).
-  Output `proof.bin`: a signed proof of `c_i = nodeStmt c_{i-1} L_i`.
+  step's output, exactly as the runner received it in the service run), `leaf.json` and `leaf.bin`
+  (`xs_i`). Output `proof.bin`: a signed proof of `c_i = nodeStmt c_{i-1} L_i`.
 
 A step may make any number of `SIGN` requests within the lifetime's budget of `2^16` signatures (a
 node needs signed proofs of its children as its witness). The runner computes every statement
@@ -103,9 +116,14 @@ itself and checks outputs against them (below).
 
 **What is fixed, what is drawn, and what is told** (AGENTS.md §6). The shape is **fixed and
 published**: `M` and the one leaf size `n` (`[stream]` of `harness/season.toml`;
-`harness/smoke.toml` has its own), the same for every evaluation and every entry. The **seeds**
-(one per step) are fresh secret draws per evaluation from the OS CSPRNG, published only after the
-run; a step learns its seed only when its inputs arrive.
+`harness/smoke.toml` has its own), the same for every evaluation and every entry. The **data** is
+the runner's: per step a fresh secret 32-byte seed `s_i` from the OS CSPRNG, expanded by the runner
+to `xs_i = SHAKE-256("recursion.fast/leaf-data/v1" ‖ s_i)` truncated to `32 · n` bytes. A prover
+never sees a seed, only the data, and a step sees its data only when its inputs arrive (`leaf.bin`,
+staged outside the sandbox and renamed into `/work` at `go`; the runner keeps its own copy in a
+directory no sandbox can see, and computes every statement from it before the first request). The
+result publishes the seeds and the expansion (`stream.leaf_data`) after the run, so anyone can
+regenerate the data and recompute every statement.
 
 **The two runs** (AGENTS.md §6).
 

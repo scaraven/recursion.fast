@@ -14,10 +14,12 @@ synthetic steps.
    is not scored; the tracks: `final`
    always, `every` only when every output is accepted within the caps and the canaries of outputs 1
    and 2 are rejected, else `tracks_reason` says why.
-3. The season's constants (AGENTS.md §6, the v6 rules): `M = 8` steps of one leaf of `n = 2^22`
-   parallel hashes, 2 timed passes, the caps 1 MiB, 512 KiB and 128 ms, the prover's 8 GiB; `Params.load` refuses a
-   malformed shape (`n` above `leafCap = 2^22` among them); the seeds are fresh OS CSPRNG draws, with no seeded generator; the local
-   season copy keeps every parameter but the two it changes.
+3. The season's constants (AGENTS.md §6, the v6 rules): `M = 8` steps of one leaf of `n = 2^18`
+   blocks of 32 bytes, 2 timed passes, the caps 1 MiB, 512 KiB and 128 ms, the prover's 8 GiB; `Params.load` refuses a
+   malformed shape (`n` above `leafCap = 2^20` among them, `n = 2^20` accepted); the seeds are fresh OS CSPRNG draws,
+   with no seeded generator, expanded by SHAKE-256 under the published domain; the runner's leaf statements through
+   `rf-oracle --data-roots` equal the pure-Python reference; the local season copy keeps every parameter but the two
+   it changes.
 4. The machine fingerprint's required fields; only they are hashed.
 """
 import json
@@ -80,7 +82,7 @@ def main():
 
     p = Params.load(os.path.join(ROOT, "harness", "season.toml"))
     cal = {"c_P": 1.0}
-    N = 1 << 22
+    N = 1 << 18
 
     def mk(i, P, pi=100, n=N, **kw):
         return dict({"index": i, "n": n, "P_s": P, "P_service_s": 2 * P, "V_ns": 10 ** 6, "pi_bytes": pi,
@@ -152,18 +154,19 @@ def main():
           "season 1's fingerprint is a sha256 in hex")
 
     # the season's constants (the v6 rules, D5)
-    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s) == (8, 1 << 22, 2, 60, 3000) and not hasattr(p, "chains")
+    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s) == (8, 1 << 18, 2, 60, 3000) and not hasattr(p, "chains")
           and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 128.0)
           and (p.size_ref, p.mem_prover) == (1 << 20, "8G") and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
-          f"season 1: M = 8 steps of one leaf of 2^22, 2 timed passes, caps 1 MiB / 512 KiB / 128 ms, prover 8G")
+          f"season 1: M = 8 steps of one leaf of 2^18 blocks, 2 timed passes, caps 1 MiB / 512 KiB / 128 ms, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     check((sp.timed_runs, sp.pi_cap, sp.final_pi_cap) == (2, p.pi_cap, p.final_pi_cap) and sp.v_cap_ms == p.v_cap_ms,
           f"the smoke: 2 timed passes, the season's caps, v_cap {sp.v_cap_ms:g} ms (M = {sp.M}, n = {sp.n})")
     season_text = open(os.path.join(ROOT, "harness", "season.toml")).read()
-    for what, pat, new, want in (("n above leafCap", r"(?m)^n = 4194304", "n = 4194305", "leafCap = 2^22"),
-                                 ("n zero", r"(?m)^n = 4194304", "n = 0", "n not a positive integer"),
+    for what, pat, new, want in (("n above leafCap", r"(?m)^n = 262144", "n = 1048577", "leafCap = 2^20"),
+                                 ("n = 2^22, the v5 cap", r"(?m)^n = 262144", "n = 4194304", "leafCap = 2^20"),
+                                 ("n zero", r"(?m)^n = 262144", "n = 0", "n not a positive integer"),
                                  ("M a string", r"(?m)^M = 8", 'M = "8"', "M not a positive integer"),
-                                 ("no n", r"(?m)^n = 4194304", "", "n not a positive integer"),
+                                 ("no n", r"(?m)^n = 262144", "", "n not a positive integer"),
                                  ("no timed pass", r"(?m)^timed_runs = 2", "timed_runs = 0", "timed_runs")):
         bad, k = re.subn(pat, new, season_text, count=1)
         assert k == 1
@@ -176,21 +179,47 @@ def main():
                 check(want in str(e) and "[stream]" in str(e), f"Params.load refuses a season with {what}: {e}")
             check(Params.load(os.path.join(bd, "s.toml"), check=False).name == p.name,
                   f"... and loads it unchecked for the aggregation ({what})")
+    with tempfile.TemporaryDirectory(prefix="rf-shape-") as bd:
+        open(os.path.join(bd, "s.toml"), "w").write(re.sub(r"(?m)^n = 262144", "n = 1048576", season_text, count=1))
+        check(Params.load(os.path.join(bd, "s.toml")).n == 1 << 20, "Params.load accepts n = leafCap = 2^20")
     src = open(os.path.join(ROOT, "harness", "rfh", "draws.py")).read()
     check(len(set(draws.starts(1000))) == 1000 and "random.Random" not in src and "import random" not in src
           and not hasattr(draws, "published_lengths"),
           "starts are fresh CSPRNG draws; no seeded generator and no length list in the draws")
-    # the runner's leaf digests: the service's parallel hasher (a total of 2^12 hashes or more) equals the
-    # pure-Python reference, leafStmt (leafValue s n) n with leafValue the XOR of Keccak-256(0x48 ‖ s ‖ enc64 j)
+    import hashlib
+    sd = bytes(range(32))
+    check(draws.DOMAIN == b"recursion.fast/leaf-data/v1" and draws.LEAF_DATA == {"xof": "shake256", "domain": draws.DOMAIN.decode()}
+          and draws.leaf_data(sd, 3) == hashlib.shake_256(draws.DOMAIN + sd).digest(96)
+          and draws.leaf_data(sd, 5)[:96] == draws.leaf_data(sd, 3) and draws.leaf_data(sd, 0) == b"",
+          "a step's data is SHAKE-256(\"recursion.fast/leaf-data/v1\" ‖ s_i) truncated to 32 n bytes")
+    # the runner's leaf statements: the service's tree hasher (a total of 2^12 permutations or more) equals
+    # the pure-Python reference leafStmt (dataRoot xs) n, which gives the shared known answers
     from rfh import digest
-    if os.path.exists(digest.ORACLE):
-        seeds = [bytes(range(32)), bytes(32), bytes([7]) * 32]
-        got = digest.leaf_digests(seeds, [5000, 0, 1], digest.ORACLE)
-        check(got == [digest.leaf_digest(s, n) for s, n in zip(seeds, [5000, 0, 1])]
-              and digest.leaf_value(seeds[2], 1) == digest.leaf_item(seeds[2], 0) and digest.leaf_value(seeds[0], 0) == bytes(32),
-              "the service's leaf hasher (rf-oracle --leaves) equals the Python reference")
-    else:
-        check(False, f"the service binary {digest.ORACLE} is not built (cargo build --release in service/)")
+    kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
+    check([digest.leaf_digest(bytes.fromhex(v["data"])).hex() for v in kat] == [v["leafStmt"] for v in kat]
+          and [digest.data_root(digest.blocks(bytes.fromhex(v["data"]))).hex() for v in kat] == [v["dataRoot"] for v in kat],
+          "the Python reference gives the known answers of tests/vectors/data_root.json (0 … 4 blocks)")
+    with tempfile.TemporaryDirectory(prefix="rf-roots-") as rd:
+        paths = []
+        for k, n in enumerate([2100, 0, 1, 3]):      # 4199 + 0 + 1 + 5 permutations: through the service
+            paths.append(os.path.join(rd, f"d{k}.bin"))
+            open(paths[-1], "wb").write(draws.leaf_data(bytes([k]) * 32, n))
+        want = [digest.leaf_digest(open(x, "rb").read()) for x in paths]
+        if os.path.exists(digest.ORACLE):
+            got = digest.leaf_digests(paths, digest.ORACLE)
+            check(got == want and want[1] == digest.leaf_stmt(bytes(32), 0)
+                  and digest.data_root([b"x" * 32]) == digest.leaf_item(b"x" * 32),
+                  "the service's tree hasher (rf-oracle --data-roots) equals the Python reference")
+        else:
+            check(False, f"the service binary {digest.ORACLE} is not built (cargo build --release in service/)")
+        check(digest.leaf_digests(paths[1:], "/nonexistent/rf-oracle") == want[1:],
+              "a tiny total (below 2^12 permutations) is hashed in Python")
+        open(paths[0], "ab").write(b"z")
+        try:
+            digest.leaf_digests(paths, digest.ORACLE)
+            check(False, "leaf_digests accepts a file that is not a whole number of blocks")
+        except ValueError as e:
+            check("not a whole number" in str(e), f"leaf_digests refuses a file that is not a whole number of blocks: {e}")
 
     # the local copy of the season (harness/local-season.py): two lines changed, as the smoke has them
     out = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "local-season.py")],

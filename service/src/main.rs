@@ -2,7 +2,7 @@
 //! wire format `PROTOCOL.md`).
 //!
 //!   rf-oracle --socket PATH [--threads N]
-//!   rf-oracle --leaves [--threads N]
+//!   rf-oracle --data-roots [--threads N] FILE…
 //!
 //! At start it draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed from
 //! `getrandom`, generates the `2^16` one-time keys and the Merkle tree (`vk` its root), binds the
@@ -28,16 +28,17 @@
 //! binary the runner uses, whose hash every result records, rejects the option. The runner also
 //! refuses a service that prints `INSECURE`.
 //!
-//! `--leaves` is the runner's leaf hasher and holds no secret: it draws no key and opens no socket.
-//! It reads lines `<seed: 64 lowercase hex> <n: decimal>` from stdin until end of file and writes,
-//! for each, one line `leafStmt (leafValue seed n) n` (64 lowercase hex) to stdout, in input order,
-//! the `n` hashes of every leaf spread over N threads; a malformed line is reported on stderr and the
-//! exit code is 2.
+//! `--data-roots` is the runner's leaf hasher and holds no secret: it draws no key and opens no
+//! socket. Each FILE is one leaf's data, `n` blocks of 32 bytes; it writes, for each, one line
+//! `leafStmt (dataRoot xs) n` (64 lowercase hex) to stdout, in argument order, each tree spread over
+//! N threads (an empty file: `leafStmt zero 0`). A file whose size is not a multiple of 32, whose `n`
+//! is above `leafCap = 2^20`, or that cannot be read is reported on stderr, nothing is written to
+//! stdout, and the exit code is 2.
 
 use rf_oracle::keccak::{self, Keyed};
 use rf_oracle::proto::*;
 use rf_oracle::wots::{NotSigned, Signer, NKEYS};
-use rf_oracle::{leaf_digests, parse_leaf_line, trace_digest};
+use rf_oracle::{data_roots, leaf_stmt, trace_digest, BLOCK, LEAF_CAP};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -255,30 +256,41 @@ fn shutdown(st: &State) -> ! {
 
 fn usage() -> ! {
     eprintln!("usage: rf-oracle --socket PATH [--threads N] [--insecure-test-keys PRFKEY_HEX SEED_HEX (test builds only)]");
-    eprintln!("       rf-oracle --leaves [--threads N]");
+    eprintln!("       rf-oracle --data-roots [--threads N] FILE…");
     std::process::exit(2)
 }
 
-/// `rf-oracle --leaves`: read every line of stdin, then write the leaf digests in input order.
-fn leaves_mode(threads: usize) -> ! {
-    let mut input = String::new();
-    if let Err(e) = io::stdin().read_to_string(&mut input) {
-        eprintln!("rf-oracle --leaves: cannot read stdin: {e}");
+/// `rf-oracle --data-roots FILE…`: read every file (each checked before any is hashed), then write
+/// the leaf statements in argument order.
+fn data_roots_mode(files: &[String], threads: usize) -> ! {
+    let refuse = |f: &str, why: String| -> ! {
+        eprintln!("rf-oracle --data-roots: {f}: {why}");
         std::process::exit(2)
-    }
-    let mut jobs = Vec::new();
-    for (k, line) in input.split_terminator('\n').enumerate() {
-        match parse_leaf_line(line) {
-            Some(job) => jobs.push(job),
-            None => {
-                eprintln!("rf-oracle --leaves: line {}: expected `<64 lowercase hex> <decimal>`, got {line:?}", k + 1);
-                std::process::exit(2)
-            }
+    };
+    let mut data = Vec::with_capacity(files.len());
+    for f in files {
+        // the size first, so that a file above the cap is never read
+        let size = match std::fs::metadata(f) {
+            Ok(m) if m.is_file() => m.len(),
+            Ok(_) => refuse(f, "not a regular file".into()),
+            Err(e) => refuse(f, format!("cannot read: {e}")),
+        };
+        if size % BLOCK as u64 != 0 {
+            refuse(f, format!("{size} bytes, not a multiple of {BLOCK}"));
+        }
+        if size / BLOCK as u64 > LEAF_CAP as u64 {
+            refuse(f, format!("{} blocks, above leafCap = 2^20", size / BLOCK as u64));
+        }
+        match std::fs::read(f) {
+            Ok(d) if d.len() as u64 == size => data.push(d),
+            Ok(d) => refuse(f, format!("changed size while read ({size}, then {} bytes)", d.len())),
+            Err(e) => refuse(f, format!("cannot read: {e}")),
         }
     }
-    let mut out = String::with_capacity(65 * jobs.len());
-    for d in leaf_digests(&jobs, threads) {
-        out.push_str(&hex(&d));
+    let leaves: Vec<&[u8]> = data.iter().map(|d| d.as_slice()).collect();
+    let mut out = String::with_capacity(65 * leaves.len());
+    for (d, r) in leaves.iter().zip(data_roots(&leaves, threads)) {
+        out.push_str(&hex(&leaf_stmt(&r, (d.len() / BLOCK) as u64)));
         out.push('\n');
     }
     let mut so = io::stdout().lock();
@@ -290,7 +302,7 @@ fn leaves_mode(threads: usize) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut socket, mut threads, mut leaves) = (None, None, false);
+    let (mut socket, mut threads, mut data_roots, mut files) = (None, None, false, Vec::new());
     #[allow(unused_mut)]
     let mut test: Option<([u8; 32], [u8; 32])> = None;
     let mut i = 0;
@@ -298,8 +310,8 @@ fn main() {
         match args[i].as_str() {
             "--socket" if i + 1 < args.len() => socket = Some(args[i + 1].clone()),
             "--threads" if i + 1 < args.len() => threads = args[i + 1].parse::<usize>().ok(),
-            "--leaves" => {
-                leaves = true;
+            "--data-roots" => {
+                data_roots = true;
                 i += 1;
                 continue;
             }
@@ -308,16 +320,21 @@ fn main() {
                 test = Some((unhex32(&args[i + 1]).unwrap_or_else(|| usage()), unhex32(&args[i + 2]).unwrap_or_else(|| usage())));
                 i += 1;
             }
+            f if data_roots && !f.starts_with("--") => {
+                files.push(f.to_string());
+                i += 1;
+                continue;
+            }
             _ => usage(),
         }
         i += 2;
     }
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
-    if leaves {
+    if data_roots {
         if socket.is_some() || test.is_some() {
             usage()
         }
-        leaves_mode(threads)
+        data_roots_mode(&files, threads)
     }
     let Some(socket) = socket else { usage() };
     // PR_SET_DUMPABLE = 4: no ptrace attach and no /proc/PID/mem for processes of the same uid.

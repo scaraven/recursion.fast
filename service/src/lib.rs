@@ -14,6 +14,8 @@ pub const TAG_T: u8 = 0x54;
 pub const TAG_H: u8 = 0x48;
 /// Domain tag of the leaf statement (`L`).
 pub const TAG_L: u8 = 0x4C;
+/// Domain tag of a node of a leaf's data tree (`D`).
+pub const TAG_D: u8 = 0x44;
 
 /// `traceDigest tr = Keccak-256(0x54 ‖ item_0 ‖ item_1 ‖ …)`, `item_i = enc64 |q_i| ‖ q_i ‖ a_i`
 /// (`RecursionFast/Contract/Signature.lean`).
@@ -26,34 +28,50 @@ pub fn trace_digest(qs: &[&[u8]], answers: &[Digest]) -> Digest {
     h.finalize()
 }
 
-/// `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)` (41 bytes, one permutation;
-/// `RecursionFast/Contract/Relation.lean`).
-pub fn leaf_item(s: &Digest, j: u64) -> Digest {
-    let mut m = [0u8; 41];
+/// `leafItem x = Keccak-256(0x48 ‖ x)` of one 32-byte block of a leaf's data (33 bytes, one
+/// permutation; `RecursionFast/Contract/Relation.lean`).
+pub fn leaf_item(x: &Digest) -> Digest {
+    let mut m = [0u8; 33];
     m[0] = TAG_H;
-    m[1..33].copy_from_slice(s);
-    m[33..].copy_from_slice(&j.to_le_bytes());
+    m[1..].copy_from_slice(x);
     hash(&m)
 }
 
-/// The XOR of `leafItem s j` over `lo ≤ j < hi`.
-fn leaf_xor(s: &Digest, lo: u64, hi: u64) -> Digest {
-    let mut acc = [0u8; 32];
-    let mut m = [0u8; 41];
-    m[0] = TAG_H;
-    m[1..33].copy_from_slice(s);
-    for j in lo..hi {
-        m[33..].copy_from_slice(&j.to_le_bytes());
-        for (a, b) in acc.iter_mut().zip(hash(&m)) {
-            *a ^= b;
-        }
-    }
-    acc
+/// `dataNode l r = Keccak-256(0x44 ‖ l ‖ r)`, a node of a leaf's data tree (65 bytes, one permutation).
+pub fn data_node(l: &Digest, r: &Digest) -> Digest {
+    let mut m = [0u8; 65];
+    m[0] = TAG_D;
+    m[1..33].copy_from_slice(l);
+    m[33..].copy_from_slice(r);
+    hash(&m)
 }
 
-/// `leafValue s n`: the XOR of `leafItem s j` over `j < n` (the zero digest for `n = 0`), on one thread.
-pub fn leaf_value(s: &Digest, n: u64) -> Digest {
-    leaf_xor(s, 0, n)
+/// `dataLevel` until one digest is left, in place: adjacent digests paired by `data_node`, an odd
+/// last one carried up unhashed; the zero digest for none.
+fn reduce(ds: &mut Vec<Digest>) -> Digest {
+    while ds.len() > 1 {
+        let k = ds.len();
+        for i in 0..k / 2 {
+            ds[i] = data_node(&ds[2 * i], &ds[2 * i + 1]);
+        }
+        if k % 2 == 1 {
+            ds[k / 2] = ds[k - 1];
+        }
+        ds.truncate(k.div_ceil(2));
+    }
+    ds.first().copied().unwrap_or([0u8; 32])
+}
+
+/// The `leafItem` of every block of `data` (its length a multiple of 32).
+fn items(data: &[u8]) -> Vec<Digest> {
+    data.chunks_exact(BLOCK).map(|x| leaf_item(x.try_into().unwrap())).collect()
+}
+
+/// `dataRoot xs` of the blocks `xs` (`data`, `32 · n` bytes; a trailing partial block is ignored),
+/// on one thread, the reference: `dataLevel` applied to the block hashes until one digest is left
+/// (`|xs|` levels reach it, and one digest is a fixed point); the zero digest for no block.
+pub fn data_root(data: &[u8]) -> Digest {
+    reduce(&mut items(data))
 }
 
 /// `leafStmt h n = Keccak-256(0x4C ‖ h ‖ enc64 n)` (41 bytes).
@@ -65,65 +83,55 @@ pub fn leaf_stmt(h: &Digest, n: u64) -> Digest {
     hash(&m)
 }
 
-/// One input line of `rf-oracle --leaves`, `<seed: 64 lowercase hex> <n: decimal u64>`, or `None`
-/// for anything else.
-pub fn parse_leaf_line(line: &str) -> Option<(Digest, u64)> {
-    let (s, n) = line.split_once(' ')?;
-    if s.len() != 64 || n.is_empty() || !n.bytes().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let mut seed = [0u8; 32];
-    for (i, b) in seed.iter_mut().enumerate() {
-        let pair = s.get(2 * i..2 * i + 2)?;
-        if !pair.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
-            return None;
-        }
-        *b = u8::from_str_radix(pair, 16).ok()?;
-    }
-    Some((seed, n.parse().ok()?))
+/// Bytes per block of a leaf's data.
+pub const BLOCK: usize = 32;
+/// The contract's `leafCap`: the most blocks a leaf statement may cover (`2^20`).
+pub const LEAF_CAP: usize = 1 << 20;
+/// Blocks per unit of work of `data_roots`: a power of two, so that the level-by-level pairing never
+/// crosses a chunk's boundary and the chunk roots are the tree's level `log2 CHUNK`.
+const CHUNK: usize = 1 << 12;
+
+/// `dataRoot` of every leaf's data in `leaves` (each `32 · n` bytes), in order, on `threads` threads.
+/// Each leaf is cut into chunks of `CHUNK` consecutive blocks, which the threads take in order, so
+/// one large tree is spread over every thread as well as many small ones. Since `CHUNK` is a power of
+/// two and every chunk but a leaf's last is full, `dataLevel` never pairs digests of two chunks
+/// below level `log2 CHUNK`, where the level is the list of the chunks' own roots (a last, partial
+/// chunk's carry-up included): the upper levels are then reduced from the chunk roots.
+pub fn data_roots(leaves: &[&[u8]], threads: usize) -> Vec<Digest> {
+    data_roots_chunked(leaves, threads, CHUNK)
 }
 
-/// The hashes per unit of work of `leaf_digests`.
-const CHUNK: u64 = 1 << 14;
-
-/// `leafStmt (leafValue s n) n` of every job `(s, n)`, in the order of `jobs`, on `threads` threads.
-/// The hashes of all jobs are cut into chunks of `CHUNK` consecutive indices `j` of one job, which
-/// the threads take in order, so one large leaf is spread over every thread as well as many small
-/// ones; each chunk's XOR is folded into its job's accumulator (XOR is commutative, so the order
-/// does not matter).
-pub fn leaf_digests(jobs: &[(Digest, u64)], threads: usize) -> Vec<Digest> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+fn data_roots_chunked(leaves: &[&[u8]], threads: usize, chunk: usize) -> Vec<Digest> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
-    // ends[k]: the number of chunks of jobs 0 ..= k (u128: no sum of u64 counts overflows)
-    let mut ends = Vec::with_capacity(jobs.len());
-    let mut total: u128 = 0;
-    for (_, n) in jobs {
-        total += n.div_ceil(CHUNK) as u128;
-        ends.push(total);
+    assert!(chunk.is_power_of_two());
+    // jobs: (leaf, first block) of every chunk, in leaf order
+    let mut jobs = Vec::new();
+    let mut counts = Vec::with_capacity(leaves.len());
+    for (k, d) in leaves.iter().enumerate() {
+        let n = d.len() / BLOCK;
+        counts.push(n.div_ceil(chunk));
+        jobs.extend((0..n).step_by(chunk).map(|lo| (k, lo)));
     }
-    let acc: Vec<Mutex<Digest>> = jobs.iter().map(|_| Mutex::new([0u8; 32])).collect();
-    let next = AtomicU64::new(0);
-    let workers = (threads.max(1) as u128).min(total.max(1)) as usize;
+    let roots: Vec<Mutex<Vec<Digest>>> = counts.iter().map(|&c| Mutex::new(vec![[0u8; 32]; c])).collect();
+    let next = AtomicUsize::new(0);
+    let workers = threads.max(1).min(jobs.len().max(1));
     std::thread::scope(|sc| {
         for _ in 0..workers {
             sc.spawn(|| loop {
-                let g = next.fetch_add(1, Ordering::Relaxed) as u128;
-                if g >= total {
+                let g = next.fetch_add(1, Ordering::Relaxed);
+                if g >= jobs.len() {
                     break;
                 }
-                let k = ends.partition_point(|&e| e <= g);
-                let c = (g - if k == 0 { 0 } else { ends[k - 1] }) as u64;
-                let (s, n) = &jobs[k];
-                let lo = c * CHUNK;
-                let x = leaf_xor(s, lo, (lo + CHUNK).min(*n));
-                let mut a = acc[k].lock().unwrap();
-                for (a, b) in a.iter_mut().zip(x) {
-                    *a ^= b;
-                }
+                let (k, lo) = jobs[g];
+                let d = leaves[k];
+                let n = d.len() / BLOCK;
+                let r = data_root(&d[lo * BLOCK..(lo + chunk).min(n) * BLOCK]);
+                roots[k].lock().unwrap()[lo / chunk] = r;
             });
         }
     });
-    jobs.iter().zip(acc).map(|((_, n), a)| leaf_stmt(&a.into_inner().unwrap(), *n)).collect()
+    roots.into_iter().map(|r| reduce(&mut r.into_inner().unwrap())).collect()
 }
 
 #[cfg(test)]
@@ -131,62 +139,82 @@ mod tests {
     use super::*;
 
     fn unhex(s: &str) -> Digest {
-        parse_leaf_line(&format!("{s} 0")).unwrap().0
+        assert_eq!(s.len(), 64);
+        core::array::from_fn(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap())
+    }
+
+    /// The data of `n` blocks of the known answers: the bytes `i mod 256`, `i < 32 n`.
+    fn pattern(n: usize) -> Vec<u8> {
+        (0..32 * n).map(|i| i as u8).collect()
+    }
+
+    /// A pseudo-random data file of `n` blocks (xorshift; test data only).
+    fn noise(n: usize, mut x: u64) -> Vec<u8> {
+        (0..32 * n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
     }
 
     #[test]
-    fn leaves_against_python() {
-        // harness/rfh/digest.py (pure-Python Keccak-256, harness/rfh/keccak.py):
-        // leaf_digest(s, n) = keccak256(b"L" + leaf_value(s, n) + enc64(n)),
-        // leaf_value(s, n) = XOR of keccak256(b"H" + s + enc64(j)) over j < n
-        let s: Digest = core::array::from_fn(|i| i as u8);
-        let jobs = [(s, 0), (s, 1), (s, 2), ([0u8; 32], 5), (s, 1000), (s, 40000), ([0xffu8; 32], 16385)];
-        let want = [
-            "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41",
-            "cdc59157f61c755d1608bc845570a416c824b31517846a466e0c8f99ac63f2f6",
-            "b87148cf718213fc578135218c8d778973d894d6110785ebc85cf206823aa924",
-            "3cd9324ad4bafc8378ddb8293c265204f8a620a272977d78296ea5abde5b8109",
-            "bf44e4a745955a2bc40189e7f698d8406e83e0ab5ad60b3339778ea693fdbf85",
-            "ee5b2aa759075d4b14c7e7998474bf3711eeea075ddc6dbd00b3b1c5332c1eba",
-            "e69d370af34a2eccb7f6776ec9c23c4547bcb58067a0da84cdb3f013ea1da679",
+    fn data_roots_against_python() {
+        // tests/vectors/data_root.json, computed by harness/rfh/digest.py (pure-Python Keccak-256,
+        // harness/rfh/keccak.py): dataRoot and leafStmt (dataRoot xs) n of 0 … 4 blocks of `pattern`
+        let roots = [
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+            "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020",
+            "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b",
+            "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1",
         ];
-        for threads in [1, 3, 8] {
-            let got = leaf_digests(&jobs, threads);
-            assert_eq!(got.len(), want.len());
-            for (g, w) in got.iter().zip(want) {
-                assert_eq!(*g, unhex(w));
+        let stmts = [
+            "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41",
+            "949bd35e15ea565d678b0a51a067a7e8c431127c395d845d86ae2f9654978261",
+            "a7f68d0c19abd06304d01c284cb4f3d972eca094de930e607179037399b28e86",
+            "44f3a6c107823c2b42c86ae9f96a120d212a10a429bcd4ed64a2a0d513749050",
+            "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f",
+        ];
+        for n in 0..5 {
+            let d = pattern(n);
+            assert_eq!(data_root(&d), unhex(roots[n]), "dataRoot of {n} blocks");
+            assert_eq!(leaf_stmt(&data_root(&d), n as u64), unhex(stmts[n]), "leafStmt of {n} blocks");
+            for threads in [1, 3] {
+                assert_eq!(data_roots(&[&d], threads), vec![unhex(roots[n])]);
             }
-            // one large leaf alone, spread over the threads
-            assert_eq!(leaf_digests(&jobs[5..6], threads), vec![unhex(want[5])]);
         }
-        assert!(leaf_digests(&[], 4).is_empty());
-        // leafItem 00 01 … 1f 0 and leafValue of one item
-        assert_eq!(leaf_item(&s, 0), unhex("da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11"));
-        assert_eq!(leaf_value(&s, 1), leaf_item(&s, 0));
-        assert_eq!(leaf_value(&s, 0), [0u8; 32]);
-        assert_eq!(leaf_value(&s, 2), unhex("987811b1565b57a5360e5a6fbe442fab425363ce2a9326cf512e5aeec7eba08e"));
+        // one block: its leafItem; two: one node; three: the third digest carried up; four: a full tree
+        let d = pattern(4);
+        let i: Vec<Digest> = (0..4).map(|j| leaf_item(d[32 * j..32 * j + 32].try_into().unwrap())).collect();
+        assert_eq!(data_root(&d[..32]), i[0]);
+        assert_eq!(data_root(&d[..64]), data_node(&i[0], &i[1]));
+        assert_eq!(data_root(&d[..96]), data_node(&data_node(&i[0], &i[1]), &i[2]));
+        assert_eq!(data_root(&d), data_node(&data_node(&i[0], &i[1]), &data_node(&i[2], &i[3])));
+        assert_eq!(data_root(&[]), [0u8; 32]);
     }
 
     #[test]
-    fn leaf_lines() {
-        let h = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
-        assert_eq!(parse_leaf_line(&format!("{h} 18446744073709551615")).unwrap().1, u64::MAX);
-        assert_eq!(parse_leaf_line(&format!("{h} 007")).unwrap().1, 7);
-        for bad in [
-            h.to_string(),
-            format!("{h} "),
-            format!("{h}  1"),
-            format!("{h} 1 "),
-            format!(" {h} 1"),
-            format!("{h} +1"),
-            format!("{h} 18446744073709551616"),
-            format!("{} 1", h.to_uppercase()),
-            format!("{} 1", &h[..62]),
-            format!("{h}00 1"),
-            format!("{h} 1\r"),
-            "é".repeat(32) + " 1",
-        ] {
-            assert!(parse_leaf_line(&bad).is_none(), "{bad:?}");
+    fn data_roots_parallel_equal_the_reference() {
+        // the chunked, threaded roots equal the one-thread reference at every chunk boundary, with
+        // a small chunk (every size and carry-up case below 3 chunks) and the release chunk
+        let sizes: Vec<usize> = (0..=40).collect();
+        let files: Vec<Vec<u8>> = sizes.iter().map(|&n| noise(n, 7 + n as u64)).collect();
+        let refs: Vec<&[u8]> = files.iter().map(|f| f.as_slice()).collect();
+        let want: Vec<Digest> = refs.iter().map(|d| data_root(d)).collect();
+        for chunk in [1, 2, 4, 8] {
+            for threads in [1, 3, 8] {
+                assert_eq!(data_roots_chunked(&refs, threads, chunk), want, "chunk {chunk}, threads {threads}");
+            }
         }
+        let big: Vec<Vec<u8>> = [CHUNK - 1, CHUNK, CHUNK + 1, 3 * CHUNK + 5].iter().map(|&n| noise(n, n as u64)).collect();
+        let refs: Vec<&[u8]> = big.iter().map(|f| f.as_slice()).collect();
+        let want: Vec<Digest> = refs.iter().map(|d| data_root(d)).collect();
+        for threads in [1, 4, 16] {
+            assert_eq!(data_roots(&refs, threads), want, "threads {threads}");
+        }
+        assert!(data_roots(&[], 4).is_empty());
     }
 }

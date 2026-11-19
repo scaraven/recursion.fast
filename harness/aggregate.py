@@ -38,7 +38,7 @@ flag is kept, always false since season rules v6). A benchmark whose machine fin
 machine); the reason says which. Likewise a stream whose shape (`stream.shape`: `M`, `n`)
 is not the season's is an organiser ERROR (`lengths`): its score is not comparable with any other
 evaluation's. A season file whose `[stream]` shape is malformed (`M`, `n` not positive
-integers, `n` above `leafCap = 2^22`, `timed_runs` not a positive integer) is named
+integers, `n` above `leafCap = 2^20` blocks, `timed_runs` not a positive integer) is named
 the same way in every mode: `--check-machine` prints it as the organiser's problem (so the setup job
 stops the evaluation), and `--organiser-error` and `--plan` then write an ERROR result named
 `lengths`, whatever kind the workflow passed, since a malformed shape is the cause of anything else

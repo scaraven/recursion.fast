@@ -4,19 +4,22 @@
  * It proves with the library's witness-sending argument: the proof `π` is the witness itself in the
  * encoding of the Lean library (WS_* below), the verifier makes no oracle query, so every trace is
  * empty and every proof is signed by one `SIGN` request with no items (service/PROTOCOL.md).
- * It computes the public Keccak-256 leaf values and statements itself, to name the children of a node.
+ * It computes the Keccak-256 data roots of its leaves' data and the statements itself, to name the
+ * children of a node.
  * Its proofs grow with every step (a node carries its children whole): it is a correct, slow entry.
  * Per step it signs, in this fixed order (the service's one-time indices follow the order of the
  * SIGN requests, and the timed passes must reproduce the service run byte for byte): the leaf
- * L = leafStmt (leafValue s n) n, and for a step i >= 2 the output nodeStmt prev L. It makes no
+ * L = leafStmt (dataRoot xs) n, and for a step i >= 2 the output nodeStmt prev L. It makes no
  * oracle query, so it never reads oracle.key.
  *
  *   prover setup DIR      nothing to set up
- *   prover first DIR      ready/go handshake; DIR/leaf.json -> DIR/proof.bin, a signed proof of L
- *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/leaf.json ->
- *                         DIR/proof.bin, a signed proof of nodeStmt prev L
+ *   prover first DIR      ready/go handshake; DIR/leaf.json, DIR/leaf.bin -> DIR/proof.bin, a signed
+ *                         proof of L
+ *   prover step DIR       ready/go handshake; DIR/prev.stmt, DIR/prev.bin, DIR/leaf.json,
+ *                         DIR/leaf.bin -> DIR/proof.bin, a signed proof of nodeStmt prev L
  *
- * Built with -DBROKEN_LEAF (proves a leaf from a changed seed), -DBROKEN_UNSIGNED (no SIGN, a
+ * Built with -DBROKEN_LEAF (proves a leaf whose data has one bit of one block flipped: its root is
+ * not L's), -DBROKEN_UNSIGNED (no SIGN, a
  * zero signature), -DBROKEN_STALE (a signature made by another service, compiled in from
  * stale_sig.h), -DBROKEN_CAP (asks a query above the service's 2^20-byte cap and gives up),
  * -DBROKEN_OOM (allocates without bound) or -DBROKEN_NONDET (when DIR/oracle.key exists, that is in a
@@ -27,6 +30,9 @@
  * step K's output is one: an entry of the track `final` alone. The committed assembly
  * (honest/prover.s) is `gcc -S -O2` of this file with no option, passed through
  * harness/tools/asm-compat.py (GCC 15 emits `.base64`, which the reference image's binutils 2.42 rejects).
+ * With -DTEST_DATAROOT it is a test program instead (tests/harness/test_leaf.py), never a prover:
+ * `toy FILE` prints `dataRoot xs` and `leafStmt (dataRoot xs) n` of the data FILE (n blocks of 32
+ * bytes), 64 lowercase hex characters each, on one line.
  */
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -89,15 +95,26 @@ static void keccak256(uint8_t out[32], const uint8_t *msg, size_t len) {
 static void put64(uint8_t *p, uint64_t x) { for (int i = 0; i < 8; i++) p[i] = (uint8_t)(x >> (8 * i)); }
 static uint64_t get64(const uint8_t *p) { uint64_t x = 0; for (int i = 7; i >= 0; i--) x = x << 8 | p[i]; return x; }
 
-/* leafValue s n: the XOR of leafItem s j = Keccak-256(0x48 ‖ s ‖ u64 j) over j < n. */
-static void leaf_value(uint8_t d[32], const uint8_t s[32], uint64_t n) {
-    uint8_t b[41], h[32];
+/* dataRoot xs of n blocks x_j (32 bytes each, at xs): the block hashes leafItem x = Keccak-256(0x48 ‖ x),
+   then levels of dataNode l r = Keccak-256(0x44 ‖ l ‖ r) over adjacent digests, an odd last digest
+   carried up unhashed, until one is left; the zero digest for n = 0. */
+static void data_root(uint8_t d[32], const uint8_t *xs, uint64_t n) {
     memset(d, 0, 32);
-    b[0] = 0x48; memcpy(b + 1, s, 32);
-    for (uint64_t j = 0; j < n; j++) {
-        put64(b + 33, j); keccak256(h, b, 41);
-        for (int i = 0; i < 32; i++) d[i] ^= h[i];
+    if (n == 0) return;
+    uint8_t (*ds)[32] = malloc(n * 32);
+    uint8_t b[65];
+    if (!ds) { fprintf(stderr, "toy prover: out of memory\n"); exit(1); }
+    b[0] = 0x48;
+    for (uint64_t j = 0; j < n; j++) { memcpy(b + 1, xs + 32 * j, 32); keccak256(ds[j], b, 33); }
+    b[0] = 0x44;
+    for (uint64_t k = n; k > 1; k = (k + 1) / 2) {          /* one level, in place: k digests -> ceil(k/2) */
+        for (uint64_t i = 0; i < k / 2; i++) {
+            memcpy(b + 1, ds[2 * i], 32); memcpy(b + 33, ds[2 * i + 1], 32); keccak256(ds[i], b, 65);
+        }
+        if (k % 2) memcpy(ds[k / 2], ds[k - 1], 32);
     }
+    memcpy(d, ds[0], 32);
+    free(ds);
 }
 static void leaf_stmt(uint8_t c[32], const uint8_t h[32], uint64_t n) {
     uint8_t b[41]; b[0] = 0x4C; memcpy(b + 1, h, 32); put64(b + 33, n); keccak256(c, b, 41);
@@ -163,14 +180,14 @@ static void sign_empty(uint8_t sig[SIG_WIRE]) {
 /* ---- the witness-sending proof and the signed-proof file (harness/FORMAT.md) ---------------- */
 /* The library's witness-sending encoding (RecursionFast/Library/WitnessSending.lean, `encode`): the
    little-endian bytes of the extractor output words `witWords w` (Library/Words.lean):
-     leaf: u64 0 ‖ seed ‖ u64 n                                    (48 bytes)
+     leaf: u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)                       (16 + 32 n bytes)
      node: u64 1 ‖ c1 ‖ c2 ‖ signedWords p1 ‖ signedWords p2
    signedWords p = u64 |π| ‖ π padded to 8 ‖ u64 m ‖ (u64 |q| ‖ q padded to 8 ‖ a)* ‖ u64 idx ‖
    133 × 32 ots ‖ 16 × 32 path: the signed-proof file with π and every query zero-padded to a
    whole word. */
 static const uint8_t ZERO8[8] = {0};
-static buf ws_leaf(const uint8_t s[32], uint64_t n) {
-    buf b = {0, 0}; app64(&b, 0); app(&b, s, 32); app64(&b, n); return b;
+static buf ws_leaf(const uint8_t *xs, uint64_t n) {
+    buf b = {0, 0}; app64(&b, 0); app64(&b, n); app(&b, xs, 32 * n); return b;
 }
 static void app_padded(buf *b, const uint8_t *p, size_t n) {
     app64(b, n); app(b, p, n); app(b, ZERO8, (8 - n % 8) % 8);
@@ -204,15 +221,14 @@ static buf signed_file(buf pi) {
     return f;
 }
 
-static buf prove_leaf(const uint8_t s[32], uint64_t n, uint8_t c[32]) {
-    uint8_t h[32], s2[32];
-    memcpy(s2, s, 32);
-    leaf_value(h, s, n);
+static buf prove_leaf(uint8_t *xs, uint64_t n, uint8_t c[32]) {
+    uint8_t h[32];
+    data_root(h, xs, n);
     leaf_stmt(c, h, n);
 #ifdef BROKEN_LEAF
-    s2[0] ^= 1;                                          /* a different seed: its value is not c's */
+    if (n) xs[0] ^= 1;                                   /* other data: its root is not c's */
 #endif
-    buf pi = ws_leaf(s2, n), f = signed_file(pi);
+    buf pi = ws_leaf(xs, n), f = signed_file(pi);
     free(pi.p); return f;
 }
 
@@ -239,15 +255,16 @@ static void over_cap(void) {
 }
 #endif
 
-/* The leaf file {"n": N, "seed": "HEX"}: its signed proof and statement. */
-static buf prove_leaf_file(const char *path, uint8_t c[32]) {
-    buf j = readfile(path); app(&j, "", 1);
-    char *p = strstr((char *)j.p, "\"n\":"), *q = strstr((char *)j.p, "\"seed\":");
-    if (!p || !q) die(path);
-    uint8_t s[32];
-    q = strchr(q + 7, '"'); if (!q || unhex(s, q + 1, 32)) die(path);
-    buf f = prove_leaf(s, strtoull(p + 4, NULL, 10), c);
-    free(j.p); return f;
+/* The leaf, leaf.json {"n": N} and its data leaf.bin (32 N bytes): its signed proof and statement. */
+static buf prove_leaf_file(uint8_t c[32]) {
+    buf j = readfile("leaf.json"); app(&j, "", 1);
+    char *p = strstr((char *)j.p, "\"n\":");
+    if (!p) die("leaf.json");
+    uint64_t n = strtoull(p + 4, NULL, 10);
+    buf x = readfile("leaf.bin");
+    if (x.n != 32 * n) die("leaf.bin is not 32 n bytes");
+    buf f = prove_leaf(x.p, n, c);
+    free(j.p); free(x.p); return f;
 }
 
 /* A signed node c = nodeStmt c1 c2 from its children's signed proofs. */
@@ -300,7 +317,7 @@ static int mode_first(void) {
     for (;;) { char *p = malloc(1 << 26); if (!p) die("malloc"); memset(p, 1, 1 << 26); }
 #endif
     uint8_t x[32];
-    output(prove_leaf_file("leaf.json", x), 1);
+    output(prove_leaf_file(x), 1);
     return 0;
 }
 
@@ -320,11 +337,24 @@ static int mode_step(void) {
     if (fp.n < 1) die("empty prev.bin");
     step = fp.p[--fp.n] + 1u;                       /* strip the previous step's index */
 #endif
-    buf fx = prove_leaf_file("leaf.json", x);
+    buf fx = prove_leaf_file(x);
     output(prove_node(c, prev, x, fp, fx), step);
     return 0;
 }
 
+#ifdef TEST_DATAROOT
+static void hexline(const uint8_t *d) { for (int i = 0; i < 32; i++) printf("%02x", d[i]); }
+int main(int argc, char **argv) {
+    if (argc != 2) die("usage: toy FILE (a test build: dataRoot and leafStmt of FILE)");
+    buf x = readfile(argv[1]);
+    if (x.n % 32) die("the file is not a whole number of 32-byte blocks");
+    uint8_t h[32], c[32];
+    data_root(h, x.p, x.n / 32);
+    leaf_stmt(c, h, x.n / 32);
+    hexline(h); printf(" "); hexline(c); printf("\n");
+    return 0;
+}
+#else
 int main(int argc, char **argv) {
     if (argc != 3) die("usage: prover setup|first|step DIR");
     if (chdir(argv[2])) die("cannot enter DIR");
@@ -334,3 +364,4 @@ int main(int argc, char **argv) {
     die("unknown mode");
     return 2;
 }
+#endif

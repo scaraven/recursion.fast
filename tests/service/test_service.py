@@ -17,15 +17,17 @@
    32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
 6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
 7. shutdown on stdin end of file: exit 0, socket removed, statistics printed;
-8. `rf-oracle --leaves`: leaf digests `leafStmt (leafValue s n) n` against the references, in input
-   order, on 1 and several threads, many small leaves and one leaf of 2^20 hashes spread over the
-   threads; a malformed line exits 2;
+8. `rf-oracle --data-roots FILE…`: leaf statements `leafStmt (dataRoot xs) n` against the C
+   reference (`par_leaf`, itself checked against the pure-Python `rfh/digest.py` and the shared
+   known answers `tests/vectors/data_root.json`), in argument order, on 1 and several threads (the
+   same output), many small files and one of `leafCap = 2^20` blocks spread over the threads; an
+   empty file prints `leafStmt zero 0`; a size that is not a multiple of 32, `n` above 2^20 or a
+   missing file exits 2 with nothing on stdout;
 9. replay mode: after the control line `replay` the service prints `key <hex k>` and `replay ready`;
    `SIGN` of the service run's traces in order returns byte-identical responses, any other trace at
    an index (never signed, or signed with another digest) is refused with status 4 `MISMATCH`;
    each `replay` resets the index to 0; `QUERY` and `VK` are unchanged; end of file still shuts down.
 """
-import functools
 import os
 import random
 import struct
@@ -102,15 +104,16 @@ VECTORS = [  # Keccak-256 (Ethereum), published values
 ]
 
 
-def par_leaf(s, n):
-    """`leafStmt (leafValue s n) n` by the C reference: leafValue s n = the XOR of
-    `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)` over `j < n`."""
-    acc = 0
-    for lo in range(0, n, 1 << 16):
-        hs = W.H_many([b"H" + s + W.enc64(j) for j in range(lo, min(n, lo + (1 << 16)))])
-        for h in hs:
-            acc ^= int.from_bytes(h, "little")
-    return W.keccak_c(b"L" + acc.to_bytes(32, "little") + W.enc64(n))
+def par_leaf(data):
+    """`leafStmt (dataRoot xs) n` of the data `data` (`n` blocks of 32 bytes) by the C reference:
+    `leafItem x = Keccak-256(0x48 ‖ x)`, then levels of `dataNode l r = Keccak-256(0x44 ‖ l ‖ r)`
+    over adjacent digests, an odd last one carried up unhashed; the zero digest for no block."""
+    n = len(data) // 32
+    ds = W.H_many([b"H" + data[o:o + 32] for o in range(0, 32 * n, 32)])
+    while len(ds) > 1:
+        up = W.H_many([b"D" + ds[k] + ds[k + 1] for k in range(0, len(ds) - 1, 2)])
+        ds = up + ds[len(ds) - len(ds) % 2:]
+    return W.H(b"L" + (ds[0] if ds else bytes(32)) + W.enc64(n))
 
 
 def replay(p):
@@ -179,34 +182,59 @@ def test_replay(tmp):
           f"replay statistics: {stats}")
 
 
-def test_leaves(binary):
+def test_data_roots(binary, tmp):
+    import json
+    from rfh import digest as pydigest
+    d = os.path.join(tmp, "data-roots")
+    os.makedirs(d)
+
+    def put(name, data):
+        path = os.path.join(d, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
+    check(all(par_leaf(bytes.fromhex(v["data"])).hex() == v["leafStmt"] == pydigest.leaf_digest(bytes.fromhex(v["data"])).hex()
+              and pydigest.data_root(pydigest.blocks(bytes.fromhex(v["data"]))).hex() == v["dataRoot"] for v in kat),
+          "data roots: the C reference and the pure-Python reference give the known answers of 0 … 4 blocks")
     rnd = random.Random(2)
-    jobs = [(bytes(rnd.getrandbits(8) for _ in range(32)), rnd.choice([0, 1, 2, 7, 100, 1000, 16384, 16385]))
-            for _ in range(300)]
-    stdin = "".join(f"{s.hex()} {n}\n" for s, n in jobs)
-    want = "".join(par_leaf(s, n).hex() + "\n" for s, n in jobs)
-    check(par_leaf(bytes(range(32)), 5) == pykeccak.keccak256(
-        b"L" + functools.reduce(lambda a, j: bytes(x ^ y for x, y in zip(a, pykeccak.keccak256(b"H" + bytes(range(32)) + W.enc64(j)))),
-                                range(5), bytes(32)) + W.enc64(5)),
-        "leaf digest: the C reference equals the pure-Python reference on a leaf of 5 hashes")
+    check(all(par_leaf(x) == pydigest.leaf_digest(x) for x in (rnd.randbytes(32 * n) for n in (5, 6, 7, 33))),
+          "data roots: the C reference equals the pure-Python reference on 5, 6, 7 and 33 random blocks")
+    sizes = [rnd.choice([0, 1, 2, 3, 5, 6, 7, 64, 100, 4095, 4096, 4097, 9000]) for _ in range(60)]
+    files = [put(f"f{k}.bin", rnd.randbytes(32 * n)) for k, n in enumerate(sizes)]
+    want = "".join(par_leaf(open(f, "rb").read()).hex() + "\n" for f in files)
+    outs = []
     for threads in ([], ["--threads", "1"], ["--threads", "7"]):
-        r = subprocess.run([binary, "--leaves"] + threads, input=stdin, capture_output=True, text=True, timeout=120)
+        r = subprocess.run([binary, "--data-roots"] + threads + files, capture_output=True, text=True, timeout=120)
+        outs.append(r.stdout)
         check(r.returncode == 0 and r.stdout == want,
-              f"--leaves {' '.join(threads)}: {len(jobs)} leaves (n up to 16385) equal the reference, in input order")
-    big = bytes(range(32, 64))
-    want_big = par_leaf(big, 1 << 20).hex() + "\n"
+              f"--data-roots {' '.join(threads)}: {len(files)} files (n up to 9000 blocks) equal the reference, in order")
+    check(len(set(outs)) == 1, "--data-roots: the same output on 1 and many threads")
+    big = put("cap.bin", rnd.randbytes(32 << 20))
+    want_big = par_leaf(open(big, "rb").read()).hex() + "\n"
     for threads in (["--threads", "1"], ["--threads", "8"]):
-        r = subprocess.run([binary, "--leaves"] + threads, input=f"{big.hex()} {1 << 20}\n", capture_output=True, text=True,
-                           timeout=120)
-        check(r.returncode == 0 and r.stdout == want_big, f"--leaves {' '.join(threads)}: one leaf of 2^20 hashes equals the reference")
+        r = subprocess.run([binary, "--data-roots"] + threads + [big], capture_output=True, text=True, timeout=120)
+        check(r.returncode == 0 and r.stdout == want_big,
+              f"--data-roots {' '.join(threads)}: one file of leafCap = 2^20 blocks equals the reference")
+    empty = put("empty.bin", b"")
+    r = subprocess.run([binary, "--data-roots", empty], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == pydigest.leaf_stmt(bytes(32), 0).hex() + "\n",
+          "--data-roots of an empty file prints leafStmt zero 0")
+    r = subprocess.run([binary, "--data-roots"], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == "", "--data-roots with no file: exit 0, no output")
+    over = put("over.bin", bytes(32 * ((1 << 20) + 1)))
+    for what, bad in (("a size not a multiple of 32", put("odd.bin", bytes(33))),
+                      ("31 bytes", put("short.bin", bytes(31))),
+                      ("n = 2^20 + 1 blocks, above leafCap", over),
+                      ("a missing file", os.path.join(d, "missing.bin")),
+                      ("a directory", d)):
+        r = subprocess.run([binary, "--data-roots", files[0], bad], capture_output=True, text=True, timeout=120)
+        check(r.returncode == 2 and r.stdout == "" and "rf-oracle --data-roots" in r.stderr,
+              f"--data-roots refuses {what} (after a good file): exit {r.returncode}, nothing on stdout")
+    r = subprocess.run([binary, "--data-roots", "--socket", "x.sock", files[0]], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 2, f"--data-roots with --socket is a usage error (exit {r.returncode})")
     r = subprocess.run([binary, "--leaves"], input="", capture_output=True, text=True, timeout=60)
-    check(r.returncode == 0 and r.stdout == "", "--leaves on empty input: exit 0, no output")
-    for bad in [stdin + "zz\n", f"{jobs[0][0].hex().upper()} 3\n", f"{jobs[0][0].hex()} -1\n", "\n"]:
-        r = subprocess.run([binary, "--leaves"], input=bad, capture_output=True, text=True, timeout=120)
-        check(r.returncode == 2 and r.stdout == "" and "rf-oracle --leaves" in r.stderr,
-              f"--leaves refuses a malformed line {bad.splitlines()[-1][:20]!r}…: exit {r.returncode}, nothing on stdout")
-    r = subprocess.run([binary, "--leaves", "--socket", "x.sock"], input="", capture_output=True, text=True, timeout=60)
-    check(r.returncode == 2, f"--leaves with --socket is a usage error (exit {r.returncode})")
+    check(r.returncode == 2 and r.stdout == "", f"the old --leaves mode is gone: a usage error (exit {r.returncode})")
 
 
 def main():
@@ -411,7 +439,7 @@ def main():
     check(stats.get("signatures") == 1 << 16, f"service statistics: {stats}")
 
     # 8. the runner's leaf hasher
-    test_leaves(RELEASE if os.path.exists(RELEASE) else BIN)
+    test_data_roots(RELEASE if os.path.exists(RELEASE) else BIN, tmp)
 
     # 9. replay mode
     test_replay(tmp)

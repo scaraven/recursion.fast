@@ -178,7 +178,7 @@ def main():
           "a rejected certificate stays REJECT whatever the stream's shape")
     # a malformed [stream] shape in the season file: named `lengths` in every mode, never a crash
     smoke_text = open(SEASON).read()
-    for what, text in (("n above leafCap", smoke_text.replace("\nn = 64 ", "\nn = 4194305 ")),
+    for what, text in (("n above leafCap = 2^20", smoke_text.replace("\nn = 64 ", "\nn = 1048577 ")),
                        ("n zero", smoke_text.replace("\nn = 64 ", "\nn = 0 ")),
                        ("no M", smoke_text.replace("\nM = 4\n", "\n"))):
         assert text != smoke_text

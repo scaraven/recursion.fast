@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 64 hashes, its service
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 64 blocks, its service
 run and its two timed passes).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
@@ -20,7 +20,7 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
 2. seven deliberately broken provers, built from the same C source with one option each, through
-   the stream with the same badge: a leaf from a wrong seed (`BROKEN_LEAF`), an unsigned trace
+   the stream with the same badge: a leaf of other data (`BROKEN_LEAF`, one bit flipped), an unsigned trace
    (`BROKEN_UNSIGNED`), a signature made by another run's service (`BROKEN_STALE`, the signature
    compiled into the binary): each REJECT, the final output rejected by `acc`; a query above
    the service's cap (`BROKEN_CAP`): REJECT naming the service's refusal; unbounded allocation
@@ -385,8 +385,9 @@ def main():
               and sc["M"] == st["M"] == smoke_stream["M"] and not st["truncated"],
               f"score components: S {sc.get('S')}, P_total {sc.get('P_total_s')} s, size factor {sc.get('size_factor')} at "
               f"|π_M| {sc.get('final_pi_bytes')} B, tracks {sc.get('tracks')}, M {sc.get('M')}")
-        check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"],
-              f"the stream ran the smoke's shape {st['shape']} with M fresh seeds")
+        check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"]
+              and st.get("leaf_data") == {"xof": "shake256", "domain": "recursion.fast/leaf-data/v1"},
+              f"the stream ran the smoke's shape {st['shape']} with M fresh seeds, their expansion published")
         check(all(all(k in s for k in ("P_s", "P_service_s", "P_timed_s", "V_ns", "pi_bytes", "accepted", "startup_s", "kill_s"))
                   and len(s["P_timed_s"]) == smoke_stream["timed_runs"] and s["P_s"] == min(s["P_timed_s"]) and s["accepted"]
                   for s in st["steps"]),

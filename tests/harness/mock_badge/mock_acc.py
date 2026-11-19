@@ -8,7 +8,7 @@ import struct
 import wots_ref as W
 import signed
 
-LEAF_CAP, QUERY_CAP = 1 << 22, 1 << 20
+LEAF_CAP, QUERY_CAP = 1 << 20, 1 << 20
 WORD = 1 << 64          # no proof cap; |π| must fit a word
 
 
@@ -16,16 +16,19 @@ def H(b):
     return W.H(b)
 
 
+def H_all(msgs):
+    return W.H_many(msgs) if msgs and W.c_lib() else [H(m) for m in msgs]
+
+
 @functools.lru_cache(maxsize=None)
-def leaf_value(s, n):
-    """The XOR of leafItem s j = H(0x48 ‖ s ‖ enc64 j) over j < n."""
-    acc = 0
-    for lo in range(0, n, 1 << 16):
-        msgs = [b"H" + s + struct.pack("<Q", j) for j in range(lo, min(n, lo + (1 << 16)))]
-        hs = W.H_many(msgs) if W.c_lib() else [H(m) for m in msgs]
-        for h in hs:
-            acc ^= int.from_bytes(h, "little")
-    return acc.to_bytes(32, "little")
+def data_root(data):
+    """dataRoot of the blocks of `data` (32 bytes each): leafItem x = H(0x48 ‖ x), then levels of
+    dataNode l r = H(0x44 ‖ l ‖ r) over adjacent digests, an odd last one carried up unhashed; the
+    zero digest for no block."""
+    ds = H_all([b"H" + data[o:o + 32] for o in range(0, len(data), 32)])
+    while len(ds) > 1:
+        ds = H_all([b"D" + ds[k] + ds[k + 1] for k in range(0, len(ds) - 1, 2)]) + ds[len(ds) - len(ds) % 2:]
+    return ds[0] if ds else bytes(32)
 
 
 def leaf_stmt(h, n):
@@ -71,13 +74,14 @@ def signed_words(pi, o):
 
 
 def decode(pi):
-    """('leaf', s, n) | ('node', c1, c2, p1, p2) in the library's encoding (`witWords`), or None.
-    (Strictness here is only the format's; the Lean `check` also re-encodes.)"""
+    """('leaf', data, n) | ('node', c1, c2, p1, p2) in the library's encoding (`witWords`), or None:
+    a leaf is `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)`. (Strictness here is only the format's; the Lean
+    `check` also re-encodes.)"""
     if len(pi) < 8:
         return None
     tag = u64(pi, 0)
-    if tag == 0 and len(pi) == 48:
-        return ("leaf", pi[8:40], u64(pi, 40))
+    if tag == 0 and len(pi) >= 16 and len(pi) == 16 + 32 * u64(pi, 8):
+        return ("leaf", pi[16:], u64(pi, 8))
     if tag != 1 or len(pi) < 72:
         return None
     a = signed_words(pi, 72)
@@ -92,7 +96,7 @@ def check(vk, c, pi):
     if w is None:
         return False
     if w[0] == "leaf":
-        return w[2] <= LEAF_CAP and c == leaf_stmt(leaf_value(w[1], w[2]), w[2])
+        return w[2] <= LEAF_CAP and c == leaf_stmt(data_root(w[1]), w[2])
     return c == node_stmt(w[1], w[2]) and acc_signed(vk, w[1], w[3]) and acc_signed(vk, w[2], w[4])
 
 

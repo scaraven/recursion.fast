@@ -110,22 +110,24 @@ class Params:
         return {"M": self.M, "n": self.n}
 
     def check_shape(self):
-        """The season's stream shape (`[stream] M`, `n`): positive integers, `n ≤ leafCap = 2^22`
-        (the contract's bound on a leaf), `timed_runs ≥ 1`; else a ValueError naming the defect."""
+        """The season's stream shape (`[stream] M`, `n`): positive integers, `1 ≤ n ≤ LEAF_CAP =
+        leafCap = 2^20` blocks (the contract's bound on a leaf), `timed_runs ≥ 1`; else a ValueError
+        naming the defect."""
         bad = [k for k in ("M", "n") if type(getattr(self, k)) is not int or getattr(self, k) < 1]
         if bad:
             raise ValueError(f"[stream] {', '.join(bad)} not a positive integer")
         if self.n > LEAF_CAP:
-            raise ValueError(f"[stream] n = {self.n} above the contract's leafCap = 2^22")
+            raise ValueError(f"[stream] n = {self.n} above the contract's leafCap = 2^20 blocks")
         if type(self.timed_runs) is not int or self.timed_runs < 1:
             raise ValueError(f"[stream] timed_runs = {self.timed_runs!r}, not a positive integer")
 
 
-LEAF_CAP = digest.LEAF_CAP       # the contract's leafCap (`Relation.lean`)
+LEAF_CAP = digest.LEAF_CAP       # the contract's leafCap = 2^20 blocks (`Relation.lean`)
 
 
-def leaf_json(n, seed):
-    return json.dumps({"n": n, "seed": seed.hex()}).encode()
+def leaf_json(n):
+    """`leaf.json`: the leaf's number of blocks (its data is `leaf.bin`, `32 · n` bytes)."""
+    return json.dumps({"n": n}).encode()
 
 
 FP_HASHED = ("cpu_model", "vm_shape", "frequency_policy", "image_id")    # what comparability is about
@@ -231,6 +233,9 @@ class Bench:
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
         os.makedirs(self.store, exist_ok=True)
+        # the leaf data: runner-only, beside the store and never under it (the badge binds the store at
+        # /store); nothing is bound into any sandbox from it, a request gets a staged copy at `go`
+        self.leafdata = os.path.join(work, "leafdata")
         self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"), p.badge_start_s)
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
@@ -470,17 +475,34 @@ class Bench:
             raise Fail(f"{tag}: {r.status}" + self.diag(svc, r.log))
         return r
 
-    def inputs(self, i, seeds, stmts, prev, key=None):
+    def inputs(self, i, data, stmts, prev, key=None):
         """Step `i`'s request: (`first` or `step`, name → bytes). Every step gets its leaf,
-        `leaf.json` (`n` and the step's fresh seed `s_i`); a step `i ≥ 2` also `prev.stmt` (`c_{i-1}`)
-        and `prev.bin` (`prev`, the service run's output of step `i - 1`); a timed request also
-        `oracle.key` (the service's PRF key `k`, 64 lowercase hex characters and a newline). All are
-        staged and appear in /work together when the clock runs."""
+        `leaf.json` (`{"n": n}`) and `leaf.bin` (the step's data, `32 · n` bytes `x_0 ‖ … ‖ x_(n−1)`,
+        read from the runner's own file `data[i - 1]`; never its seed); a step `i ≥ 2` also
+        `prev.stmt` (`c_{i-1}`) and `prev.bin` (`prev`, the service run's output of step `i - 1`); a
+        timed request also `oracle.key` (the service's PRF key `k`, 64 lowercase hex characters and a
+        newline). All are staged and appear in /work together when the clock runs."""
         ins = {} if i == 1 else {"prev.stmt": (stmts[i - 2].hex() + "\n").encode(), "prev.bin": prev}
-        ins["leaf.json"] = leaf_json(self.p.n, seeds[i - 1])
+        ins["leaf.json"] = leaf_json(self.p.n)
+        with open(data[i - 1], "rb") as f:
+            ins["leaf.bin"] = f.read()
         if key is not None:
             ins["oracle.key"] = (key + "\n").encode()
         return ("first" if i == 1 else "step"), ins
+
+    def write_leaf_data(self, seeds):
+        """Every step's data, `leaf_data(s_i, n)`, written to `leafdata/step{i}.bin` (a fresh
+        runner-only directory beside the store): the files' paths, in step order."""
+        if os.path.exists(self.leafdata):
+            shutil.rmtree(self.leafdata)
+        os.makedirs(self.leafdata, mode=0o700)
+        paths = []
+        for i, s in enumerate(seeds, 1):
+            path = os.path.join(self.leafdata, f"step{i}.bin")
+            with open(path, "wb") as f:
+                f.write(draws.leaf_data(s, self.p.n))
+            paths.append(path)
+        return paths
 
     def stored(self, step):
         return open(os.path.join(self.store, step["file"]), "rb").read()
@@ -489,25 +511,29 @@ class Bench:
         """The stream (AGENTS.md §6) under one service lifetime: the service run (`service_run`),
         then the timed passes (`timed`), all within `stream_s`, which is the entry's REJECT if
         reached. `M` steps, a fresh process each, `PROVER first` then `PROVER step`; step `i` proves
-        `c_i` from one fresh leaf of `n` hashes (`rfh.digest.stream_statements`)."""
+        `c_i` from one fresh leaf of `n` blocks (`rfh.digest.stream_statements`). Before the first
+        request every step's data is drawn and expanded (`rfh.draws.leaf_data`) into a file of the
+        runner-only directory `leafdata` (never under the store, never bound into a sandbox), and
+        every leaf statement is computed from those files."""
         p, name = self.p, "stream"
         p.check_shape()
         M = p.M
         seeds = draws.starts(M)               # fresh CSPRNG draws per evaluation, one per step
-        self.log(f"[{name}] computing {M} leaf digests (n = {p.n} hashes each)")
-        ld = digest.leaf_digests(seeds, p.n, self.service_bin)  # all before the first request
+        data = self.write_leaf_data(seeds)
+        self.log(f"[{name}] computing {M} leaf digests (n = {p.n} blocks each)")
+        ld = digest.leaf_digests(data, self.service_bin)   # all before the first request, from the runner's data
         stmts, first = digest.stream_statements(ld)
         self.req_root = request_root()
         svc = self.service(name)
         rec = {"vk": svc.vk.hex(), "service": {k: v for k, v in svc.info.items() if k != "simd"}, "shape": p.shape(),
-               "seeds": [s.hex() for s in seeds], "leaf_digests": [d.hex() for d in ld],
+               "seeds": [s.hex() for s in seeds], "leaf_data": dict(draws.LEAF_DATA), "leaf_digests": [d.hex() for d in ld],
                "statements": [c.hex() for c in stmts], "steps": [],
                "truncated": False, "timed_runs": p.timed_runs,
                "request_dir": "tmpfs (/dev/shm)" if self.req_root else "the work directory"}
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
-            self.service_run(svc, rec, seeds, stmts, first)
-            self.timed(svc, rec, seeds, stmts)
+            self.service_run(svc, rec, data, stmts, first)
+            self.timed(svc, rec, data, stmts)
             self.alive(svc)
         except Fail as e:
             e.rec = rec        # a failed run keeps its measurements in the result
@@ -517,6 +543,7 @@ class Bench:
             self.stop(svc, rec)
             if self.req_root:
                 shutil.rmtree(self.req_root, ignore_errors=True)
+            shutil.rmtree(self.leafdata, ignore_errors=True)     # the seeds, published, regenerate it
         try:
             self.audit_replays(rec)
         except Fail as e:
@@ -527,7 +554,7 @@ class Bench:
         rec["calibration"] = self.calibration()
         return rec
 
-    def service_run(self, svc, rec, seeds, stmts, first):
+    def service_run(self, svc, rec, data, stmts, first):
         """The service run (AGENTS.md §6), untimed: the stream against the service, every output
         kept. Its times are recorded (`P_service_s`), never scored. Every output's size is at most
         `pi_cap`: its `|π|` if it parses as a signed proof that `acc` accepts, else its file size
@@ -580,7 +607,7 @@ class Bench:
                 self.sample(f"service run, step {i}")
             if self.left() <= 0:
                 raise Fail(f"service run, step {i}: {self.deadline[1]}")
-            kind, ins = self.inputs(i, seeds, stmts, self.stored(steps[-1]) if steps else None)
+            kind, ins = self.inputs(i, data, stmts, self.stored(steps[-1]) if steps else None)
             r = self.one(svc, f"service{i}", kind, ins)
             rel = self.keep(f"stream/step{i}.bin", r.proof)
             steps.append(step_record(i, p.n, r, rel))
@@ -682,14 +709,15 @@ class Bench:
         if left:
             raise Fail(f"the service run left {len(left)} entries in the request directory that the runner cannot remove")
 
-    def timed(self, svc, rec, seeds, stmts):
+    def timed(self, svc, rec, data, stmts):
         """The timed passes (AGENTS.md §6): `timed_runs` passes of steps `1 … M`, each a fresh
         sandbox as in the service run, after the service run's request directories are gone. Before
         each pass the service enters replay mode (`Service.replay`) and reveals its PRF key `k`; a
-        timed request gets the same leaf, the runner's statement, the **service run's** output of
-        step `i - 1` as `prev.bin`, and `oracle.key`. Each output must be byte-identical to the
-        service run's output of that step, else the entry's REJECT naming the pass, the step and the
-        first differing byte. `P_i` = the minimum of step `i`'s timed times."""
+        timed request gets the same leaf (`leaf.json` and `leaf.bin`, the same bytes), the runner's
+        statement, the **service run's** output of step `i - 1` as `prev.bin`, and `oracle.key`.
+        Each output must be byte-identical to the service run's output of that step, else the
+        entry's REJECT naming the pass, the step and the first differing byte. `P_i` = the minimum
+        of step `i`'s timed times."""
         p, steps = self.p, rec["steps"]
         self.purge_requests()
         for t in range(1, p.timed_runs + 1):
@@ -702,7 +730,7 @@ class Bench:
                 if self.left() <= 0:
                     raise Fail(f"timed pass {t}, step {i}: {self.deadline[1]}")
                 ref = self.stored(steps[i - 1])
-                kind, ins = self.inputs(i, seeds, stmts, self.stored(steps[i - 2]) if i > 1 else None, key)
+                kind, ins = self.inputs(i, data, stmts, self.stored(steps[i - 2]) if i > 1 else None, key)
                 r = self.one(svc, f"timed{t}-step{i}", kind, ins)
                 if r.proof != ref:
                     rel = self.keep(f"stream/timed{t}-step{i}.bin", r.proof)

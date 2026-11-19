@@ -1,0 +1,55 @@
+{
+ "about": "Known answers of the committed-data leaf (RecursionFast/Contract/Relation.lean), computed by the pure-Python reference harness/rfh/digest.py and checked by service/src/lib.rs (cargo test), tests/harness/test_leaf.py (the toy prover's C dataRoot) and the Lean controls. Keccak-256 is Ethereum's. leafItem x = Keccak-256(0x48 || x); dataNode l r = Keccak-256(0x44 || l || r); dataRoot pairs adjacent digests level by level from the leafItems, an odd last digest carried up unhashed (the zero digest for no block); leafStmt h n = Keccak-256(0x4C || h || enc64 n), enc64 8 bytes little-endian. 3 blocks: dataNode (dataNode i0 i1) i2; 4 blocks: dataNode (dataNode i0 i1) (dataNode i2 i3).",
+ "pattern": "the data of n blocks is the 32 n bytes b_i = i mod 256 (block j, byte k: (32 j + k) mod 256)",
+ "vectors": [
+  {
+   "n": 0,
+   "data": "",
+   "leafItems": [],
+   "dataRoot": "0000000000000000000000000000000000000000000000000000000000000000",
+   "leafStmt": "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41"
+  },
+  {
+   "n": 1,
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "leafItems": [
+    "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69"
+   ],
+   "dataRoot": "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+   "leafStmt": "949bd35e15ea565d678b0a51a067a7e8c431127c395d845d86ae2f9654978261"
+  },
+  {
+   "n": 2,
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "leafItems": [
+    "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+    "bea32b562ceff4efb8e461d8068bc952e8a11b759db5b51b9fc9a335e311edee"
+   ],
+   "dataRoot": "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020",
+   "leafStmt": "a7f68d0c19abd06304d01c284cb4f3d972eca094de930e607179037399b28e86"
+  },
+  {
+   "n": 3,
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+   "leafItems": [
+    "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+    "bea32b562ceff4efb8e461d8068bc952e8a11b759db5b51b9fc9a335e311edee",
+    "c32c7a34971a5d6ce7889b0c3921fe43994a3ebd4be4c40b6bf22d4781655fe7"
+   ],
+   "dataRoot": "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b",
+   "leafStmt": "44f3a6c107823c2b42c86ae9f96a120d212a10a429bcd4ed64a2a0d513749050"
+  },
+  {
+   "n": 4,
+   "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+   "leafItems": [
+    "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+    "bea32b562ceff4efb8e461d8068bc952e8a11b759db5b51b9fc9a335e311edee",
+    "c32c7a34971a5d6ce7889b0c3921fe43994a3ebd4be4c40b6bf22d4781655fe7",
+    "94621f56350927d503e3fee700007e0f673936477a2b2a71d31a160ef8b5fa59"
+   ],
+   "dataRoot": "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1",
+   "leafStmt": "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f"
+  }
+ ]
+}

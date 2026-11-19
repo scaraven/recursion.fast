@@ -3,11 +3,15 @@
 
   python3 tests/harness/test_stream.py
 
-1. Inputs: step 1 gets `leaf.json` (`n` and the step's fresh seed), step i ≥ 2 also `prev.stmt` and
-   `prev.bin` (the service run's previous output); a timed request also `oracle.key` (the key the
-   service's replay mode revealed, 64 hex and a newline); the service run's requests get no key. The
-   runner's statements are `L_i = leafStmt (leafValue s_i n) n`, `c_1 = L_1`, `c_i = nodeStmt c_{i-1}
-   L_i`; every leaf has the season's `n`, `n_i = n`.
+1. Inputs: step 1 gets `leaf.json` (`{"n": n}`, no seed) and `leaf.bin` (its data, the SHAKE-256
+   expansion of the step's fresh seed, `32 n` bytes), step i ≥ 2 also `prev.stmt` and `prev.bin` (the
+   service run's previous output); a timed request also `oracle.key` (the key the service's replay
+   mode revealed, 64 hex and a newline); the service run's requests get no key; every timed pass gets
+   the service run's `leaf.bin` and `leaf.json`, byte for byte. The runner's statements are
+   `L_i = leafStmt (dataRoot xs_i) n`, `c_1 = L_1`, `c_i = nodeStmt c_{i-1} L_i`, computed from its own
+   data files before the first request; every leaf has the season's `n`, `n_i = n`. The data files
+   live in a runner-only directory beside the store, never under it or the request directories, and
+   are gone after the stream; the result records the expansion (`leaf_data`).
 2. The service run, then `timed_runs` timed passes, each after a `replay`; the timed passes' `prev.bin`
    is the service run's output; `P_i` is the minimum of the timed times, the service run's time is
    recorded, not scored; the score is `P_total · 2^(|π_M| / size_ref)`, `P_total = Σ P_i`.
@@ -40,7 +44,7 @@ from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
-from rfh import bench as bench_mod, digest, signed  # noqa: E402
+from rfh import bench as bench_mod, digest, draws, signed  # noqa: E402
 from rfh.bench import Bench, Fail, Params, score  # noqa: E402
 from rfh.prover import Step  # noqa: E402
 
@@ -91,7 +95,8 @@ def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok
     b.service_bin = None                     # the leaves are small: digest.py hashes them in Python
     b.work = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.store = os.path.join(b.work, "store")
-    b.calls, b.reqs, b.svc, b.verify_calls = [], {}, FakeSvc(mism), []
+    b.leafdata = os.path.join(b.work, "leafdata")
+    b.calls, b.reqs, b.svc, b.verify_calls, b.data_seen = [], {}, FakeSvc(mism), [], []
     b.service = lambda name: b.svc
     b.stop = lambda svc, rec: rec.update(service_stats=stats or {"signatures": 7 * M, "replays": 7 * M * p.timed_runs,
                                                                  "mismatches": 0})
@@ -125,6 +130,7 @@ def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok
     def one(svc, tag, kind, ins):
         b.calls.append(tag)
         b.reqs[tag] = (kind, ins)
+        b.data_seen.append(sorted(os.listdir(b.leafdata)) if os.path.isdir(b.leafdata) else None)
         if tag == cap_at:
             raise Fail(f"{tag}: {b.deadline[1]} (timeout)")
         if tag.startswith("service"):
@@ -161,22 +167,38 @@ def main():
     p = b.p
     k1, in1 = b.reqs["service1"]
     k2, in2 = b.reqs["service2"]
-    leaf = ["leaf.json"]
+    leaf = ["leaf.bin", "leaf.json"]
     check(k1 == "first" and sorted(in1) == leaf and k2 == "step"
           and sorted(in2) == leaf + ["prev.bin", "prev.stmt"] and in2["prev.bin"] == proof(1),
           "the service run: step 1 gets its leaf; step 2 the previous output, its statement and its leaf; no key")
     seeds = [bytes.fromhex(s) for s in rec["seeds"]]
-    L = [digest.leaf_stmt(digest.leaf_value(s, p.n), p.n) for s in seeds]
+    xs = [draws.leaf_data(s, p.n) for s in seeds]
+    L = [digest.leaf_stmt(digest.data_root(digest.blocks(x)), p.n) for x in xs]
     c = [L[0]]
     for x in L[1:]:
         c.append(digest.node_stmt(c[-1], x))
     check(rec["leaf_digests"] == [x.hex() for x in L] and rec["statements"] == [x.hex() for x in c]
           and in2["prev.stmt"] == (c[0].hex() + "\n").encode(),
-          "the statements: L_i = leafStmt (leafValue s_i n) n, c_1 = L_1, c_i = nodeStmt c_{i-1} L_i")
-    check(len(seeds) == 4 and all(json.loads(b.reqs[f"service{i}"][1]["leaf.json"]) == {"n": p.n, "seed": rec["seeds"][i - 1]}
-                                  for i in range(1, 5))
+          "the statements: L_i = leafStmt (dataRoot xs_i) n, c_1 = L_1, c_i = nodeStmt c_{i-1} L_i, xs_i the "
+          "SHAKE-256 expansion of the step's seed")
+    check(len(seeds) == 4 and all(json.loads(b.reqs[f"service{i}"][1]["leaf.json"]) == {"n": p.n} for i in range(1, 5))
           and all(s["n"] == p.n for s in st) and rec["shape"] == {"M": 4, "n": p.n},
-          f"M fresh seeds, one per step, every leaf of the season's n = {p.n}, n_i = n")
+          f"M fresh seeds, one per step, every leaf of the season's n = {p.n}, n_i = n; leaf.json is {{\"n\": n}} only")
+    check(all(b.reqs[f"service{i}"][1]["leaf.bin"] == xs[i - 1] and len(xs[i - 1]) == 32 * p.n for i in range(1, 5))
+          and len(set(xs)) == 4
+          and all(b.reqs[f"timed{t}-step{i}"][1][k] == b.reqs[f"service{i}"][1][k]
+                  for t in (1, 2) for i in range(1, 5) for k in ("leaf.bin", "leaf.json")),
+          "every step gets its own data as leaf.bin (32 n bytes, SHAKE-256(domain ‖ s_i)); every timed pass gets the "
+          "service run's leaf.bin and leaf.json byte for byte")
+    check(rec["leaf_data"] == {"xof": "shake256", "domain": "recursion.fast/leaf-data/v1"}
+          and draws.leaf_data(seeds[0], 2) == __import__("hashlib").shake_256(b"recursion.fast/leaf-data/v1" + seeds[0]).digest(64),
+          f"the result publishes the seeds and the expansion: {rec['leaf_data']}")
+    ld = os.path.realpath(b.leafdata)
+    check(b.data_seen == [[f"step{i}.bin" for i in range(1, 5)]] * len(b.calls) and not os.path.exists(b.leafdata)
+          and os.path.dirname(ld) == os.path.realpath(b.work)
+          and not ld.startswith(os.path.realpath(b.store) + os.sep) and ld != os.path.realpath(b.store),
+          "the data of all M steps is written before the first request, to a runner-only directory beside the store "
+          "(never under it), and removed after the stream")
     t1 = [b.reqs[f"timed1-step{i}"] for i in range(1, 5)]
     check(b.calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2) for i in range(1, 5)]
           and b.svc.replays == 2

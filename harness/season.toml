@@ -40,10 +40,11 @@ claim_bytes = 65536       # claim.json, the renderer's input
                   # process each, run once against the service (the service run, untimed), then
                   # timed_runs times against its replay (the timed passes)
 M = 8             # steps per stream: one published constant, the same for every entry
-n = 4194304       # 2^22, the contract's leafCap: every step proves one leaf of n parallel hashes,
-                  # L_i = leafStmt (leafValue s_i n) n, leafValue s n = ⊕_{j<n} Keccak-256(0x48 ‖ s ‖
-                  # enc64 j), one permutation each; c_1 = L_1, c_i = nodeStmt c_{i-1} L_i. The seeds
-                  # s_i are fresh secret draws per evaluation; 2^25 permutations per stream
+n = 262144        # 2^18 blocks of 32 bytes per step (leafCap = 2^20): every step proves one leaf
+                  # over its data xs_i (leaf.bin, 8 MiB), L_i = leafStmt (dataRoot xs_i) n, dataRoot a
+                  # Keccak-256 Merkle root (2^18 block hashes and 2^18 − 1 tree nodes, about 2^19
+                  # permutations); c_1 = L_1, c_i = nodeStmt c_{i-1} L_i. The data is the SHAKE-256
+                  # expansion of a fresh secret seed s_i per step and evaluation, published after it
 ready_s = 10      # seconds from a request's process start to its `ready` line
 step_s = 60       # seconds per request from its inputs to the death of its last process
 stream_s = 3000   # wall seconds for the whole benchmark from its first calibration sample: the service
