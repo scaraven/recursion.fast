@@ -118,9 +118,14 @@
   signed traces as `T`, which the log accounts for by the service's specification, and outputs
   `walkSigned`'s (or `walkStreamSigned`'s) forgery; the collision finder does the same with the
   signing key drawn itself.
-  Also on paper: EUF-CMA of the scheme with each index used once, from Keccak-256's properties
-  (AGENTS.md §11); lazy sampling against a random function, randomised adversaries, and the PRF
-  hybrid from the random oracle to the keyed deployment (AGENTS.md §12).
+  `Adv_EUF-CMA` (the scheme, each index used once) is itself no assumption: the EUF-CMA outcome
+  is reduced in the kernel to a Keccak-256 collision or a chain inversion
+  (`Library/WotsReduce.lean`, `eufReduce`, with the service's signatures the reference signer's
+  as its specification says; `compose_prob_stream_wots` splits the stream's EUF-CMA term so),
+  leaving on paper that the chain starts are pseudorandom and the inversion's
+  probability (one-wayness of the chain step, AGENTS.md §11). Also on paper: lazy sampling
+  against a random function, randomised adversaries, and the PRF hybrid from the random oracle to
+  the keyed deployment (AGENTS.md §12).
 -/
 import RecursionFast.Library.Trace
 import RecursionFast.Library.Tree

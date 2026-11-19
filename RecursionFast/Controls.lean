@@ -7,7 +7,9 @@ output format) · LogScan · WitnessSending · Tree · Certificate (the key quan
 (certified in the model, harmless under the keyed deployment) · Unforgeability (the forgery
 events and the service's signed traces) · Compose (the composition walks over trees and the
 stream, their reduction to EUF-CMA and collisions, and their probability) · Signature (trace
-digest, WOTS digits, chain, leaf, node, root, `SigOk`).
+digest, WOTS digits, chain, leaf, node, root, `SigOk`) · WotsReduce (EUF-CMA reduced to a
+collision or a chain inversion: reached by a forger that knows the key, unsatisfiable by revealed
+values or with an index used twice).
 Security holds the direct controls of the textbook `KS`; Security and Potential hold the
 potential controls as facts about the library's `KState`.
 -/
@@ -27,3 +29,4 @@ import RecursionFast.Controls.Certificate
 import RecursionFast.Controls.Backdoor
 import RecursionFast.Controls.Unforgeability
 import RecursionFast.Controls.Compose
+import RecursionFast.Controls.WotsReduce

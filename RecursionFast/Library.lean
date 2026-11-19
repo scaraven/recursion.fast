@@ -11,7 +11,8 @@ word-level badge path, proved equal) · WitnessSending (certified for every key)
 certified verifier trusts a signature) · Unforgeability (the EUF-CMA, SUF-CMA and signature-only
 forgery events, the service's signed traces) · Compose (the composition walks across the stream
 and across balanced trees, their reduction to EUF-CMA and collisions, and their probability) ·
-SignerFast (the executable reference signer).
+WotsReduce (EUF-CMA of the signature reduced to a Keccak-256 collision or a chain inversion, and
+the stream composition down to them) · SignerFast (the executable reference signer).
 -/
 import RecursionFast.Library.Keccak
 import RecursionFast.Library.Oracle
@@ -31,4 +32,5 @@ import RecursionFast.Library.WitnessSending
 import RecursionFast.Library.SigTrust
 import RecursionFast.Library.Unforgeability
 import RecursionFast.Library.Compose
+import RecursionFast.Library.WotsReduce
 import RecursionFast.Library.SignerFast

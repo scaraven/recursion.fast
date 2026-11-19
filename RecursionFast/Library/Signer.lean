@@ -27,6 +27,9 @@
     some WOTS digit of the second is below the first's (from `msgDigits_inj` and the checksum
     falling when message digits rise), so a signature cannot be walked forward along its chains
     into a signature of another message. Kernel-checked, no hash.
+  * For the reduction of EUF-CMA (`Library/WotsReduce.lean`): `wotsDigits_lt_three` (some digit
+    of every message is below 3, from the checksum) and `sign_ots_getElem?` (what a signature
+    reveals: chain `i` at position `dᵢ`).
   * `pk` and `sign` are computable; `Library/SignerFast.lean` has their fast twins and how to run
     them.
 -/
@@ -218,6 +221,37 @@ theorem wotsDigits_dominates {m m' : Digest} (h : m ≠ m') :
     rw [← wotsDigits_getD_check m ht, ← wotsDigits_getD_check m' ht]
     exact hcon _ (by unfold wotsLen; omega)
   omega
+
+/-- **Some WOTS digit is below 3**: 128 message digits `3` make the checksum `0`, so every
+signature reveals some chain strictly below its end. -/
+theorem wotsDigits_lt_three (m : Digest) : ∃ i < wotsLen, (wotsDigits m).getD i 0 < 3 := by
+  by_contra hcon
+  simp only [not_exists, not_and, not_lt] at hcon
+  have h0 : ((msgDigits m).map (3 - ·)).sum = 0 := by
+    refine List.sum_eq_zero_iff_forall_eq_nat.mpr fun x hx => ?_
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.mp hx
+    obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hd
+    have hi' : i < 128 := by rwa [msgDigits_length] at hi
+    have := hcon i (by unfold wotsLen; omega)
+    rw [wotsDigits_getD_msg m hi', List.getD_eq_getElem _ _ hi] at this
+    omega
+  have := hcon (128 + 0) (by unfold wotsLen; omega)
+  rw [wotsDigits_getD_check m (by norm_num), h0] at this
+  simp at this
+
+/-- Every WOTS digit, read with default `0`, is at most 3. -/
+theorem wotsDigits_getD_le (m : Digest) (i : ℕ) : (wotsDigits m).getD i 0 ≤ 3 := by
+  rw [List.getD_eq_getElem?_getD]
+  cases h : (wotsDigits m)[i]? with
+  | none => simp
+  | some d => exact wotsDigits_le m d (List.mem_of_getElem? h)
+
+/-- **What a signature reveals**: its value for chain `i` is the chain at position `dᵢ`, the
+`i`-th WOTS digit of the message. -/
+theorem sign_ots_getElem? (j : ℕ) (m : Digest) {i : ℕ} (hi : i < wotsLen) :
+    (sign sk j m).ots[i]? = some (wotsChain j i 0 ((wotsDigits m).getD i 0) (sk j i)) := by
+  have hi' : i < (wotsDigits m).length := by rwa [wotsDigits_length]
+  simp [sign, List.getElem?_mapIdx, List.getElem?_eq_getElem hi']
 
 /-- **The signature's chain ends are the key's.** -/
 theorem wotsEnds_sign (j : ℕ) (m : Digest) :
