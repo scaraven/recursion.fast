@@ -25,6 +25,12 @@ Negative:
 * `ws_fuel_short`: the witness-sending program does not compute its extractor in 25 steps.
 * `halt_not_ws`: the one-statement program does not compute the witness-sending extractor (wrong
   output: on the proof of a leaf witness it outputs nothing).
+* `halt_not_big`: **the domain reaches `8 · outCap` bytes**: the one-statement program does not
+  compute the extractor that returns a witness exactly on proofs longer than `outCap` bytes, since
+  such a proof of at most `8 · outCap` bytes is in the domain (`tests/mutation`'s
+  `ext-computes-small-domain`); `halt_not_longQuery`, `halt_not_longTape`: likewise, the domain
+  reaches queries of `2^64 − 1` bytes and tapes of `2^64` words (`ext-computes-short-queries`,
+  `ext-computes-short-tape`).
 * `spin_computes_nothing`: a program that never halts computes no extractor at any fuel.
 * `toolong_not_computes`: a program that outputs `2^24 + 1` words computes no extractor (the output
   cap).
@@ -93,6 +99,58 @@ theorem halt_not_ws : ¬ Computes haltProg E fun _ => 1 := by
     (by simp [extractorInput_eq, packBytes_length, hs, logWords])
   cases (halt_run _ 0).symm.trans ho
   exact nomatch hd.trans (decode_encode (.leaf _ 0) (by decide : (0 : ℕ) < 2 ^ 64))
+
+/-- The extractor that returns a leaf witness exactly on proofs longer than `outCap` bytes. -/
+def Ebig (_ : Digest) (π : Proof) (_ : Log) : Option Wit :=
+  if outCap < π.size then some (.leaf (Vector.replicate 32 0) 0) else none
+
+/-- **The domain reaches `8 · outCap` bytes**: on a proof of more than `outCap` and at most
+`8 · outCap` bytes the one-statement program outputs nothing, which does not denote `Ebig`'s
+witness. -/
+theorem halt_not_big (π : Proof) (h₁ : outCap < π.size) (h₂ : π.size ≤ 8 * outCap) :
+    ¬ Computes haltProg Ebig fun _ => 1 := by
+  intro h
+  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) π [] h₂ (by simp)
+    (by simp only [extractorInput_eq, List.length_append, packBytes_length, logWords,
+          Vector.length_toList, List.length_cons, List.flatMap_nil, List.length_nil,
+          ← size_eq_length]; unfold outCap at h₂; omega)
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Ebig, h₁, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
+
+/-- The extractor that returns a leaf witness exactly on logs with a query of at least `2^64 − 1`
+bytes. -/
+def Equery (_ : Digest) (_ : Proof) (L : Log) : Option Wit :=
+  if ∃ e ∈ L, 2 ^ 64 - 1 ≤ e.1.size then some (.leaf (Vector.replicate 32 0) 0) else none
+
+/-- **The domain reaches queries of `2^64 − 1` bytes**: on a log with one such query the
+one-statement program outputs nothing, which does not denote `Equery`'s witness. -/
+theorem halt_not_longQuery (q : ByteArray) (a : Digest) (h : q.size = 2 ^ 64 - 1) :
+    ¬ Computes haltProg Equery fun _ => 1 := by
+  intro hc
+  obtain ⟨o, ho, -, hd⟩ := hc (Vector.replicate 32 0) .empty [(q, a)] (by decide)
+    (by simp [h])
+    (by simp only [extractorInput_eq, List.length_append, packBytes_length, logWords, bytesWords,
+          Vector.length_toList, List.length_cons, List.flatMap_cons, List.flatMap_nil,
+          List.length_nil, List.append_nil, ← size_eq_length, h]; decide)
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Equery, List.mem_singleton, exists_eq_left, h, le_refl, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
+
+/-- The extractor that returns a leaf witness exactly on tapes of more than `2^63` words. -/
+def Etape (c : Digest) (π : Proof) (L : Log) : Option Wit :=
+  if 2 ^ 63 < (extractorInput c π L).length then some (.leaf (Vector.replicate 32 0) 0) else none
+
+/-- **The domain reaches tapes of `2^64` words**: on a tape of more than `2^63` and at most `2^64`
+words the one-statement program outputs nothing, which does not denote `Etape`'s witness. -/
+theorem halt_not_longTape (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ 8 * outCap)
+    (hL : ∀ e ∈ L, e.1.size < 2 ^ 64) (h₁ : 2 ^ 63 < (extractorInput c π L).length)
+    (h₂ : (extractorInput c π L).length ≤ 2 ^ 64) : ¬ Computes haltProg Etape fun _ => 1 := by
+  intro hc
+  obtain ⟨o, ho, -, hd⟩ := hc c π L hπ hL h₂
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Etape, h₁, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
 
 /-! ## No halt; too long an output; enumeration -/
 

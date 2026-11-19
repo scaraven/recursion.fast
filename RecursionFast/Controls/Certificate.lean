@@ -6,13 +6,16 @@ Positive:
   `Certificate`: knowledge soundness and completeness with error `0` **under every public key**,
   the program computing the extractor within its fuel, the caps.
 * `ws_certificateR`: and against a claim rendered the way a challenge renders it (both errors `0`,
-  no verifier query, fuel `8 · t`).
+  no verifier query, fuel `8 · t`); `ws_certificateR_loose`: and against the loosest claim, the
+  caps themselves and the budget (a declared number bounds the submission's from above;
+  `tests/mutation`'s `certr-bounds-flipped`).
 * `ws_acc_leaf`: the certified submission's `acc` accepts an honest signed leaf proof under the
   reference signer's key (`Controls/Relation.lean`), so the harness's check is satisfiable too.
 
 Negative:
 * `fuel_low_claim`, `fuel_over_budget_claim`: claims the submission does not meet, or that exceed
-  the budget, are not certified.
+  the budget, are not certified; `fuel_over_budget_per_word_claim`: the budget charges `2^16`
+  steps per input word, not more (`tests/mutation`'s `ext-budget-2^17`).
 * `rejectAll_no_certificate`, `acceptAll_no_certificate`, `error_one_no_certificate`,
   `delta_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_program_no_certificate`:
   with the verifier a function of the key; `acceptAll_no_certificate` against
@@ -66,12 +69,26 @@ theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ leafC
       (Controls.Relation.leafSigned (Signer.chainStart seed) 0 s n) = true :=
   Controls.Relation.acc_leafSigned _ (by decide) s hn
 
+/-- The loosest claim a challenge may render: the caps and the budget. -/
+noncomputable def declaredLoose : Declared where
+  ε := errorCap
+  δ := completenessCap
+  qV := 2 ^ 16
+  fuel := extractorBudget
+
+theorem ws_certificateR_loose : CertificateR declaredLoose submission :=
+  ⟨certificate, zero_le, zero_le, Nat.zero_le _, fun t => ⟨certificate.cap.2.2.2.1 t, le_rfl⟩⟩
+
 theorem fuel_low_claim : ¬ CertificateR { declared with fuel := fun _ => 25 } submission :=
   fun h => absurd (h.bounds.2.2.2 4).1 (by decide)
 
 theorem fuel_over_budget_claim :
     ¬ CertificateR { declared with fuel := fun _ => 2 ^ 49 } submission :=
   fun h => absurd (h.bounds.2.2.2 0).2 (by decide)
+
+theorem fuel_over_budget_per_word_claim :
+    ¬ CertificateR { declared with fuel := fun t => 2 ^ 48 + 2 ^ 16 * t + t } submission :=
+  fun h => absurd (h.bounds.2.2.2 1).2 (by decide)
 
 theorem rejectAll_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = Security.rejectAll) :
     ¬ Certificate S := fun h =>

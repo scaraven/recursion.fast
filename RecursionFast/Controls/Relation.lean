@@ -25,7 +25,8 @@ Positive:
 Negative:
 * `wrong_value` (the seed in place of the value), `wrong_seed` (another seed),
   `wrong_count` (one hash dropped), `extra_item` (one hash added), `leaf_over_leafCap` (every
-  `acc`).
+  `acc`); `leaf_over_season`: the bound is the season's `2^22` (a leaf of `2^22 + 1` hashes is
+  rejected under every `acc`; `tests/mutation`'s `rel-leafcap-2^23`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
@@ -42,7 +43,9 @@ Negative:
   trace longer than its `qV`; the instance at `qV + 1 = 2` entries.
 * `acc_over_word`, `acc_query_over_cap`: every submission's `acc` rejects a proof of `2^64`
   bytes or more (its length does not fit a word) and a trace with a query above
-  `queryCap`; `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
+  `queryCap`; `acc_query_over_2pow20`: the cap is the service's `2^20` bytes (a query of
+  `2^20 + 1` bytes is rejected; `tests/mutation`'s `rel-querycap-2^21`);
+  `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
   proof of `9704 · 2^51 − 9656` bytes (its children within the word) that `acc` then rejects, so
   the word bound is what rejects it.
 
@@ -150,6 +153,12 @@ theorem leaf_at_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
 theorem leaf_over_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
     ¬ Rel acc (leafStmt (leafValue s (leafCap + 1)) (leafCap + 1)) (.leaf s (leafCap + 1)) :=
   fun h => absurd h.1 (by omega)
+
+/-- **The leaf bound is the season's `2^22`**: a leaf of `2^22 + 1` hashes is not in the
+relation, under every `acc`. -/
+theorem leaf_over_season (acc : Digest → Signed → Bool) (s : Digest) :
+    ¬ Rel acc (leafStmt (leafValue s (2 ^ 22 + 1)) (2 ^ 22 + 1)) (.leaf s (2 ^ 22 + 1)) :=
+  fun h => absurd h.1 (by decide)
 
 /-- The statement of the seed is not the statement of its leaf's value (`s0`, `n = 1`). -/
 theorem seed_ne_value : leafStmt s0 1 ≠ leafStmt (leafValue s0 1) 1 := by
@@ -317,6 +326,13 @@ theorem acc_query_over_cap (S : Submission) (vk c : Digest) (p : Signed) {e : By
   unfold Submission.acc
   rw [decide_eq_false this]
   simp
+
+/-- **The query cap is the service's `2^20` bytes**: every submission's `acc` rejects a trace whose
+query has `2^20 + 1` bytes, whatever its answer, proof and signature. -/
+theorem acc_query_over_2pow20 (S : Submission) (vk c a : Digest) (π : Proof) (σ : Sig) :
+    S.acc vk c ⟨π, [(⟨Array.replicate (2 ^ 20 + 1) 0⟩, a)], σ⟩ = false :=
+  acc_query_over_cap S vk c _ (List.mem_singleton_self _)
+    (show queryCap < (Array.replicate _ _).size by rw [Array.size_replicate]; decide)
 
 /-- The verifier that asks the one query `q` and accepts, declaring `qV = 1` (the
 witness-sending submission otherwise). -/
