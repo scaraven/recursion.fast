@@ -101,7 +101,7 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
     timed = timed or {t: {i: 0.001 * t for i in range(1, M + 1)} for t in range(1, p.timed_runs + 1)}
     V = V or {}
     b = Bench.__new__(Bench)
-    b.p, b.log, b.samples, b.deadline, b.req_root = p, (lambda m: None), [], None, None
+    b.p, b.log, b.samples, b.deadline = p, (lambda m: None), [], None
     b.service_bin = None                     # the leaves are small: digest.py hashes them in Python
     b.work = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.store = os.path.join(b.work, "store")
@@ -383,7 +383,7 @@ def main():
     w = Bench.__new__(Bench)
     w.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     w.run = SimpleNamespace(bin_dir=bindir, setup_dir=setup, mem="1G")
-    w.req_root, w.work, w.deadline = None, d, None
+    w.work, w.deadline = d, None
     w.warm_caches = lambda: (events.append("warm"), Bench.warm_caches(w))[1]
 
     svc_w = FakeSvc()

@@ -108,7 +108,7 @@ def bench(tmp, bindir, n):
     os.makedirs(b.store)
     b.run = Run(bindir, os.path.join(b.work, "setup"), "256M")
     os.makedirs(b.run.setup_dir)
-    b.req_root, b.deadline, b.log = None, None, (lambda m: None)
+    b.deadline, b.log = None, (lambda m: None)
     return b
 
 
