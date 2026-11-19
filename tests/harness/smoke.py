@@ -30,7 +30,9 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    the timed passes (`BROKEN_NONDET`): REJECT naming the first differing byte; a SIGN that differs
    in the timed passes (`BROKEN_PROBE`, a replay MISMATCH read as a bit): REJECT; and one variant
    that is not broken, intermediate outputs that are not signed proofs (`FINAL_ONLY=4`): ACCEPT in
-   the track `final` only, the reason recorded;
+   the track `final` only, the reason recorded; each REJECT names its `reject_stage` (`check` for
+   the final output rejected and for the verifier cap, `request` for the service's cap and the
+   memory cap, `timed-pass` for the byte and replay mismatches, `certificate` for the source rule);
 3. the same entry with `certified := sorry`: PROVISIONAL, not comparable;
 4. an entry with `#eval` in its Lean source: REJECT by the source rule, nothing built;
 5. the entry's module that `Solution` does not import is never built, and a Lean-kernel run
@@ -197,6 +199,9 @@ def main():
               "BROKEN_NONDET": "timed pass 1, step 1: the output differs from the service run's output of the step, "
                                "first at byte offset",
               "BROKEN_PROBE": "timed pass 1: a SIGN in a timed pass differed from the service run's"}
+    # where each is rejected (the result's `reject_stage`)
+    expect_stage = {"BROKEN_LEAF": "check", "BROKEN_UNSIGNED": "check", "BROKEN_STALE": "check", "BROKEN_CAP": "request",
+                    "BROKEN_OOM": "request", "BROKEN_NONDET": "timed-pass", "BROKEN_PROBE": "timed-pass"}
     lowmem = os.path.join(tmp, "smoke-256M.toml")    # the OOM prover runs under a 256 MiB cap
     smoke_text = open(os.path.join(ROOT, "harness", "smoke.toml")).read()
     assert 'prover = "8G"' in smoke_text
@@ -304,8 +309,10 @@ def main():
                          "--season", vc, "--parts", "calibrate,stream")
                 rv = load(out)
                 why = " ".join(rv.get("reasons", []))
-                check(rv.get("verdict") == "REJECT" and "above v_cap = 8 ms" in why and "the final output" in why,
-                      f"the honest toy under v_cap = 8 ms (below its final V): {rv.get('verdict')}: {why[:200]}")
+                check(rv.get("verdict") == "REJECT" and "above v_cap = 8 ms" in why and "the final output" in why
+                      and rv.get("reject_stage") == "check",
+                      f"the honest toy under v_cap = 8 ms (below its final V): {rv.get('verdict')} at "
+                      f"{rv.get('reject_stage')}: {why[:200]}")
             step("the season's verifier cap", vcap)
 
             def organiser():
@@ -354,7 +361,8 @@ def main():
             evaluate("all", "--entry", se, "--org", a.org, "--work", os.path.join(tmp, "eval"), "--out", sc)
             sr = load(sc)
             why = " ".join((sr.get("certificate") or {}).get("reasons", []))
-            check(sr.get("verdict") == "REJECT" and "source rule" in why, f"`#eval` in the entry: {sr.get('verdict')} {why[:120]}")
+            check(sr.get("verdict") == "REJECT" and "source rule" in why and sr.get("reject_stage") == "certificate",
+                  f"`#eval` in the entry: {sr.get('verdict')} at {sr.get('reject_stage')} {why[:120]}")
         step("source rule", source_rule)
 
     r = results.get("honest", {})
@@ -417,8 +425,9 @@ def main():
             continue
         rb = results.get(flag, {})
         why = " ".join(rb.get("reasons", []))
-        check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and expect[flag] in why,
-              f"{flag}: {rb.get('verdict', rb.get('benchmark'))}: {why[:400]}")
+        check(rb.get("benchmark") == "fail" and rb.get("verdict", "REJECT") == "REJECT" and expect[flag] in why
+              and rb.get("reject_stage") == expect_stage[flag],
+              f"{flag}: {rb.get('verdict', rb.get('benchmark'))} at {rb.get('reject_stage')}: {why[:400]}")
     print(f"\n{len(fails)} failure(s); results in {tmp}")
     return 1 if fails else 0
 

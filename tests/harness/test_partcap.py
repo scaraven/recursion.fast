@@ -5,8 +5,9 @@ REJECT, never a missing part.
   python3 tests/harness/test_partcap.py
 
 A prover whose `setup` sleeps runs through `harness/evaluate.py`'s `bench_job` with `PART_S`
-lowered to 20 s and the mock badge: the result is `benchmark: fail`, verdict REJECT, its reason
-names `PART_S` and the stage the runner's checkpoint reached (`prover setup`).
+lowered to 20 s and the mock badge: the result is `benchmark: fail`, verdict REJECT at the reject
+stage `prover`, its reason names `PART_S` and the stage the runner's checkpoint reached (`prover
+setup`).
 """
 import importlib.util
 import json
@@ -48,8 +49,10 @@ def main():
                         bench=os.path.join(ROOT, "service", "target", "release", "rf-bench"))
     res = ev.bench_job(a, {"status": "ok", "badge_dir": badge})
     why = " ".join(res.get("reasons", []))
-    ok = res.get("benchmark") == "fail" and res.get("verdict") == "REJECT" and "PART_S" in why and "prover setup" in why
-    print(("ok   " if ok else "FAIL ") + f"a part past PART_S during the prover's setup: {res.get('verdict')}: {why}")
+    ok = (res.get("benchmark") == "fail" and res.get("verdict") == "REJECT" and "PART_S" in why and "prover setup" in why
+          and res.get("reject_stage") == "prover")
+    print(("ok   " if ok else "FAIL ") + f"a part past PART_S during the prover's setup: {res.get('verdict')} at "
+          f"{res.get('reject_stage')}: {why}")
     json.dump(res, open(out, "w"), indent=1)
     print(f"{0 if ok else 1} failure(s)")
     return 0 if ok else 1

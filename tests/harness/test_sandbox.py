@@ -28,9 +28,14 @@
     /proc entry but the pid directories, `self` and `thread-self` reads as empty (a file) or lists
     nothing (a directory), and so does everything in /sys/devices/system/cpu but its static
     description; `socket`/`socketpair` fail with EPERM for every domain but AF_UNIX (UDP among them);
+    `statfs`/`fstatfs`/`statvfs`/`ustat` (free disk space), every way to a pidfd (pidfs inode
+    numbers) and `SO_COOKIE` are refused, `clone3` is ENOSYS and `fork` and threads work;
     `mlock` of N pages in one request raises the host's `unevictable_pgs_mlocked` by N and the next
-    request sees none of it; a request's first inode number and /work's free counts do not depend on
-    how many files an earlier request made (with a shared tmpfs, the control, they do).
+    request sees none of it; a request's first inode number does not depend on how many files an
+    earlier request made (with a shared tmpfs, the control, it does); with the runner's scrub
+    (`harness/tools/scrub.c`) before every request, the per-CPU inode counters of pipes and memfds
+    show a later request nothing of the K pipes and memfds an earlier one made on every CPU (without
+    it, the control, each CPU's counter has moved by K).
 
 The requests of 6.-8., 10. and 11. run as the benchmark's do, /work a private tmpfs (`request` with
 no host directory).
@@ -47,6 +52,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh.files import OutputError, read_output  # noqa: E402
 from rfh.prover import Run, build, remove_tree, request  # noqa: E402
+from rfh.bench import build_scrub  # noqa: E402
 from rfh.sandbox import memcap_method  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 
@@ -242,7 +248,7 @@ def main():
         lines = text.splitlines()
         bad = [l for l in lines if l.startswith("FAIL")]
         check(lines and lines[-1] == "checks passed" and not bad,
-              f"{what}: masks and the socket rule hold ({'; '.join(l for l in lines if l.startswith('/'))}; "
+              f"{what}: masks, the socket rule and the counters' refusals hold ({'; '.join(l for l in lines if l.startswith('/'))}; "
               f"links left in /proc: {[l[5:] for l in lines if l.startswith('link /proc/')]}; {bad[:5]})")
     r = iso_req("probe")
     report(f"a request ({r.status})", (r.proof or b"").decode(errors="replace"))
@@ -269,12 +275,12 @@ def main():
 
     def ino_of(r):
         kv = dict(w.split("=") for w in (r.proof or b"").decode().split())
-        return int(kv.get("ino", -1)), int(kv.get("ffree", -1)), int(kv.get("bfree", -1))
+        return int(kv.get("ino", -1))
     K = 3000
     a, many, b = iso_req("ino 0"), iso_req(f"ino {K}"), iso_req("ino 0")
-    check(all(x.status == "ok" for x in (a, many, b)) and ino_of(a) == ino_of(b) == ino_of(many) and ino_of(a)[0] > 0,
-          f"a request's first inode number and /work's free inodes and blocks do not depend on an earlier request's "
-          f"{K} files: {ino_of(a)}, after {K} files {ino_of(b)}")
+    check(all(x.status == "ok" for x in (a, many, b)) and ino_of(a) == ino_of(b) == ino_of(many) and ino_of(a) > 0,
+          f"a request's first inode number does not depend on an earlier request's {K} files (/work's free counts "
+          f"are unreadable, statvfs refused): {ino_of(a)}, after {K} files {ino_of(b)}")
     shm = "/dev/shm"                     # the control: two requests on one shared tmpfs
     if os.path.isdir(shm) and os.access(shm, os.W_OK):
         ctl = tempfile.mkdtemp(prefix="rf-ino-ctl-", dir=shm)
@@ -287,6 +293,46 @@ def main():
         check(seen[1] - seen[0] > K, f"the control: on a shared tmpfs the next request's first inode number moves "
                                      f"by the earlier one's {K} files ({seen[0]} then {seen[1]})")
         remove_tree(ctl)
+
+    # the per-CPU inode counters (pipes, sockets, pseudo files; memfds): a request makes K of each on
+    # every CPU; the next request reads each CPU's next numbers. Without the scrub (the control) each
+    # CPU's counter has moved by about K; with it, by a uniform random amount
+    scrub_bin, _ = build_scrub(os.path.join(tmp, "tools"))
+
+    def per_cpu(r):
+        out = {}
+        for line in (r.proof or b"").decode().splitlines():
+            kv = dict(w.split("=") for w in line.split())
+            out[int(kv["cpu"])] = (int(kv["pipe"]), int(kv["memfd"]))
+        return out
+    KP = 300
+
+    def moved(scrub):
+        """Per counter, the share of CPUs whose next number moved by K to K + 64 (mod 1024) across a
+        request that made K pipes and memfds on every CPU."""
+        rs = []
+        for mode in ("inos", f"pipes {KP}", "inos"):
+            if scrub:
+                subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
+            rs.append(iso_req(mode))
+        x, y = per_cpu(rs[0]), per_cpu(rs[2])
+        cpus = sorted(set(x) & set(y))
+        share = [sum(KP <= (y[c][k] - x[c][k]) % 1024 <= KP + 64 for c in cpus) / max(1, len(cpus)) for k in (0, 1)]
+        return all(r.status == "ok" for r in rs) and len(cpus) > 0, share, len(cpus)
+    ok0, ctl_share, n0 = moved(False)
+    ok1, scr_share, n1 = moved(True)
+    # the scrub's offsets are random, not only past the batch's end: after it, the CPUs' next pipe
+    # numbers (mod 1024) spread over the batch
+    subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
+    offs = sorted(p % 1024 for p, _ in per_cpu(iso_req("inos")).values())
+    spread = len(offs) < 4 or offs[-1] - offs[0] > 256
+    # with few CPUs a hit by chance is likely: the bound only binds from 8 CPUs on
+    check(ok0 and ok1 and min(ctl_share) >= 0.5 and (n1 < 8 or max(scr_share) <= 0.25) and spread,
+          f"with the runner's scrub before every request, an earlier request's {KP} pipes and memfds per CPU do not show "
+          f"in a later one's inode numbers: CPUs whose pipe / memfd counter moved by {KP}–{KP + 64} mod 1024: "
+          f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), offsets after a scrub spread over "
+          f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'}; without the scrub, the control: "
+          f"{[round(x, 2) for x in ctl_share]} of {n0}")
     svc.stop()
 
     # 5. the memory cap
@@ -338,7 +384,7 @@ def main():
         why = res
     except BadgeError as e:
         res, why = None, str(e)[-400:]
-    check(res is not None and res[0][0], f"a badge run: masks and the socket rule hold ({why})")
+    check(res is not None and res[0][0], f"a badge run: masks, the socket rule and the counters' refusals hold ({why})")
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 

@@ -13,7 +13,10 @@ toy prover (`harness/toy-prover/toy.c`), with real sandboxes and a real service.
    of the step (`32 n` bytes) and `leaf.json` is `{"n": n}`; a second request of the step (as in a
    timed pass) receives the same bytes.
 3. The data directory (`Bench.leafdata`, beside the store) appears in no mount of a request's sandbox,
-   of `prover setup`'s or of a badge run's (their `/proc/self/mountinfo`).
+   of `prover setup`'s or of a badge run's (their `/proc/self/mountinfo`). A request's mounts name
+   neither its pass nor its step: its socket directory (bound at /run/rf) has 16 random hex
+   characters for a name, a fresh one per request, while the runner's tags (`service2`,
+   `timed1-step2`) stay in its log and `Fail` messages.
 4. Statements from the runner's data: the toy prover's leaf proof, run in the sandbox on the staged
    inputs, is `u64 0 ‖ u64 n ‖ x_0 … x_(n−1)` (the library's witness-sending layout), and the mock
    badge accepts it against `leafStmt (dataRoot xs) n` computed by the runner from its own file, and
@@ -23,6 +26,7 @@ toy prover (`harness/toy-prover/toy.c`), with real sandboxes and a real service.
 import json
 import os
 import random
+import re
 import shutil
 import struct
 import subprocess
@@ -36,7 +40,7 @@ sys.path.insert(0, os.path.join(ROOT, "harness", "rfh"))          # `signed`, as
 sys.path.insert(0, os.path.join(ROOT, "tests", "service"))        # `wots_ref`
 sys.path.insert(0, os.path.join(HERE, "mock_badge"))
 from rfh import digest, draws  # noqa: E402
-from rfh.bench import Bench, Params  # noqa: E402
+from rfh.bench import Bench, Fail, Params, build_scrub  # noqa: E402
 from rfh.checks import Badge  # noqa: E402
 from rfh.prover import Run  # noqa: E402
 from rfh.service import Service  # noqa: E402
@@ -98,8 +102,9 @@ def fields(data):
     return (pre, *out)
 
 
-def bench(tmp, bindir, n):
-    """A Bench over the smoke season with leaves of `n` blocks, its real `inputs`, `one` and data files."""
+def bench(tmp, bindir, n, scrub_bin=None):
+    """A Bench over the smoke season with leaves of `n` blocks, its real `inputs`, `one` and data files
+    (and the runner's scrub before every request with `scrub_bin`)."""
     b = Bench.__new__(Bench)
     b.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     b.p.n = n
@@ -108,7 +113,7 @@ def bench(tmp, bindir, n):
     os.makedirs(b.store)
     b.run = Run(bindir, os.path.join(b.work, "setup"), "256M")
     os.makedirs(b.run.setup_dir)
-    b.deadline, b.log = None, (lambda m: None)
+    b.deadline, b.log, b.scrub_bin, b.phase = None, (lambda m: None), scrub_bin, "request"
     return b
 
 
@@ -148,7 +153,7 @@ def main():
     svc = Service(BIN, os.path.join(tmp, "svc", "stream")).start()
     try:
         n = 1 << 18
-        b = bench(tmp, pdir, n)
+        b = bench(tmp, pdir, n, build_scrub(os.path.join(tmp, "tools"))[0])
         seeds = draws.starts(2)
         data = b.write_leaf_data(seeds)
         ld = os.path.realpath(b.leafdata)
@@ -171,6 +176,24 @@ def main():
               "a second request of the step (a timed pass's) receives the same leaf.json and leaf.bin; step 1 its own")
         check(b" /work " in mi and ld.encode() not in mi and b"leafdata" not in mi and all(ld.encode() not in g[1] for g in got),
               "the data directory appears in no mount of a request's sandbox (/proc/self/mountinfo, which lists /work)")
+
+        def run_rf(m):
+            """The source of the /run/rf bind in a mountinfo (its fourth field: the root within the filesystem)."""
+            return next((l.split()[3] for l in m.decode().splitlines() if l.split()[4] == "/run/rf"), "")
+        names = [os.path.basename(run_rf(g[1])) for g in got]
+        check(all(re.fullmatch(r"[0-9a-f]{16}", x) for x in names) and len(set(names)) == len(names)
+              and not any(re.search(rb"service|timed|step|pass", g[1]) for g in got),
+              f"a request's mounts name neither its pass nor its step: its socket directory is 16 random hex characters, "
+              f"a fresh one per request ({names})")
+        bad = b.inputs(1, data, stmts, None)
+        b.run.bin_dir = os.path.join(tmp, "none")              # a request that cannot start: its Fail names the tag
+        try:
+            b.one(svc, "timed2-step7", *bad)
+            check(False, "a request with no prover binary passes")
+        except Fail as e:
+            check(str(e).startswith("timed2-step7: ") and e.stage == "request",
+                  f"the runner's tag names the request in its Fail message: {str(e)[:80]}")
+        b.run.bin_dir = pdir
         ok, _, _ = b.run.setup(60)
         smi = open(os.path.join(b.run.setup_dir, "mountinfo"), "rb").read()
         check(ok and b"/setup" in smi and ld.encode() not in smi and b"leafdata" not in smi,

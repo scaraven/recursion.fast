@@ -42,8 +42,20 @@
    `MalformedStream` (the organiser's ERROR).
 10. Before every request the page cache of the setup directory and the prover binary is warmed (every
     regular file read in full, no link followed), and the warm-up's time is recorded; every request
-    gets its own empty socket directory, into which the service's socket is linked only at `go`.
+    gets its own empty socket directory, named by 16 random hex characters (never its tag), into
+    which the service's socket is linked only at `go`.
+11.-12. The reject stage: every REJECT path above names where it was rejected (`Fail.stage`, the result's
+    `reject_stage`): `request` (a service-run request's failure or a cap of its output, `final_pi_cap`
+    included), `check` (a check by the badge failed, rejected or broke `v_cap`, an output not accepted
+    and sized by its file above `pi_cap`, a canary accepted), `timed-pass` (a byte or replay mismatch,
+    a failed timed request), `stream-cap`; a failure with no stage of its own takes its phase's; the
+    real `Bench.verify` names a failed badge run `check`; the service failing at its stop never
+    replaces a failure in flight (recorded as `stop_error`).
+    `run-benchmark.py` records it as `reject_stage` (`prover` for the prover's build), and a stream
+    record the score cannot be computed from (`MalformedStream`) as `benchmark: error`,
+    `organiser_error: malformed`, with no reject stage.
 """
+import importlib.util
 import json
 import os
 import sys
@@ -84,7 +96,7 @@ def proof(i, pi_bytes=100):
 
 
 def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes=None, differ=None,
-         cap_at=None, crash=(), reject_later=(), stats=None, mism=(), mism_from=1):
+         cap_at=None, crash=(), reject_later=(), stats=None, mism=(), mism_from=1, fail_at=None):
     """A Bench over the smoke season with stubs: the service run's request i takes times[i] s, timed pass
     t's timed[t][i] s; outputs `proof(i)` (or `out_bytes[i]`); `acc` rejects the steps in `reject` in
     every judged run and those in `reject_later` in judged runs 2 and 3 only; V_i in judged run r is
@@ -92,7 +104,8 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
     name) in `canary_ok` accepted; timed pass t's step i differs at byte 7 for (t, i) = `differ`; the
     cap is reached at the request tagged `cap_at`; a badge run whose description contains a string of
     `crash` crashes; the service's stats are `stats` (default: the timed passes replayed every
-    signature) and its logged MISMATCH refusals `mism`, from timed pass `mism_from` on."""
+    signature) and its logged MISMATCH refusals `mism`, from timed pass `mism_from` on; the request
+    tagged `fail_at` fails with no reject stage of its own (the stream names it from its phase)."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     p.M = M
     p.calib_idle_s = 0.0
@@ -117,7 +130,7 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
         b.verify_calls.append((what, [os.path.basename(rel) for _, _, rel in items]))
         b.timeouts.append((what, timeout, warm))
         if any(c in what for c in crash):
-            raise Fail(f"{what}: verify: exit -11, 0 of {len(items)} answers", kind="crash")
+            raise Fail(f"{what}: verify: exit -11, 0 of {len(items)} answers", kind="crash", stage="check")
         run = int(what.split("judged run ")[1].split()[0]) if "judged run " in what else None
         out = []
         for vk, c, rel in items:
@@ -145,7 +158,9 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
         b.reqs[tag] = (kind, ins)
         b.data_seen.append(sorted(os.listdir(b.leafdata)) if os.path.isdir(b.leafdata) else None)
         if tag == cap_at:
-            raise Fail(f"{tag}: {b.deadline[1]} (timeout)")
+            raise Fail(f"{tag}: {b.deadline[1]} (timeout)", stage="stream-cap")    # as Bench.one
+        if tag == fail_at:
+            raise Fail(f"{tag}: exit 1")
         if tag.startswith("service"):
             i = int(tag[7:])
             t = times[i]
@@ -242,36 +257,48 @@ def main():
     check(sorted(b.canary_targets) == [1, 2, 4] and st[0]["canaries_accepted"] == [] and rec["canaries"] == 5,
           "statement canaries of outputs 1, 2 and M (stmt-bit each, first-child for outputs 2 and M: output 1 is a leaf)")
 
-    def fails_with(what, want, **kw):
+    def fails_with(what, want, stage, **kw):
         try:
             make(**kw).stream_run()
             check(False, f"{what}: passes")
         except Fail as e:
-            check(want in str(e), f"{what}: REJECT: {e}")
+            check(want in str(e) and e.stage == stage, f"{what}: REJECT at {e.stage} (want {stage}): {e}")
     fails_with("a timed output one bit off", "timed pass 2, step 3: the output differs from the service run's output of the "
-               "step, first at byte offset 7", differ=(2, 3))
-    fails_with("the final output rejected", "the final output (step 4) is rejected by acc", reject={4})
+               "step, first at byte offset 7", "timed-pass", differ=(2, 3))
+    fails_with("the final output rejected", "the final output (step 4) is rejected by acc", "check", reject={4})
     big = signed.Signed(b"x" * (p.final_pi_cap + 1)).encode()
-    fails_with("|π_M| above final_pi_cap", f"above final_pi_cap = {p.final_pi_cap}", out_bytes={4: big})
+    fails_with("|π_M| above final_pi_cap", f"above final_pi_cap = {p.final_pi_cap}", "request", out_bytes={4: big})
     huge = b"z" * (p.pi_cap + 1)
     fails_with("an intermediate output above pi_cap (not a signed proof: its file size)",
-               f"service run, step 2: the output's file size is {p.pi_cap + 1} bytes, above pi_cap", out_bytes={2: huge})
+               f"service run, step 2: the output's file size is {p.pi_cap + 1} bytes, above pi_cap", "request", out_bytes={2: huge})
     stash = signed.Signed(b"", [(b"q" * (2 << 20), bytes(32))]).encode()     # |π| = 0, 2 MiB in the trace
     not_acc = f"service run, step 2: the output, not accepted by acc (rejected, or its check failed), has {len(stash)} bytes"
-    fails_with("a rejected intermediate that parses, its state in the trace (sized by its file)", not_acc,
+    fails_with("a rejected intermediate that parses, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, reject={2})
-    fails_with("an intermediate whose batch check crashed, its state in the trace (sized by its file)", not_acc,
+    fails_with("an intermediate whose batch check crashed, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, crash=("intermediate",))
-    fails_with("an intermediate rejected in a later judged run, its state in the trace (sized by its file)", not_acc,
+    fails_with("an intermediate rejected in a later judged run, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, reject_later={2})
-    fails_with("an intermediate whose second judged run crashed, its state in the trace (sized by its file)", not_acc,
+    fails_with("an intermediate whose second judged run crashed, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, crash=("intermediate outputs, judged run 2",))
-    fails_with("V_M above v_cap in all three judged runs", "above v_cap = 64 ms", V={4: [200e6, 150e6, 190e6]})
+    fails_with("V_M above v_cap in all three judged runs", "above v_cap = 64 ms", "check", V={4: [200e6, 150e6, 190e6]})
     fails_with("V_M above v_cap in two of its three judged runs (the median counts, not the least)",
-               "takes V = 200.000 ms (the median of its three judged runs, [200.0, 10.0, 300.0] ms), above v_cap = 64 ms",
+               "takes V = 200.000 ms (the median of its three judged runs, [200.0, 10.0, 300.0] ms), above v_cap = 64 ms", "check",
                V={4: [200e6, 10e6, 300e6]})
-    fails_with("a canary of the final output accepted", "statement canaries accepted by acc", canary_ok=[(4, "x")])
-    fails_with("the stream's cap", "stream_s", cap_at="timed1-step2")
+    fails_with("a canary of the final output accepted", "statement canaries accepted by acc", "check", canary_ok=[(4, "x")])
+    fails_with("the stream's cap", "stream_s", "stream-cap", cap_at="timed1-step2")
+    fails_with("a service-run request that fails (no stage of its own: the phase's)", "service3: exit 1", "request",
+               fail_at="service3")
+    fails_with("a timed request that fails (no stage of its own: the phase's)", "timed2-step1: exit 1", "timed-pass",
+               fail_at="timed2-step1")
+    b = make()
+    b.left = lambda: -1.0
+    try:
+        b.stream_run()
+        check(False, "the stream's cap before the service run's first step: passes")
+    except Fail as e:
+        check(e.stage == "stream-cap" and "service run, step 1" in str(e),
+              f"the stream's cap reached before a service-run step: REJECT at {e.stage}: {e}")
 
     b = make(V={4: [200e6, 10e6, 20e6], 2: [5e6, 300e6, 6e6]})
     rec = b.stream_run()
@@ -330,11 +357,11 @@ def main():
           f"each judged run is a fresh warmed badge run; a run of c intermediate outputs, and the canary run of outputs 1 "
           f"and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap, the final output's by the stream's cap: "
           f"{[(w[-24:], round(t, 3)) for w, t, _ in b.timeouts]}")
-    fails_with("a crashed check of the final output", "service run: the final output, judged run 1 of 3: verify: exit -11",
+    fails_with("a crashed check of the final output", "service run: the final output, judged run 1 of 3: verify: exit -11", "check",
                crash=("the final output",))
-    fails_with("a crash in the final output's third judged run", "service run: the final output, judged run 3 of 3: verify: exit -11",
+    fails_with("a crash in the final output's third judged run", "service run: the final output, judged run 3 of 3: verify: exit -11", "check",
                crash=("the final output, judged run 3",))
-    fails_with("the final output rejected in a later judged run", "is rejected when checked again", reject_later={4})
+    fails_with("the final output rejected in a later judged run", "is rejected when checked again", "check", reject_later={4})
     b = make(reject={2})
     rec = b.stream_run()
     whats = [w for w, _ in b.verify_calls]
@@ -344,19 +371,19 @@ def main():
     # 9. the replay audit
     fails_with("a MISMATCH refusal logged in a timed pass",
                "timed pass 1: a SIGN in a timed pass differed from the service run's (1 refused; the first: "
-               "`rf-oracle: refused (status 4): replay at one-time key index 5",
+               "`rf-oracle: refused (status 4): replay at one-time key index 5", "timed-pass",
                mism=["rf-oracle: refused (status 4): replay at one-time key index 5: the trace digest differs"])
-    fails_with("a MISMATCH in the service's stats", "a SIGN in a timed pass differed from the service run's (1 MISMATCH",
+    fails_with("a MISMATCH in the service's stats", "a SIGN in a timed pass differed from the service run's (1 MISMATCH", "timed-pass",
                stats={"signatures": 28, "replays": 56, "mismatches": 1})
-    fails_with("fewer replays than timed_runs · signatures", "the timed passes made 55 signatures, not timed_runs · signatures",
+    fails_with("fewer replays than timed_runs · signatures", "the timed passes made 55 signatures, not timed_runs · signatures", "timed-pass",
                stats={"signatures": 28, "replays": 55, "mismatches": 0})
     fails_with("a SIGN missing in the third pass (replays = 3 · signatures - 1)",
-               "the timed passes made 83 signatures, not timed_runs · signatures = 3 · 28",
+               "the timed passes made 83 signatures, not timed_runs · signatures = 3 · 28", "timed-pass",
                stats={"signatures": 28, "replays": 83, "mismatches": 0})
     fails_with("an extra SIGN in the third pass (replays = 3 · signatures + 1)",
-               "the timed passes made 85 signatures, not timed_runs · signatures = 3 · 28",
+               "the timed passes made 85 signatures, not timed_runs · signatures = 3 · 28", "timed-pass",
                stats={"signatures": 28, "replays": 85, "mismatches": 0})
-    fails_with("a MISMATCH refusal logged in the third timed pass", "timed pass 3: a SIGN in a timed pass differed",
+    fails_with("a MISMATCH refusal logged in the third timed pass", "timed pass 3: a SIGN in a timed pass differed", "timed-pass",
                mism=["rf-oracle: refused (status 4): replay at one-time key index 9: the trace digest differs"], mism_from=3)
     b = make()
     rec = b.stream_run()
@@ -368,7 +395,7 @@ def main():
         check(False, "a step with two timed times is scored")
     except MalformedStream as e:
         check("step 2" in str(e), f"a step with two timed times is MalformedStream (the organiser's ERROR): {e}")
-    fails_with("no replay statistics", "the service reported no replay statistics", stats={"signatures": 28})
+    fails_with("no replay statistics", "the service reported no replay statistics", "timed-pass", stats={"signatures": 28})
 
     # 10. the page cache is warmed before every request
     d = tempfile.mkdtemp(prefix="rf-warm-", dir=os.environ.get("RF_TEST_TMP"))
@@ -383,31 +410,52 @@ def main():
     w = Bench.__new__(Bench)
     w.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     w.run = SimpleNamespace(bin_dir=bindir, setup_dir=setup, mem="1G")
-    w.work, w.deadline = d, None
+    w.work, w.deadline, w.scrub_bin, w.phase = d, None, None, "request"
     w.warm_caches = lambda: (events.append("warm"), Bench.warm_caches(w))[1]
 
     svc_w = FakeSvc()
     svc_w.sock_dir = os.path.join(d, "svc", "stream")
     svc_w.socket_path = os.path.join(svc_w.sock_dir, "oracle.sock")
 
+    status = ["ok"]
+
     def fake_request(run, kind, work, sock, inputs, step_s, file_cap, **kw):
         events.append("request")
         socks.append((os.path.dirname(sock) == os.path.join(d, "svc", "requests") and os.listdir(sock) == [],
-                      kw.get("sock_at_go") == svc_w.socket_path))
+                      kw.get("sock_at_go") == svc_w.socket_path, os.path.basename(sock)))
         r = Step()
-        r.seconds, r.proof = 0.001, b"x"
+        r.seconds, r.proof, r.status = 0.001, b"x", status[0]
         return r
     real_request, bench_mod.request = bench_mod.request, fake_request
     try:
         rs = [w.one(svc_w, f"service{i}", "first", {}) for i in (1, 2, 3)]
+        stages = []
+        for phase, st, dl in (("request", "exit 1", None), ("timed-pass", "exit 1", None),
+                              ("request", "timeout", (0.0, "the stream's cap stream_s = 1 s was reached")),
+                              ("timed-pass", "no ready line", (0.0, "the stream's cap stream_s = 1 s was reached"))):
+            w.phase, w.deadline, status[0] = phase, dl, st
+            try:
+                w.one(svc_w, "timed3-step5", "step", {})
+                stages.append(None)
+            except Fail as e:
+                stages.append((e.stage, str(e).split(" (")[0]))
+        w.phase, w.deadline, status[0] = "request", None, "ok"
     finally:
         bench_mod.request = real_request
-    check(events == ["warm", "request"] * 3 and all(r.warm_bytes == 3_006_000 and r.warm_s >= 0 for r in rs),
+    check(events == ["warm", "request"] * 7 and all(r.warm_bytes == 3_006_000 and r.warm_s >= 0 for r in rs),
           f"the setup directory and the binary are read in full before every request (no link followed): "
           f"{events}, {rs[0].warm_bytes} bytes")
-    check(socks == [(True, True)] * 3 and not os.listdir(os.path.join(d, "svc", "requests")),
-          "every request gets its own empty socket directory beside the service's, the service's socket linked "
-          "in only at `go` (sock_at_go), and the directory removed after it")
+    names = [x[2] for x in socks]
+    check([x[:2] for x in socks] == [(True, True)] * 7 and not os.listdir(os.path.join(d, "svc", "requests"))
+          and all(len(x) == 16 and all(c in "0123456789abcdef" for c in x) for x in names) and len(set(names)) == 7,
+          f"every request gets its own empty socket directory beside the service's, named by 16 random hex characters "
+          f"(never its tag: {names[:3]}), the service's socket linked in only at `go` (sock_at_go), and the directory "
+          "removed after it")
+    check(stages == [("request", "timed3-step5: exit 1"), ("timed-pass", "timed3-step5: exit 1"),
+                     ("stream-cap", "timed3-step5: the stream's cap stream_s = 1 s was reached"),
+                     ("stream-cap", "timed3-step5: the stream's cap stream_s = 1 s was reached")],
+          f"a failed request is REJECTed at `request` in the service run and `timed-pass` in a timed pass, at "
+          f"`stream-cap` when the stream's cap ended it; its Fail names its tag: {stages}")
     b = make()
     rec = b.stream_run()
     check(all("warm_s" in s and all("warm_s" in x for x in s["timed"]) for s in rec["steps"]),
@@ -416,6 +464,110 @@ def main():
     recs = [make().stream_run() for _ in range(2)]
     check(recs[0]["shape"] == recs[1]["shape"] and len(set(recs[0]["seeds"] + recs[1]["seeds"])) == 2 * 4,
           "two evaluations: the same shape, fresh seeds each")
+
+    # 11. the real Bench.verify names a failed badge run `check`; a service failing at its stop while a
+    # failure is in flight does not replace it (its stage stays), and is recorded
+    from rfh.checks import BadgeError
+    v = Bench.__new__(Bench)
+    v.store = "/nonexistent"
+    v.badge = SimpleNamespace(verify=lambda *a, **kw: (_ for _ in ()).throw(BadgeError("verify: exit -11", kind="crash")))
+    try:
+        Bench.verify(v, [(b"k", b"c", "x")], "the final output, judged run 1 of 3", 10)
+        check(False, "a crashed badge run passes")
+    except Fail as e:
+        check(e.stage == "check" and e.kind == "crash", f"Bench.verify: a crashed badge run is REJECTed at check: {e}")
+    b = make(reject={4})
+
+    def stop_fails(svc, rec):
+        raise Fail("the service failed during the run (exit 9); the run is aborted")
+    b.stop = stop_fails
+    try:
+        b.stream_run()
+        check(False, "the final output rejected, then the service failing at its stop: passes")
+    except Fail as e:
+        check(e.stage == "check" and "rejected by acc" in str(e) and "exit 9" in e.rec.get("stop_error", ""),
+              f"a service failing at its stop does not replace the failure in flight: {e.stage}: {str(e)[:60]}; "
+              f"stop_error {e.rec.get('stop_error')}")
+    b = make()
+    b.stop = stop_fails
+    try:
+        b.stream_run()
+        check(False, "the service failing at its stop after a good stream: passes")
+    except Fail as e:
+        check(e.stage == "timed-pass" and "exit 9" in str(e),
+              f"the service failing at its stop after the timed passes: REJECT at {e.stage}")
+
+    # 12. run-benchmark.py: the reject stage and a malformed stream record, with the prover's build, its
+    # setup and the stream stubbed
+    spec = importlib.util.spec_from_file_location("run_benchmark", os.path.join(ROOT, "harness", "run-benchmark.py"))
+    rb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rb)
+    good = make().stream_run()
+    bad_rec = json.loads(json.dumps(good))
+    bad_rec["steps"][1]["P_timed_s"] = bad_rec["steps"][1]["P_timed_s"][:2]
+
+    class FakeBench:
+        outcome = None
+
+        def __init__(self, *a, **kw):
+            self.kw = kw
+
+        def calibrate(self):
+            return {"service": {}}
+
+        def stream_run(self):
+            if isinstance(FakeBench.outcome, Exception):
+                raise FakeBench.outcome
+            return json.loads(json.dumps(FakeBench.outcome))
+
+    class FakeRun:
+        def __init__(self, bin_dir, setup_dir, mem):
+            self.setup_dir = setup_dir
+
+        def setup(self, timeout, size_cap=None):
+            os.makedirs(self.setup_dir, exist_ok=True)
+            return True, 0.0, ""
+    tools = []
+    rb.build_calib = lambda d: ("calib", {})
+    rb.build_scrub = lambda d: (tools.append(d), ("scrub-bin", {"source_sha256": "s"}))[1]
+    rb.Run, rb.Bench, rb.tree_sha256 = FakeRun, FakeBench, (lambda *a: "h")
+    built = [(True, {"binary_sha256": "b", "binary_bytes": 1})]
+    rb.build = lambda *a: built[0]
+    entry = tempfile.mkdtemp(prefix="rf-rb-entry-", dir=os.environ.get("RF_TEST_TMP"))
+
+    def bench_result(outcome, build_ok=True):
+        FakeBench.outcome = outcome
+        built[0] = (True, {"binary_sha256": "b", "binary_bytes": 1}) if build_ok else (False, {"error": "gcc exited with 1"})
+        work = tempfile.mkdtemp(prefix="rf-rb-", dir=os.environ.get("RF_TEST_TMP"))
+        out = os.path.join(work, "result.json")
+        argv = sys.argv
+        sys.argv = ["run-benchmark.py", "--season", os.path.join(ROOT, "harness", "smoke.toml"), "--entry", entry,
+                    "--badge", work, "--service", "/nonexistent", "--bench", "/nonexistent",
+                    "--work", os.path.join(work, "w"), "--out", out]
+        try:
+            code = rb.main()
+        finally:
+            sys.argv = argv
+        return code, json.load(open(out))
+    code, r = bench_result(bad_rec)
+    check(code == 2 and r["benchmark"] == "error" and r.get("organiser_error") == "malformed" and "score" not in r
+          and "reject_stage" not in r and "traceback" not in r and any("malformed" in x for x in r["reasons"]),
+          f"run-benchmark.py: a stream record with a step of two timed times is benchmark: error, organiser_error: "
+          f"malformed (not a harness error, which would count against the author): {r['reasons']}")
+    code, r = bench_result(good)
+    check(code == 0 and r["benchmark"] == "pass" and "reject_stage" not in r and r["score"]["median_pass"] in (1, 2, 3)
+          and r.get("scrub") == {"source_sha256": "s"} and tools,
+          "run-benchmark.py: a good stream passes, with no reject stage; the scrub is built before the prover")
+    for what, outcome, build_ok, want in (
+            ("the prover's build fails", good, False, "prover"),
+            ("a timed pass's byte mismatch", Fail("timed pass 1, step 2: the output differs", stage="timed-pass"), True,
+             "timed-pass"),
+            ("a check of the final output", Fail("service run: the final output (step 4) is rejected", stage="check"), True,
+             "check"),
+            ("a Fail with no stage", Fail("the service died during the run"), True, "prover")):
+        code, r = bench_result(outcome, build_ok)
+        check(code == 1 and r["benchmark"] == "fail" and r.get("reject_stage") == want,
+              f"run-benchmark.py: {what}: benchmark: fail, reject_stage {r.get('reject_stage')!r}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

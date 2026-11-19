@@ -20,7 +20,9 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     perf_event_open, userfaultfd, io_uring, keyrings, mounts, namespaces, module and kexec loading,
     handle-based opens), fails `socket` and `socketpair` for every domain but `AF_UNIX` (the oracle's
     socket is the only one a prover needs; an `AF_INET` datagram would raise machine-wide counters,
-    `/proc/self/net/softnet_stat`), and kills a process that uses another syscall ABI;
+    `/proc/self/net/softnet_stat`), fails the calls that read other machine-wide counters a request
+    could write for a later one (`statfs`/`fstatfs`/`ustat`: free disk space; pidfds: pidfs inode
+    numbers; `SO_COOKIE`; `seccomp_program`), and kills a process that uses another syscall ABI;
   * a memory cap on the whole process tree: a transient systemd scope with `MemoryMax` and no swap
     (`systemd-run --user --scope`), or, where no user systemd manager is reachable, an address-space
     limit (`prlimit --as`), which is recorded as the weaker method;
@@ -52,16 +54,30 @@ DENY = {
     "open_by_handle_at": 304, "name_to_handle_at": 303, "fanotify_init": 300, "acct": 163, "swapon": 167,
     "swapoff": 168, "reboot": 169, "syslog": 103, "quotactl": 179, "iopl": 172, "ioperm": 173,
     "uselib": 134, "lookup_dcookie": 212, "vhangup": 153,
+    # the machine-wide channels a request could write and a later one read (`seccomp_program`): the
+    # free space of the filesystems behind /setup, /prover and /run/rf, and pidfs inode numbers
+    "statfs": 137, "fstatfs": 138, "ustat": 136, "pidfd_open": 434,
 }
 
 
 AF_UNIX = 1
 SOCKET = {"socket": 41, "socketpair": 53}       # allowed only for the domain (first argument) AF_UNIX
+CLONE, CLONE3, CLONE_PIDFD = 56, 435, 0x1000     # clone refused with CLONE_PIDFD; clone3 is ENOSYS
+GETSOCKOPT, SETSOCKOPT = 55, 54
+SO_COOKIE, SO_PEERPIDFD, SO_PASSPIDFD = 57, 77, 76
 
 
 def seccomp_program() -> bytes:
-    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`."""
-    LD, JEQ, JGE, RET = 0x20, 0x15, 0x35, 0x06          # BPF_LD|W|ABS, BPF_JMP|JEQ|K, JGE, BPF_RET|K
+    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`. Besides the
+    `DENY` list and the socket domains, it closes machine-wide counters a request could write and a
+    later request read (AGENTS.md §5): `statfs`, `fstatfs` and `ustat` (the free space of the work
+    disk behind /setup, /prover and /run/rf, which the runner's writes move and a prover's outputs,
+    logs and refusals move with them); every way to a pidfd, whose pidfs inode number counts every
+    process and thread the machine has started (`pidfd_open`, `clone` with `CLONE_PIDFD`, `clone3`,
+    which fails with ENOSYS so that libc falls back to `clone`, `SO_PEERPIDFD`, `SO_PASSPIDFD`); and
+    `SO_COOKIE`, a socket's cookie, drawn from a machine-wide counter."""
+    LD, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06   # BPF_LD|W|ABS, BPF_JMP|JEQ|K, JGE, JSET, BPF_RET|K
+    ALLOW, ERRNO = 0x7FFF0000, 0x00050000                 # SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO
     ins = [(LD, 0, 0, 4),                               # seccomp_data.arch
            (JEQ, 1, 0, 0xC000003E),                     # AUDIT_ARCH_X86_64
            (RET, 0, 0, 0x80000000),                     # SECCOMP_RET_KILL_PROCESS
@@ -69,13 +85,32 @@ def seccomp_program() -> bytes:
            (JGE, "errno", 0, 0x40000000)]               # the x32 ABI
     ins += [(JEQ, "errno", 0, nr) for nr in sorted(DENY.values())]
     ins += [(JEQ, "socket", 0, nr) for nr in sorted(SOCKET.values())]
-    ins += [(RET, 0, 0, 0x7FFF0000),                    # SECCOMP_RET_ALLOW
+    ins += [(JEQ, "enosys", 0, CLONE3), (JEQ, "clone", 0, CLONE), (JEQ, "getsockopt", 0, GETSOCKOPT),
+            (JEQ, "setsockopt", 0, SETSOCKOPT)]
+    # the arguments' low 32 bits (seccomp_data.args[i] at 16 + 8 i): the kernel reads the domain and
+    # the option name as ints, and CLONE_PIDFD is a low bit of the flags
+    ins += [(RET, 0, 0, ALLOW),
             "socket",
-            (LD, 0, 0, 16),                             # seccomp_data.args[0], its low 32 bits: the
-            (JEQ, 0, "errno", AF_UNIX),                 # kernel reads the domain as an int
-            (RET, 0, 0, 0x7FFF0000),
+            (LD, 0, 0, 16),                             # args[0], the domain
+            (JEQ, 0, "errno", AF_UNIX),
+            (RET, 0, 0, ALLOW),
+            "clone",
+            (LD, 0, 0, 16),                             # args[0], the flags
+            (JSET, "errno", 0, CLONE_PIDFD),
+            (RET, 0, 0, ALLOW),
+            "getsockopt",
+            (LD, 0, 0, 32),                             # args[2], the option name (at any level)
+            (JEQ, "errno", 0, SO_COOKIE),
+            (JEQ, "errno", 0, SO_PEERPIDFD),
+            (RET, 0, 0, ALLOW),
+            "setsockopt",
+            (LD, 0, 0, 32),
+            (JEQ, "errno", 0, SO_PASSPIDFD),
+            (RET, 0, 0, ALLOW),
+            "enosys",
+            (RET, 0, 0, ERRNO | 38),                    # ENOSYS
             "errno",
-            (RET, 0, 0, 0x00050000 | 1)]                # SECCOMP_RET_ERRNO | EPERM
+            (RET, 0, 0, ERRNO | 1)]                     # EPERM
     at, k = {}, 0
     for x in ins:
         if isinstance(x, str):

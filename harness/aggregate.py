@@ -35,7 +35,10 @@ stream's per-step records with `rfh.bench.score`, the definition the runner used
 and comparability are set; whatever score a part recorded is replaced, and a stream record it cannot
 be computed from is an organiser ERROR (`malformed`). Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
-not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. The result is
+not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. A REJECT carries where it
+was rejected (`reject_stage`, `rfh.bench.REJECT_STAGES`): `certificate` for a rejected certificate,
+else the failed part's own (`prover`, `request`, `check`, `timed-pass`, `stream-cap`); the bot
+re-runs a REJECT without the record build cache only at `certificate` and `check`. The result is
 **comparable** iff it is ACCEPT (a stream that reaches its cap is the entry's REJECT; the `truncated`
 flag is kept, always false since season rules v6). A benchmark whose machine fingerprint
 (`machine.fingerprint`, `rfh.bench.fingerprint`) is missing, unreadable or not the season's
@@ -76,7 +79,7 @@ PLANS = {"split": ["all"], "single": ["all"]}
 ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.bench import REJECT_STAGES, MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
 
 
 def load_season(path):
@@ -231,6 +234,11 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None):
             verdict, malformed = "ERROR", True
             res["reasons"].append(f"organiser ERROR: the stream's record is malformed ({e})")
     res["verdict"] = verdict
+    if verdict == "REJECT":     # where it was rejected (`rfh.bench.REJECT_STAGES`): the certificate's first,
+        # else the failed part's as its runner recorded it (None from a runner that recorded none)
+        st = ("certificate" if cert.get("status") == "reject" else
+              next((r.get("reject_stage") for r in parts if r.get("benchmark") == "fail"), None))
+        res["reject_stage"] = st if st in REJECT_STAGES else None      # an unknown value: none
     if verdict == "ERROR":      # the named organiser error, if one is known (the bot never counts these against the author)
         kinds = [x.get("organiser_error") for x in [cert] + list(parts) if x.get("organiser_error") in ORGANISER_ERRORS]
         res["organiser_error"] = ("fingerprint" if fp_why else "lengths" if len_why else "malformed" if malformed

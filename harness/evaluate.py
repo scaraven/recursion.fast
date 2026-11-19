@@ -525,6 +525,8 @@ def bench_job(a, cert):
         stage = res.get("stage") or "organiser setup"
         entry_stage = stage not in ("organiser setup",)
         res["benchmark"] = "fail" if entry_stage else "error"
+        if entry_stage:      # before the stream, the prover's build or setup; from it on, the stream's time
+            res["reject_stage"] = "prover" if stage in ("prover build", "prover setup") else "stream-cap"
         res.setdefault("reasons", []).append(
             f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
             + (": the entry's failure" if entry_stage else ": a harness error"))
@@ -535,6 +537,10 @@ def bench_job(a, cert):
     res["verdict"] = (("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject"
                       else "ERROR" if res.get("benchmark") == "error" else "REJECT")     # the organiser's, never the entry's
     res["comparable"] = res["verdict"] == "ACCEPT" and not (res.get("stream") or {}).get("truncated")
+    if res["verdict"] == "REJECT":      # where it was rejected (AGENTS.md §7); the certificate's first
+        res["reject_stage"] = "certificate" if cert["status"] == "reject" else res.get("reject_stage")
+    else:
+        res.pop("reject_stage", None)
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {res['verdict']}")
     return res
@@ -576,7 +582,8 @@ def main():
         a.out, a.work = out, work + "/bench"
         if cert["status"] in ("reject", "error"):
             verdict = "REJECT" if cert["status"] == "reject" else "ERROR"
-            res = {"verdict": verdict, "comparable": False, "certificate": cert}
+            res = {"verdict": verdict, "comparable": False, "certificate": cert,
+                   **({"reject_stage": "certificate"} if verdict == "REJECT" else {})}
             json.dump(res, open(out, "w"), indent=1)
             print(f"VERDICT: {verdict}")
             return 1 if verdict == "REJECT" else 2

@@ -6,18 +6,27 @@
  *   - /sys/devices/system/cpu: everything but its static description is masked (the same rule as
  *     `rfh.sandbox`'s allowlists, written out here again);
  *   - `socket` and `socketpair` fail with EPERM for every domain but AF_UNIX (a UDP socket among
- *     them), and work for AF_UNIX.
+ *     them), and work for AF_UNIX;
+ *   - the other machine-wide counters are out of reach: `statfs`, `fstatfs`, `statvfs` and `ustat`
+ *     fail with EPERM (free disk space), and so does every way to a pidfd (pidfs inode numbers count
+ *     every process the machine started): `pidfd_open`, `clone` with CLONE_PIDFD, `SO_PEERPIDFD`,
+ *     `SO_PASSPIDFD`; `clone3` fails with ENOSYS, while `fork` and `pthread_create` (libc falls back
+ *     to `clone`) work; `SO_COOKIE` fails with EPERM.
  *
  * Request modes (the request's input `mode`, read at `go`): `probe` (the checks), `mlock N` (lock N
  * pages, which raises the machine-wide `unevictable_pgs_mlocked` by N), `ino K` (the inode number
- * and free counts of /work at its first file, then K more files). A oneshot `inoK` does the
- * latter without the handshake. The report is `proof.bin` (a request), `/setup/report.txt`
+ * and inode generation of /work's first file, then K more files), `inos` (on every CPU of its
+ * affinity, the inode numbers of a new pipe and a new memfd), `pipes K` (on every CPU, K pipes and K
+ * memfds made and closed). A oneshot `inoK` does `ino K` without the handshake. The report is `proof.bin` (a request), `/setup/report.txt`
  * (setup), `/work/ino.txt` (a oneshot), or the badge's answer (`accept` when every check passed;
  * the report on stderr). */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,9 +34,21 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+#ifndef SO_PASSPIDFD
+#define SO_PASSPIDFD 76
+#endif
+#ifndef SO_PEERPIDFD
+#define SO_PEERPIDFD 77
+#endif
+#ifndef CLONE_PIDFD
+#define CLONE_PIDFD 0x1000
+#endif
 
 static char rep[1 << 17];
 static size_t len;
@@ -126,6 +147,8 @@ static long readable(const char *p) {
     return r;
 }
 
+static void *nop(void *a) { return a; }
+
 static void checks(void) {
     int n = masked("/proc", keep_proc);
     add("/proc: %d masked entries\n", n);
@@ -165,14 +188,89 @@ static void checks(void) {
     if (u < 0) FAIL("socket AF_UNIX: %s\n", strerror(errno));
     else close(u);
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp)) FAIL("socketpair AF_UNIX: %s\n", strerror(errno));
+    else {
+        long v = 0;
+        int one = 1;
+        socklen_t n = sizeof v;
+        if (getsockopt(sp[0], SOL_SOCKET, SO_COOKIE, &v, &n) == 0 || errno != EPERM)
+            FAIL("getsockopt SO_COOKIE: %s\n", strerror(errno));
+        n = sizeof v;
+        if (getsockopt(sp[0], SOL_SOCKET, SO_PEERPIDFD, &v, &n) == 0 || errno != EPERM)
+            FAIL("getsockopt SO_PEERPIDFD: %s\n", strerror(errno));
+        if (setsockopt(sp[0], SOL_SOCKET, SO_PASSPIDFD, &one, sizeof one) == 0 || errno != EPERM)
+            FAIL("setsockopt SO_PASSPIDFD: %s\n", strerror(errno));
+        n = sizeof v;
+        if (getsockopt(sp[0], SOL_SOCKET, SO_TYPE, &v, &n)) FAIL("getsockopt SO_TYPE: %s\n", strerror(errno));
+        close(sp[0]), close(sp[1]);
+    }
+    /* free disk space: statfs and its relatives */
+    struct statfs sf;
+    struct statvfs sv;
+    char ub[64];
+    if (statfs("/", &sf) == 0 || errno != EPERM) FAIL("statfs /: %s\n", strerror(errno));
+    if (statvfs(".", &sv) == 0 || errno != EPERM) FAIL("statvfs .: %s\n", strerror(errno));
+    int rfd = open("/", O_RDONLY | O_DIRECTORY);
+    if (rfd >= 0 && (fstatfs(rfd, &sf) == 0 || errno != EPERM)) FAIL("fstatfs /: %s\n", strerror(errno));
+    if (rfd >= 0) close(rfd);
+    if (syscall(SYS_ustat, 0, ub) == 0 || errno != EPERM) FAIL("ustat: %s\n", strerror(errno));
+    /* pidfs: no pidfd, by any way */
+    if (syscall(SYS_pidfd_open, getpid(), 0) >= 0 || errno != EPERM) FAIL("pidfd_open: %s\n", strerror(errno));
+    if (syscall(SYS_clone3, NULL, 0) == 0 || errno != ENOSYS) FAIL("clone3: %s (not ENOSYS)\n", strerror(errno));
+    int pfd = -1;
+    long c = syscall(SYS_clone, CLONE_PIDFD | SIGCHLD, 0, &pfd, 0, 0);
+    if (c == 0) _exit(0);
+    if (c > 0) FAIL("clone with CLONE_PIDFD: a child, pidfd %d\n", pfd), waitpid((pid_t)c, 0, 0);
+    else if (errno != EPERM) FAIL("clone with CLONE_PIDFD: %s\n", strerror(errno));
+    pid_t f = fork();
+    if (f == 0) _exit(7);
+    int ws = 0;
+    if (f < 0 || waitpid(f, &ws, 0) != f || !WIFEXITED(ws) || WEXITSTATUS(ws) != 7) FAIL("fork: %s\n", strerror(errno));
+    pthread_t th;
+    if (pthread_create(&th, 0, nop, 0) || pthread_join(th, 0)) FAIL("pthread_create\n");
     add("%s\n", fails ? "checks failed" : "checks passed");
+}
+
+/* every CPU of the affinity, in turn: the inode numbers of a new pipe and a new memfd (`inos`), or K
+ * pipes and K memfds made and closed (`pipes K`) */
+static long ino_pipe(void) {
+    int p[2];
+    struct stat st;
+    if (pipe(p)) return -1;
+    long r = fstat(p[0], &st) ? -1 : (long)st.st_ino;
+    close(p[0]), close(p[1]);
+    return r;
+}
+static long ino_memfd(void) {
+    struct stat st;
+    int fd = memfd_create("probe", 0);
+    if (fd < 0) return -1;
+    long r = fstat(fd, &st) ? -1 : (long)st.st_ino;
+    close(fd);
+    return r;
+}
+static void percpu(long k, int report) {
+    cpu_set_t all, one;
+    if (sched_getaffinity(0, sizeof all, &all)) {
+        FAIL("sched_getaffinity: %s\n", strerror(errno));
+        return;
+    }
+    for (int c = 0; c < CPU_SETSIZE; c++) {
+        if (!CPU_ISSET(c, &all)) continue;
+        CPU_ZERO(&one);
+        CPU_SET(c, &one);
+        if (sched_setaffinity(0, sizeof one, &one)) {
+            FAIL("pin to cpu %d: %s\n", c, strerror(errno));
+            continue;
+        }
+        for (long i = 0; i < k; i++) ino_pipe(), ino_memfd();
+        if (report) add("cpu=%d pipe=%ld memfd=%ld\n", c, ino_pipe(), ino_memfd());
+    }
 }
 
 static void ino(long k) {
     int fd = open("a", O_WRONLY | O_CREAT | O_EXCL, 0644);
     struct stat st;
-    struct statvfs vs;
-    if (fd < 0 || fstat(fd, &st) || statvfs(".", &vs)) {
+    if (fd < 0 || fstat(fd, &st)) {
         FAIL("the first file: %s\n", strerror(errno));
         return;
     }
@@ -182,8 +280,7 @@ static void ino(long k) {
         snprintf(n, sizeof n, "f%ld", i);
         close(open(n, O_WRONLY | O_CREAT, 0644));
     }
-    add("ino=%lu ffree=%lu bfree=%lu\n", (unsigned long)st.st_ino, (unsigned long)vs.f_ffree,
-        (unsigned long)vs.f_bfree);
+    add("ino=%lu\n", (unsigned long)st.st_ino);      /* free counts: statvfs is refused (checks) */
 }
 
 static void put(const char *path) {
@@ -225,6 +322,8 @@ int main(int argc, char **argv) {
     close(fd);
     if (!strncmp(mode, "probe", 5)) checks();
     else if (!strncmp(mode, "ino ", 4)) ino(atol(mode + 4));
+    else if (!strncmp(mode, "inos", 4)) percpu(0, 1);
+    else if (!strncmp(mode, "pipes ", 6)) percpu(atol(mode + 6), 0);
     else if (!strncmp(mode, "mlock ", 6)) {
         long n = atol(mode + 6), pg = sysconf(_SC_PAGESIZE);
         char *m = mmap(0, n * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

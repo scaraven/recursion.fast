@@ -11,7 +11,8 @@ intermediate output was rejected is in the track `final` only); a step record wi
 timed times is an organiser ERROR named `malformed`, never comparable, and so is a part the runner
 named `malformed`; the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
-gives REJECT; a rejected certificate gives REJECT; a stream flagged truncated (no v6 runner writes one)
+gives REJECT; a rejected certificate gives REJECT; a REJECT carries its `reject_stage` (the
+certificate's, else the failed part's own); a stream flagged truncated (no v6 runner writes one)
 is not comparable. The ranking takes, per entry (not per binary) and per track (`final` from `S`,
 `every` from `S_every`, read through `score.tracks`), the median of its last three evaluations, a
 REJECT, a not comparable run or a run outside the track counting as its worst, and ranks only from
@@ -135,6 +136,18 @@ def main():
           "parts from two harness commits")
     check(run(tmp, [part("calibrate,stream", benchmark="fail")]), "REJECT", "a failed part")
     check(run(tmp, full, cert_status="reject"), "REJECT", "a rejected certificate")
+    # the reject stage, carried through: the certificate's first, else the failed part's own
+    stages = []
+    for st in ("prover", "request", "check", "timed-pass", "stream-cap"):
+        f = part("calibrate,stream", benchmark="fail")
+        f["reject_stage"] = st
+        stages.append((st, run(tmp, [f]).get("reject_stage"), run(tmp, [f], cert_status="reject").get("reject_stage")))
+    holds(all(got == st and cert == "certificate" for st, got, cert in stages)
+          and run(tmp, [], cert_status="reject").get("reject_stage") == "certificate"
+          and "reject_stage" not in run(tmp, full) and "reject_stage" not in run(tmp, [mal])
+          and run(tmp, [part("calibrate,stream", benchmark="fail")]).get("reject_stage") is None,
+          f"a REJECT carries its reject stage (a failed part's own, `certificate` for a rejected certificate first; "
+          f"none recorded by an older runner: None); an ACCEPT or ERROR none: {stages}")
     check(run(tmp, [part("calibrate,stream", truncated=True)]), "ACCEPT", "a stream flagged truncated", comparable=False)
     holds("duel" not in r and "incumbent" not in r and "cpu_models" not in r and "mixed_cpu" not in r,
           "no duel, incumbent or CPU-model field")

@@ -13,6 +13,7 @@ import json
 import math
 import os
 import platform
+import secrets
 import shutil
 import stat
 import statistics
@@ -30,11 +31,21 @@ from .service import Service, ServiceError
 
 class Fail(Exception):
     """The entry fails the benchmark (the message says why). `kind`: the badge's failure kind when a
-    check failed (`timeout`, `crash`), else None."""
+    check failed (`timeout`, `crash`), else None. `stage`: where it was rejected, the result's
+    `reject_stage` (one of `REJECT_STAGES`; AGENTS.md §7): `prover` (the prover's build or setup, or
+    anything else before the stream), `request` (a service-run request failed: its exit, a timeout, a
+    cap of the request or of its output), `check` (an output's check by the badge failed or broke a
+    cap, or a statement canary was accepted), `timed-pass` (a byte or replay mismatch, or a timed
+    request failed), `stream-cap` (`stream_s` reached). The bot re-runs a REJECT without the record
+    build cache only for `certificate` and `check`, the stages a sabotaged cache can cause. None is
+    filled in by the stream from the phase it was in (`Bench.phase`)."""
 
-    def __init__(self, msg, kind=None):
+    def __init__(self, msg, kind=None, stage=None):
         super().__init__(msg)
-        self.kind = kind
+        self.kind, self.stage = kind, stage
+
+
+REJECT_STAGES = ("certificate", "prover", "request", "check", "timed-pass", "stream-cap")
 
 
 def printable(text, limit=1200):
@@ -206,23 +217,35 @@ def fingerprint_problem(fp_status, fp_hash, expected):
     return None if fp_hash == expected else "mismatched"
 
 
-def build_calib(out_dir):
-    """Build the calibration workload (`harness/tools/calib.c`) with the runner's `gcc`, before any
-    entry code runs; (path, info)."""
-    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "calib.c")
+def build_tool(name, out_dir):
+    """Build the runner's tool `harness/tools/NAME.c` with the runner's `gcc`, before any entry code
+    runs; (path, info)."""
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", f"{name}.c")
     os.makedirs(out_dir, exist_ok=True)
-    out = os.path.join(out_dir, "calib")
+    out = os.path.join(out_dir, name)
     p = subprocess.run(["gcc", "-O2", "-pthread", "-o", out, src], capture_output=True, text=True, timeout=120)
     if p.returncode != 0:
-        raise RuntimeError(f"calib build failed: {p.stderr[-500:]}")
+        raise RuntimeError(f"{name} build failed: {p.stderr[-500:]}")
     return out, {"source_sha256": hashlib.sha256(open(src, "rb").read()).hexdigest(),
                  "binary_sha256": hashlib.sha256(open(out, "rb").read()).hexdigest()}
 
 
+def build_calib(out_dir):
+    """The calibration workload (`harness/tools/calib.c`); (path, info)."""
+    return build_tool("calib", out_dir)
+
+
+def build_scrub(out_dir):
+    """The per-CPU inode counters' scrub (`harness/tools/scrub.c`, `Bench.scrub`); (path, info)."""
+    return build_tool("scrub", out_dir)
+
+
 class Bench:
-    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print):
+    def __init__(self, p: Params, run, badge_dir, service_bin, bench_bin, work, calib_bin=None, log=print,
+                 scrub_bin=None):
         self.p, self.run, self.service_bin, self.bench_bin = p, run, service_bin, bench_bin
-        self.work, self.log, self.calib_bin = work, log, calib_bin
+        self.work, self.log, self.calib_bin, self.scrub_bin = work, log, calib_bin, scrub_bin
+        self.phase = "prover"                # the reject stage of a Fail without one (`Fail.stage`)
         self.store = os.path.join(work, "store")
         os.makedirs(self.store, exist_ok=True)
         # the leaf data: runner-only, beside the store and never under it (the badge binds the store at
@@ -274,11 +297,11 @@ class Bench:
 
     def verify(self, items, what, timeout, warm=False):
         """The badge on (vk, stmt, store-relative path) items within `timeout` seconds for the whole
-        run; a badge failure is the entry's."""
+        run; a badge failure is the entry's (reject stage `check`)."""
         try:
             return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
         except BadgeError as e:
-            raise Fail(f"{what}: {e}", kind=e.kind)
+            raise Fail(f"{what}: {e}", kind=e.kind, stage="check")
 
     def capped(self):
         """The timeout of one badge run: 30 s past the stream's cap (work begun before the cap ends
@@ -369,6 +392,20 @@ class Bench:
                 os.close(fd)
         return time.monotonic() - t0, total
 
+    def scrub(self):
+        """Before every request, untimed and with no entry process alive (after `warm_caches`): the
+        per-CPU inode counters (pipes, sockets and other pseudo files; memfds) set to a fresh batch
+        and a uniform random offset on every CPU of the job (`harness/tools/scrub.c`), so that what an
+        earlier request did on a CPU does not show in a later request's inode numbers. Seconds, or
+        None without the tool (the unit tests' benches). A failure is the runner's."""
+        if not self.scrub_bin:
+            return None
+        t0 = time.monotonic()
+        p = subprocess.run([self.scrub_bin], capture_output=True, text=True, timeout=60)
+        if p.returncode != 0:
+            raise RuntimeError(f"the inode counters' scrub failed: {p.stderr.strip()[-300:]}")
+        return time.monotonic() - t0
+
     # -- calibration -------------------------------------------------------------------------------
     def calibrate(self):
         """Before the stream: the service's calls/s and permutations/s (published, not in the
@@ -435,28 +472,34 @@ class Bench:
     # -- the stream ----------------------------------------------------------------------------------
     def one(self, svc, tag, kind, inputs):
         """One timed request, within `ready_s`, `step_s` and the stream's cap: its `Step` record.
-        Every failure is the entry's: the request's own errors (`request`), the stream's cap reached
-        during it. Before it the page cache of the setup and the binary is warmed (`warm_caches`).
-        The request's /work is a private tmpfs of its own (`request` with no host directory), which
-        holds `vk.hex` when the prover starts and is gone with the request: no file, inode number or
-        free-space count of it reaches a later request. The service's socket appears in the
-        request's `/run/rf` only at `go`; the socket directory is removed after it."""
+        Every failure is the entry's: the request's own errors (`request`; reject stage `request` in
+        the service run, `timed-pass` in a timed pass, `Bench.phase`), the stream's cap reached
+        during it (`stream-cap`). Before it the page cache of the setup and the binary is warmed
+        (`warm_caches`) and the per-CPU inode counters are scrubbed (`scrub`). The request's /work
+        is a private tmpfs of its own (`request` with no host directory), which holds `vk.hex` when
+        the prover starts and is gone with the request: no file, inode number or free-space count of
+        it reaches a later request. The service's socket appears in the request's `/run/rf` only at
+        `go`. `tag` (`service{i}`, `timed{t}-step{i}`) names the request in the runner's log, its
+        `Fail` messages and the records, never in the sandbox: the socket directory, whose path
+        `/proc/self/mountinfo` shows, has 16 random hex characters from the CSPRNG for a name, and is
+        removed after the request."""
         # the request's own socket directory, on the service socket's filesystem (a hard link cannot
         # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
-        sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", tag)
+        sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", secrets.token_hex(8))
         fresh_dir(sock)
         dl = self.deadline[0] if self.deadline else None
         warm_s, warm_bytes = self.warm_caches()
+        scrub_s = self.scrub()
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
                     preset={"vk.hex": (svc.vk.hex() + "\n").encode()})
-        r.warm_s, r.warm_bytes = warm_s, warm_bytes
+        r.warm_s, r.warm_bytes, r.scrub_s = warm_s, warm_bytes, scrub_s
         self.alive(svc)
         remove_tree(sock)
         if r.status != "ok":
             if dl is not None and time.monotonic() >= dl - 1e-3 and r.status in ("timeout", "no ready line"):
-                raise Fail(f"{tag}: {self.deadline[1]} ({r.status})" + self.diag(svc, r.log))
-            raise Fail(f"{tag}: {r.status}" + self.diag(svc, r.log))
+                raise Fail(f"{tag}: {self.deadline[1]} ({r.status})" + self.diag(svc, r.log), stage="stream-cap")
+            raise Fail(f"{tag}: {r.status}" + self.diag(svc, r.log), stage=self.phase)
         return r
 
     def inputs(self, i, data, stmts, prev, key=None):
@@ -515,21 +558,32 @@ class Bench:
                "request_dir": "a private tmpfs per request"}
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
-            self.service_run(svc, rec, data, stmts, first)
-            self.timed(svc, rec, data, stmts)
-            self.alive(svc)
-        except Fail as e:
-            e.rec = rec        # a failed run keeps its measurements in the result
-            raise
-        finally:
+            try:
+                self.phase = "request"
+                self.service_run(svc, rec, data, stmts, first)
+                self.phase = "timed-pass"
+                self.timed(svc, rec, data, stmts)
+                self.alive(svc)
+            except BaseException:
+                # the failure in flight decides (its stage, or a harness error); the service's own
+                # failure at its stop is only recorded
+                self.deadline = None
+                shutil.rmtree(self.leafdata, ignore_errors=True)
+                try:
+                    self.stop(svc, rec)
+                except Fail as e2:
+                    rec["stop_error"] = str(e2)
+                raise
             self.deadline = None
-            self.stop(svc, rec)
             shutil.rmtree(self.leafdata, ignore_errors=True)     # the seeds, published, regenerate it
-        try:
+            self.stop(svc, rec)
             self.audit_replays(rec)
         except Fail as e:
-            e.rec = rec
+            e.rec = rec        # a failed run keeps its measurements in the result
+            e.stage = e.stage or self.phase
             raise
+        finally:
+            self.phase = "prover"
         rec["M"] = len(rec["steps"])
         rec["last_file"], rec["last_stmt"] = rec["steps"][-1]["file"], stmts[-1].hex()
         rec["calibration"] = self.calibration()
@@ -564,7 +618,7 @@ class Bench:
                 s["pi_bytes"], s["signed_proof"] = s["file_bytes"], False
             if s["pi_bytes"] > p.pi_cap:
                 raise Fail(f"service run, step {s['index']}: the output, not accepted by acc (rejected, or its check "
-                           f"failed), has {s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}")
+                           f"failed), has {s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}", stage="check")
 
         def flush():
             """Check the pending intermediate outputs; a failed badge run costs the track `every`."""
@@ -591,7 +645,7 @@ class Bench:
                 flush()
                 self.sample(f"service run, step {i}")
             if self.left() <= 0:
-                raise Fail(f"service run, step {i}: {self.deadline[1]}")
+                raise Fail(f"service run, step {i}: {self.deadline[1]}", stage="stream-cap")
             kind, ins = self.inputs(i, data, stmts, self.stored(steps[-1]) if steps else None)
             r = self.one(svc, f"service{i}", kind, ins)
             rel = self.keep(f"stream/step{i}.bin", r.proof)
@@ -601,7 +655,7 @@ class Bench:
                      f"|π|={s['pi_bytes'] if s['signed_proof'] else 'not a signed proof'}")
             if s["pi_bytes"] > p.pi_cap:
                 raise Fail(f"service run, step {i}: the output's {'|π|' if s['signed_proof'] else 'file size'} is "
-                           f"{s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}")
+                           f"{s['pi_bytes']} bytes, above pi_cap = {p.pi_cap}", stage="request")
             if i < M:
                 pending.append((i - 1, (svc.vk, stmts[i - 1], rel)))
                 if len(pending) >= p.check_every:
@@ -613,24 +667,25 @@ class Bench:
         final["accepted"], final["V_runs_ns"], final["V_ns"] = ok, runs, v
         if not ok:
             raise Fail(f"service run: the final output (step {M}) is rejected by acc against c_{M}"
-                       + self.diag(svc, ""))
+                       + self.diag(svc, ""), stage="check")
         if not again:
             final["recheck_rejected"] = True
             raise Fail(f"service run: the final output (step {M}), accepted by acc in its first judged run, is "
-                       "rejected when checked again in another")
+                       "rejected when checked again in another", stage="check")
         if final["pi_bytes"] > p.final_pi_cap:
+            # |π| is parsed by the runner, not judged by the badge: a cap of the request's output
             raise Fail(f"service run: the final output (step {M}) has |π| = {final['pi_bytes']} bytes, above "
-                       f"final_pi_cap = {p.final_pi_cap}")
+                       f"final_pi_cap = {p.final_pi_cap}", stage="request")
         if final["V_ns"] > v_cap:
             raise Fail(f"service run: the final output (step {M}) takes V = {final['V_ns'] / 1e6:.3f} ms (the median "
                        f"of its three judged runs, {[round(x / 1e6, 3) for x in runs]} ms), above v_cap = "
-                       f"{p.v_cap_ms:g} ms")
+                       f"{p.v_cap_ms:g} ms", stage="check")
         bad, rec["canaries"] = self.canary_check(svc.vk, [(M, final["file"], stmts[M - 1], [("first-child", first[M - 1])])],
                                                  "service run: the final output")
         final["canaries_accepted"] = bad[M]
         if bad[M]:
             raise Fail(f"service run: the final output (step {M}): statement canaries accepted by acc (a proof "
-                       f"accepted for another statement): {bad[M]}")
+                       f"accepted for another statement): {bad[M]}", stage="check")
         # the track `every`: never the run's failure; skipped once lost
         ks = [k for k in (1, 2) if k < M]
         if ks and not every_reasons(p, rec, canaries=False):
@@ -658,13 +713,15 @@ class Bench:
         pass could read (OK or MISMATCH at an index), so any is the entry's REJECT."""
         st, want = rec.get("service_stats") or {}, self.p.timed_runs
         if not all(isinstance(st.get(k), int) for k in ("signatures", "replays", "mismatches")):
-            raise Fail(f"the service reported no replay statistics ({sorted(st)})")
+            raise Fail(f"the service reported no replay statistics ({sorted(st)})", stage="timed-pass")
         if st["mismatches"]:
             raise Fail(f"a SIGN in a timed pass differed from the service run's ({st['mismatches']} MISMATCH refusals"
-                       + (f"; {printable(rec['service_mismatches'][0], 300)}" if rec.get("service_mismatches") else "") + ")")
+                       + (f"; {printable(rec['service_mismatches'][0], 300)}" if rec.get("service_mismatches") else "") + ")",
+                       stage="timed-pass")
         if st["replays"] != want * st["signatures"]:
             raise Fail(f"the timed passes made {st['replays']} signatures, not timed_runs · signatures = {want} · "
-                       f"{st['signatures']}: a timed pass must make exactly the service run's SIGN requests")
+                       f"{st['signatures']}: a timed pass must make exactly the service run's SIGN requests",
+                       stage="timed-pass")
 
     def timed(self, svc, rec, data, stmts):
         """The timed passes (AGENTS.md §6): `timed_runs` passes of steps `1 … M`, each a fresh
@@ -682,10 +739,10 @@ class Bench:
             try:
                 key = svc.replay()
             except ServiceError as e:
-                raise Fail(f"timed pass {t}: the service did not enter replay mode ({e})")
+                raise Fail(f"timed pass {t}: the service did not enter replay mode ({e})", stage="timed-pass")
             for i in range(1, p.M + 1):
                 if self.left() <= 0:
-                    raise Fail(f"timed pass {t}, step {i}: {self.deadline[1]}")
+                    raise Fail(f"timed pass {t}, step {i}: {self.deadline[1]}", stage="stream-cap")
                 ref = self.stored(steps[i - 1])
                 kind, ins = self.inputs(i, data, stmts, self.stored(steps[i - 2]) if i > 1 else None, key)
                 r = self.one(svc, f"timed{t}-step{i}", kind, ins)
@@ -695,17 +752,18 @@ class Bench:
                     raise Fail(f"timed pass {t}, step {i}: the output differs from the service run's output of the "
                                f"step, first at byte offset {off} ({len(r.proof)} bytes, the service run's {len(ref)}; "
                                f"kept as {rel}): a prover's output must be a function of its inputs, its setup and the "
-                               "oracle answers")
+                               "oracle answers", stage="timed-pass")
                 s = steps[i - 1]
                 s.setdefault("P_timed_s", []).append(r.seconds)
                 s.setdefault("timed", []).append({"startup_s": r.startup_s, "kill_s": r.kill_s, "mem_peak": r.mem_peak,
-                                                  "work_bytes": r.work_bytes, "ended_by": r.ended, "warm_s": r.warm_s})
+                                                  "work_bytes": r.work_bytes, "ended_by": r.ended, "warm_s": r.warm_s,
+                                                  "scrub_s": getattr(r, "scrub_s", None)})
                 self.log(f"[timed pass {t}] step {i}: P={r.seconds:.4f} s (identical output)")
             mism = svc.mismatches()
             if mism:
                 raise Fail(f"timed pass {t}: a SIGN in a timed pass differed from the service run's "
                            f"({len(mism)} refused; the first: {printable(mism[0], 300)}): a timed pass must make exactly "
-                           "the service run's SIGN requests, in its order")
+                           "the service run's SIGN requests, in its order", stage="timed-pass")
         if self.left() > 30:              # a closing sample, only with 30 s of the cap to spare
             self.sample("closing")
 
@@ -737,7 +795,8 @@ def step_record(i, n_i, r, rel):
     return {"index": i, "n": n_i, "P_service_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": size, "signed_proof": ok,
             "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns,
-            "warm_s": getattr(r, "warm_s", None), "warm_bytes": getattr(r, "warm_bytes", None)}
+            "warm_s": getattr(r, "warm_s", None), "warm_bytes": getattr(r, "warm_bytes", None),
+            "scrub_s": getattr(r, "scrub_s", None)}
 
 
 def every_reasons(p, stream, canaries=True):

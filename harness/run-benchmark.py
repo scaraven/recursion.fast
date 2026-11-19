@@ -15,8 +15,11 @@ service's replay mode, every output byte-identical to the service run's; interle
 samples); the score (`rfh.bench.score`: `P_total` the median of the pass totals,
 `S = P_total · 2^(|π_M| / size_ref)` in `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` in
 `every`, the tracks the run is in). One stream per evaluation, no repeats. The per-step JSON lines
-go to WORK/stream.jsonl and into the result. The first failure ends the run with `benchmark: fail`
-and its reason; so does reaching `stream_s`. A machine whose fingerprint is missing, unreadable or not the season's
+go to WORK/stream.jsonl and into the result. The first failure ends the run with `benchmark: fail`,
+its reason and where it was rejected (`reject_stage`: `prover`, `request`, `check`, `timed-pass` or
+`stream-cap`, `rfh.bench.Fail`); so does reaching `stream_s`. The runner's tools (`calib`, and
+`scrub`, which sets the per-CPU inode counters to random offsets before every request) are built
+before any entry code runs. A machine whose fingerprint is missing, unreadable or not the season's
 (AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and a `c_P` that
 drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
 machine was not in its calibrated state, the organiser's failure, never a score change. A stream
@@ -34,8 +37,8 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, fingerprint_problem, fs_free,  # noqa: E402
-                       machine, printable, score)
+from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, build_scrub, fingerprint_problem,  # noqa: E402
+                       fs_free, machine, printable, score)
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream"]
@@ -122,11 +125,12 @@ def main():
                         + (f" ({m['fingerprint_reason']})" if why != "mismatched" else
                            f" (fingerprint {m['fingerprint']}, the season expects {p.fingerprint})"), "fingerprint")
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
+        scrub_bin, res["scrub"] = build_scrub(os.path.join(work, "tools"))
         save("prover build")
         ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s)
         res["prover"] = info
         if not ok:
-            raise Fail(f"prover build: {info.get('error')}")
+            raise Fail(f"prover build: {info.get('error')}", stage="prover")
         log(f"prover built: {info['binary_sha256']} ({info['binary_bytes']} bytes)")
         run = Run(os.path.join(work, "prover", "bin"), os.path.join(work, "setup"), p.mem_prover)
         save("prover setup")
@@ -139,14 +143,15 @@ def main():
         res["setup"] = {"ok": ok, "seconds": dt, "log": slog[-2000:]}
         if not ok:
             raise Fail("prover setup failed" + (": " + printable(slog.strip().splitlines()[-1], 300)
-                                                if "setup_cap" in slog else ""))  # organiser text, sanitised anyway
+                                                if "setup_cap" in slog else ""), stage="prover")  # organiser text, sanitised anyway
         res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)
         if res["setup"]["sha256"] is None:
-            raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s")
+            raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s",
+                       stage="prover")
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
-                      calib_bin=calib_bin, log=log)
+                      calib_bin=calib_bin, log=log, scrub_bin=scrub_bin)
         if "calibrate" in parts:
             save("calibration")
             res["calibration"] = bench.calibrate()
@@ -178,6 +183,7 @@ def main():
                             "in its calibrated state; not the entry's failure, and never a score change", "drift")
     except Fail as e:
         res["benchmark"] = "fail"
+        res["reject_stage"] = e.stage or "prover"      # a Fail before the stream names none: the prover's
         res["reasons"].append(str(e))
         if getattr(e, "rec", None) is not None:
             res["failed_run"] = e.rec
