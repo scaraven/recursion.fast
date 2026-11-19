@@ -19,9 +19,10 @@ request line to the moment the answer line has arrived, on its own monotonic clo
 badge's process. What is judged against `v_cap` is the larger of that external time and the badge's
 own `NS`, so a badge whose in-process timer under-reports (a compiler or runtime surprise, or glue
 that is not what it should be) gains nothing. The external time adds the request's round trip
-through two pipes, reading the file and parsing the two hex strings: about 0.3 ms plus about
-0.4 ms per MiB of file from the page cache (measured by `tests/harness/accprobe/run.py`, which
-prints it: 0.3 ms for a 5 KB file, 3.6 to 5.7 ms for a 9.2 MB one), against `v_cap` = 64 ms; the
+through two pipes, reading the file (a copy on the runner's tmpfs, `Badge.stage`) and parsing the
+two hex strings: about 0.3 ms plus about 0.4 ms per MiB of file (measured by
+`tests/harness/accprobe/run.py`, which prints it: 0.3 ms for a 5 KB file, 3.6 to 5.7 ms for a
+9.2 MB one, from the page cache before the copies), against `v_cap` = 64 ms; the
 checked files are at most `file_cap`. The first request of a process also pays the process's
 start-up (about 80 ms there).
 
@@ -53,14 +54,86 @@ in the core CI (`tests/harness/canaries.py`).
 """
 import os
 import select
+import stat
 import subprocess
 import time
 
 from .prover import Drain
-from .sandbox import Sandbox
+from .sandbox import Sandbox, copy_file, copy_tree, remove_tree, runner_path
 from .signed import Signed
 
-LIB_ROOT = ("/usr", "/bin", "/lib", "/lib64", "/etc/ld.so.cache")
+LD_CACHE = "/etc/ld.so.cache"
+HOST_ROOT = ("/usr", "/bin", "/lib", "/lib64", LD_CACHE)     # `host_root` (a test's stand-in badge) only
+
+
+def needed(path):
+    """The host files a dynamically linked executable `path` loads (its interpreter and libraries, as
+    the system's `ldd` lists them: the dynamic loader in its list mode, which runs none of the
+    executable's code), and the interpreter of a `#!` script; [] for a static executable."""
+    with open(path, "rb") as f:
+        head = f.read(256)
+    if head.startswith(b"#!"):
+        w = head[2:].split(b"\n")[0].split()
+        return [os.fsdecode(w[0])] if w else []
+    p = subprocess.run(["ldd", path], capture_output=True, text=True, timeout=60)
+    out = []
+    for line in p.stdout.splitlines():
+        w = line.split()
+        if "=>" in w and len(w) > w.index("=>") + 1 and w[w.index("=>") + 1].startswith("/"):
+            out.append(w[w.index("=>") + 1])
+        elif w and w[0].startswith("/"):
+            out.append(w[0])
+    return out
+
+
+def mirror(root, path, depth=0):
+    """Reproduce the host path `path` under `root`: its directories (mode 0700), every symbolic link
+    on the way (as the same link, then followed), and the file at its end (`copy_file`)."""
+    if depth > 40:
+        raise OSError(f"too many links resolving {path}")
+    cur, parts = "/", [x for x in path.split("/") if x]
+    for i, name in enumerate(parts):
+        host = os.path.join(cur, name)
+        here = root + host
+        st = os.lstat(host)
+        if stat.S_ISLNK(st.st_mode):
+            target = os.readlink(host)
+            if not os.path.lexists(here):
+                os.symlink(target, here)
+            nxt = os.path.normpath(os.path.join(cur, target))
+            return mirror(root, os.path.join(nxt, *parts[i + 1:]), depth + 1)
+        if stat.S_ISDIR(st.st_mode):
+            if not os.path.isdir(here):
+                os.mkdir(here, 0o700)
+            cur = host
+        elif i == len(parts) - 1 and stat.S_ISREG(st.st_mode):
+            if not os.path.exists(here):
+                copy_file(host, here)
+        else:
+            raise OSError(f"{host} is neither a directory nor a regular file")
+
+
+def lib_view(root, executable, tools=()):
+    """A tree under `root` (on the runner's tmpfs) holding what the badge executable (already
+    copied, at `executable`) loads and the host executables `tools`: their interpreters and
+    libraries (`needed`), recursively, and the loader's cache, at their host paths (`mirror`).
+    Returns its binds for the sandbox's root: each top-level directory read-only, each top-level link
+    as a link."""
+    todo, seen = needed(executable) + list(tools), set()
+    if os.path.isfile(LD_CACHE):
+        mirror(root, LD_CACHE)
+    while todo:
+        p = todo.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        mirror(root, p)
+        todo += needed(p)
+    out = []
+    for n in sorted(os.listdir(root)):
+        full = os.path.join(root, n)
+        out.append(("symlink", os.readlink(full), "/" + n) if os.path.islink(full) else ("ro", full, "/" + n))
+    return out
 
 
 class BadgeError(Exception):
@@ -88,33 +161,73 @@ def warm_file():
 
 class Badge:
     """The badge executable `verify` in the sandbox. `start_s` (the season's `badge_start_s`): the
-    cap on a warmed run's start-up, from the moment the process may run to the warm-up's answer."""
+    cap on a warmed run's start-up, from the moment the process may run to the warm-up's answer.
+    Everything a badge run sees is on the runner's tmpfs (`sandbox.runner_dir`), never the work disk
+    or the host's /usr (review LR4 H1: a lookup there leaves a negative dentry that a later badge
+    run, one of a proof's three judged runs, could time): a copy of the badge directory at /badge
+    and, at their host paths, the files `verify` loads (`lib_view`), both made at the first run; the
+    warm-up file at /warm; and, fresh for every run, a directory holding copies of that run's
+    checked files alone at /store (`stage`), removed after it. `tools`: host executables a stand-in
+    badge (a script, in the tests) runs, put in the same tree with what they load. `host_root`
+    (tests only: the Python stand-in badge of `smoke.py --mock` needs the host's Python library)
+    binds the host's /usr, /bin, /lib and /lib64 in place of that tree, as before review LR4."""
 
-    def __init__(self, badge_dir, mem, scratch, start_s=None):
-        self.dir, self.mem, self.scratch, self.start_s = badge_dir, mem, scratch, start_s
+    def __init__(self, badge_dir, mem, scratch, start_s=None, tools=(), host_root=False):
+        self.dir, self.mem, self.scratch, self.start_s, self.tools = badge_dir, mem, scratch, start_s, tuple(tools)
+        self.host_root = host_root
         self.core = pinned_core()
         self.n = 0
         self.last = []
+        self._warm = self._view = None
 
     def warm_dir(self):
-        """The directory holding the warm-up file (`warm.bin`), written once."""
-        d = os.path.join(self.scratch, "warm")
-        if not os.path.exists(os.path.join(d, "warm.bin")):
-            os.makedirs(d, exist_ok=True)
+        """The directory on the runner's tmpfs holding the warm-up file (`warm.bin`), written once."""
+        if self._warm is None:
+            d = runner_path("warm")
             with open(os.path.join(d, "warm.bin"), "wb") as f:
                 f.write(warm_file())
+            os.chmod(os.path.join(d, "warm.bin"), 0o444)
+            self._warm = d
+        return self._warm
+
+    def stage(self, items, store):
+        """A fresh directory on the runner's tmpfs with a copy of each item's file (its path relative
+        to `store` kept): the /store of one badge run."""
+        d = runner_path("store")
+        for rel in sorted({rel for _, _, rel in items}):
+            dst = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(dst), mode=0o700, exist_ok=True)
+            if not os.path.exists(dst) and os.path.lexists(os.path.join(store, rel)):   # a missing one stays missing
+                copy_file(os.path.join(store, rel), dst, 0o444)
         return d
+
+    def view(self):
+        """(the badge directory's copy, the binds of what it loads), made at the first run."""
+        if self._view is None:
+            root = runner_path("badge")
+            bdir = os.path.join(root, "badge")
+            copy_tree(self.dir, bdir)            # directories, regular files (read-only) and links
+            libs = os.path.join(root, "root")
+            os.mkdir(libs, 0o700)
+            if self.host_root:
+                binds = [("symlink", os.readlink(p), p) if os.path.islink(p) else ("ro", p, p)
+                         for p in HOST_ROOT if os.path.lexists(p)]
+            else:
+                binds = lib_view(libs, os.path.join(bdir, "verify"), self.tools)
+            self._view = (bdir, binds)
+        return self._view
 
     def start(self, store, warm_dir):
         """A fresh `verify --serve` process: (process, stop(), the monotonic time it was let run,
         the store's path and the warm-up directory's path as the process sees them). The sandbox is
         set up held, and the clock starts when it is released, so the start-up cap counts the
         badge's own start-up, not the sandbox's."""
-        binds = [("ro", self.dir, "/badge"), ("ro", store, "/store")]
+        bdir, libs = self.view()
+        binds = libs + [("ro", bdir, "/badge"), ("ro", store, "/store")]
         binds += [("ro", warm_dir, "/warm")] if warm_dir else []
         sb = Sandbox(["/badge/verify", "--serve"], binds, self.mem, env={"PATH": "/usr/bin:/bin"}, cwd="/",
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                     extra_ro_root=LIB_ROOT, cpus=self.core, hold=True)
+                     cpus=self.core, hold=True)
         sb.wait_ready()
         t0 = time.monotonic()
         sb.release()
@@ -138,6 +251,13 @@ class Badge:
             return []
         wd = self.warm_dir() if warm else None
         self.n += 1
+        staged = self.stage(items, store)
+        try:
+            return self._verify(items, staged, timeout, warm, wd)
+        finally:
+            remove_tree(staged)
+
+    def _verify(self, items, store, timeout, warm, wd):
         proc, stop, t0, sp, wp = self.start(store, wd)
         lines = [f"{os.urandom(32).hex()} {os.urandom(32).hex()} {wp}/warm.bin"] if warm else []
         lines += [f"{vk.hex()} {stmt.hex()} {sp}/{rel}" for vk, stmt, rel in items]

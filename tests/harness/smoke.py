@@ -162,6 +162,15 @@ def main():
     ap.add_argument("--mock", action="store_true")
     ap.add_argument("--nanoda", action="store_true")
     a = ap.parse_args()
+    if memcap_method() == "prlimit":
+        # the test-only override: without a systemd user manager a benchmark is an organiser ERROR
+        # (`run-benchmark.py`); the smoke still runs every path under the fallback, recorded
+        os.environ["RF_ALLOW_PRLIMIT"] = "1"
+        print("memory caps: the prlimit fallback (RF_ALLOW_PRLIMIT=1 for this smoke)", flush=True)
+    if a.mock:
+        # the Python stand-in badge needs the host's Python library: its sandbox binds the host's
+        # /usr (test-only; the real badge gets a tmpfs tree of what it loads, `rfh.checks.lib_view`)
+        os.environ["RF_TEST_BADGE_HOST_ROOT"] = "1"
     tmp = a.work or tempfile.mkdtemp(prefix="rf-smoke-", dir=os.environ.get("RF_TEST_TMP"))
     os.makedirs(tmp, exist_ok=True)
     fails = []

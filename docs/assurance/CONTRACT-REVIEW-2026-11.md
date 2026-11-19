@@ -137,7 +137,7 @@ or *recorded* is explained, not changed.
 | R5 NIT-5 | nit | No control for the tape's injectivity. | `c00a2ca`: `extractorInput_inj` (with `readTape_run`). |
 | R5 obs. | obs. | Memory beyond cell `2^64` is unreachable by address, a burden only on honest extractors of absurd tapes. | Recorded. |
 | R6 L2 | low | AGENTS.md §6 said nothing key-dependent can run in the untimed start-up; `vk.hex` is in `/work` then. | Docs: the start-up sees `vk` and may do any work that depends on nothing else. |
-| R6 L3 | low | The runner's warm read of `/setup` charges those pages to its own memory cgroup, so read-only setup data sits outside the prover's 8 GiB. | Docs (AGENTS.md §9, `warm_caches`): not fixed, since charging the request would mean evicting and re-reading up to 4 GiB from disk before every request. |
+| R6 L3 | low | The runner's warm read of `/setup` charges those pages to its own memory cgroup, so read-only setup data sits outside the prover's 8 GiB. | Docs (AGENTS.md §9, `warm_caches`): not fixed, since charging the request would mean evicting and re-reading up to 4 GiB from disk before every request. (Since review LR4 the setup is a copy on the runner's tmpfs, `Run.publish`, still charged to the runner, and `warm_caches` is gone.) |
 | R6 L4 | low | "A trace is within `v_cap`" is false for intermediate outputs of the track `final`, which are not V-capped. | Docs (AGENTS.md §12). |
 | R6 nit | nit | A `SIGN` body is capped at 16 MiB, below the `2^36` bytes of trace `acc` admits. | Docs (`Certificate.lean`, AGENTS.md §12). |
 | R6 nit | nit | AGENTS.md anchors (as R5 NIT-3). | Docs. |

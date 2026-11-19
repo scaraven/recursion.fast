@@ -15,7 +15,6 @@ import os
 import platform
 import secrets
 import shutil
-import stat
 import statistics
 import subprocess
 import time
@@ -25,7 +24,7 @@ from dataclasses import dataclass
 from . import digest, draws, signed
 from .checks import Badge, BadgeError, canaries
 from .prover import fresh_dir, remove_tree, request
-from .sandbox import memcap, memcap_method
+from .sandbox import memcap, memcap_method, runner_path
 from .service import Service, ServiceError
 
 
@@ -251,14 +250,17 @@ class Bench:
         # the leaf data: runner-only, beside the store and never under it (the badge binds the store at
         # /store); nothing is bound into any sandbox from it, a request gets a staged copy at `go`
         self.leafdata = os.path.join(work, "leafdata")
-        self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"), p.badge_start_s)
+        self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"), p.badge_start_s,
+                           host_root=os.environ.get("RF_TEST_BADGE_HOST_ROOT") == "1")     # tests only
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
         self.samples = []                    # the interleaved calibration samples
 
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
-        svc = Service(self.service_bin, os.path.join(self.work, "svc", name),
+        # the socket directory on the runner's tmpfs: each request's own socket directory is made
+        # beside it (a hard link cannot cross filesystems), and no request sees the work disk
+        svc = Service(self.service_bin, os.path.join(runner_path("svc"), name),
                       wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
                       stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
@@ -301,6 +303,7 @@ class Bench:
         past the stream's cap, whose message then says so: a badge built from a sabotaged record cache could
         hang, and the bot re-runs a `check` REJECT without the cache)."""
         shared = self.deadline is not None and timeout >= self.left() + 30 - 1e-3   # the run had the shared bound
+        self.scrub()        # as before a request: no badge run reads an earlier one's per-CPU inode counts
         try:
             return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
         except BadgeError as e:
@@ -376,42 +379,15 @@ class Bench:
         output's runs are bounded by the stream's cap alone.)"""
         return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (c + 1) * self.p.v_cap_ms / 1e3)
 
-    def warm_caches(self):
-        """Before every request, untimed and with no entry process alive: read every regular file under
-        the setup directory and the prover binary in full, so that every page of the files a request
-        can see that outlive it is in the page cache and their cache state carries no information
-        from one request to the next (a request could otherwise evict chosen pages and the next one
-        probe which are cached). No link is followed; the setup directory is bounded by `setup_cap`
-        and 2^20 entries (checked after `setup`, read-only since). The pages are charged to the
-        runner's memory cgroup, not to the request's (cgroup v2 charges a page to the cgroup that
-        brought it into the cache), so read-only setup data is outside the prover's memory cap
-        (AGENTS.md §9). Returns (seconds, bytes read)."""
-        t0, total, buf = time.monotonic(), 0, bytearray(1 << 20)
-        files = [os.path.join(self.run.bin_dir, "prover")]
-        for root, _, names in os.walk(self.run.setup_dir, followlinks=False):
-            files += [os.path.join(root, n) for n in names]
-        for f in files:
-            try:
-                fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            except OSError:
-                continue
-            try:
-                if stat.S_ISREG(os.fstat(fd).st_mode):
-                    while (k := os.readv(fd, [buf])) > 0:
-                        total += k
-            except OSError:
-                pass
-            finally:
-                os.close(fd)
-        return time.monotonic() - t0, total
-
     def scrub(self):
-        """Before every request, untimed and with no entry process alive (after `warm_caches`): the
+        """Before every request, untimed and with no entry process alive: the
         per-CPU inode counters (pipes, sockets and other pseudo files; memfds) set to a fresh batch
         and a uniform random offset on every CPU of the job (`harness/tools/scrub.c`), so that what an
         earlier request did on a CPU does not show in a later request's inode numbers. Seconds, or
-        None without the tool (the unit tests' benches). A failure is the runner's."""
-        if not self.scrub_bin:
+        None without the tool (the unit tests' benches). A failure is the runner's. It also runs
+        before every badge run (`verify`), so that one of a proof's three judged runs cannot leave a
+        count there for the next (a memo across the judged runs)."""
+        if not getattr(self, "scrub_bin", None):
             return None
         t0 = time.monotonic()
         p = subprocess.run([self.scrub_bin], capture_output=True, text=True, timeout=60)
@@ -444,7 +420,12 @@ class Bench:
             e.rec = rec        # a failed run keeps its measurements in the result
             raise
         finally:
-            self.stop(svc, rec)
+            # no entry process runs during the calibration: a service failing at its stop here is
+            # the organiser's (a harness ERROR), never the entry's REJECT (review LR4 L2)
+            try:
+                self.stop(svc, rec)
+            except Fail as e:
+                raise RuntimeError(f"the calibration's service failed at its stop: {e}") from None
         cal["service"] = rec
         return cal
 
@@ -487,26 +468,31 @@ class Bench:
         """One timed request, within `ready_s`, `step_s` and the stream's cap: its `Step` record.
         Every failure is the entry's: the request's own errors (`request`; reject stage `request` in
         the service run, `timed-pass` in a timed pass, `Bench.phase`), the stream's cap reached
-        during it (`stream-cap`). Before it the page cache of the setup and the binary is warmed
-        (`warm_caches`) and the per-CPU inode counters are scrubbed (`scrub`). The request's /work
+        during it (`stream-cap`). Before it the per-CPU inode counters are scrubbed (`scrub`); the
+        setup and the binary need no warming, their copies on the runner's tmpfs being always
+        resident (`Run.publish`). The request's /work
         is a private tmpfs of its own (`request` with no host directory), which holds `vk.hex` when
         the prover starts and is gone with the request: no file, inode number or free-space count of
         it reaches a later request. The service's socket appears in the request's `/run/rf` only at
         `go`. `tag` (`service{i}`, `timed{t}-step{i}`) names the request in the runner's log, its
         `Fail` messages and the records, never in the sandbox: the socket directory, whose path
         `/proc/self/mountinfo` shows, has 16 random hex characters from the CSPRNG for a name, and is
-        removed after the request."""
+        removed after the request. Every request stages the same number of unnamed inodes on its
+        /work, `STAGED`'s five, an input's placeholder (never linked, of the input's fixed size where
+        it has one) for each input it does not get, so that a prover counting inode numbers before
+        `go` cannot tell a timed request from the service run's or step 1 from step i (review LR4
+        L1)."""
         # the request's own socket directory, on the service socket's filesystem (a hard link cannot
         # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
         sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", secrets.token_hex(8))
         fresh_dir(sock)
         dl = self.deadline[0] if self.deadline else None
-        warm_s, warm_bytes = self.warm_caches()
         scrub_s = self.scrub()
+        pads = [bytes(n) for name, n in STAGED.items() if name not in inputs]
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
-                    preset={"vk.hex": (svc.vk.hex() + "\n").encode()})
-        r.warm_s, r.warm_bytes, r.scrub_s = warm_s, warm_bytes, scrub_s
+                    preset={"vk.hex": (svc.vk.hex() + "\n").encode()}, pads=pads)
+        r.scrub_s = scrub_s
         self.alive(svc)
         remove_tree(sock)
         if r.status != "ok":
@@ -770,7 +756,7 @@ class Bench:
                 s = steps[i - 1]
                 s.setdefault("P_timed_s", []).append(r.seconds)
                 s.setdefault("timed", []).append({"startup_s": r.startup_s, "kill_s": r.kill_s, "mem_peak": r.mem_peak,
-                                                  "work_bytes": r.work_bytes, "ended_by": r.ended, "warm_s": r.warm_s,
+                                                  "work_bytes": r.work_bytes, "ended_by": r.ended,
                                                   "scrub_s": getattr(r, "scrub_s", None)})
                 self.log(f"[timed pass {t}] step {i}: P={r.seconds:.4f} s (identical output)")
             mism = svc.mismatches()
@@ -782,6 +768,11 @@ class Bench:
             self.sample("closing")
 
 
+# the inputs a request can get, with the size of the placeholder staged for each it does not get
+# (`Bench.one`): a statement or a key is 65 bytes (64 hex characters and a newline) in every request
+# that has one; the leaf's files and `prev.bin` have the step's sizes in the service run and in the
+# timed passes alike (step 1, which has no `prev.*`, is told by its command, `first`)
+STAGED = {"leaf.json": 0, "leaf.bin": 0, "prev.stmt": 65, "prev.bin": 0, "oracle.key": 65}
 INTERMEDIATE_SLACK_S = 60  # seconds a badge run of intermediate checks may take beyond 2 v_cap per check
 JUDGED_RUNS = 3           # the fresh badge runs that judge each checked proof; its V is their median
 
@@ -809,7 +800,6 @@ def step_record(i, n_i, r, rel):
     return {"index": i, "n": n_i, "P_service_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": size, "signed_proof": ok,
             "ended_by": r.ended, "work_bytes": r.work_bytes, "t_stop_ns": r.t_stop_ns,
-            "warm_s": getattr(r, "warm_s", None), "warm_bytes": getattr(r, "warm_bytes", None),
             "scrub_s": getattr(r, "scrub_s", None)}
 
 

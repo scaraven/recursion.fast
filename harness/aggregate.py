@@ -12,7 +12,8 @@ entries provisionally.
                                   --harness-commit SHA [--job URL]      the ERROR result of a run that
                                   stopped on the organiser's side before any benchmark
 
-**Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine), `lengths`
+**Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine, or
+no systemd user manager for the sandboxes' memory scopes, `run-benchmark.py`), `lengths`
 (the stream's shape, `M` and the leaf size `n`, is not the season's, or the season
 file's `[stream]` shape is malformed; the name is kept from the chain-length list of earlier
 seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser

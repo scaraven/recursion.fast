@@ -9,7 +9,8 @@
 #   2. bubblewrap is installed if missing.
 #   3. lingering is enabled for the job's user, so that a systemd user manager exists and the sandbox
 #      can cap memory with transient scopes (`systemd-run --user --scope -p MemoryMax=…`); without
-#      it the sandbox falls back to an address-space limit and the result records `memcap: prlimit`.
+#      it the sandbox falls back to an address-space limit and the result records `memcap: prlimit`
+#      (a benchmark is then an organiser ERROR unless RF_ALLOW_PRLIMIT=1, which only the tests set).
 # It prints the runner's CPU count, memory and kernel for the log (the machine itself is described
 # in AGENTS.md §6).
 set -euo pipefail

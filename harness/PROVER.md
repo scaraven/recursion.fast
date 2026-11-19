@@ -36,35 +36,41 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 
 | path | contents |
 |---|---|
-| `/prover/prover` | the binary (read-only) |
-| `/setup` | the setup directory (read-only after `setup`) |
+| `/prover/prover` | the binary (read-only; in a request, the runner's copy on its tmpfs) |
+| `/setup` | the setup directory (read-only after `setup`; in a request, the runner's copy on its tmpfs: directories, regular files, every byte written, and links; FIFOs, sockets and devices are left out) |
 | `/work` | the request's own private tmpfs (a superblock of its own, fresh for every request), read-write, the working directory |
 | `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`), **only from `go` on**: connect after `go` |
 | `/tmp` | an empty tmpfs (counted in the memory cap) |
 | `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes and holds no machine-wide counter: every top-level entry but the pid directories, `self` and `thread-self` reads empty (`stat`, `vmstat`, `meminfo`, `loadavg`, `interrupts`, `pressure`, `cpuinfo`, …; use `cpuid`); the links `mounts` and `net` lead into `self` |
-| `/sys/devices/system/cpu` | the CPU topology, read-only, its static description only (`cpuidle`, `cpufreq` and `power` read empty) |
+| `/sys/devices/system/cpu` | the CPU topology, read-only: a static copy of its description, made when the runner starts (`cpuidle`, `cpufreq`, `power` and the tree's links are absent) |
 
-Nothing else exists: no `/usr`, no shell, no network, no other process. The one host directory
-bound into a request by name, its socket directory at `/run/rf` (`/proc/self/mountinfo` shows its
-path), is `svc/requests/<16 random hex characters>`, fresh for every request, so no name in the
+Nothing else exists: no `/usr`, no shell, no network, no other process. Nothing a request sees is
+on the host's disks or sysfs: every bound file and directory is on the runner's own tmpfs or fresh
+for the request, so a lookup of an absent name leaves nothing a later request can time and no
+page-cache folio of a setup file changes shape (on a disk filesystem both persist: AGENTS.md §12).
+The one directory bound into a request under a name the runner chose, its socket directory at
+`/run/rf` (`/proc/self/mountinfo` shows its path), is `svc/requests/<16 random hex characters>`
+on that tmpfs, fresh for every request, so no name in the
 sandbox tells a request its pass or its step (counters that advance with every sandbox, such as
 mount ids, and the clock still roughly do: AGENTS.md §12). The environment is
 `RF_ORACLE=/run/rf/oracle.sock`, `RF_SETUP=/setup`, `HOME=/work`, `TMPDIR=/tmp`, `PATH=/prover`.
 Resources: every CPU of the machine (shared with the service, which computes the oracle on the same
 CPUs), memory capped by a cgroup (`memory.prover` of the season, 8 GiB in season 1; the service
-has its own 2 GiB), `oom_score_adj = 1000`. The runner reads `/setup` in full before every request
-(below), so its page cache is charged to the runner, not to the prover: up to `setup_cap` (4 GiB)
-of read-only setup can be resident beyond the prover's 8 GiB. A seccomp filter fails (EPERM) `ptrace`,
+has its own 2 GiB), `oom_score_adj = 1000`. The setup's copy is the runner's (written by it, charged
+to it, always resident): up to `setup_cap` (4 GiB) of read-only setup is resident beyond the
+prover's 8 GiB, and mapping it costs no page-in. A seccomp filter fails (EPERM) `ptrace`,
 `process_vm_*`, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_*`, key management, mounts,
 namespaces and module loading, and `socket` and `socketpair` for every domain but `AF_UNIX` (the
 oracle's socket is the only one a prover needs). It also refuses what would read a machine-wide
 counter that one request could set for a later one: `statfs`, `fstatfs` (so `statvfs`) and `ustat`
-fail with EPERM (free disk space); no pidfd can be made, since a pidfd's inode number counts every
+fail with ENOSYS (free space; glibc's `pathconf` then answers its defaults); `setsid` fails (the
+prover is a session leader already; a new session would move the machine-wide autogroup counter);
+`madvise` with `MADV_COLD` or `MADV_PAGEOUT`, and `process_madvise`, fail (they could push the
+runner's tmpfs pages out to swap); no pidfd can be made, since a pidfd's inode number counts every
 process the machine started (`pidfd_open`, `clone` with `CLONE_PIDFD`, `getsockopt` `SO_PEERPIDFD`
 and `setsockopt` `SO_PASSPIDFD` fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to
 `clone`, so `fork`, `posix_spawn` and threads work); `getsockopt` `SO_COOKIE` fails (socket cookies
-come from a machine-wide counter). Before every request (after the page-cache warm-up below) the
-runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
+come from a machine-wide counter). Before every request (and every badge run) the runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
 files and memfds) to the end of their batch and then a uniform random offset into a fresh one
 (`harness/tools/scrub.c`, one pinned thread per CPU, about 0.1 s, recorded as `scrub_s`), so a
 pipe's or memfd's inode number says nothing of what an earlier request did on that CPU. When a
@@ -194,9 +200,11 @@ included (test it on 0-, 103-, 104- and 239-byte queries).
    the clock stopped exists. A prover that closes stdout without `done` is timed until its last
    process exits. The cap is `step_s` (20 s) from the inputs to the death of the last process.
 
-**Before every request** (untimed, with no entry process alive) the runner reads every regular file
-of `/setup` and the binary in full, so every page of the files that outlive a request is in the page
-cache: their cache state carries nothing from one request to the next.
+**Before every request** (untimed, with no entry process alive) the runner scrubs the per-CPU inode
+counters (§2); `/setup` and the binary need no warming, their copies on the runner's tmpfs being
+always resident. The inputs are staged as five unnamed inodes in every request (a placeholder for
+each input the request does not get), so a prover counting `/work`'s inode numbers before `go`
+learns nothing of whether it is in a timed pass.
 
 `/work` is a private tmpfs of the request's own, gone with the request, so its inode numbers and
 free space carry nothing from one request to the next. What the prover writes there counts
@@ -284,7 +292,7 @@ byte-identical to the service run's output of its step; a replay `MISMATCH`, or 
 does not make exactly the service run's signatures; a crash or timeout of the final output's checks; a
 filesystem error the prover caused in `/work`; the service dying during the run; a timed pass
 that does not finish; the benchmark reaching `stream_s`. `stream_s` (2,000 s) covers the 64
-requests at `ready_s + step_s` each (1,920 s) and the checks, samples and setup re-reads, so it
+requests at `ready_s + step_s` each (1,920 s) and the checks, samples and scrubs, so it
 binds only when an entry uses nearly every cap at once (start-ups near 10 s, steps near 20 s, a
 setup directory near 4 GiB); such an entry can reach it within every per-request cap (AGENTS.md
 §9). An intermediate output that `acc` rejects (in any of its three judged

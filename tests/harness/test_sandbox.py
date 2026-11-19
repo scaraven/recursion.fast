@@ -26,18 +26,31 @@
     connect to `RF_ORACLE` before `ready` fails (no such file) and one after `go` reaches the service;
 11. isolation (`isoprobe.c`), in a request, in `prover setup` and in a badge run: every top-level
     /proc entry but the pid directories, `self` and `thread-self` reads as empty (a file) or lists
-    nothing (a directory), and so does everything in /sys/devices/system/cpu but its static
-    description; `socket`/`socketpair` fail with EPERM for every domain but AF_UNIX (UDP among them);
-    `statfs`/`fstatfs`/`statvfs`/`ustat` (free disk space), every way to a pidfd (pidfs inode
-    numbers) and `SO_COOKIE` are refused, `clone3` is ENOSYS and `fork` and threads work;
+    nothing (a directory), and /sys/devices/system/cpu holds only its static description (a copy on
+    the runner's tmpfs); after `Run.publish` a request binds /prover and /setup from the runner's
+    tmpfs; `socket`/`socketpair` fail with EPERM for every domain but AF_UNIX (UDP among them);
+    `statfs`/`fstatfs`/`statvfs`/`ustat` (free disk space) fail with ENOSYS while `pathconf`
+    answers; every way to a pidfd (pidfs inode numbers), `SO_COOKIE`, `setsid` in a child,
+    `madvise` MADV_COLD and MADV_PAGEOUT, `process_madvise`, `quotactl_fd` and `open_tree_attr` are
+    refused (EPERM), `clone3` is ENOSYS and `fork` and threads work;
     `mlock` of N pages in one request raises the host's `unevictable_pgs_mlocked` by N and the next
     request sees none of it; a request's first inode number does not depend on how many files an
     earlier request made (with a shared tmpfs, the control, it does); with the runner's scrub
     (`harness/tools/scrub.c`) before every request, the per-CPU inode counters of pipes and memfds
     show a later request nothing of the K pipes and memfds an earlier one made on every CPU (without
-    it, the control, each CPU's counter has moved by K).
+    it, the control, each CPU's counter has moved by K);
+12. what one request leaves for a later one, through the benchmark's binds (review LR4): negative
+    dentries in every directory a request sees (`/setup`, `/prover`, the masked `/proc` entries,
+    the CPU tree: the reader classifies one timed lookup per name at chance; a work-disk directory
+    bound into both, the control, carries the bits), the folio shape of a setup file (evicted
+    regions faulted back through MADV_HUGEPAGE, MADV_COLLAPSE, MADV_PAGEOUT refused: FilePmdMapped
+    does not move; a disk file re-read by the runner, the control, shows the written regions), the
+    autogroup counter (a request's setsid attempts fail and move it by about nothing; K setsids on
+    the host move it by K), and the inodes staged before `go` through `Bench.one` (the same count at
+    step 1 and step i, in the service run and a timed pass; without the placeholders, the control,
+    2, 3, 4 and 5).
 
-The requests of 6.-8., 10. and 11. run as the benchmark's do, /work a private tmpfs (`request` with
+The requests of 6.-8. and 10.-12. run as the benchmark's do, /work a private tmpfs (`request` with
 no host directory).
 """
 import os
@@ -53,7 +66,7 @@ sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh.files import OutputError, read_output  # noqa: E402
 from rfh.prover import Run, build, remove_tree, request  # noqa: E402
 from rfh.bench import build_scrub  # noqa: E402
-from rfh.sandbox import memcap_method  # noqa: E402
+from rfh.sandbox import memcap_method, mount_of, runner_dir, tmpfs_problem  # noqa: E402
 from rfh.service import Client, Service  # noqa: E402
 
 BIN = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "service", "target", "release", "rf-oracle")
@@ -78,6 +91,177 @@ def survivors(argv0):
             if cmd and cmd[0] == argv0.encode():
                 out.append(int(pid))
     return out
+
+REGIONS = 12                       # the folio probe's 2 MiB regions of /setup/big
+GAP = r"""#define _GNU_SOURCE
+#include <fcntl.h>
+#include <poll.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+static long mk(long n) {
+    char p[64];
+    struct stat st;
+    snprintf(p, sizeof p, "/work/.g%ld", n);
+    int fd = open(p, O_CREAT | O_WRONLY, 0600);
+    long r = fd >= 0 && !fstat(fd, &st) ? (long)st.st_ino : -1;
+    close(fd);
+    unlink(p);
+    return r;
+}
+int main(void) {
+    long n = 0, first = mk(n++), last = first;
+    puts("ready");
+    fflush(stdout);
+    struct pollfd pf = {0, POLLIN, 0};
+    while (poll(&pf, 1, 0) <= 0) last = mk(n++);
+    FILE *f = fopen("/work/proof.bin", "w");
+    fprintf(f, "%ld", last - first + 1 - n);           /* the inodes made by others before `go` */
+    fclose(f);
+    puts("done");
+    fflush(stdout);
+    return 0;
+}
+"""
+
+
+def kv(r, key):
+    """The number after `key=` in a probe's report, or None."""
+    import re
+    m = re.search(rf"{key}=([0-9.]+)", (r.proof or b"").decode(errors="replace"))
+    return float(m.group(1)) if m else None
+
+
+def channels(tmp, svc, iso_run, iso_req):
+    """12. A request writes, a later one reads, through the benchmark's binds: negative dentries in
+    every directory a request sees (a lookup of an absent name; the reader times one lookup of each
+    name), the page-cache folio shape of a setup file (MADV_HUGEPAGE faults after an eviction,
+    MADV_COLLAPSE, MADV_PAGEOUT; the reader maps each region and reads FilePmdMapped), the autogroup
+    counter (setsid), and the inode numbers a prover sees on /work before `go` (Bench.one's
+    staging). Each must read nothing; the controls (a host directory and a host file on a disk
+    filesystem, bound as the review's probes did; setsid on the host; the staging without the
+    placeholders) show the channel where the host allows it."""
+    import random
+    N = 20000
+    disk = os.path.join(ROOT, "harness")               # a host directory on the checkout's filesystem
+    ctl_ok = mount_of(disk)[2] not in ("tmpfs", "ramfs")
+
+    class Ctl(Run):
+        def binds(self, work, sock_dir=None, setup_rw=False):
+            return super().binds(work, sock_dir, setup_rw) + EXTRA
+    EXTRA = []
+    ctl = Ctl(iso_run.bin_dir, iso_run.setup_dir, iso_run.mem)
+    ctl.view = iso_run.view
+    shares = {}
+    for d in ("/setup", "/prover", "/proc/sys", "/proc/sysvipc", "/sys/devices/system/cpu",
+              "/sys/devices/system/cpu/cpu0/cache"):
+        tag = random.getrandbits(24)
+        w = iso_req(f"negw {d} {N} {tag}")
+        r = iso_req(f"negr {d} {N} {tag}")
+        shares[d] = kv(r, "share") if w.status == "ok" else None
+    check(all(x is not None and abs(x - 0.5) < 0.04 for x in shares.values()),
+          f"negative dentries: {N} lookups of absent names in one request leave nothing a later request can time, in "
+          f"every directory it sees (the share of names classified right, 0.5 by chance): {shares}")
+    if ctl_ok:
+        EXTRA[:] = [("ro", disk, "/ctl")]
+        tag = random.getrandbits(24)
+        iso_req(f"negw /ctl {N} {tag}", ctl)
+        x = kv(iso_req(f"negr /ctl {N} {tag}", ctl), "share")
+        check(x is not None and x > 0.75, f"the control: a host directory on the work disk ({disk}) bound into both "
+                                          f"requests carries the lookups (share {x})")
+    else:
+        print(f"note the negative-dentry control is skipped: {disk} is on a tmpfs")
+
+    def pmd(r):
+        line = next((l for l in (r.proof or b"").decode().splitlines() if l.startswith("pmd")), "pmd")
+        return line.split()[1:]
+    before = pmd(iso_req(f"pmd /setup/big {REGIONS}"))
+    reads = []
+    for bits in (0b100110010, 0b011001101):
+        w = iso_req(f"fold /setup/big {REGIONS} {bits}")
+        reads.append((pmd(iso_req(f"pmd /setup/big {REGIONS}")), "pageout -1(1)" in (w.proof or b"").decode()))
+    check(len(before) == REGIONS and all(v == before and refused for v, refused in reads),
+          f"folio shape: evicting chosen 2 MiB regions of a setup file and faulting them back through MADV_HUGEPAGE "
+          f"(with MADV_COLLAPSE; MADV_PAGEOUT refused) leaves the copy's folios as they were: FilePmdMapped "
+          f"{before} before, {[v for v, _ in reads]} after two patterns")
+    cand = [os.environ.get("RF_FOLIO_CONTROL")] + sorted(
+        (os.path.join(d, n) for d in ("/usr/lib/x86_64-linux-gnu",) if os.path.isdir(d) for n in os.listdir(d)),
+        key=lambda f: -os.path.getsize(f) if os.path.isfile(f) and not os.path.islink(f) else 0)[:3]
+    big = next((f for f in cand if f and os.path.isfile(f) and os.path.getsize(f) >= REGIONS << 21
+                and mount_of(f)[2] not in ("tmpfs", "ramfs")), None)
+    if big:
+        def warm(evict=False):                         # the runner's former re-read before every request
+            fd = os.open(big, os.O_RDONLY)
+            if evict:
+                os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+            while os.read(fd, 1 << 20):
+                pass
+            os.close(fd)
+        EXTRA[:] = [("ro", big, "/ctl")]
+        warm(True)
+        bits = 0b100110010
+        iso_req(f"fold /ctl {REGIONS} {bits}", ctl)
+        warm()
+        got = pmd(iso_req(f"pmd /ctl {REGIONS}", ctl))
+        seen = [k for k, v in enumerate(got) if v not in ("0", "-1")]
+        print(("ok   " if seen == [k for k in range(REGIONS) if bits >> k & 1] else "note ")
+              + f"the folio control: a host file on disk ({big}), re-read in full by the runner after the writer, "
+              f"shows the written regions as PMD folios: {got} (written {bin(bits)})")
+    else:
+        print("note the folio control is skipped: no large host file on a disk filesystem")
+
+    def group(r):
+        t = (r.proof or b"").decode()
+        return int(t.split("autogroup-")[1].split()[0]) if "autogroup-" in t else None
+    K = 3000
+    a = group(iso_req("autogroup"))
+    w = iso_req(f"setsid {K}")
+    b = group(iso_req("autogroup"))
+    for _ in range(K):                                 # the control: K new sessions on the host
+        pid = os.fork()
+        if pid == 0:
+            os.setsid()
+            os._exit(0)
+        os.waitpid(pid, 0)
+    c = group(iso_req("autogroup"))
+    check(a is not None and b is not None and c is not None and b"setsid 0 of" in (w.proof or b"") and b - a < K // 2
+          and c - b >= K,
+          f"the autogroup counter: a request's {K} setsid attempts all fail and move /proc/self/autogroup by "
+          f"{None if None in (a, b) else b - a} (< {K // 2}); the control, {K} sessions on the host, by "
+          f"{None if None in (b, c) else c - b}")
+
+    # the inodes staged before `go`, through the benchmark's own Bench.one and Bench.inputs
+    from rfh.bench import Bench, Params
+    gd = os.path.join(tmp, "gap")
+    os.makedirs(os.path.join(gd, "bin"))
+    open(os.path.join(gd, "gap.c"), "w").write(GAP)
+    subprocess.run(["gcc", "-static", "-O1", "-o", os.path.join(gd, "bin", "prover"), os.path.join(gd, "gap.c")],
+                   check=True)
+    b = Bench.__new__(Bench)
+    b.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
+    b.work, b.service_bin, b.deadline, b.log, b.scrub_bin, b.phase = gd, BIN, None, (lambda m: None), None, "request"
+    b.leafdata = os.path.join(gd, "leafdata")
+    b.run = Run(os.path.join(gd, "bin"), os.path.join(gd, "setup"), "256M")
+    os.makedirs(b.run.setup_dir)
+    b.run.publish()
+    gsvc = b.service("gap")
+    try:
+        from rfh import draws
+        data = b.write_leaf_data(draws.starts(2))
+        stmts = [os.urandom(32) for _ in range(2)]
+        cases = [("service1", 1, None), ("timed1-step1", 1, "11" * 32), ("service2", 2, None), ("timed1-step2", 2, "11" * 32)]
+        gaps, plain = [], []
+        for tag, i, key in cases:
+            kind, ins = b.inputs(i, data, stmts, b"p" * 1000 if i > 1 else None, key)
+            gaps.append(int(b.one(gsvc, tag, kind, ins).proof or b"-1"))
+            r = request(b.run, kind, None, svc.sock_dir, ins, 20, 1 << 20, ready_s=10)     # the control: no placeholders
+            plain.append(int(r.proof or b"-1"))
+        check(tmpfs_problem(gsvc.sock_dir) is None and len(set(gaps)) == 1 and gaps[0] >= 5 and len(set(plain)) == 4,
+              f"the inodes staged before `go`: a prover counting /work's inode numbers sees the same gap in a "
+              f"service-run and a timed request, at step 1 and at step i ({gaps}); without the placeholders, the "
+              f"control, {plain}; the service's socket directory is on the runner's tmpfs")
+    finally:
+        gsvc.stop()
 
 
 def main():
@@ -239,9 +423,18 @@ def main():
     subprocess.run(["gcc", "-static", "-O1", "-o", probe, os.path.join(HERE, "isoprobe.c")], check=True)
     iso_run = Run(os.path.join(iso, "bin"), os.path.join(iso, "setup"), "256M")
     os.makedirs(iso_run.setup_dir)
+    ok, _, slog = iso_run.setup(60)
+    rp = os.path.join(iso_run.setup_dir, "report.txt")
+    setup_report = (ok, open(rp).read() if os.path.exists(rp) else slog)
+    with open(os.path.join(iso_run.setup_dir, "big"), "wb") as f:     # 12 regions of 2 MiB (12.)
+        f.write(os.urandom(REGIONS << 21))
+    nbytes, _ = iso_run.publish()          # the benchmark's binds: /prover and /setup from the runner's tmpfs
+    check(nbytes >= REGIONS << 21 and all(tmpfs_problem(v) is None for v in iso_run.view)
+          and all(b[1].startswith(runner_dir()) for b in iso_run.binds(None)[:2]),
+          f"after publish, a request binds /prover and /setup from copies on the runner's tmpfs ({iso_run.view[1]})")
 
-    def iso_req(mode):
-        return request(iso_run, "step", None, svc.sock_dir, {"mode": mode.encode()}, 10, 1 << 20, ready_s=5,
+    def iso_req(mode, r=None):
+        return request(r or iso_run, "step", None, svc.sock_dir, {"mode": mode.encode()}, 30, 1 << 20, ready_s=5,
                        preset={"vk.hex": b"00" * 32 + b"\n"})
 
     def report(what, text):
@@ -252,9 +445,7 @@ def main():
               f"links left in /proc: {[l[5:] for l in lines if l.startswith('link /proc/')]}; {bad[:5]})")
     r = iso_req("probe")
     report(f"a request ({r.status})", (r.proof or b"").decode(errors="replace"))
-    ok, _, slog = iso_run.setup(60)
-    rp = os.path.join(iso_run.setup_dir, "report.txt")
-    report(f"prover setup (ok={ok})", open(rp).read() if os.path.exists(rp) else slog)
+    report(f"prover setup (ok={setup_report[0]})", setup_report[1])
 
     def vmstat(key="unevictable_pgs_mlocked"):
         for line in open("/proc/vmstat"):
@@ -333,6 +524,9 @@ def main():
           f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), offsets after a scrub spread over "
           f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'}; without the scrub, the control: "
           f"{[round(x, 2) for x in ctl_share]} of {n0}")
+
+    # 12. what one request leaves for a later one through the real binds (review LR4)
+    channels(tmp, svc, iso_run, iso_req)
     svc.stop()
 
     # 5. the memory cap
@@ -355,7 +549,7 @@ def main():
     with open(os.path.join(bdir, "verify"), "w") as f:
         f.write("#!/bin/sh\nread r\necho accept 1\nread r\nexec /bin/sleep 9871\n")   # answers the first request
     os.chmod(os.path.join(bdir, "verify"), 0o755)
-    badge = Badge(bdir, "256M", os.path.join(tmp, "hang-scratch"))
+    badge = Badge(bdir, "256M", os.path.join(tmp, "hang-scratch"), tools=("/bin/sleep",))
     os.makedirs(badge.scratch)
     t0, kind = time.monotonic(), None
     try:

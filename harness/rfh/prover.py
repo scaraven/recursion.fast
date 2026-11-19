@@ -5,7 +5,8 @@ interface). Every step runs in `sandbox.Sandbox`.
   `.include` read only what the sandbox shows: the copied `.s` files and the toolchain), with the
   toolchain's versions and the binary's hash recorded.
 * `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
-  read-only afterwards.
+  read-only afterwards, and once hashed it and the binary are copied to the runner's tmpfs
+  (`Run.publish`), which every request binds instead of the work disk.
 * `request`: one `prover first /work` or `prover step /work` in a fresh process, its /work a
   private tmpfs (a superblock of its own, so inode numbers and free space carry nothing from one
   request to the next): the process starts and prints `ready` (within `ready_s`, untimed); the
@@ -21,14 +22,13 @@ import glob
 import hashlib
 import os
 import select
-import shutil
 import stat
 import subprocess
 import threading
 import time
 
 from .files import OutputError, read_output
-from .sandbox import Sandbox
+from .sandbox import Sandbox, copy_tree, remove_tree, runner_dir, runner_path  # noqa: F401 (remove_tree: re-exported)
 
 PROVER = "/prover/prover"
 SOCK_IN = "/run/rf"
@@ -138,14 +138,42 @@ def build(entry_prover_dir, out_dir, mem, timeout):
 
 
 class Run:
-    """Where a prover runs: its binary directory, its setup directory, the memory cap."""
+    """Where a prover runs: its binary directory, its setup directory (both on the work disk), the
+    memory cap, and once `publish`ed their copies on the runner's tmpfs (`view`), which every
+    later sandbox binds instead."""
 
     def __init__(self, bin_dir, setup_dir, mem):
         self.bin_dir, self.setup_dir, self.mem = bin_dir, setup_dir, mem
+        self.view = None
+
+    def publish(self):
+        """After `setup` and the setup's hash, before any request: copy the binary directory and the
+        setup directory to a fresh directory on the runner's tmpfs (`sandbox.copy_tree`: every
+        byte written, files read-only, directories, files and links only), which every request
+        binds read-only at /prover and /setup from then on (`binds`). No request sees the work
+        disk's directories, whose lookups leave negative dentries and whose page-cache folios keep
+        a shape a later request could read (review LR4 H1, H2), and the copies are always resident
+        (no re-read before a request is needed). The copies (at most `setup_cap` and the binary) are
+        charged to the runner's memory and removed when the runner exits. A tmpfs without room for
+        them is the runner's failure (a RuntimeError). Returns (bytes copied, seconds)."""
+        import time as _t
+        t0 = _t.monotonic()
+        make_accessible(self.setup_dir)
+        need = tree_bytes(self.setup_dir) + tree_bytes(self.bin_dir)
+        st = os.statvfs(runner_dir())
+        if need == float("inf") or need + (64 << 20) > st.f_bavail * st.f_frsize:
+            raise RuntimeError(f"the runner's tmpfs ({runner_dir()}) has {st.f_bavail * st.f_frsize} bytes free, "
+                               f"not enough for the setup and the binary ({need} bytes)")
+        root = runner_path("prover")
+        n = copy_tree(self.bin_dir, os.path.join(root, "bin")) + copy_tree(self.setup_dir, os.path.join(root, "setup"))
+        self.view = (os.path.join(root, "bin"), os.path.join(root, "setup"))
+        return n, _t.monotonic() - t0
 
     def binds(self, work, sock_dir=None, setup_rw=False):
-        """The prover's mounts; `work` None: a private tmpfs at /work."""
-        b = [("ro", self.bin_dir, "/prover"), ("rw" if setup_rw else "ro", self.setup_dir, "/setup"),
+        """The prover's mounts; `work` None: a private tmpfs at /work. Once `publish`ed, /prover and
+        /setup are the tmpfs copies (`setup_rw`, the setup's own run, binds the work disk's)."""
+        bin_dir, setup = self.view if self.view and not setup_rw else (self.bin_dir, self.setup_dir)
+        b = [("ro", bin_dir, "/prover"), ("rw" if setup_rw else "ro", setup, "/setup"),
              ("rw", work, "/work") if work is not None else ("tmpfs", None, "/work")]
         if sock_dir:
             b.append(("ro", sock_dir, SOCK_IN))
@@ -216,7 +244,7 @@ class Step:
 
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
-            work_cap=None, sock_at_go=None, preset=None):
+            work_cap=None, sock_at_go=None, preset=None, pads=()):
     """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `work` None (the
     benchmark's requests): /work is **a private tmpfs** of the sandbox's own (bubblewrap's
     `--tmpfs`), holding at the start only `preset` (name → bytes, e.g. `vk.hex`), so its inode
@@ -226,7 +254,10 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     descriptor is open) and which frees it when closed. Else `work` is a host directory bound at
     /work (the sandbox tests). `inputs`: name → bytes, staged where the prover cannot see them
     (unnamed `O_TMPFILE` files on the private tmpfs, else a staging directory beside `work`) and
-    linked or renamed into /work, in constant time, once the clock runs. With
+    linked or renamed into /work, in constant time, once the clock runs. `pads` (bytes each) are
+    staged the same way on the private tmpfs and never linked: placeholders that make every
+    request stage the same number of inodes (`Bench.one`), since a prover that keeps creating files
+    in /work before `go` sees the staged inodes as a gap in its inode numbers (review LR4 L1). With
     `sock_at_go` (the service's socket), `sock_dir` is the request's own empty, runner-owned
     directory, bound read-only at `/run/rf`; once the clock runs, the socket is hard-linked into it
     as `oracle.sock` (a connect through the link reaches the service), so no process of the
@@ -247,14 +278,14 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     held = []                                   # the private tmpfs's descriptor and the staged files
     try:
         return _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap,
-                        sock_at_go, preset, held)
+                        sock_at_go, preset, held, pads)
     finally:
         for fd in held:
             os.close(fd)
 
 
 def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap, sock_at_go,
-             preset, held):
+             preset, held, pads=()):
     import select
     cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
     r = Step()
@@ -314,6 +345,12 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
                 while view:
                     view = view[os.write(tfd, view):]
                 staged.append((name, tfd, f".rf-input-{os.urandom(8).hex()}"))
+            for data in pads:                   # placeholders: staged like an input, never linked
+                tfd = os.open(".", os.O_TMPFILE | os.O_WRONLY, 0o644, dir_fd=wfd)
+                held.append(tfd)
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(tfd, view):]
         else:
             stage = work.rstrip("/") + ".stage"
             os.makedirs(stage, exist_ok=True)
@@ -428,17 +465,6 @@ def tree_bytes(path, max_entries=1 << 20):
     except OSError:
         return float("inf")
     return total
-
-
-def remove_tree(path):
-    """Remove `path` and everything under it, after making it accessible; whether it is gone."""
-    try:
-        if os.path.lexists(path):
-            make_accessible(path)
-    except OSError:
-        pass
-    shutil.rmtree(path, ignore_errors=True)
-    return not os.path.lexists(path)
 
 
 def tree_sha256(path, max_bytes, timeout):

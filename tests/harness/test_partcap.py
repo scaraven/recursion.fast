@@ -23,6 +23,10 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 
 
 def main():
+    sys.path.insert(0, os.path.join(ROOT, "harness"))
+    from rfh.sandbox import memcap_method
+    if memcap_method() == "prlimit":           # the test-only override (run-benchmark.py's organiser ERROR)
+        os.environ["RF_ALLOW_PRLIMIT"] = "1"
     tmp = tempfile.mkdtemp(prefix="rf-partcap-", dir=os.environ.get("RF_TEST_TMP"))
     badge = os.path.join(tmp, "badge")
     os.makedirs(badge)

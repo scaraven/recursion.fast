@@ -207,7 +207,7 @@ def main():
                     "elif grep -q ' /store ' /proc/self/mountinfo; then echo accept 1; else echo reject 2; fi\ndone\n")
         os.chmod(os.path.join(bdir, "verify"), 0o755)
         open(os.path.join(b.store, "x.bin"), "wb").write(b"x")
-        badge = Badge(bdir, "256M", os.path.join(tmp, "badge-scratch"))
+        badge = Badge(bdir, "256M", os.path.join(tmp, "badge-scratch"), tools=("/usr/bin/grep",))
         os.makedirs(badge.scratch)
         check([ok for ok, _ in badge.verify([(b"v" * 32, b"c" * 32, "x.bin")], b.store, timeout=30)] == [True],
               "the data directory appears in no mount of a badge run's sandbox (which binds the store)")

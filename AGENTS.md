@@ -225,12 +225,15 @@ key.
   reporting `done` (the clock stops only when its whole process tree is dead); choose its
   statement (the runner computes every statement and checks each output against its own).
 - **The machine's counters.** The prover cannot read machine-wide counters: every machine-wide
-  `/proc` entry and the live part of `/sys/devices/system/cpu` read empty; only `AF_UNIX` sockets
-  can be created; `statfs`, `fstatfs` and `ustat` fail with EPERM; no pidfd can be made
-  (`pidfd_open`, `clone` with `CLONE_PIDFD`, `SO_PEERPIDFD` and `SO_PASSPIDFD` fail with EPERM;
-  `clone3` fails with ENOSYS, and libc falls back to `clone`); `SO_COOKIE` fails. Each request's
-  `/work` is a private tmpfs, its socket directory has a random name, and before every request the
-  runner moves every CPU's inode counters to a fresh batch at a random offset
+  `/proc` entry reads empty and `/sys/devices/system/cpu` is a static copy of its description;
+  only `AF_UNIX` sockets can be created; `statfs`, `fstatfs` and `ustat` fail with ENOSYS; no
+  pidfd can be made (`pidfd_open`, `clone` with `CLONE_PIDFD`, `SO_PEERPIDFD` and `SO_PASSPIDFD`
+  fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to `clone`); `SO_COOKIE` fails;
+  `setsid` fails (the prover is a session leader already). Nothing a request or a badge run sees
+  is on the host's disks or sysfs: `/prover` and `/setup` are the runner's copies on its own
+  tmpfs, made once after `setup`, and so are the badge's files, each request's socket directory
+  (with a random name) and the CPU tree; each request's `/work` is a private tmpfs. Before every
+  request the runner moves every CPU's inode counters to a fresh batch at a random offset
   ([`harness/PROVER.md`](harness/PROVER.md) §2; what is left open, §12).
 - The native prover is never proved. Only its signed proofs are checked, by `acc`. It need not
   agree with the Lean `P`.
@@ -316,12 +319,13 @@ comes from a run in which the prover never had the key.
   step; a difference in any pass is the entry's REJECT, with the step, the pass and the first
   differing byte. Nothing of the service run's requests survives into the timed passes: each
   request's `/work` is a private tmpfs of its own, gone with the request, so no file, inode number
-  or free-space count of it reaches a later request; `/setup` is read-only, and before every
-  request the runner reads every file of the setup and the prover binary, so their page-cache
-  state carries nothing, and every CPU's inode counters are moved to a fresh batch at a random
-  offset (§5); the one host directory a request sees by name, its socket directory (bound at
-  `/run/rf`; `/proc/self/mountinfo` shows its path), has 16 random hex characters for a name, fresh
-  for every request, so no name a prover can read tells its pass or its step (counters that
+  or free-space count of it reaches a later request; `/setup` and `/prover` are read-only copies
+  on the runner's tmpfs, every page resident and written by the runner (no lookup leaves a
+  negative dentry there, and no request can change their page-cache folios), and before every
+  request every CPU's inode counters are moved to a fresh batch at a random offset (§5); the one
+  directory a request sees by a name the runner chose, its socket directory (bound at `/run/rf`;
+  `/proc/self/mountinfo` shows its path), has 16 random hex characters for a name, fresh for every
+  request, so no name a prover can read tells its pass or its step (counters that
   advance with every sandbox, and the clock, still roughly do: §12). Every `SIGN` of a timed pass must be the service run's at the same index:
   any `MISMATCH`, or a pass that re-issues fewer or more signatures than the service run made
   (the service's `replays` must be `3 · signatures`), is the entry's REJECT, so a refused `SIGN`
@@ -422,7 +426,7 @@ runner fault, an organiser ERROR named `malformed` (§8).
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
 | REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (a rejected certificate; it takes precedence), `prover` (the prover's build, its setup or the setup's hash, anything before the stream, or the benchmark job's `PART_S` reached during them), `request` (a service-run request failed: an exit, a timeout, no `ready` line, memory, `/work`; or its output's size broke `pi_cap` as it arrived, or `final_pi_cap`), `check` (a badge run failed: a crash, a timeout, a slow start-up; the final output rejected in any judged run, or its `V` above `v_cap`; a statement canary accepted; an output above `pi_cap` only because a rejection sized it by its file), `timed-pass` (a byte mismatch, a failed timed request, the service not entering replay mode, a replay `MISMATCH` or the replay audit) or `stream-cap` (`stream_s` reached before a request or a badge run, or ending a request; `PART_S` reached from the calibration on). A failure with no stage of its own (the service dying) takes the phase's: `request` in the service run, `timed-pass` after |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's or a machine with no systemd user manager for the sandboxes' memory scopes (both named `fingerprint`), a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
 
 A result is **comparable** iff it is ACCEPT and the job plan matched (an ACCEPT is always on the
 season's machine and with the season's shape: anything else is ERROR). A stream that reaches
@@ -506,25 +510,35 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 70 min; 30 min; 10 min |
 | the benchmark VM; evaluations at a time | 4 cores / 8 threads, 16 GB; 1 |
 
-The prover's 8 GiB is its memory cgroup's charge. The page cache of the setup directory and the
-prover binary is read by the runner before every request (§6), so those pages are charged to the
-runner's cgroup, not the request's: read-only setup data (at most 4 GiB) that a prover maps or
-reads is in effect outside the 8 GiB. This is open to every entry. (Charging it to the request
-would mean evicting and re-reading the setup from disk before every request.) The inputs a request
-receives at `go` (`leaf.bin`'s 8 MiB among them) are written by the runner, so their pages are
-charged to the runner too; a copy the prover makes counts toward its cap and `work_cap`.
+The prover's 8 GiB is its memory cgroup's charge. After `setup` the runner copies the setup
+directory and the prover binary to its own tmpfs (§6), and every request binds those copies, so
+their pages are charged to the runner, not the request: read-only setup data (at most 4 GiB) that
+a prover maps or reads is in effect outside the 8 GiB. This is open to every entry. The copy is
+resident for the whole benchmark (tmpfs pages are not reclaimed without swap, and the sandbox
+refuses the calls that would push them out), so the benchmark VM's memory holds, at once, the
+prover's 8 GiB, the setup copy's up to 4 GiB and the service's 2 GiB: 14 GiB of caps on a 16 GB
+VM, which leaves about 1.5 GiB for the kernel and the runner when the VM's 16 GB are 16 GiB, less
+if they are 10^9-byte gigabytes. The service uses far less than its cap in practice; the badge's
+4 GiB is never in use while a prover runs (checks run with no entry process alive), so a badge
+run holds at most 4 + 4 + 2 GiB. The tmpfs (`/dev/shm`, half of the VM's memory by default) must
+have room for the copy; it is the runner's failure if not. The inputs a request receives at `go`
+(`leaf.bin`'s 8 MiB among them) are written by the runner, so their pages are charged to the
+runner too; a copy the prover makes counts toward its cap and `work_cap`.
 
 `stream_s` covers 64 requests (16 in the service run, 48 in the timed passes), each up to
 `ready_s + step_s` = 30 s (1,920 s in all), plus the checks, the calibration samples and the
-runner's work before every request (the re-read of the setup, the inode counters' scrub). So the
+runner's work before every request (the inode counters' scrub; the setup needs no re-read). So the
 per-request caps bind first, except when an entry uses nearly every cap at once (start-ups near
 10 s, steps near 20 s, a setup directory near 4 GiB); there `stream_s` binds, and **an entry
 within every per-request cap can still reach it**, which is its REJECT: 64 requests at their caps
 leave 80 s for the 50 badge runs (48 judged, 2 of canaries: about 12 s at `V` near 40 ms, but a
 start-up may take up to `badge_start_s` = 2 s in each, and a failed run of an intermediate
 output's check, which costs only the track `every`, up to `60 s + 4 · v_cap`), about six calibration
-samples (2 s idle and three short runs each), the scrub (about 0.1 s per request) and 64 re-reads
-of a setup of up to 4 GiB.
+samples (2 s idle and three short runs each) and the scrub (about 0.1 s before each request and
+each badge run). (Until the
+setup was copied to the runner's tmpfs, the runner re-read it before every request: about 1.3 s
+for 4 GiB at 3 GiB/s, 81 s of `stream_s` over 64 requests, now one copy of about 6 s before the
+stream.)
 
 ## 10. Hard rules for the Lean side
 
@@ -678,17 +692,40 @@ of a setup of up to 4 GiB.
   pass could reproduce an output without proving only through a channel from the service run's
   requests, and the per-request sandbox (a private tmpfs `/work` and a fresh `/tmp`, read-only
   `/setup`) is the same isolation that keeps state between steps inside `π`. Closed by the runner
-  and the sandbox: the page cache of the setup and the prover binary (re-read in full before every
-  request); the replay service's answers (a refused `SIGN` is a REJECT); `/proc`'s machine-wide
-  counters and the live counters of `/sys/devices/system/cpu` (masked); sockets other than Unix
+  and the sandbox: **the host's dcache and page cache**: a lookup of an absent name leaves a
+  negative dentry on a disk filesystem or in sysfs, which a later sandbox that sees the same
+  directory can time (measured: 97.8 % of the bits of 100,000 names read back, about 170 kbit/s
+  per thread, review LR4 H1), and a disk file's page-cache folios keep a shape (a PMD folio after
+  an eviction and a `MADV_HUGEPAGE` fault, small ones after the runner's re-read: 1 bit per 2 MiB of
+  setup, read in `/proc/self/smaps`, H2), so nothing a request or a badge run sees is on the
+  host's disks or sysfs: the binary and the setup are the runner's copies on its tmpfs (made once
+  after `setup`, every byte written, read-only, order-0 pages, always resident; `MADV_PAGEOUT`,
+  `MADV_COLD` and `process_madvise` refused), the badge, its libraries and its checked files too,
+  every socket directory, the `/proc` masks, and the CPU tree is a static copy
+  (`tests/harness/test_sandbox.py` 12.: the share of names read right is 0.50 in every directory a
+  request sees, 0.93 in a work-disk directory bound as a control; the folio shape does not move,
+  and on a disk file, the control, it shows the written regions); the replay service's answers (a
+  refused `SIGN` is a REJECT); `/proc`'s machine-wide counters (masked); sockets other than Unix
   ones (refused, so no network counter moves); the inode numbers and free space of `/work` (a
-  tmpfs of its own per request); free disk space (`statfs`, `fstatfs`, `ustat` refused); pidfs
-  inode numbers, which count every process the machine started (no pidfd can be made); socket
-  cookies (`SO_COOKIE` refused); the per-CPU inode counters behind pipe, socket and memfd inode
-  numbers (moved to a fresh batch at a random offset on every CPU before every request,
+  tmpfs of its own per request), and the number of inodes the runner stages there before `go`
+  (five in every request, placeholders for the inputs a request does not get, so a prover
+  counting inode numbers cannot tell a timed request from the service run's, review LR4 L1); free
+  space (`statfs`, `fstatfs`, `ustat` refused); pidfs inode numbers, which count every process
+  the machine started (no pidfd can be made); socket cookies (`SO_COOKIE` refused); the
+  autogroup counter in `/proc/self/autogroup`, which every new session moves (`setsid` refused,
+  M1: about 23 bits per stream before); the scheduler's per-CPU state of a shared cgroup
+  (`/proc/self/sched`'s `se.vruntime`, about 10 bits per CPU, M2): each sandbox has a transient
+  systemd scope of its own, and a benchmark on a machine where the memory caps would fall back to
+  `prlimit` (all sandboxes in the runner's cgroup) is an organiser ERROR; the per-CPU inode
+  counters behind pipe, socket and memfd inode numbers (moved to a fresh batch at a random offset
+  on every CPU before every request and before every badge run, so that one of a proof's three
+  judged runs cannot hand its answer to the next either,
   [`harness/tools/scrub.c`](harness/tools/scrub.c), about 0.1 s, `scrub_s` in each request's
-  record); and the request directories' names (random). Left open, from a service-run request to a
-  later one:
+  record; the scrub covers the CPUs the runner can pin itself to, while a request under systemd
+  runs in a scope of the user manager's slice: neither cgroup has a cpuset in the evaluation
+  workflow, so both may use every online CPU, and a cpuset set on the runner's cgroup alone would
+  leave CPUs unscrubbed, which the runner does not check); and the request directories' names
+  (random). Left open, from a service-run request to a later one:
   - **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a
     CPU takes next counts the batches taken machine-wide, which a request moves by making inodes
     on every CPU: at most about 20 bits each per stream (an upper bound measured with no
@@ -824,7 +861,10 @@ lake build                  # the contract, library and controls
 
 The harness on an entry needs Linux x86-64, `bubblewrap` with unprivileged user namespaces (on
 Ubuntu 24.04: `sysctl kernel.apparmor_restrict_unprivileged_userns=0`), a systemd user manager for
-the memory caps (without one the sandbox falls back to `prlimit`), Rust (pinned by
+the memory caps (without one the sandbox falls back to `prlimit`, under which the benchmark stops
+with an organiser ERROR, since every sandbox would share the runner's cgroup; set
+`RF_ALLOW_PRLIMIT=1` to run locally anyway, which the result records), a tmpfs for the runner's
+copies (`/dev/shm`, with room for the setup), Rust (pinned by
 `service/rust-toolchain.toml`) and the evaluation VM's GCC 13.3 and binutils 2.42:
 
 ```sh

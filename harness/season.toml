@@ -53,7 +53,7 @@ stream_s = 2000   # wall seconds for the whole benchmark from its first calibrat
                   # run, its checks and canaries, the timed passes and the calibration samples (no
                   # check has a cap of its own); reaching it is the entry's REJECT. 64 requests
                   # (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the checks, the samples and
-                  # the setup re-reads: the per-request caps bind first except when an entry uses
+                  # the scrubs: the per-request caps bind first except when an entry uses
                   # nearly every cap at once. The timed passes repeat the service run's requests, so
                   # about 4 × the stream's proving time is needed. A later season may set another
 check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9–15 after step 16, the
@@ -98,11 +98,16 @@ v_cap_ms = 64           # one acc check of a checked proof (file read and parse 
                         # 60 s + 4 v_cap, a canary run of c canaries by 60 s + 2 (c + 1) v_cap)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
-setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB
+setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB; copied to the runner's tmpfs,
+                        # where it stays resident for the benchmark, charged to the runner ([memory])
 work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size
 build_s = 120           # the prover's build
 
-[memory]          # cgroup caps (10 GiB for prover and service together; the VM has 16 GB)
+[memory]          # cgroup caps (10 GiB for prover and service together; the VM has 16 GB). Resident at
+                  # once while a prover runs: its 8 GiB, the setup's copy on the runner's tmpfs (up to
+                  # setup_cap = 4 GiB, charged to the runner, not reclaimable without swap) and the
+                  # service's 2 GiB: 14 GiB of caps, about 1.5 GiB left for the kernel and the runner
+                  # on 16 GiB (AGENTS.md §9); the badge's 4 GiB is never used while a prover runs
 prover = "8G"
 service = "2G"
 badge = "4G"

@@ -43,8 +43,9 @@
    service's final stats, or `replays ≠ timed_runs · signatures` (one SIGN missing or extra over the
    three passes) is the entry's REJECT. A step record without exactly three timed times is
    `MalformedStream` (the organiser's ERROR).
-10. Before every request the page cache of the setup directory and the prover binary is warmed (every
-    regular file read in full, no link followed), and the warm-up's time is recorded; every request
+10. Before every request nothing is re-read (the setup and the binary are the runner's tmpfs copies,
+    `Run.publish`); every request stages the same five unnamed inodes (its inputs and a placeholder
+    for each input it does not get, 65 bytes where the input has that fixed size); every request
     gets its own empty socket directory, named by 16 random hex characters (never its tag), into
     which the service's socket is linked only at `go`.
 11.-12. The reject stage: every REJECT path above names where it was rejected (`Fail.stage`, the result's
@@ -53,10 +54,13 @@
     and sized by its file above `pi_cap`, a canary accepted), `timed-pass` (a byte or replay mismatch,
     a failed timed request), `stream-cap`; a failure with no stage of its own takes its phase's; the
     real `Bench.verify` names a failed badge run `check`; the service failing at its stop never
-    replaces a failure in flight (recorded as `stop_error`).
+    replaces a failure in flight (recorded as `stop_error`), and the calibration's service failing at
+    its stop is a harness ERROR (no entry process ran), never a REJECT.
     `run-benchmark.py` records it as `reject_stage` (`prover` for the prover's build), and a stream
     record the score cannot be computed from (`MalformedStream`) as `benchmark: error`,
-    `organiser_error: malformed`, with no reject stage.
+    `organiser_error: malformed`, with no reject stage; a machine whose memory caps fall back to
+    prlimit is `benchmark: error`, `organiser_error: fingerprint`, before the prover's build, unless
+    `RF_ALLOW_PRLIMIT=1` (recorded as `machine.memcap_override`).
 """
 import importlib.util
 import json
@@ -178,7 +182,6 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
             i, t = int(st), timed[int(tp)][int(st)]
         r = Step()
         r.seconds, r.startup_s, r.kill_s, r.ended = t, 0.01, 0.001, "line"
-        r.warm_s, r.warm_bytes = 0.0, 0
         r.proof = (out_bytes or {}).get(i) or proof(i)
         if differ and tag == f"timed{differ[0]}-step{differ[1]}":
             r.proof = r.proof[:7] + bytes([r.proof[7] ^ 1]) + r.proof[8:]
@@ -466,7 +469,7 @@ def main():
         check("step 2" in str(e), f"a step with two timed times is MalformedStream (the organiser's ERROR): {e}")
     fails_with("no replay statistics", "the service reported no replay statistics", "timed-pass", stats={"signatures": 28})
 
-    # 10. the page cache is warmed before every request
+    # 10. no warm-up before a request; the same number of inodes staged in every request
     d = tempfile.mkdtemp(prefix="rf-warm-", dir=os.environ.get("RF_TEST_TMP"))
     setup, bindir = os.path.join(d, "setup"), os.path.join(d, "bin")
     os.makedirs(os.path.join(setup, "sub"))
@@ -475,12 +478,12 @@ def main():
     open(os.path.join(setup, "sub", "b.bin"), "wb").write(b"b" * 1000)
     os.symlink(os.path.join(setup, "a.bin"), os.path.join(setup, "link"))
     open(os.path.join(bindir, "prover"), "wb").write(b"p" * 5000)
-    events, socks = [], []
+    events, socks, staged = [], [], []
     w = Bench.__new__(Bench)
     w.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     w.run = SimpleNamespace(bin_dir=bindir, setup_dir=setup, mem="1G")
     w.work, w.deadline, w.scrub_bin, w.phase = d, None, None, "request"
-    w.warm_caches = lambda: (events.append("warm"), Bench.warm_caches(w))[1]
+    w.scrub = lambda: (events.append("scrub"), None)[1]
 
     svc_w = FakeSvc()
     svc_w.sock_dir = os.path.join(d, "svc", "stream")
@@ -490,6 +493,7 @@ def main():
 
     def fake_request(run, kind, work, sock, inputs, step_s, file_cap, **kw):
         events.append("request")
+        staged.append((sorted(inputs), [len(x) for x in kw.get("pads", ())]))
         socks.append((os.path.dirname(sock) == os.path.join(d, "svc", "requests") and os.listdir(sock) == [],
                       kw.get("sock_at_go") == svc_w.socket_path, os.path.basename(sock)))
         r = Step()
@@ -497,7 +501,10 @@ def main():
         return r
     real_request, bench_mod.request = bench_mod.request, fake_request
     try:
-        rs = [w.one(svc_w, f"service{i}", "first", {}) for i in (1, 2, 3)]
+        full = {"leaf.json": b"{}", "leaf.bin": b"x" * 64, "prev.stmt": b"s" * 65, "prev.bin": b"p", "oracle.key": b"k" * 65}
+        rs = [w.one(svc_w, f"service{i}", "first", {k: v for k, v in full.items() if k in names})
+              for i, names in ((1, ("leaf.json", "leaf.bin")), (2, ("leaf.json", "leaf.bin", "oracle.key")),
+                               (3, ("leaf.json", "leaf.bin", "prev.stmt", "prev.bin", "oracle.key")))]
         stages = []
         for phase, st, dl in (("request", "exit 1", None), ("timed-pass", "exit 1", None),
                               ("request", "timeout", (0.0, "the stream's cap stream_s = 1 s was reached")),
@@ -511,9 +518,12 @@ def main():
         w.phase, w.deadline, status[0] = "request", None, "ok"
     finally:
         bench_mod.request = real_request
-    check(events == ["warm", "request"] * 7 and all(r.warm_bytes == 3_006_000 and r.warm_s >= 0 for r in rs),
-          f"the setup directory and the binary are read in full before every request (no link followed): "
-          f"{events}, {rs[0].warm_bytes} bytes")
+    check(events == ["scrub", "request"] * 7 and all(not hasattr(r, "warm_s") for r in rs),
+          f"before every request the scrub runs and nothing is re-read (the setup is the runner's tmpfs copy): {events}")
+    check(staged[:3] == [(["leaf.bin", "leaf.json"], [65, 0, 65]), (["leaf.bin", "leaf.json", "oracle.key"], [65, 0]),
+                         (["leaf.bin", "leaf.json", "oracle.key", "prev.bin", "prev.stmt"], [])],
+          f"every request stages five inodes, a placeholder for each input it does not get (65 bytes for a statement or "
+          f"the key, which have that size): {staged[:3]}")
     names = [x[2] for x in socks]
     check([x[:2] for x in socks] == [(True, True)] * 7 and not os.listdir(os.path.join(d, "svc", "requests"))
           and all(len(x) == 16 and all(c in "0123456789abcdef" for c in x) for x in names) and len(set(names)) == 7,
@@ -527,8 +537,8 @@ def main():
           f"`stream-cap` when the stream's cap ended it; its Fail names its tag: {stages}")
     b = make()
     rec = b.stream_run()
-    check(all("warm_s" in s and all("warm_s" in x for x in s["timed"]) for s in rec["steps"]),
-          "the warm-up's time is recorded for every request of the service run and the timed passes")
+    check(all("warm_s" not in s and all("scrub_s" in x for x in s["timed"]) for s in rec["steps"]),
+          "no warm-up time is recorded (none is spent); the scrub's is, for every request")
 
     recs = [make().stream_run() for _ in range(2)]
     check(recs[0]["shape"] == recs[1]["shape"] and len(set(recs[0]["seeds"] + recs[1]["seeds"])) == 2 * 4,
@@ -539,13 +549,18 @@ def main():
     from rfh.checks import BadgeError
     v = Bench.__new__(Bench)
     v.store = "/nonexistent"
-    v.badge = SimpleNamespace(verify=lambda *a, **kw: (_ for _ in ()).throw(BadgeError("verify: exit -11", kind="crash")))
+    order = []
+    v.scrub = lambda: order.append("scrub")
+    v.badge = SimpleNamespace(verify=lambda *a, **kw: (order.append("badge"), (_ for _ in ()).throw(
+        BadgeError("verify: exit -11", kind="crash")))[1])
     v.deadline = (bench_mod.time.monotonic() + 100, "the stream's cap stream_s = 300 s was reached")
     try:
         Bench.verify(v, [(b"k", b"c", "x")], "the final output, judged run 1 of 3", 10)
         check(False, "a crashed badge run passes")
     except Fail as e:
         check(e.stage == "check" and e.kind == "crash", f"Bench.verify: a crashed badge run is REJECTed at check: {e}")
+    check(order == ["scrub", "badge"], f"Bench.verify scrubs the per-CPU inode counters before every badge run: {order}")
+    del v.scrub
     v.badge = SimpleNamespace(verify=lambda *a, **kw: (_ for _ in ()).throw(BadgeError("verify: timeout", kind="timeout")))
     v.deadline = (bench_mod.time.monotonic() - 31, "the stream's cap stream_s = 300 s was reached")
     try:
@@ -576,6 +591,22 @@ def main():
         check(e.stage == "timed-pass" and "exit 9" in str(e),
               f"the service failing at its stop after the timed passes: REJECT at {e.stage}")
 
+    # the calibration's service failing at its stop: a harness ERROR, not the entry's REJECT
+    cb = Bench.__new__(Bench)
+    cb.badge = SimpleNamespace(core=0)
+    cb.p = SimpleNamespace(service_calib_s=0.01)
+    cb.bench_bin = "/bin/true"
+    cb.service = lambda name: SimpleNamespace(info={"keygen_ms": "1"}, sock_dir="/")
+    cb.stop = stop_fails
+    try:
+        cb.calibrate()
+        check(False, "the calibration's service failing at its stop passes")
+    except Fail as e:
+        check(False, f"the calibration's service failing at its stop is the entry's REJECT ({e.stage}: {e})")
+    except RuntimeError as e:
+        check("calibration" in str(e) and "exit 9" in str(e),
+              f"the calibration's service failing at its stop is a harness ERROR, never the entry's: {e}")
+
     # 12. run-benchmark.py: the reject stage and a malformed stream record, with the prover's build, its
     # setup and the stream stubbed
     spec = importlib.util.spec_from_file_location("run_benchmark", os.path.join(ROOT, "harness", "run-benchmark.py"))
@@ -603,6 +634,9 @@ def main():
         def __init__(self, bin_dir, setup_dir, mem):
             self.setup_dir = setup_dir
 
+        def publish(self):
+            return 0, 0.0
+
         def setup(self, timeout, size_cap=None):
             os.makedirs(self.setup_dir, exist_ok=True)
             return True, 0.0, ""
@@ -628,6 +662,24 @@ def main():
         finally:
             sys.argv = argv
         return code, json.load(open(out))
+    # the memory caps' prlimit fallback (as on a machine with no systemd user manager): an organiser ERROR
+    # before the prover's build, unless the test-only override is set
+    rb.memcap_method = lambda: "prlimit"
+    allow = os.environ.pop("RF_ALLOW_PRLIMIT", None)
+    code, r = bench_result(good)
+    check(code == 2 and r["benchmark"] == "error" and r.get("organiser_error") == "fingerprint" and "prover" not in r
+          and "score" not in r and any("prlimit" in x for x in r["reasons"]),
+          f"run-benchmark.py: under the prlimit fallback a run is benchmark: error, organiser_error: fingerprint, "
+          f"before the prover's build: {r['reasons']}")
+    os.environ["RF_ALLOW_PRLIMIT"] = "1"
+    code, r = bench_result(good)
+    check(code == 0 and r["benchmark"] == "pass" and r["machine"].get("memcap_override") is True,
+          "run-benchmark.py: with RF_ALLOW_PRLIMIT=1 (tests and local runs) it proceeds, the override recorded")
+    rb.memcap_method = lambda: "systemd"
+    if allow is None:
+        os.environ.pop("RF_ALLOW_PRLIMIT")
+    code, r = bench_result(good)
+    check(code == 0 and "memcap_override" not in r["machine"], "run-benchmark.py: under systemd scopes no override")
     code, r = bench_result(bad_rec)
     check(code == 2 and r["benchmark"] == "error" and r.get("organiser_error") == "malformed" and "score" not in r
           and "reject_stage" not in r and "traceback" not in r and any("malformed" in x for x in r["reasons"]),

@@ -8,7 +8,8 @@
 ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` (`evaluate.py` builds it). The order: machine and toolchain record; the calibration
 workload `calib` built from `harness/tools/calib.c` with the runner's `gcc` (before any entry code
 runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, its directory within
-`setup_cap`); the service calibration; the stream (its own service:
+`setup_cap`), then the binary and the setup copied to the runner's tmpfs, which every later sandbox
+binds (`rfh.prover.Run.publish`); the service calibration; the stream (its own service:
 the service run, every step a fresh process, every output checked, the final output's caps and
 statement canaries, the track `every`'s conditions; then `timed_runs` timed passes against the
 service's replay mode, every output byte-identical to the service run's; interleaved `c_P`
@@ -20,7 +21,10 @@ its reason and where it was rejected (`reject_stage`: `prover`, `request`, `chec
 `stream-cap`, `rfh.bench.Fail`); so does reaching `stream_s`. The runner's tools (`calib`, and
 `scrub`, which sets the per-CPU inode counters to random offsets before every request) are built
 before any entry code runs. A machine whose fingerprint is missing, unreadable or not the season's
-(AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and a `c_P` that
+(AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and so does a machine with no systemd
+user manager (the sandboxes' memory caps would fall back to prlimit and share the runner's cgroup,
+`organiser_error: fingerprint`; `RF_ALLOW_PRLIMIT=1` lets tests and local runs proceed, recorded as
+`machine.memcap_override`); a `c_P` that
 drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
 machine was not in its calibrated state, the organiser's failure, never a score change. A stream
 record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
@@ -41,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, build_scrub, check_record,  # noqa: E402
                        fingerprint_problem, fs_free, machine, printable, score)
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
+from rfh.sandbox import memcap_method  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream"]
 
@@ -125,6 +130,18 @@ def main():
             raise Drift(f"organiser ERROR: the machine fingerprint is {why}"
                         + (f" ({m['fingerprint_reason']})" if why != "mismatched" else
                            f" (fingerprint {m['fingerprint']}, the season expects {p.fingerprint})"), "fingerprint")
+        if memcap_method() != "systemd":
+            # under the prlimit fallback every sandbox shares the runner's cgroup, so a request can
+            # read what an earlier one did to the group's per-CPU run queues (`/proc/self/sched`,
+            # review LR4 M2): the machine is not in the season's state, before any entry code runs
+            if os.environ.get("RF_ALLOW_PRLIMIT") != "1":
+                raise Drift("organiser ERROR: no systemd user manager on this machine (`systemd-run --user --scope` "
+                            "fails), so the sandboxes' memory caps would fall back to prlimit and share the runner's "
+                            "cgroup: the machine is not in the season's state", "fingerprint")
+            m["memcap_override"] = True       # RF_ALLOW_PRLIMIT=1: tests and local runs only
+            log("memory caps: the prlimit fallback, allowed by RF_ALLOW_PRLIMIT=1 (not the season's machine state)")
+        if os.environ.get("RF_TEST_BADGE_HOST_ROOT") == "1":       # the tests' Python stand-in badge only
+            m["badge_host_root"] = True
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
         scrub_bin, res["scrub"] = build_scrub(os.path.join(work, "tools"))
         save("prover build")
@@ -149,6 +166,8 @@ def main():
         if res["setup"]["sha256"] is None:
             raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s",
                        stage="prover")
+        # every later sandbox binds the binary and the setup from copies on the runner's tmpfs
+        res["setup"]["copy_bytes"], res["setup"]["copy_s"] = run.publish()
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
