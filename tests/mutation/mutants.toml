@@ -1,0 +1,840 @@
+# Mutants of the trusted contract (RecursionFast/Contract/**/*.lean), for tests/mutation/run.py.
+#
+# Each mutant replaces `original` (which must occur exactly once in `file`, relative to
+# RecursionFast/Contract/) by `replacement`, in a scratch copy of the repository only; the committed
+# contract is never changed. `breaks` is the property the mutation breaks, `expect` the check
+# expected to kill it. `calibrate = "survive"` marks a mutant expected to survive (an equivalent
+# mutation, or a constant no check pins), so that a run also shows what the checks do not see;
+# `equivalent = true` marks one that does not change the meaning on any input.
+
+# ---------------------------------------------------------------- Relation.lean
+
+[[mutant]]
+id = "rel-no-leafcap"
+file = "Relation.lean"
+original = '''| c, .leaf s n => n ≤ leafCap ∧ c = leafStmt (leafValue s n) n'''
+replacement = '''| c, .leaf s n => c = leafStmt (leafValue s n) n'''
+breaks = "a leaf witness of any size is in the relation (no leafCap bound)"
+expect = "Controls.Relation.leaf_over_leafCap"
+
+[[mutant]]
+id = "rel-leafcap-2^23"
+file = "Relation.lean"
+original = '''def leafCap : ℕ := 2 ^ 22'''
+replacement = '''def leafCap : ℕ := 2 ^ 23'''
+breaks = "the leaf bound is 2^23, not the season's 2^22"
+expect = "Controls.Relation.leaf_over_season (added after this mutant survived an earlier version)"
+calibrate = "survive"
+
+[[mutant]]
+id = "rel-querycap-2^21"
+file = "Relation.lean"
+original = '''def queryCap : ℕ := 2 ^ 20'''
+replacement = '''def queryCap : ℕ := 2 ^ 21'''
+breaks = "acc accepts queries of up to 2^21 bytes, above the service's 2^20 cap"
+expect = "Controls.Relation.acc_query_over_2pow20 (added after this mutant survived)"
+calibrate = "survive"
+
+[[mutant]]
+id = "rel-nodestmt-swap"
+file = "Relation.lean"
+original = '''keccakDigest (tagNode :: c₁.toList ++ c₂.toList)'''
+replacement = '''keccakDigest (tagNode :: c₂.toList ++ c₁.toList)'''
+breaks = "the node layout hashes the children in the wrong order"
+expect = "Controls.Relation.nodeStmt_kat"
+
+[[mutant]]
+id = "rel-tagitem-eq-tagleaf"
+file = "Relation.lean"
+original = '''def tagItem : UInt8 := 0x48'''
+replacement = '''def tagItem : UInt8 := 0x4C'''
+breaks = "leaf items and leaf statements share a domain tag"
+expect = "Controls.Relation.tags_separate / item0_kat"
+
+[[mutant]]
+id = "rel-enc64-big-endian"
+file = "Relation.lean"
+original = '''List.ofFn fun i : Fin 8 => (n / 256 ^ i.val).toUInt8'''
+replacement = '''List.ofFn fun i : Fin 8 => (n / 256 ^ (7 - i.val)).toUInt8'''
+breaks = "enc64 is big-endian, not Rust's u64::to_le_bytes"
+expect = "Controls.Relation.item1_kat"
+
+[[mutant]]
+id = "rel-leafvalue-shift"
+file = "Relation.lean"
+original = '''| n + 1 => digestXor (leafValue s n) (leafItem s n)'''
+replacement = '''| n + 1 => digestXor (leafValue s n) (leafItem s (n + 1))'''
+breaks = "the leaf value XORs items 1 … n, dropping item 0 and adding item n"
+expect = "Controls.Relation.value2_kat"
+
+[[mutant]]
+id = "rel-leafvalue-nonzero-start"
+file = "Relation.lean"
+original = '''  | 0 => Vector.replicate 32 0
+  | n + 1 => digestXor'''
+replacement = '''  | 0 => Vector.replicate 32 1
+  | n + 1 => digestXor'''
+breaks = "the leaf value starts from a nonzero digest"
+expect = "Controls.Relation.value2_kat"
+
+[[mutant]]
+id = "rel-xor-or"
+file = "Relation.lean"
+original = '''Vector.zipWith (· ^^^ ·) a b'''
+replacement = '''Vector.zipWith (· ||| ·) a b'''
+breaks = "the leaf value combines items by OR, not XOR"
+expect = "Controls.Relation.value2_kat"
+
+[[mutant]]
+id = "rel-leafstmt-no-count"
+file = "Relation.lean"
+original = '''keccakDigest (tagLeaf :: h.toList ++ enc64 n)'''
+replacement = '''keccakDigest (tagLeaf :: h.toList)'''
+breaks = "the leaf statement does not commit to the number of hashes"
+expect = "Controls.Relation.leafStmt_kat"
+
+[[mutant]]
+id = "rel-node-drop-acc2"
+file = "Relation.lean"
+original = '''c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true ∧ acc c₂ p₂ = true'''
+replacement = '''c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true'''
+breaks = "a node's second child is not checked"
+expect = "Controls.Relation.second_child_rejected"
+
+[[mutant]]
+id = "rel-node-acc2-wrong-child"
+file = "Relation.lean"
+original = '''acc c₁ p₁ = true ∧ acc c₂ p₂ = true'''
+replacement = '''acc c₁ p₁ = true ∧ acc c₁ p₂ = true'''
+breaks = "a node's second proof is checked against the first child's digest"
+expect = "Controls.Relation.node_of_two_leaves / second_child_rejected"
+
+[[mutant]]
+id = "rel-docstring-only"
+file = "Relation.lean"
+original = '''/-- The most hashes a leaf statement may cover: `2^22`. -/'''
+replacement = '''/-- The most hashes a leaf statement may cover (a mutated docstring). -/'''
+breaks = "nothing: only a docstring changes"
+expect = "survives (equivalent)"
+calibrate = "survive"
+equivalent = true
+
+# ---------------------------------------------------------------- Tree.lean
+
+[[mutant]]
+id = "tree-stream-args-swapped"
+file = "Tree.lean"
+original = '''hs.foldl (fun c h => nodeStmt c (leafStmt h n)) (leafStmt h n)'''
+replacement = '''hs.foldl (fun c h => nodeStmt (leafStmt h n) c) (leafStmt h n)'''
+breaks = "the stream step hashes the new leaf before the previous statement"
+expect = "Controls.Tree.streamStmt_three / streamStmt_kat"
+
+[[mutant]]
+id = "tree-stream-reversed"
+file = "Tree.lean"
+original = '''| h :: hs => hs.foldl'''
+replacement = '''| h :: hs => hs.reverse.foldl'''
+breaks = "the stream folds its later leaves newest first"
+expect = "Controls.Tree.streamStmt_kat"
+
+[[mutant]]
+id = "tree-level-swap"
+file = "Tree.lean"
+original = '''| c₁ :: c₂ :: cs => nodeStmt c₁ c₂ :: treeLevel cs'''
+replacement = '''| c₁ :: c₂ :: cs => nodeStmt c₂ c₁ :: treeLevel cs'''
+breaks = "the tree pairs adjacent digests right to left"
+expect = "Controls.Tree.treeRoot_two"
+
+[[mutant]]
+id = "tree-root-half-levels"
+file = "Tree.lean"
+original = '''(treeLevel^[cs.length] cs).headD'''
+replacement = '''(treeLevel^[cs.length / 2] cs).headD'''
+breaks = "the root iterates |cs|/2 levels: equal on powers of two, wrong on 3 leaves"
+expect = "Controls.Tree.treeRoot_three"
+
+# ---------------------------------------------------------------- Oracle.lean
+
+[[mutant]]
+id = "oracle-runseq-leftover"
+file = "Oracle.lean"
+original = '''| _ :: _, ret _ => none'''
+replacement = '''| _ :: _, ret a => some a'''
+breaks = "runSeq accepts a trace with entries left over (no exact consumption)"
+expect = "Controls.Oracle.prog_runSeq_extra / Controls.Relation.child_trace_nonempty"
+
+[[mutant]]
+id = "oracle-runseq-no-query-check"
+file = "Oracle.lean"
+original = '''| (q', a) :: tr, query q k => if q' = q then runSeq tr (k a) else none'''
+replacement = '''| (_, a) :: tr, query _ k => runSeq tr (k a)'''
+breaks = "runSeq answers a query by an entry for another query"
+expect = "Controls.Oracle.prog_runSeq_wrong_query"
+
+[[mutant]]
+id = "oracle-runlog-last-entry"
+file = "Oracle.lean"
+original = '''(L.find? fun e => e.1 = q).bind'''
+replacement = '''(L.reverse.find? fun e => e.1 = q).bind'''
+breaks = "runLog reads the last entry for a query, not the first (prob's table reads the first)"
+expect = "Controls.Oracle.prog_runLog_first"
+
+[[mutant]]
+id = "oracle-queries-drop-head"
+file = "Oracle.lean"
+original = '''| query q k => q :: (k (H q)).queries H'''
+replacement = '''| query q k => (k (H q)).queries H'''
+breaks = "queries omits each query asked, so qV and Q bound nothing"
+expect = "Controls.Oracle.prog_queries / Controls.Security.queryThenAccept_ks_ge_one"
+
+[[mutant]]
+id = "oracle-bind-ignores-answer"
+file = "Oracle.lean"
+original = '''| query q k, f => query q fun d => (k d).bind f'''
+replacement = '''| query q k, f => query q fun _ => (k (Vector.replicate 32 0)).bind f'''
+breaks = "bind feeds the zero digest to the program instead of the oracle's answer"
+expect = "Library proofs (completeness, KS bridge)"
+
+# ---------------------------------------------------------------- Certificate.lean
+
+[[mutant]]
+id = "cert-acc-no-qv"
+file = "Certificate.lean"
+original = '''decide (p.π.size < 2 ^ 64) && decide (p.tr.length ≤ S.qV) &&'''
+replacement = '''decide (p.π.size < 2 ^ 64) &&'''
+breaks = "acc accepts traces longer than the declared qV"
+expect = "Controls.Relation.acc_trace_over_qV"
+
+[[mutant]]
+id = "cert-acc-no-querycap"
+file = "Certificate.lean"
+original = '''    decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk'''
+replacement = '''    SigOk'''
+breaks = "acc accepts trace queries of any length"
+expect = "Controls.Relation.acc_query_over_cap"
+
+[[mutant]]
+id = "cert-acc-no-sigok"
+file = "Certificate.lean"
+original = '''SigOk vk (traceDigest p.tr) p.σ &&'''
+replacement = ''''''
+breaks = "acc does not check the signature on the trace"
+expect = "Controls.Relation.child_other_key"
+
+[[mutant]]
+id = "cert-acc-runlog"
+file = "Certificate.lean"
+original = '''decide ((S.V vk c p.π).runSeq p.tr = some true)'''
+replacement = '''decide ((S.V vk c p.π).runLog p.tr = some true)'''
+breaks = "acc reads the trace by lookup, not in order and used up exactly"
+expect = "Controls.Relation.child_trace_nonempty"
+
+[[mutant]]
+id = "cert-acc-word-le"
+file = "Certificate.lean"
+original = '''decide (p.π.size < 2 ^ 64)'''
+replacement = '''decide (p.π.size ≤ 2 ^ 64)'''
+breaks = "acc accepts a proof of exactly 2^64 bytes, whose length no 64-bit word writes"
+expect = "Controls.Relation.acc_over_word"
+
+[[mutant]]
+id = "cert-acc-qv-lt"
+file = "Certificate.lean"
+original = '''decide (p.tr.length ≤ S.qV)'''
+replacement = '''decide (p.tr.length < S.qV)'''
+breaks = "acc rejects a trace of exactly qV entries"
+expect = "Controls.Relation.acc_query_at_cap"
+
+[[mutant]]
+id = "cert-acc-querycap-lt"
+file = "Certificate.lean"
+original = '''e.1.size ≤ queryCap'''
+replacement = '''e.1.size < queryCap'''
+breaks = "acc rejects a query of exactly queryCap bytes"
+expect = "Controls.Relation.acc_query_at_cap"
+
+[[mutant]]
+id = "cert-secure-one-key"
+file = "Certificate.lean"
+original = '''secure : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV'''
+replacement = '''secure : KS (Rel (S.acc 0)) (S.V 0) S.E S.ε S.qV'''
+breaks = "knowledge soundness under one fixed key, not every key"
+expect = "Controls.Certificate.sigTrust_no_certificate"
+
+[[mutant]]
+id = "cert-no-complete"
+file = "Certificate.lean"
+original = '''  /-- Completeness of the honest prover with error `δ` over a random oracle, under every key. -/
+  complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ
+'''
+replacement = ''''''
+breaks = "the certificate asks no completeness"
+expect = "Controls.Certificate.rejectAll_no_certificate"
+
+[[mutant]]
+id = "cert-complete-error-1"
+file = "Certificate.lean"
+original = '''CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ'''
+replacement = '''CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) 1'''
+breaks = "completeness at error 1 (vacuous), not the declared delta"
+expect = "Controls.Certificate.rejectAll_no_certificate"
+
+[[mutant]]
+id = "cert-no-computes"
+file = "Certificate.lean"
+original = '''  /-- The program computes the extractor within the fuel. -/
+  computes : Computes S.ext S.E S.fuel
+'''
+replacement = ''''''
+breaks = "the extractor program need not compute E"
+expect = "Controls.Extractor.halt_not_ws-style negatives, Library proofs"
+
+[[mutant]]
+id = "cert-cap-qv-2^17"
+file = "Certificate.lean"
+original = '''S.qV ≤ 2 ^ 16 ∧'''
+replacement = '''S.qV ≤ 2 ^ 17 ∧'''
+breaks = "the certificate admits 2^17 verifier queries"
+expect = "Controls.Certificate (small_of_caps uses the 2^16 cap)"
+calibrate = "survive"
+
+[[mutant]]
+id = "cert-cap-no-fuel"
+file = "Certificate.lean"
+original = '''(∀ t, S.fuel t ≤ extractorBudget t) ∧ S.ext.body.size ≤ progCap'''
+replacement = '''True ∧ S.ext.body.size ≤ progCap'''
+breaks = "the fuel is not bounded by the budget"
+expect = "Controls.Certificate.fuel_over_budget_no_certificate"
+
+[[mutant]]
+id = "cert-cap-no-progcap"
+file = "Certificate.lean"
+original = '''(∀ t, S.fuel t ≤ extractorBudget t) ∧ S.ext.body.size ≤ progCap'''
+replacement = '''(∀ t, S.fuel t ≤ extractorBudget t) ∧ True'''
+breaks = "the extractor program may have any size"
+expect = "Controls.Certificate.big_program_no_certificate"
+
+[[mutant]]
+id = "certr-bounds-flipped"
+file = "Certificate.lean"
+original = '''bounds : S.ε ≤ D.ε ∧ S.δ ≤ D.δ ∧ S.qV ≤ D.qV ∧'''
+replacement = '''bounds : D.ε ≤ S.ε ∧ D.δ ≤ S.δ ∧ D.qV ≤ S.qV ∧'''
+breaks = "the declared errors and query bound are lower bounds, not upper bounds"
+expect = "Controls.Certificate.ws_certificateR_loose (added after this mutant survived)"
+calibrate = "survive"
+
+[[mutant]]
+id = "certr-fuel-flipped"
+file = "Certificate.lean"
+original = '''∀ t, S.fuel t ≤ D.fuel t ∧ D.fuel t ≤ extractorBudget t'''
+replacement = '''∀ t, D.fuel t ≤ S.fuel t ∧ D.fuel t ≤ extractorBudget t'''
+breaks = "the declared fuel is a lower bound of the submission's"
+expect = "Controls.Certificate.fuel_low_claim"
+
+[[mutant]]
+id = "certr-no-budget"
+file = "Certificate.lean"
+original = '''∀ t, S.fuel t ≤ D.fuel t ∧ D.fuel t ≤ extractorBudget t'''
+replacement = '''∀ t, S.fuel t ≤ D.fuel t ∧ True'''
+breaks = "the declared fuel may exceed the budget"
+expect = "Controls.Certificate.fuel_over_budget_claim"
+
+# ---------------------------------------------------------------- Security.lean
+
+[[mutant]]
+id = "sec-errorcap-2^-64"
+file = "Security.lean"
+original = '''noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 128'''
+replacement = '''noncomputable def errorCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 64'''
+breaks = "the knowledge error cap is 2^-64 per query, not 2^-128"
+expect = "Controls.Potential (a bound stated at 2^-128)"
+calibrate = "survive"
+
+[[mutant]]
+id = "sec-completenesscap-2^-20"
+file = "Security.lean"
+original = '''noncomputable def completenessCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 40'''
+replacement = '''noncomputable def completenessCap : ℝ≥0 := (2 : ℝ≥0)⁻¹ ^ 20'''
+breaks = "the completeness error cap is 2^-20, not 2^-40"
+expect = "Controls.Completeness (a bound stated at 2^-40)"
+calibrate = "survive"
+
+[[mutant]]
+id = "sec-logcap-2^64"
+file = "Security.lean"
+original = '''def logCap : ℕ := 2 ^ 96'''
+replacement = '''def logCap : ℕ := 2 ^ 64'''
+breaks = "knowledge soundness is claimed only up to 2^64 queries"
+expect = "Controls.Potential (a bound stated at 2^96)"
+calibrate = "survive"
+
+[[mutant]]
+id = "sec-ks-no-qv-conjunct"
+file = "Security.lean"
+original = '''  (∀ H c π, ((V c π).queries H).length ≤ qV) ∧
+'''
+replacement = '''  True ∧
+'''
+breaks = "KS does not bound the verifier's own queries by qV"
+expect = "Controls.Security.queryThenAccept_ks_ge_one-style controls, Library KS lemmas"
+
+[[mutant]]
+id = "sec-ks-extractor-no-log"
+file = "Security.lean"
+original = '''¬ ∃ w, E x.1 x.2 L = some w ∧ R x.1 w'''
+replacement = '''¬ ∃ w, E x.1 x.2 [] = some w ∧ R x.1 w'''
+breaks = "the extractor is given the empty log instead of the final query log"
+expect = "Controls.Security.lucky_ks / Library KState.ks"
+
+[[mutant]]
+id = "sec-ks-no-qv-charge"
+file = "Security.lean"
+original = '''[] ≤ (Q + qV) * ε'''
+replacement = '''[] ≤ Q * ε'''
+breaks = "the verifier's own queries are not charged in the error"
+expect = "Library KState.ks (PaperTheorem) / Controls.Security.queryThenAccept_ks_one"
+
+[[mutant]]
+id = "sec-ks-logcap-only-q"
+file = "Security.lean"
+original = '''Q + qV ≤ logCap →'''
+replacement = '''Q ≤ logCap →'''
+breaks = "the logCap restriction ignores the verifier's queries"
+expect = "Controls.Security.acceptAll_ks_above_logCap"
+
+[[mutant]]
+id = "sec-ks-verdict-empty-log"
+file = "Security.lean"
+original = '''(V x.1 x.2).runLog L = some true ∧'''
+replacement = '''(V x.1 x.2).runLog [] = some true ∧'''
+breaks = "the adversary's win reads the verifier's verdict on the empty log"
+expect = "Controls.Security.queryThenAccept_ks_ge_one"
+
+[[mutant]]
+id = "sec-complete-b-true"
+file = "Security.lean"
+original = '''prob (fun b _ => b = false) ((P c w).bind (V c)) [] ≤ δ'''
+replacement = '''prob (fun b _ => b = true) ((P c w).bind (V c)) [] ≤ δ'''
+breaks = "completeness bounds the probability of acceptance, not of rejection"
+expect = "Controls.Security.ws_complete / rejectAll_not_complete"
+
+[[mutant]]
+id = "sec-prob-not-recorded"
+file = "Security.lean"
+original = '''∑ a : Digest, prob B (k a) (L ++ [(q, a)])'''
+replacement = '''∑ a : Digest, prob B (k a) L'''
+breaks = "a fresh answer is not recorded: a repeated query is re-sampled (no function)"
+expect = "Library prob lemmas"
+
+[[mutant]]
+id = "sec-prob-weight"
+file = "Security.lean"
+original = '''| none => (2 ^ 256)⁻¹ * ∑ a : Digest'''
+replacement = '''| none => (2 ^ 255)⁻¹ * ∑ a : Digest'''
+breaks = "a fresh answer is weighted 2^-255, so prob is not a probability"
+expect = "Library prob lemmas (total mass 1)"
+
+# ---------------------------------------------------------------- Signature.lean
+
+[[mutant]]
+id = "sig-no-checksum"
+file = "Signature.lean"
+original = '''  d ++ (List.range 5).map fun t => C / 4 ^ t % 4'''
+replacement = '''  d ++ (List.range 5).map fun _ => 0'''
+breaks = "the checksum digits are constant: a signature advances to another message"
+expect = "Controls.Signature.wotsDigits_zero / wotsDigits_dominates"
+
+[[mutant]]
+id = "sig-checksum-no-complement"
+file = "Signature.lean"
+original = '''let C := (d.map (3 - ·)).sum'''
+replacement = '''let C := d.sum'''
+breaks = "the checksum sums the digits, not their complements (no domination)"
+expect = "Controls.Signature.wotsDigits_ff / wotsDigits_dominates"
+
+[[mutant]]
+id = "sig-msgdigits-high-first"
+file = "Signature.lean"
+original = '''b.toNat / 4 ^ t % 4'''
+replacement = '''b.toNat / 4 ^ (3 - t) % 4'''
+breaks = "message digits are taken high bits first"
+expect = "Controls.Signature.wotsDigits_order"
+
+[[mutant]]
+id = "sig-step-no-key-index"
+file = "Signature.lean"
+original = '''keccakDigest (tagWots :: enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList)'''
+replacement = '''keccakDigest (tagWots :: [i.toUInt8, s.toUInt8] ++ x.toList)'''
+breaks = "the chain step is not tweaked by the key index"
+expect = "Controls.Signature.wotsStep_kat"
+
+[[mutant]]
+id = "sig-step-no-position"
+file = "Signature.lean"
+original = '''keccakDigest (tagWots :: enc64 j ++ [i.toUInt8, s.toUInt8] ++ x.toList)'''
+replacement = '''keccakDigest (tagWots :: enc64 j ++ [i.toUInt8] ++ x.toList)'''
+breaks = "the chain step is not tweaked by the position"
+expect = "Controls.Signature.wotsStep_kat"
+
+[[mutant]]
+id = "sig-ends-to-2"
+file = "Signature.lean"
+original = '''wotsChain j i e.1 (3 - e.1) e.2'''
+replacement = '''wotsChain j i e.1 (2 - e.1) e.2'''
+breaks = "the verifier walks each chain to position 2, not to its end"
+expect = "Library Signer.sigOk_sign"
+
+[[mutant]]
+id = "sig-leaf-no-index"
+file = "Signature.lean"
+original = '''keccakDigest (tagWotsLeaf :: enc64 j ++ ends.flatMap Vector.toList)'''
+replacement = '''keccakDigest (tagWotsLeaf :: ends.flatMap Vector.toList)'''
+breaks = "the WOTS leaf does not commit to its key index"
+expect = "Controls.Signature.wotsLeaf_length / tags_separate"
+
+[[mutant]]
+id = "sig-root-swap"
+file = "Signature.lean"
+original = '''(if j % 2 = 0 then sigNode x s else sigNode s x)'''
+replacement = '''(if j % 2 = 0 then sigNode s x else sigNode x s)'''
+breaks = "the Merkle path takes the current value as the right child at even index"
+expect = "Controls.Signature.sigRoot_bits"
+
+[[mutant]]
+id = "sig-no-idx-check"
+file = "Signature.lean"
+original = '''decide (σ.idx < 2 ^ sigHeight) && decide (σ.ots.length = wotsLen) &&'''
+replacement = '''decide (σ.ots.length = wotsLen) &&'''
+breaks = "a signature index of 2^16 or more is accepted"
+expect = "Controls.Signature.sigOk_idx_out_of_range"
+
+[[mutant]]
+id = "sig-no-path-length"
+file = "Signature.lean"
+original = '''    decide (σ.path.length = sigHeight) &&
+'''
+replacement = ''''''
+breaks = "a signature with a path of any length is accepted"
+expect = "Controls.Signature.sigOk_path_length"
+
+[[mutant]]
+id = "sig-trace-no-length"
+file = "Signature.lean"
+original = '''enc64 e.1.size ++ e.1.data.toList ++ e.2.toList'''
+replacement = '''e.1.data.toList ++ e.2.toList'''
+breaks = "the trace encoding drops each query's length (not injective)"
+expect = "Controls.Signature.traceBytes_kat"
+
+[[mutant]]
+id = "sig-trace-no-tag"
+file = "Signature.lean"
+original = '''def traceDigest (tr : Trace) : Digest := keccakDigest (tagTrace :: traceBytes tr)'''
+replacement = '''def traceDigest (tr : Trace) : Digest := keccakDigest (traceBytes tr)'''
+breaks = "the trace digest has no domain tag"
+expect = "Controls.Signature.traceDigest_layout"
+
+# ---------------------------------------------------------------- Hash/Keccak.lean
+
+[[mutant]]
+id = "keccak-pad-0x06"
+file = "Hash/Keccak.lean"
+original = '''else 0x01 :: List.replicate (p - 2) 0 ++ [0x80]'''
+replacement = '''else 0x06 :: List.replicate (p - 2) 0 ++ [0x80]'''
+breaks = "SHA3-256's domain suffix instead of Keccak's padding"
+expect = "Controls.Keccak.empty_kat"
+
+[[mutant]]
+id = "keccak-pad-single-0x01"
+file = "Hash/Keccak.lean"
+original = '''if p = 1 then [0x81]'''
+replacement = '''if p = 1 then [0x01]'''
+breaks = "a single padding byte omits the final 0x80 bit"
+expect = "Controls.Keccak.len135_kat"
+
+[[mutant]]
+id = "keccak-rc5"
+file = "Hash/Keccak.lean"
+original = '''0x000000000000808B, 0x0000000080000001'''
+replacement = '''0x000000000000808B, 0x0000000080000011'''
+breaks = "one round constant (round 5) is wrong"
+expect = "Controls.Keccak.rc_spec"
+
+[[mutant]]
+id = "keccak-rho4"
+file = "Hash/Keccak.lean"
+original = '''#v[0, 1, 62, 28, 27,'''
+replacement = '''#v[0, 1, 62, 28, 26,'''
+breaks = "one rho offset (lane 4) is wrong"
+expect = "Controls.Keccak.rho_spec / rho_ones"
+
+[[mutant]]
+id = "keccak-rate-135"
+file = "Hash/Keccak.lean"
+original = '''def rate : Nat := 136'''
+replacement = '''def rate : Nat := 135'''
+breaks = "the sponge's rate is 135 bytes"
+expect = "Controls.Keccak.len135_kat"
+
+[[mutant]]
+id = "keccak-out-31"
+file = "Hash/Keccak.lean"
+original = '''(w >>> (8 * k).toUInt64).toUInt8).take 32'''
+replacement = '''(w >>> (8 * k).toUInt64).toUInt8).take 31'''
+breaks = "the output is 31 bytes"
+expect = "INVALID: keccakDigest's length proof (Relation.lean)"
+
+[[mutant]]
+id = "keccak-chi-mirrored"
+file = "Hash/Keccak.lean"
+original = '''lane a x y ^^^ (~~~lane a (x + 1) y &&& lane a (x + 2) y)'''
+replacement = '''lane a x y ^^^ (lane a (x + 1) y &&& ~~~lane a (x + 2) y)'''
+breaks = "chi negates the wrong neighbour"
+expect = "Controls.Keccak.chi_unit"
+
+[[mutant]]
+id = "keccak-theta-swapped"
+file = "Hash/Keccak.lean"
+original = '''c (x + 4) ^^^ rotl (c (x + 1)) 1'''
+replacement = '''c (x + 1) ^^^ rotl (c (x + 4)) 1'''
+breaks = "theta's neighbouring columns are swapped"
+expect = "Controls.Keccak.theta_unit"
+
+[[mutant]]
+id = "keccak-23-rounds"
+file = "Hash/Keccak.lean"
+original = '''def keccakF (a : State) : State := rc.foldl round a'''
+replacement = '''def keccakF (a : State) : State := (rc.toList.take 23).foldl round a'''
+breaks = "the permutation has 23 rounds"
+expect = "Controls.Keccak.keccakF_zero_kat"
+
+[[mutant]]
+id = "keccak-blocklane-xor"
+file = "Hash/Keccak.lean"
+original = '''(fun w k => w ||| (blk.getD (8 * i + k) 0).toUInt64 <<< (8 * k).toUInt64) 0'''
+replacement = '''(fun w k => w ^^^ (blk.getD (8 * i + k) 0).toUInt64 <<< (8 * k).toUInt64) 0'''
+breaks = "nothing: the eight shifted bytes are disjoint, so OR and XOR agree"
+expect = "survives (equivalent), unless a proof depends on the form"
+calibrate = "survive"
+equivalent = true
+
+# ---------------------------------------------------------------- Extractor.lean
+
+[[mutant]]
+id = "ext-tag-swap"
+file = "Extractor.lean"
+original = '''  | 0 => return .leaf (← readDigest) (← readNat)
+  | 1 => return .node'''
+replacement = '''  | 1 => return .leaf (← readDigest) (← readNat)
+  | 0 => return .node'''
+breaks = "the output's tags 0 and 1 are swapped"
+expect = "Controls.Extractor.decodeWit_leaf_kat"
+
+[[mutant]]
+id = "ext-readbytes-lenient"
+file = "Extractor.lean"
+original = '''  if ws.length = (n + 7) / 8 then some ((ws.flatMap wordBytes).take n, o.drop ((n + 7) / 8))
+  else none'''
+replacement = '''  some ((ws.flatMap wordBytes).take n, o.drop ((n + 7) / 8))'''
+breaks = "a byte field that runs past the end decodes (not strict)"
+expect = "Controls.Extractor.decodeWit_long_proof"
+
+[[mutant]]
+id = "ext-logwords-no-count"
+file = "Extractor.lean"
+original = '''toWord L.length :: L.flatMap'''
+replacement = '''L.flatMap'''
+breaks = "the log on the tape carries no entry count"
+expect = "Controls.Extractor.extractorInput_kat"
+
+[[mutant]]
+id = "ext-pack-big-endian"
+file = "Extractor.lean"
+original = '''ds.foldr (fun d a => d.toNat + 256 * a) 0'''
+replacement = '''ds.foldl (fun a d => d.toNat + 256 * a) 0'''
+breaks = "bytes are packed big-endian"
+expect = "Controls.Extractor.extractorInput_kat"
+
+[[mutant]]
+id = "ext-readsig-counts-swapped"
+file = "Extractor.lean"
+original = '''readList readDigest wotsLen, ← readList readDigest sigHeight'''
+replacement = '''readList readDigest sigHeight, ← readList readDigest wotsLen'''
+breaks = "the signature's chain values and path are read with each other's counts"
+expect = "Controls.Extractor.decodeWit_node_kat"
+
+[[mutant]]
+id = "ext-budget-2^17"
+file = "Extractor.lean"
+original = '''def extractorBudget (t : ℕ) : ℕ := 2 ^ 48 + 2 ^ 16 * t'''
+replacement = '''def extractorBudget (t : ℕ) : ℕ := 2 ^ 48 + 2 ^ 17 * t'''
+breaks = "the budget charges 2^17 steps per input word"
+expect = "Controls.Certificate.fuel_over_budget_per_word_claim (added after this mutant survived)"
+calibrate = "survive"
+
+[[mutant]]
+id = "ext-outcap-2^25"
+file = "Extractor.lean"
+original = '''def outCap : ℕ := 2 ^ 24'''
+replacement = '''def outCap : ℕ := 2 ^ 25'''
+breaks = "the output cap is 2^25 words, so the proof domain 256 MiB"
+expect = "Controls.Extractor.toolong_not_computes (2^24 + 1 output words)"
+calibrate = "survive"
+
+[[mutant]]
+id = "ext-computes-small-domain"
+file = "Extractor.lean"
+original = '''π.size ≤ 8 * outCap →'''
+replacement = '''π.size ≤ outCap →'''
+breaks = "efficient extraction is asked only for proofs of at most 16 MiB"
+expect = "Controls.Extractor.halt_not_big (added after this mutant survived)"
+
+[[mutant]]
+id = "ext-computes-no-outcap"
+file = "Extractor.lean"
+original = '''o.length ≤ outCap ∧ decodeWit o = E c π L'''
+replacement = '''decodeWit o = E c π L'''
+breaks = "the extractor's output is not capped"
+expect = "Controls.Extractor.toolong_not_computes"
+
+# ---------------------------------------------------------------- Machine.lean
+
+[[mutant]]
+id = "mach-sub-reversed"
+file = "Machine.lean"
+original = '''| .sub, a, b => a - b'''
+replacement = '''| .sub, a, b => b - a'''
+breaks = "sub computes b - a"
+expect = "Controls.Machine.eval_kat"
+
+[[mutant]]
+id = "mach-remu-zero"
+file = "Machine.lean"
+original = '''| .remu, a, b => a % b'''
+replacement = '''| .remu, a, b => if b = 0 then 0 else a % b'''
+breaks = "x % 0 is 0, not x"
+expect = "Controls.Machine.eval_kat"
+
+[[mutant]]
+id = "mach-shl-unmasked"
+file = "Machine.lean"
+original = '''| .shl, a, b => a <<< (b.toNat % 64)'''
+replacement = '''| .shl, a, b => a <<< b.toNat'''
+breaks = "shl shifts by the whole word, not its low 6 bits"
+expect = "Controls.Machine.eval_kat"
+
+[[mutant]]
+id = "mach-clmulh-63"
+file = "Machine.lean"
+original = '''(RecursionFast.clmul a b >>> 64).setWidth 64'''
+replacement = '''(RecursionFast.clmul a b >>> 63).setWidth 64'''
+breaks = "clmulh returns the wrong window of the carry-less product"
+expect = "Controls.Machine.eval_kat"
+
+[[mutant]]
+id = "mach-ite-swapped"
+file = "Machine.lean"
+original = '''(if M.getD c 0 = 0 then q else p)'''
+replacement = '''(if M.getD c 0 = 0 then p else q)'''
+breaks = "ite runs p when the cell is zero"
+expect = "Controls.Extractor.ws_computes (the witness-sending program branches)"
+
+[[mutant]]
+id = "mach-mem-free"
+file = "Machine.lean"
+original = '''XStmt.exec input.toArray (fuel - p.memFor input.length)'''
+replacement = '''XStmt.exec input.toArray fuel'''
+breaks = "memory is not charged"
+expect = "Controls.Machine.mem_charged / straight_short"
+
+[[mutant]]
+id = "mach-output-reversed"
+file = "Machine.lean"
+original = '''| _, _, o, [] => some o.toList'''
+replacement = '''| _, _, o, [] => some o.toList.reverse'''
+breaks = "the output words come out in reverse order"
+expect = "Controls.Machine.straight_run"
+
+[[mutant]]
+id = "mach-loop-size-free"
+file = "Machine.lean"
+original = '''| .loop _ p => p.size + 1'''
+replacement = '''| .loop _ p => p.size'''
+breaks = "a loop statement does not count toward the program size cap"
+expect = "Controls.Machine.size_kat (added after this mutant survived)"
+calibrate = "survive"
+
+[[mutant]]
+id = "mach-loop-no-fuel"
+file = "Machine.lean"
+original = '''    | .loop c p => exec I n M o (if M.getD c 0 = 0 then ks else p :: .loop c p :: ks)'''
+replacement = '''    | .loop c p => exec I (n + 1) M o (if M.getD c 0 = 0 then ks else p :: .loop c p :: ks)'''
+breaks = "a loop iteration consumes no fuel"
+expect = "INVALID: the structural recursion on fuel no longer terminates"
+
+# ---------------------------------------------------------------- added after review
+
+[[mutant]]
+id = "rel-tagsignode-eq-tagnode"
+file = "Relation.lean"
+original = '''def tagSigNode : UInt8 := 0x4D'''
+replacement = '''def tagSigNode : UInt8 := 0x4E'''
+breaks = "signature Merkle nodes and relation nodes share a domain tag"
+expect = "Controls.Relation.tags_separate / Controls.Signature.sigNode_kat"
+
+[[mutant]]
+id = "keccak-pi-transposed"
+file = "Hash/Keccak.lean"
+original = '''def pi (a : State) : State := ofLanes fun x y => lane a (x + 3 * y) x'''
+replacement = '''def pi (a : State) : State := ofLanes fun x y => lane a y (x + 3 * y)'''
+breaks = "pi reads A[y, x + 3y]"
+expect = "Controls.Keccak.pi_idx"
+
+[[mutant]]
+id = "ext-readstring-off-by-one"
+file = "Extractor.lean"
+original = '''def readString : Reader ByteArray := do return ⟨(← readBytes (← readNat)).toArray⟩'''
+replacement = '''def readString : Reader ByteArray := do return ⟨(← readBytes ((← readNat) + 1)).toArray⟩'''
+breaks = "a byte string is read one byte longer than its length word"
+expect = "Controls.Extractor.decodeWit_node_kat"
+
+[[mutant]]
+id = "ext-computes-short-queries"
+file = "Extractor.lean"
+original = '''(∀ e ∈ L, e.1.size < 2 ^ 64) →'''
+replacement = '''(∀ e ∈ L, e.1.size < 2 ^ 32) →'''
+breaks = "efficient extraction is asked only for logs of queries under 2^32 bytes"
+expect = "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)"
+calibrate = "survive"
+
+[[mutant]]
+id = "ext-computes-short-tape"
+file = "Extractor.lean"
+original = '''(extractorInput c π L).length ≤ 2 ^ 64 →'''
+replacement = '''(extractorInput c π L).length ≤ 2 ^ 32 →'''
+breaks = "efficient extraction is asked only for tapes of at most 2^32 words"
+expect = "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)"
+calibrate = "survive"
+
+[[mutant]]
+id = "mach-load-address"
+file = "Machine.lean"
+original = '''| .load d a => exec I n (M.setIfInBounds d (M.getD (M.getD a 0).toNat 0)) o ks'''
+replacement = '''| .load d a => exec I n (M.setIfInBounds d (M.getD a 0)) o ks'''
+breaks = "load copies the address cell instead of the cell it names"
+expect = "Controls.Machine.indirect_run"
+
+[[mutant]]
+id = "mach-input-past-end-one"
+file = "Machine.lean"
+original = '''| .input d a => exec I n (M.setIfInBounds d (I.getD (M.getD a 0).toNat 0)) o ks'''
+replacement = '''| .input d a => exec I n (M.setIfInBounds d (I.getD (M.getD a 0).toNat 1)) o ks'''
+breaks = "an input read past the tape's end is 1, not 0"
+expect = "Controls.Machine.bounds_run"
+
+[[mutant]]
+id = "mach-run-mem-lt"
+file = "Machine.lean"
+original = '''if p.memFor input.length ≤ fuel then'''
+replacement = '''if p.memFor input.length < fuel then'''
+breaks = "a run needs one step more than its memory before any statement"
+expect = "Controls.Machine.straight_exact"
