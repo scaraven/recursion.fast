@@ -222,7 +222,7 @@ mod tests {
         for (n, d) in pat {
             assert_eq!(hex(&hash(&pattern(n))), d, "pattern({n})");
         }
-        // a chain step: "C" ‖ 00 01 … 1f
+        // a 33-byte input 0x43 ‖ 00 01 … 1f (0x43 was v5's chain-step tag; no contract tag since v6)
         let mut step = vec![0x43u8];
         step.extend(0..32u8);
         assert_eq!(hex(&hash(&step)), "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97");

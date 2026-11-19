@@ -28,12 +28,14 @@ log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_ve
   two coincide on them. Textbook ⇒ `KS`, with the same extractor and the error at most doubled: the
   adversary followed by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV) · ε ≤ 2 (Q
   + qV) · ε` (`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: a verifier that accepts when its
-  own fresh answer, masked, is the statement's witness is certified at error `0` with an extractor
-  that reads that answer, against about `2^-112` textbook for every efficient extractor
-  (`Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`; the efficient bound on paper). The
-  deployment needs no more: every prover in it is normalised, since the verifier reads only the
-  signed trace and the prover asked the service for every answer in it; and in the tree's
-  composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`). An
+  own fresh answer, masked, is the statement's witness is knowledge-sound (`KS`) at error `0` with
+  an extractor that reads that answer (it has no complete prover, so it is not certified), against
+  about `2^-112` textbook for every efficient extractor (`Controls/Security.lean`, `lucky_ks`,
+  `lucky_not_textbook`; the efficient bound on paper). The deployment needs no more: every run in
+  it is normalised, since the verifier reads only the signed trace and every signed answer is in
+  the run's log (`SIGN` computes the answers it signs, so the normalised run is the prover together
+  with those evaluations, as one query program; `Library/Compose.lean` matches every signed trace
+  to that log or reduces it to a forgery); and in the tree's composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`). An
   extractor that reads only the adversary's log is not used: it would break the potential's bridge
   and every potential-based proof, and is stronger than the deployment needs.
 * *The adversary* is computationally unbounded, bounded only in queries, and deterministic. A
@@ -91,7 +93,12 @@ perfect completeness over every oracle function (`Complete`, in `Library/Complet
 forbids; `Complete` implies `CompleteWithError` at `δ = 0`. The library's `failProb` is `prob` of a
 `false` result (`Library/Completeness.lean`, `failProb_eq_prob`, `completeWithError_iff`). Nothing
 here says that an honest proof verifies under the one deployed oracle (keyed Keccak-256); the
-harness's concrete checks of `acc` do.
+harness's concrete checks of `acc` do. Two more gaps lie between the game and the deployment. The
+game fixes the witness and then draws the oracle, while in the stream a node's witness carries its
+children's signed traces, answered by the same oracle its own proof is checked against, so a
+verifier complete in the game can still reject every node of the stream (which costs only its
+entrant, a REJECT). And the game runs `V`, not `acc`: `acc`'s other conjuncts (`|π| < 2^64`, the
+trace at most `qV` entries of queries of at most `queryCap` bytes, the signature) are not in it.
 
 **Why `2^-40`.** A completeness failure is no security event: it costs only its entrant, as one
 rejected proof and a failed run. An evaluation's prover makes 8 output proofs (the service run's 8

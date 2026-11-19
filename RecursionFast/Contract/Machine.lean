@@ -12,8 +12,9 @@ statement it executes, so a proved fuel bound is a proved step bound (`Extractor
   free.)
 * **Three-address code.** An operation reads two memory cells and writes one, a branch or a
   loop tests one cell, and no statement contains a sub-expression. Each step is a bounded amount
-  of word-RAM work: one `XOp` (one instruction on the reference machine; `clmul`/`clmulh` are
-  `pclmulqdq` or RISC-V Zbc), one memory or input access, one output word, or one push or pop of the
+  of word-RAM work: one `XOp` (one instruction on the reference machine, plus a branch for `divu`
+  by zero: `x / 0 = 0` here, `2^64 − 1` on RISC-V, a fault on x86; `remu`'s `x % 0 = x` is
+  RISC-V's; `clmul`/`clmulh` are `pclmulqdq` or RISC-V Zbc), one memory or input access, one output word, or one push or pop of the
   statement stack.
 * **Memory is charged and affine in the input.** A program declares
   `mem + memPerWord · t` zero-initialised words on a tape of `t` words, two numbers given as data,

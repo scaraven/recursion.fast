@@ -335,7 +335,10 @@ class Bench:
         can see that outlive it is in the page cache and their cache state carries no information
         from one request to the next (a request could otherwise evict chosen pages and the next one
         probe which are cached). No link is followed; the setup directory is bounded by `setup_cap`
-        and 2^20 entries (checked after `setup`, read-only since). Returns (seconds, bytes read)."""
+        and 2^20 entries (checked after `setup`, read-only since). The pages are charged to the
+        runner's memory cgroup, not to the request's (cgroup v2 charges a page to the cgroup that
+        brought it into the cache), so read-only setup data is outside the prover's memory cap
+        (AGENTS.md §9). Returns (seconds, bytes read)."""
         t0, total, buf = time.monotonic(), 0, bytearray(1 << 20)
         files = [os.path.join(self.run.bin_dir, "prover")]
         for root, _, names in os.walk(self.run.setup_dir, followlinks=False):

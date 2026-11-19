@@ -1,5 +1,5 @@
 /-
-# Contract: the stream's statement and the tree's root (a specification of the runner) (TRUSTED)
+# Contract: the stream's statement (the runner's) and the tree's root (the library's) (TRUSTED)
 
 **The stream's statement (the benchmark).** The benchmark is one stream of `M` steps (plain IVC)
 over the leaf values `h_1 … h_M` of size `n`, oldest first: `c_1 = L_1`,
@@ -18,8 +18,14 @@ against a value computed with the harness's Python Keccak-256 reference).
 
 **Convention.** The tree composition theorem has a power of two of leaves. `treeRoot` is total:
 on an odd level the last digest is carried up unhashed, a single digest is its own root, and the
-empty list has the zero digest. The theorem uses none of these cases but the single digest.
-`streamStmt` of no leaf is the zero digest; the benchmark's streams have `M = 8` leaves.
+empty list has the zero digest. The theorem uses none of these cases but the single digest. So
+the root does not commit to the number of leaves (`treeRoot [a, b] = treeRoot [nodeStmt a b]`,
+`treeRoot [a, b, c] = treeRoot [nodeStmt a b, c]`), which is harmless where it is used: the tree
+composition fixes `2^r` leaves, and nothing in `Certificate.lean` or `Security.lean` uses
+`treeRoot`.
+`streamStmt` does commit to its length and to `n`: two different streams with one statement give
+a Keccak collision (unwinding ends at a leaf's statement against a node's). `streamStmt` of no leaf is the zero
+digest; the benchmark's streams have `M` leaves, `M` of `harness/season.toml`.
 -/
 import RecursionFast.Contract.Relation
 import Mathlib.Logic.Function.Iterate

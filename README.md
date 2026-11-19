@@ -50,6 +50,9 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
 - **Submissions**: [`scaraven/recursion.fast-submissions`](https://github.com/scaraven/recursion.fast-submissions).
   Open one pull request per entry there.
 - **Rules**: [`AGENTS.md`](AGENTS.md), the precise rulebook for submitters and their agents.
+- **Assurance**: [`docs/assurance/CONTRACT-REVIEW-2026-11.md`](docs/assurance/CONTRACT-REVIEW-2026-11.md),
+  six adversarial reviews and a mutation test of the trusted contract and its harness, with every
+  finding's resolution and the open items.
 
 ## This repository
 
@@ -57,6 +60,7 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
 |---|---|
 | `RecursionFast/Contract/` | the trusted Lean contract: relation, acceptance, certificate |
 | `RecursionFast/Library/`, `RecursionFast/Controls/` | untrusted, kernel-checked tools for entries, and controls showing each definition is non-vacuous |
+| `RecursionFast/Badge.lean` | the badge executable's glue (trusted harness code, compiled before any entry) |
 | `service/` | the oracle and signing service (Rust) |
 | `harness/` | the runner, the season file, the prover interface and the proof file format |
 | `.github/workflows/` | the core CI and the attested evaluation workflow |
