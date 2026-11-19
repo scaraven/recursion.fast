@@ -76,7 +76,7 @@ jobs:
           timeout 300 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: the compiled extractor interpreter on the witness-sending entry (organiser code)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
-      - name: acc on a 2^16-query signed trace, timed by the badge, the organiser's canaries, and the badge's glue against a hostile entry's instances
+      - name: acc on a 2^16-query signed trace, timed by the badge, the organiser's canaries, the badge's glue against a hostile entry's instances, and a memoising verifier judged slow
         run: timeout 300 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
@@ -124,6 +124,8 @@ jobs:
         run: timeout 300 cargo build --release
       - name: sandbox tests (hostile prover; the clock stops when the sandbox is dead)
         run: timeout 300 python3 tests/harness/test_sandbox.py
+      - name: the badge's request loop against hostile stand-ins, the warm-up and the start-up cap
+        run: timeout 120 python3 tests/harness/test_serve.py
       - name: the score, the caps, the draws and the statements
         run: timeout 60 python3 tests/harness/test_tv.py
       - name: the stream's control flow, the timed passes and the tracks

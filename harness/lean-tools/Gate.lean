@@ -88,7 +88,9 @@ It rejects (exit code 1) if:
    (`harness/badge/Verify.lean.in`, the only module elaborated with both the entry and the glue in
    scope) declares anything but `main`, or `main`'s value is not exactly the constant application
    `RFBadge.main RecursionFast.Challenge.submission`, or it has no compiled code, or the glue's
-   module is not trusted by hash; rule 3 runs on every non-trusted module of that environment.
+   module is not trusted by hash (its `.olean`; the compiled objects the badge links are checked
+   by the certificate job against `org-setup.sh`'s step 4b, `olean-manifest.py objects-check`);
+   rule 3 runs on every non-trusted module of that environment.
    Checking the elaborated value, not the source text, matters: an entry's `notation
    "RFBadge.main" => fakeMain` makes the text `RFBadge.main` mean `fakeMain` in every importer
    (`tests/gate/GateWiringHijack.lean`).

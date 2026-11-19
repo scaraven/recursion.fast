@@ -3,6 +3,15 @@
 
   scripts/olean-manifest.py gen   [--org DIR] [--packages DIR] [--prefix MOD]... [--closure FILE]... OUT
   scripts/olean-manifest.py check [--org DIR] [--packages DIR] [--prefix MOD]... MANIFEST
+  scripts/olean-manifest.py objects-gen   [--org DIR] OUT
+  scripts/olean-manifest.py objects-check [--org DIR] OBJECTS
+
+`objects-gen`/`objects-check`: the organiser's own compiled code, every `.c` file and compiled
+object (`.c.o`, `.c.o.export`, `.c.o.noexport`) under `<org>/.lake/build/ir/RecursionFast/`: what
+a badge executable links of the organiser (the glue `RecursionFast/Badge`, `Library/Fast`'s `accF`,
+the contract), which the olean manifest does not cover (a badge links objects, not oleans).
+`harness/org-setup.sh` writes it after building the objects (its step 4b); the certificate job
+checks it after the badge build (changed, missing or extra files fail).
 
 Scope (every `*.olean`, `*.olean.server`, `*.olean.private` file of):
   core/<rel>              the toolchain (`lean --print-prefix`/lib/lean): Init, Std, Lean, Lake, ...
@@ -108,7 +117,7 @@ def packages_dir(org):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["gen", "check"])
+    ap.add_argument("mode", choices=["gen", "check", "objects-gen", "objects-check"])
     ap.add_argument("manifest")
     ap.add_argument("--org", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     ap.add_argument("--packages", default=None, help="packages dir ('' for none)")
@@ -116,6 +125,8 @@ def main():
     ap.add_argument("--closure", action="append", default=[], help="gen: a module list (one per line)")
     a = ap.parse_args()
     org = os.path.abspath(a.org)
+    if a.mode.startswith("objects-"):
+        return objects(org, a.mode == "objects-gen", a.manifest)
     packages = packages_dir(org) if a.packages is None else a.packages
     prefixes = a.prefix or DEFAULT_PREFIXES
     if a.mode == "gen":
@@ -159,6 +170,44 @@ def main():
         return 1
     print(f"olean-manifest: OK ({len(want)} files match)")
     return 0
+
+OBJECT_SUFFIXES = (".c", ".c.o", ".c.o.export", ".c.o.noexport")
+
+
+def objects(org, gen, path):
+    """`objects-gen` (to `path`) or `objects-check` (against `path`) of the organiser's compiled code."""
+    root = os.path.join(org, ".lake", "build", "ir")
+    files = {}
+    for dp, dns, fns in os.walk(os.path.join(root, "RecursionFast")):
+        dns.sort()
+        for f in sorted(fns):
+            p = os.path.join(dp, f)
+            if f.endswith(OBJECT_SUFFIXES) and not os.path.islink(p):
+                files["ir/" + os.path.relpath(p, root)] = p
+    hashes = hash_all(files) if files else {}
+    if gen:
+        if not any(k.endswith(".c.o.export") or k.endswith(".c.o") for k in hashes):
+            print("olean-manifest: no compiled organiser object (run harness/org-setup.sh step 4 first)")
+            return 1
+        with open(path, "w") as f:
+            f.write("# sha256 of the organiser's compiled code (scripts/olean-manifest.py objects-gen)\n")
+            for k in sorted(hashes):
+                f.write(f"{hashes[k]}  {k}\n")
+        print(f"olean-manifest: wrote {len(hashes)} compiled-code entries to {path}")
+        return 0
+    want = {}
+    for line in open(path):
+        if line.strip() and not line.startswith("#"):
+            h, k = line.split(None, 1)
+            want[k.strip()] = h
+    bad = [f"changed {k}" for k in sorted(want) if k in hashes and hashes[k] != want[k]]
+    bad += [f"missing {k}" for k in sorted(want) if k not in hashes]
+    bad += [f"extra {k}" for k in sorted(hashes) if k not in want]
+    for b in bad[:50]:
+        print(f"olean-manifest: {b}")
+    print(f"olean-manifest: objects {'FAIL' if bad else 'OK'} ({len(bad)} differences in {len(want)} entries)")
+    return 1 if bad else 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

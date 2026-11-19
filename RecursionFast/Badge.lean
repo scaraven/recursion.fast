@@ -4,22 +4,29 @@
 Everything the badge executable `verify` does around the check. It is compiled with the
 organiser's package (`lake build`, `harness/org-setup.sh` step 1) before any entry exists, in a
 module that does **not** import the entry's solution, so every instance, notation and name in this
-file is resolved against Lean core and the organiser's own modules, and its compiled code (stored
-in this module's `.olean`, which the olean manifest hashes) is what the badge links. The per-entry
+file is resolved against Lean core and the organiser's own modules. Its `.olean` is in the olean
+manifest; what the badge links is its compiled object (`.lake/build/ir/RecursionFast/Badge.c` and
+its `.c.o.export`, built in `org-setup.sh` step 4), which step 4b hashes with every other
+organiser object into `.lake/rf/objects.sha256`; the badge build sees the organiser's build
+directory read-only, and the certificate job checks those hashes after it. The per-entry
 module (`harness/badge/Verify.lean.in`, rendered and built by `harness/evaluate.py`) imports the
 solution and this module and defines only
 
     def main : List String → IO UInt32 := RFBadge.main RecursionFast.Challenge.submission
 
-so the one thing of the entry that reaches the badge is the value `submission` (its `V` runs inside
-`acc`), passed as an ordinary argument. `RFBadge.main` has no instance-implicit or auto-bound
+so what of the entry reaches the glue is the value `submission` (its `V` runs inside `acc`), passed
+as an ordinary argument. (The entry's compiled modules are linked too: their top-level constants
+are evaluated when the process starts, untimed, and live for the whole process, which is why the
+runner warms each process with its own input and caps the start-up, `harness/rfh/checks.py`.) `RFBadge.main` has no instance-implicit or auto-bound
 argument, so nothing is resolved in the per-entry module. The compiler may inline or specialise
 this module's code there, but it works on the compiled code stored here and never elaborates it
 again, so an entry-declared instance (a `HSub Nat Nat Nat` that shrinks the time, a `HOr UInt64`
 that changes a length word) or notation cannot change it (`tests/harness/accprobe/`, the hostile
 submission). After the badge build the gate checks that the per-entry module declares that `main`
-alone, with exactly that value, and registers no attribute (`harness/lean-tools/Gate.lean`,
-`--wiring`), which an entry's notation cannot fake either.
+alone, with exactly that value and compiled code, and registers none of the code-substituting
+attributes of gate rule 3 (`implemented_by`, `extern`, `export`, `init`, `csimp`, `cpass`,
+`computed_field`; `harness/lean-tools/Gate.lean`, `--wiring`), which an entry's notation cannot fake
+either.
 
 What runs:
 

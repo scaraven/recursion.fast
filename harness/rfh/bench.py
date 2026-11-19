@@ -67,6 +67,7 @@ class Params:
     pi_cap: int
     final_pi_cap: int
     v_cap_ms: float
+    badge_start_s: float
     file_cap: int
     setup_s: float
     setup_cap: int
@@ -95,6 +96,7 @@ class Params:
             calib_drift=float(g("calibration", "c_P_drift")), calib_runs=g("calibration", "runs_per_sample"),
             calib_ref_provisional=bool(g("calibration", "ref_provisional")), service_calib_s=g("calibration", "service_s"),
             pi_cap=g("caps", "pi_cap"), final_pi_cap=g("caps", "final_pi_cap"), v_cap_ms=float(g("caps", "v_cap_ms")),
+            badge_start_s=float(g("caps", "badge_start_s")),
             file_cap=g("caps", "file_cap"), setup_s=g("caps", "setup_s"),
             setup_cap=g("caps", "setup_cap"), work_cap=g("caps", "work_cap"), build_s=g("caps", "build_s"),
             mem_prover=g("memory", "prover"), mem_service=g("memory", "service"), mem_badge=g("memory", "badge"),
@@ -229,7 +231,7 @@ class Bench:
         self.work, self.log, self.calib_bin = work, log, calib_bin
         self.store = os.path.join(work, "store")
         os.makedirs(self.store, exist_ok=True)
-        self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"))
+        self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"), p.badge_start_s)
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
         self.samples = []                    # the interleaved calibration samples
@@ -292,7 +294,8 @@ class Bench:
 
     def check(self, items, what, timeout=None):
         """`acc` on items (vk, stmt, store-relative path): [(accepted, V ns)], each `V` one
-        measurement, the batch warmed with an untimed first check. A rejection is an answer, not a
+        measurement, in one fresh badge process warmed with the organiser's warm-up input (never an
+        item; its start-up capped by `badge_start_s`, `Badge.verify`). A rejection is an answer, not a
         failure (the caller decides what it means); a badge run that times out or crashes is the
         entry's failure. The badge run ends within `timeout`, by default within 30 s of the stream's
         cap."""
@@ -300,14 +303,16 @@ class Bench:
 
     def v_capped(self, item, first_ns, what, timeout=None):
         """`V` of an accepted proof against `v_cap` (AGENTS.md §6): its one measurement `first_ns`;
-        above the cap the check is timed twice more (one warmed badge run) and the minimum counts.
-        Returns (V ns, every measurement, whether every check accepted it); a badge failure raises
-        `Fail`."""
+        above the cap the check is timed twice more, each in a fresh badge process warmed with the
+        organiser's input (a process that had already checked this proof could answer it from state
+        kept since), and the minimum counts. Each run ends within `timeout`. Returns (V ns, every
+        measurement, whether every check accepted it); a badge failure raises `Fail`."""
         runs, again = [first_ns], True
         if first_ns > self.p.v_cap_ms * 1e6:
-            res = self.check([item, item], what, timeout)
-            again = all(ok for ok, _ in res)
-            runs += [ns for _, ns in res]
+            for _ in range(2):
+                ((ok, ns),) = self.check([item], what, timeout)
+                again = again and ok
+                runs.append(ns)
         return min(runs), runs, again
 
     def canary_check(self, vk, targets, what, timeout=None):
