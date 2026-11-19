@@ -16,7 +16,9 @@ entries provisionally.
 (the stream's shape, `M` and the leaf size `n`, is not the season's, or the season
 file's `[stream]` shape is malformed; the name is kept from the chain-length list of earlier
 seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
-cache was missing). They never count against the author in the bot's fair order; `harness` (the
+cache was missing), `malformed` (the runner's stream record has a step without exactly `timed_runs`
+timed times, so no score can be computed from it: `rfh.bench.MalformedStream`). They never count
+against the author in the bot's fair order; `harness` (the
 certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one.
 
 **The plan**. This file is the one definition of the benchmark jobs: `evaluate.yml` builds
@@ -26,9 +28,12 @@ mismatched part, or parts that disagree on the season or the harness commit, mak
 ERROR and the result not comparable, so a job lost to its time limit or to a runner failure never
 yields an ACCEPT. The benchmark is **one job**: the calibration and the one stream (with
 its interleaved samples and its timed passes; `split` is kept as a name for callers and is the same
-one job). The score (`S = P_total · 2^(|π_M| / size_ref)`, AGENTS.md §7) and the tracks the run is in
-(`final`, and `every` when its conditions hold) are recomputed here from the stream's per-step records
-with `rfh.bench.score`, the definition the runner used; whatever score a part recorded is replaced. Verdict: REJECT
+one job). The score (AGENTS.md §7: `P_total` the median of the timed passes' totals, `S = P_total ·
+2^(|π_M| / size_ref)` for `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` for `every`) and
+the tracks the run is in (`final`, and `every` when its conditions hold) are recomputed here from the
+stream's per-step records with `rfh.bench.score`, the definition the runner used, before the verdict
+and comparability are set; whatever score a part recorded is replaced, and a stream record it cannot
+be computed from is an organiser ERROR (`malformed`). Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
 not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. The result is
 **comparable** iff it is ACCEPT (a stream that reaches its cap is the entry's REJECT; the `truncated`
@@ -38,7 +43,7 @@ flag is kept, always false since season rules v6). A benchmark whose machine fin
 machine); the reason says which. Likewise a stream whose shape (`stream.shape`: `M`, `n`)
 is not the season's is an organiser ERROR (`lengths`): its score is not comparable with any other
 evaluation's. A season file whose `[stream]` shape is malformed (`M`, `n` not positive
-integers, `n` above `leafCap = 2^20` blocks, `timed_runs` not a positive integer) is named
+integers, `n` above `leafCap = 2^20` blocks, `timed_runs` not an odd positive integer) is named
 the same way in every mode: `--check-machine` prints it as the organiser's problem (so the setup job
 stops the evaluation), and `--organiser-error` and `--plan` then write an ERROR result named
 `lengths`, whatever kind the workflow passed, since a malformed shape is the cause of anything else
@@ -50,9 +55,10 @@ The result also records the runner the benchmark ran on (`runner`: name, environ
 `--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
 binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
 three evaluations, by the median score of its last three (by `finished`), each REJECT,
-PROVISIONAL or otherwise not comparable run counting as infinite, once per track (`median_S` for
-`final`, which orders the rows, `median_S_every` for `every`, where a run outside the track counts
-as infinite too); it publishes
+PROVISIONAL or otherwise not comparable run counting as infinite, once per track, each run's score
+of the track read through its `score.tracks` (`median_S` for `final`, from `S`, which orders the
+rows, `median_S_every` for `every`, from `S_every`, where a run outside the track counts as infinite
+too); it publishes
 each entry's counts of evaluations, failures and unscored runs. ERROR results (the organiser's) are not
 counted.
 """
@@ -67,10 +73,10 @@ import sys
 ALL_PARTS = "calibrate,stream"
 # one benchmark job; `split` is the same one job (the name callers pass)
 PLANS = {"split": ["all"], "single": ["all"]}
-ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness")
+ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.bench import MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
 
 
 def load_season(path):
@@ -215,17 +221,27 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None):
     elif len_why:
         verdict = "ERROR"
         res["reasons"].append(f"organiser ERROR: the stream's shape {got} is not the season's {p.shape()}")
+    # the score, recomputed before the verdict and comparability are final: a stream record it cannot
+    # be computed from is the runner's fault, an organiser ERROR
+    sc, malformed = None, False
+    if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
+        try:
+            sc = score(p, res["stream"])
+        except MalformedStream as e:
+            verdict, malformed = "ERROR", True
+            res["reasons"].append(f"organiser ERROR: the stream's record is malformed ({e})")
     res["verdict"] = verdict
     if verdict == "ERROR":      # the named organiser error, if one is known (the bot never counts these against the author)
         kinds = [x.get("organiser_error") for x in [cert] + list(parts) if x.get("organiser_error") in ORGANISER_ERRORS]
-        res["organiser_error"] = "fingerprint" if fp_why else "lengths" if len_why else (kinds[0] if kinds else None)
+        res["organiser_error"] = ("fingerprint" if fp_why else "lengths" if len_why else "malformed" if malformed
+                                  else (kinds[0] if kinds else None))
     truncated = bool((res["stream"] or {}).get("truncated"))
     res["truncated"] = truncated
     res["comparable"] = verdict == "ACCEPT" and not plan_errors and not truncated
     res["prover_sha256"] = next(((r.get("prover") or {}).get("binary_sha256") for r in parts if r.get("prover")), None)
     res["entry"] = next((r.get("entry") for r in parts if r.get("entry")), None)
-    if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
-        res["score"] = score(p, res["stream"])
+    if sc is not None:
+        res["score"] = sc
     return res
 
 
@@ -235,6 +251,15 @@ def entry_key(r):
     binary's hash: a no-op edit gives a fresh binary, and a fresh group would reset the window."""
     e = r.get("entry") or {}
     return e.get("name") or e.get("prover_sources_sha256")
+
+
+def track_score(r, track):
+    """A result's score in `track`, read through its `score.tracks` (`final` → `S`, `every` →
+    `S_every`), or None if the run is not in the track or the field is not a number."""
+    sc = r.get("score") or {}
+    field = (sc.get("tracks") or {}).get(track)
+    v = sc.get(field) if isinstance(field, str) else None
+    return v if type(v) in (int, float) else None
 
 
 def rank(results):
@@ -255,9 +280,8 @@ def rank(results):
         row = {"entry": key, "evaluations": len(rs), "failures": sum(r.get("verdict") == "REJECT" for r in rs),
                "not_scored": sum(r.get("verdict") == "ACCEPT" and not r.get("comparable") for r in rs)}
         for track, suffix in (("final", ""), ("every", "_every")):
-            vals = [r["score"]["S"] if r.get("verdict") == "ACCEPT" and r.get("comparable")
-                    and track in ((r.get("score") or {}).get("tracks") or {}) and r["score"].get("S") is not None
-                    else inf for r in rs[-3:]]
+            vals = [track_score(r, track) if r.get("verdict") == "ACCEPT" and r.get("comparable")
+                    and track_score(r, track) is not None else inf for r in rs[-3:]]
             med = statistics.median(vals) if len(rs) >= 3 else None
             row["last_three" + suffix] = [v if v != inf else "failed or not scored" for v in vals]
             row["median_S" + suffix] = ("unranked (fewer than 3 evaluations)" if med is None
@@ -265,9 +289,10 @@ def rank(results):
         rows.append(row)
     rows.sort(key=lambda x: (not isinstance(x["median_S"], float), x["median_S"] if isinstance(x["median_S"], float) else 0))
     return {"schema": "recursion.fast/v6/ranking-1",
-            "rule": "per entry (its name in the submissions repository) and per track (final, every), the median S of "
-                    "its last three evaluations, a REJECT, PROVISIONAL or not comparable run, or one outside the track, "
-                    "counting as infinite; ranked from three evaluations, ordered by the track final (median_S)",
+            "rule": "per entry (its name in the submissions repository) and per track (final: S, every: S_every, each "
+                    "read through score.tracks), the median score of its last three evaluations, a REJECT, PROVISIONAL "
+                    "or not comparable run, or one outside the track, counting as infinite; ranked from three "
+                    "evaluations, ordered by the track final (median_S)",
             "entries": rows}
 
 

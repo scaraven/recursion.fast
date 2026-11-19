@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 64 blocks, its service
-run and its two timed passes).
+"""The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 6 blocks, its service
+run and its three timed passes; the season's size caps and size_ref, its own verifier and time caps).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
   python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
@@ -11,11 +11,13 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    through `harness/evaluate.py cert` (source rule, comparator, gate, badge build) and must be
    certified;
 1. `evaluate.py bench` of that entry through every part (the calibration, the stream: its service run
-   with its interleaved samples, its checks and its statement canaries on π_1, π_2 and π_M, then two
-   timed passes against the service's replay mode, every output byte-identical; the score) with the
-   compiled `accF` badge: verdict ACCEPT in both tracks under the season's `v_cap_ms = 128`, and
-   REJECT under `v_cap_ms = 8`, below the toy's final verifier time (about 64 ms: it grows with the
-   stream's history), the final output's V above the cap; then the organiser's canaries
+   with its interleaved samples, its checks (each checked proof judged in three fresh badge runs, the
+   median counting) and its statement canaries on π_1, π_2 and π_M, then three timed passes against
+   the service's replay mode, every output byte-identical; the score, the median pass) with the
+   compiled `accF` badge: verdict ACCEPT in both tracks (`S` and `S_every`) under the smoke's
+   `v_cap_ms = 128` (its one exception to the season's caps, whose `v_cap_ms` is 64), and REJECT
+   under `v_cap_ms = 8`, below the toy's final verifier time (it grows with the stream's history),
+   the final output's V above the cap; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI
    only) on the first and the last step's outputs through the same badge: the files
    accepted, every mutation rejected;
@@ -372,27 +374,35 @@ def main():
         check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
               f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')}")
         mine, agg_sc = r.get("score") or {}, whole.get("score") or {}
-        check("S" in mine and abs(agg_sc.get("S", -1) - mine["S"]) <= 1e-12 * max(1.0, abs(mine["S"]))
-              and agg_sc.get("tracks") == mine.get("tracks"),
-              f"aggregate recomputes the score and the tracks as the runner did: S {agg_sc.get('S')} = {mine.get('S')}, "
-              f"tracks {agg_sc.get('tracks')}")
+        check("S" in mine and "S_every" in mine and agg_sc.get("S") == mine["S"] and agg_sc.get("S_every") == mine["S_every"]
+              and agg_sc.get("tracks") == mine.get("tracks") and agg_sc.get("median_pass") == mine.get("median_pass"),
+              f"aggregate recomputes the scores and the tracks exactly as the runner did: S {agg_sc.get('S')} = {mine.get('S')}, "
+              f"S_every {agg_sc.get('S_every')} = {mine.get('S_every')}, tracks {agg_sc.get('tracks')}")
     step("aggregate", aggregate_check)
     if r.get("benchmark") == "pass":
         sc, st = r["score"], r["stream"]
         smoke_stream = tomllib.load(open(os.path.join(ROOT, "harness", "smoke.toml"), "rb"))["stream"]
-        check(all(k in sc for k in ("S", "P_total_s", "size_factor", "final_pi_bytes", "tracks", "c_P", "M"))
-              and sc.get("tracks") == {"final": "S", "every": "S"} and "tracks_reason" not in sc
+        check(all(k in sc for k in ("S", "S_every", "P_total_s", "size_factor", "size_factor_every", "final_pi_bytes",
+                                    "max_pi_bytes", "pass_totals_s", "median_pass", "tracks", "c_P", "M"))
+              and sc.get("tracks") == {"final": "S", "every": "S_every"} and "tracks_reason" not in sc
+              and len(sc["pass_totals_s"]) == smoke_stream["timed_runs"] == 3
+              and sc["P_total_s"] == sorted(sc["pass_totals_s"])[1] == sc["pass_totals_s"][sc["median_pass"] - 1]
+              and sc["max_pi_bytes"] == max(s["pi_bytes"] for s in st["steps"])
               and sc["M"] == st["M"] == smoke_stream["M"] and not st["truncated"],
-              f"score components: S {sc.get('S')}, P_total {sc.get('P_total_s')} s, size factor {sc.get('size_factor')} at "
-              f"|π_M| {sc.get('final_pi_bytes')} B, tracks {sc.get('tracks')}, M {sc.get('M')}")
+              f"score components: S {sc.get('S')}, S_every {sc.get('S_every')}, P_total {sc.get('P_total_s')} s (the median of "
+              f"{sc.get('pass_totals_s')}, pass {sc.get('median_pass')}), size factors {sc.get('size_factor')} at |π_M| "
+              f"{sc.get('final_pi_bytes')} B and {sc.get('size_factor_every')} at max |π_i| {sc.get('max_pi_bytes')} B, "
+              f"tracks {sc.get('tracks')}, M {sc.get('M')}")
         check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"]
               and st.get("leaf_data") == {"xof": "shake256", "domain": "recursion.fast/leaf-data/v1"},
               f"the stream ran the smoke's shape {st['shape']} with M fresh seeds, their expansion published")
-        check(all(all(k in s for k in ("P_s", "P_service_s", "P_timed_s", "V_ns", "pi_bytes", "accepted", "startup_s", "kill_s"))
-                  and len(s["P_timed_s"]) == smoke_stream["timed_runs"] and s["P_s"] == min(s["P_timed_s"]) and s["accepted"]
+        check(all(all(k in s for k in ("P_s", "P_service_s", "P_timed_s", "V_ns", "V_runs_ns", "pi_bytes", "accepted",
+                                       "startup_s", "kill_s"))
+                  and len(s["P_timed_s"]) == smoke_stream["timed_runs"] and s["P_s"] == s["P_timed_s"][sc["median_pass"] - 1]
+                  and len(s["V_runs_ns"]) == 3 and s["V_ns"] == sorted(s["V_runs_ns"])[1] and s["accepted"]
                   for s in st["steps"]),
-              f"every step records its service-run time, its timed times (P = their minimum), V, |π|, acceptance, "
-              f"start-up and kill latency: {sorted(st['steps'][0])}")
+              f"every step records its service-run time, its timed times (P = its time in the median pass), its three "
+              f"judged V times (V = their median), |π|, acceptance, start-up and kill latency: {sorted(st['steps'][0])}")
         check(st["canaries"] >= 5 and len(st["calibration"]["samples"]) >= 2 + smoke_stream["timed_runs"],
               f"statement canaries on π_1, π_2, π_M rejected ({st['canaries']}); calibration sampled "
               f"{len(st['calibration']['samples'])} times")

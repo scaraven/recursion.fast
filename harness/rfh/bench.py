@@ -10,6 +10,7 @@ the reason.
 """
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
@@ -111,15 +112,17 @@ class Params:
 
     def check_shape(self):
         """The season's stream shape (`[stream] M`, `n`): positive integers, `1 ≤ n ≤ LEAF_CAP =
-        leafCap = 2^20` blocks (the contract's bound on a leaf), `timed_runs ≥ 1`; else a ValueError
-        naming the defect."""
+        leafCap = 2^20` blocks (the contract's bound on a leaf), and `timed_runs` an odd positive
+        integer (`P_total` is the median of the pass totals, `score`); else a ValueError naming the
+        defect, its message naming `[stream]` (so the aggregation names it `lengths`)."""
         bad = [k for k in ("M", "n") if type(getattr(self, k)) is not int or getattr(self, k) < 1]
         if bad:
             raise ValueError(f"[stream] {', '.join(bad)} not a positive integer")
         if self.n > LEAF_CAP:
             raise ValueError(f"[stream] n = {self.n} above the contract's leafCap = 2^20 blocks")
-        if type(self.timed_runs) is not int or self.timed_runs < 1:
-            raise ValueError(f"[stream] timed_runs = {self.timed_runs!r}, not a positive integer")
+        if type(self.timed_runs) is not int or self.timed_runs < 1 or self.timed_runs % 2 == 0:
+            raise ValueError(f"[stream] timed_runs = {self.timed_runs!r}, not an odd positive integer (P_total is "
+                             "the median of the pass totals)")
 
 
 LEAF_CAP = digest.LEAF_CAP       # the contract's leafCap = 2^20 blocks (`Relation.lean`)
@@ -306,38 +309,48 @@ class Bench:
         cap."""
         return self.verify(items, what, timeout if timeout is not None else self.capped(), warm=True)
 
-    def v_capped(self, item, first_ns, what, timeout=None):
-        """`V` of an accepted proof against `v_cap` (AGENTS.md §6): its one measurement `first_ns`;
-        above the cap the check is timed twice more, each in a fresh badge process warmed with the
-        organiser's input (a process that had already checked this proof could answer it from state
-        kept since), and the minimum counts. Each run ends within `timeout`. Returns (V ns, every
-        measurement, whether every check accepted it); a badge failure raises `Fail`."""
-        runs, again = [first_ns], True
-        if first_ns > self.p.v_cap_ms * 1e6:
-            for _ in range(2):
-                ((ok, ns),) = self.check([item], what, timeout)
-                again = again and ok
-                runs.append(ns)
-        return min(runs), runs, again
+    def judged(self, items, what, bounded=False):
+        """The verifier check of the checked proofs `items` (vk, stmt, store-relative path; AGENTS.md
+        §6): `JUDGED_RUNS` = 3 separate badge runs (`check`), each a fresh process warmed with the
+        organiser's input and checking every item once, so that no proof is checked twice in one
+        process (a process that had checked it could answer it again from state kept since:
+        `tests/harness/accprobe/MemoSub.lean`). Per item, in order: (accepted in the first run,
+        accepted in every run, its three times in run order, their median `V`). A rejection is an
+        answer; a failed run (timed out, too slow to start, crashed) raises `Fail` and the caller
+        decides. Each run ends within `bounded(len(items))` with `bounded`, else within 30 s of
+        the stream's cap."""
+        runs = []
+        for r in range(1, JUDGED_RUNS + 1):
+            runs.append(self.check(items, f"{what}, judged run {r} of {JUDGED_RUNS}",
+                                   self.bounded(len(items)) if bounded else None))
+        out = []
+        for k in range(len(items)):
+            got = [res[k] for res in runs]
+            times = [ns for _, ns in got]
+            out.append((got[0][0], all(ok for ok, _ in got), times, statistics.median(times)))
+        return out
 
-    def canary_check(self, vk, targets, what, timeout=None):
+    def canary_check(self, vk, targets, what, bounded=False):
         """The statement canaries (AGENTS.md §6) of every target (key, store path, stmt, others): the
-        accepted file, checked against another statement, must be rejected. Returns {key: [the names
-        of the canaries `acc` accepted]} and the number of canaries checked; the caller decides. A
-        badge failure raises `Fail`."""
+        accepted file, checked against another statement, must be rejected. Each canary is checked
+        once, all in one badge run (they test rejection, not time), which ends within
+        `bounded(the number of canaries)` with `bounded`, else within 30 s of the stream's cap.
+        Returns {key: [the names of the canaries `acc` accepted]} and the number of canaries
+        checked; the caller decides. A badge failure raises `Fail`."""
         items = [(key, name, (vk, c, rel)) for key, rel, stmt, others in targets for name, c in canaries(stmt, others)]
-        res = self.verify([it for _, _, it in items], f"{what} canaries", timeout if timeout is not None else self.capped())
+        res = self.verify([it for _, _, it in items], f"{what} canaries", self.bounded(len(items)) if bounded else self.capped())
         out = {key: [] for key, _, _, _ in targets}
         for (key, name, _), (ok, _) in zip(items, res):
             if ok:
                 out[key].append(name)
         return out, len(items)
 
-    def bounded(self, n):
-        """The timeout of a badge run of `n` checks of intermediate outputs (plus its warm-up), whose
-        failure costs only the track `every`: `INTERMEDIATE_SLACK_S` plus two `v_cap` per check, within
-        the stream's cap. (The final output's checks are bounded by the stream's cap alone.)"""
-        return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (n + 1) * self.p.v_cap_ms / 1e3)
+    def bounded(self, c):
+        """The timeout of one badge run of `c` checks whose failure costs only the track `every` (a
+        judged run of `c` intermediate outputs, or a canary run of `c` canaries), its warm-up
+        included: `INTERMEDIATE_SLACK_S + 2·(c + 1)·v_cap`, within the stream's cap. (The final
+        output's runs are bounded by the stream's cap alone.)"""
+        return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (c + 1) * self.p.v_cap_ms / 1e3)
 
     def warm_caches(self):
         """Before every request, untimed and with no entry process alive: read every regular file under
@@ -562,15 +575,17 @@ class Bench:
         file's trace is no place to keep state uncounted); a breach is the entry's REJECT.
 
         The intermediate outputs are checked with `acc` against the runner's statements in batches
-        between steps (one warmed badge run each, one `V` measurement per output, each run bounded by
-        `bounded`). Then, with no entry process alive, the **final** output on its own: it must be
-        accepted against `c_M`, with `|π_M| ≤ final_pi_cap`, `V_M ≤ v_cap` (timed twice more above
-        it, the minimum) and its statement canaries (`stmt-bit`, `first-child`) rejected; any breach,
-        and any failure of its checks, is the entry's REJECT. Last the track `every`: re-timing of
-        intermediate `V_i` above the cap and the canaries of outputs 1 and 2, skipped once the track
-        is lost. A breach of the track's conditions, or a failed (crashed or timed-out) check of an
-        intermediate output or of those canaries, is recorded per step and only excludes the entry
-        from that track (`every_reasons`)."""
+        between steps, each batch judged in three fresh warmed badge runs (`judged`, each run
+        bounded by `bounded`): `V_i` is the median of the output's three times (`V_runs_ns`, in run
+        order); rejected in the first run is `accepted = False`, accepted there and rejected in a
+        later run is `recheck_rejected`. Then, with no entry process alive, the **final** output on
+        its own, in three runs of its own: it must be accepted against `c_M` in all three, with
+        `|π_M| ≤ final_pi_cap`, `V_M ≤ v_cap` (the median of its three times) and its statement
+        canaries (`stmt-bit`, `first-child`) rejected; any breach, and any failure of its checks, is
+        the entry's REJECT. Last the track `every`: the canaries of outputs 1 and 2, skipped once the
+        track is lost. A breach of the track's conditions, or a failed (crashed or timed-out) check
+        of an intermediate output or of those canaries, is recorded per step and only excludes the
+        entry from that track (`every_reasons`)."""
         p, steps, pending, M = self.p, rec["steps"], [], self.p.M
         v_cap = p.v_cap_ms * 1e6
 
@@ -589,16 +604,18 @@ class Bench:
                 return
             items = [it for _, it in pending]
             try:
-                res = self.check(items, "the service run's intermediate outputs", self.bounded(len(items)))
+                res = self.judged(items, "the service run's intermediate outputs", bounded=True)
             except Fail as e:
                 for k, _ in pending:
                     steps[k]["check_error"] = printable(str(e), 300)
                     rejected_size(steps[k])
                 pending.clear()
                 return
-            for (k, _), (ok, ns) in zip(pending, res):
-                steps[k]["accepted"], steps[k]["V_ns"] = ok, ns
-                if not ok:
+            for (k, _), (ok, again, runs, v) in zip(pending, res):
+                steps[k]["accepted"], steps[k]["V_runs_ns"], steps[k]["V_ns"] = ok, runs, v
+                if ok and not again:
+                    steps[k]["recheck_rejected"] = True
+                if not (ok and again):
                     rejected_size(steps[k])
             pending.clear()
         for i in range(1, M + 1):
@@ -624,21 +641,22 @@ class Bench:
         flush()
         # the final output, on its own: every failure here is the entry's REJECT
         final, item = steps[-1], (svc.vk, stmts[M - 1], steps[-1]["file"])
-        ((ok, ns),) = self.check([item], "service run: the final output")
-        final["accepted"], final["V_ns"] = ok, ns
+        ((ok, again, runs, v),) = self.judged([item], "service run: the final output")
+        final["accepted"], final["V_runs_ns"], final["V_ns"] = ok, runs, v
         if not ok:
             raise Fail(f"service run: the final output (step {M}) is rejected by acc against c_{M}"
                        + self.diag(svc, ""))
+        if not again:
+            final["recheck_rejected"] = True
+            raise Fail(f"service run: the final output (step {M}), accepted by acc in its first judged run, is "
+                       "rejected when checked again in another")
         if final["pi_bytes"] > p.final_pi_cap:
             raise Fail(f"service run: the final output (step {M}) has |π| = {final['pi_bytes']} bytes, above "
                        f"final_pi_cap = {p.final_pi_cap}")
-        final["V_ns"], final["V_runs_ns"], again = self.v_capped(item, ns, "service run: the final output (V above "
-                                                                       "v_cap, timed again)")
-        if not again:
-            raise Fail(f"service run: the final output (step {M}), accepted by acc, is rejected when checked again")
         if final["V_ns"] > v_cap:
-            raise Fail(f"service run: the final output (step {M}) takes V = {final['V_ns'] / 1e6:.3f} ms (the minimum "
-                       f"of {len(final['V_runs_ns'])} checks), above v_cap = {p.v_cap_ms:g} ms")
+            raise Fail(f"service run: the final output (step {M}) takes V = {final['V_ns'] / 1e6:.3f} ms (the median "
+                       f"of its three judged runs, {[round(x / 1e6, 3) for x in runs]} ms), above v_cap = "
+                       f"{p.v_cap_ms:g} ms")
         bad, rec["canaries"] = self.canary_check(svc.vk, [(M, final["file"], stmts[M - 1], [("first-child", first[M - 1])])],
                                                  "service run: the final output")
         final["canaries_accepted"] = bad[M]
@@ -646,26 +664,11 @@ class Bench:
             raise Fail(f"service run: the final output (step {M}): statement canaries accepted by acc (a proof "
                        f"accepted for another statement): {bad[M]}")
         # the track `every`: never the run's failure; skipped once lost
-        lost = lambda: bool(every_reasons(p, rec, canaries=False))  # noqa: E731
-        inter = steps[:-1]
-        for s in inter if all(s.get("accepted") and not s.get("check_error") for s in inter) else []:
-            if s["V_ns"] > v_cap:
-                k = s["index"]
-                try:
-                    s["V_ns"], s["V_runs_ns"], again = self.v_capped(
-                        (svc.vk, stmts[k - 1], s["file"]), s["V_ns"], f"service run, step {k} (V above v_cap, timed again)",
-                        self.bounded(2))
-                    if not again:
-                        s["recheck_rejected"] = True
-                except Fail as e:
-                    s["check_error"] = printable(str(e), 300)
-                if s.get("check_error") or s.get("recheck_rejected") or s["V_ns"] > v_cap:
-                    break                     # `every` is lost: no more re-timing
         ks = [k for k in (1, 2) if k < M]
-        if ks and not lost():
+        if ks and not every_reasons(p, rec, canaries=False):
             try:
                 bad, n = self.canary_check(svc.vk, [(k, steps[k - 1]["file"], stmts[k - 1], [("first-child", first[k - 1])])
-                                                    for k in ks], "service run: outputs 1 and 2", self.bounded(2 * len(ks)))
+                                                    for k in ks], "service run: outputs 1 and 2", bounded=True)
                 rec["canaries"] += n
                 for k in ks:
                     steps[k - 1]["canaries_accepted"] = bad[k]
@@ -716,8 +719,9 @@ class Bench:
         timed request gets the same leaf (`leaf.json` and `leaf.bin`, the same bytes), the runner's
         statement, the **service run's** output of step `i - 1` as `prev.bin`, and `oracle.key`.
         Each output must be byte-identical to the service run's output of that step, else the
-        entry's REJECT naming the pass, the step and the first differing byte. `P_i` = the minimum
-        of step `i`'s timed times."""
+        entry's REJECT naming the pass, the step and the first differing byte; a pass that does not
+        finish (a request's failure, the stream's cap) is the entry's REJECT too. Each step records
+        its `timed_runs` times in pass order (`P_timed_s`); `score` takes the median pass."""
         p, steps = self.p, rec["steps"]
         self.purge_requests()
         for t in range(1, p.timed_runs + 1):
@@ -751,12 +755,11 @@ class Bench:
                            "the service run's SIGN requests, in its order")
         if self.left() > 30:              # a closing sample, only with 30 s of the cap to spare
             self.sample("closing")
-        for s in steps:
-            s["P_s"] = min(s["P_timed_s"])
 
 
 FS_SLACK = 1 << 20        # bytes the request directories' filesystem may lose to other processes
 INTERMEDIATE_SLACK_S = 60  # seconds a badge run of intermediate checks may take beyond 2 v_cap per check
+JUDGED_RUNS = 3           # the fresh badge runs that judge each checked proof; its V is their median
 
 
 def fs_free(path):
@@ -776,8 +779,8 @@ def output_size(data):
 
 
 def step_record(i, n_i, r, rel):
-    """The per-step record of the service run (the timed passes add `P_timed_s` and `P_s`, the
-    checks `accepted`, `V_ns`, the canaries, the score its derived fields)."""
+    """The per-step record of the service run (the timed passes add `P_timed_s`, the checks
+    `accepted`, `V_runs_ns`, `V_ns`, the canaries, the score its derived fields `P_s`, `share_P`)."""
     size, ok = output_size(r.proof)
     return {"index": i, "n": n_i, "P_service_s": r.seconds, "startup_s": r.startup_s, "kill_s": r.kill_s,
             "mem_peak": r.mem_peak, "file": rel, "file_bytes": len(r.proof), "pi_bytes": size, "signed_proof": ok,
@@ -787,8 +790,8 @@ def step_record(i, n_i, r, rel):
 
 def every_reasons(p, stream, canaries=True):
     """Why the stream is not eligible for the track `every` (AGENTS.md §7), [] if it is: every
-    output checked and accepted by `acc` against its statement (again when timed again), with
-    `|π_i| ≤ pi_cap` and `V_i ≤ v_cap` (the minimum of its checks), and the statement canaries of
+    output checked and accepted by `acc` against its statement in each of its three judged runs, with
+    `|π_i| ≤ pi_cap` and `V_i ≤ v_cap` (the median of its three times), and the statement canaries of
     outputs 1 and 2 checked and rejected (with `canaries`). (The final output's own conditions are
     the run's: their breach is a REJECT, never a reason here.) From the per-step records alone, so
     the aggregation recomputes it."""
@@ -802,7 +805,7 @@ def every_reasons(p, stream, canaries=True):
             out.append(f"output {i} rejected by acc")
             continue
         if s.get("recheck_rejected"):
-            out.append(f"output {i}: rejected by acc when timed again")
+            out.append(f"output {i}: rejected by acc when checked again (accepted in its first judged run)")
             continue
         if not isinstance(s.get("pi_bytes"), int) or s["pi_bytes"] > p.pi_cap:
             out.append(f"output {i}: |π| = {s.get('pi_bytes')} bytes above pi_cap = {p.pi_cap}")
@@ -818,32 +821,75 @@ def every_reasons(p, stream, canaries=True):
     return out
 
 
-def score(p: Params, stream):
-    """The score (AGENTS.md §7; seconds, lower is better), one number for both tracks:
+class MalformedStream(ValueError):
+    """A stream record the score cannot be computed from: a step whose `P_timed_s` is not exactly
+    the season's `timed_runs` times. A runner fault, never the entry's: the runner and the
+    aggregation record it as an organiser ERROR named `malformed`."""
 
-        S        = P_total · 2^(|π_M| / size_ref)
-        P_total  = Σ_i P_i,   P_i = the least of step i's timed times
+
+def pass_totals(p: Params, steps):
+    """`T_t = Σ_i P_{i,t}` for each timed pass `t` (in pass order, summed in step order), from each
+    step's `P_timed_s`; `MalformedStream` unless every step holds exactly `timed_runs` finite,
+    non-negative times."""
+    for s in steps:
+        t = s.get("P_timed_s")
+        if not (isinstance(t, list) and len(t) == p.timed_runs
+                and all(type(x) in (int, float) and math.isfinite(x) and x >= 0 for x in t)):
+            raise MalformedStream(f"step {s.get('index')}: P_timed_s = {str(t)[:80]} is not {p.timed_runs} times, "
+                                  "one per timed pass")
+    totals = [0.0] * p.timed_runs
+    for s in steps:
+        for t in range(p.timed_runs):
+            totals[t] += s["P_timed_s"][t]
+    return totals
+
+
+def median_pass(totals):
+    """`t*` (1-based): the pass whose total is the median of `totals` (an odd number of them); among
+    passes with that total, the lowest index."""
+    med = sorted(totals)[len(totals) // 2]
+    return totals.index(med) + 1
+
+
+def score(p: Params, stream):
+    """The score (AGENTS.md §7; seconds, lower is better), from the per-step records alone:
+
+        T_t      = Σ_i P_{i,t}                         the total of timed pass t (t = 1 … timed_runs)
+        t*       = the pass whose total is the median of the T_t (ties: the lowest such index)
+        P_total  = T_{t*},   P_i = P_{i,t*}            (so Σ_i P_i = P_total)
+        S        = P_total · 2^(|π_M| / size_ref)                  the track `final`
+        S_every  = P_total · 2^(max_i |π_i| / size_ref)            the track `every`, when eligible
 
     `tracks` names the score field of each track the run is in: always `final` (a run that fails a
     `final` condition is REJECTed), `every` too when `every_reasons` is empty, else
-    `tracks_reason` says why not. Published diagnostics: the untimed service run's total, each
-    step's share of `P_total`. Adds the derived per-step fields in place."""
+    `tracks_reason` says why not (and `S_every`, `size_factor_every`, `max_pi_bytes` are absent).
+    Published diagnostics: the pass totals and the median pass, the untimed service run's total,
+    each step's share of `P_total`. Adds the derived per-step fields in place (`P_s`, `share_P`).
+    A step without exactly `timed_runs` timed times raises `MalformedStream`."""
     if not stream or not stream.get("steps"):
         return {}
     steps, cal = stream["steps"], stream.get("calibration") or {}
-    P = sum(s["P_s"] for s in steps)
+    totals = pass_totals(p, steps)
+    t_star = median_pass(totals)
+    P = totals[t_star - 1]
     pi_M = steps[-1]["pi_bytes"]
     f = 2 ** (pi_M / p.size_ref)
     why = every_reasons(p, stream)
     out = {"S": P * f, "P_total_s": P, "size_factor": f, "final_pi_bytes": pi_M,
            "final_file_bytes": steps[-1].get("file_bytes"),       # published beside |π_M|, never scored
-           "tracks": {"final": "S", **({} if why else {"every": "S"})}}
+           "pass_totals_s": totals, "median_pass": t_star,
+           "tracks": {"final": "S", **({} if why else {"every": "S_every"})}}
     if why:
         out["tracks_reason"] = {"every": "; ".join(why)[:2000]}
+    else:
+        pi_max = max(s["pi_bytes"] for s in steps)
+        f_every = 2 ** (pi_max / p.size_ref)
+        out.update(S_every=P * f_every, size_factor_every=f_every, max_pi_bytes=pi_max)
     out.update(size_ref=p.size_ref, M=len(steps), sum_n=sum(s["n"] for s in steps),
                c_P=cal.get("c_P"), c_P_provisional=bool(cal.get("c_P_provisional")))
     if all(isinstance(s.get("P_service_s"), (int, float)) for s in steps):
         out["P_total_service_run_s"] = sum(s["P_service_s"] for s in steps)      # published, never scored
     for s in steps:
+        s["P_s"] = s["P_timed_s"][t_star - 1]
         s["share_P"] = s["P_s"] / P if P else 0.0
     return out

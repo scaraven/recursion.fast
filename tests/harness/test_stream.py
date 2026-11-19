@@ -12,26 +12,34 @@
    data files before the first request; every leaf has the season's `n`, `n_i = n`. The data files
    live in a runner-only directory beside the store, never under it or the request directories, and
    are gone after the stream; the result records the expansion (`leaf_data`).
-2. The service run, then `timed_runs` timed passes, each after a `replay`; the timed passes' `prev.bin`
-   is the service run's output; `P_i` is the minimum of the timed times, the service run's time is
-   recorded, not scored; the score is `P_total · 2^(|π_M| / size_ref)`, `P_total = Σ P_i`.
+2. The service run, then `timed_runs` = 3 timed passes, each after a `replay`; the timed passes'
+   `prev.bin` is the service run's output; `P_total` is the median of the three pass totals and `P_i`
+   the step's time in that pass (not the least of its times), the service run's time is recorded, not
+   scored; `S = P_total · 2^(|π_M| / size_ref)`, `S_every = P_total · 2^(max_i |π_i| / size_ref)`.
 3. A timed output that differs from the service run's is the entry's REJECT, naming the pass, the step
    and the first differing byte offset.
-4. The final output: rejected by acc, |π_M| above final_pi_cap, V_M above v_cap (after two more
-   timings: the minimum counts, so one slow check is not a breach), a statement canary accepted, any
-   output above pi_cap, where an output `acc` did not accept (rejected, its check crashed, or rejected
-   or crashed when timed again) is sized by its whole file: each the entry's REJECT. An intermediate
-   output rejected by acc, or with V
-   above v_cap, or an accepted canary of output 1 or 2: scored in `final` only, the reason recorded.
+4. The verifier check: every checked proof is judged in three separate badge runs, each checking
+   every proof of its batch once (no proof twice in one run), `V_i` the median of its three times
+   (`V_runs_ns` in run order), so one slow run is not a breach and one fast run is no pass. The final
+   output: rejected by acc (in its first run, or in a later one), |π_M| above final_pi_cap, V_M above
+   v_cap, a statement canary accepted, any output above pi_cap, where an output `acc` did not accept
+   (rejected in any run, or its check crashed in any run) is sized by its whole file: each the
+   entry's REJECT. An intermediate output rejected by acc, or with V above v_cap, or an accepted
+   canary of output 1 or 2: scored in `final` only, the reason recorded. Each judged run of `c`
+   intermediate outputs, and the canary run of outputs 1 and 2, is bounded by `60 s + 2 (c + 1)
+   v_cap`; the final output's runs by the stream's cap.
 5. The stream's cap reached is the entry's REJECT (no truncation).
 6. Calibration samples: before the service run's step 1, before each timed pass and a closing one.
 7. Two evaluations have the same shape and fresh seeds.
-8. The track `every` never fails the run: a crashed check of intermediate outputs or of the canaries
-   of outputs 1 and 2, or an intermediate rejected when timed again, costs only the track; the final
-   output is checked on its own, and a crash there (or its rejection when timed again) is a REJECT;
-   once `every` is lost, no intermediate is re-timed and no canary of outputs 1 and 2 is checked.
-9. The replay audit: a MISMATCH refusal logged in a timed pass, a MISMATCH in the service's final
-   stats, or `replays ≠ timed_runs · signatures` is the entry's REJECT.
+8. The track `every` never fails the run: a crashed check of intermediate outputs (in any judged
+   run) or of the canaries of outputs 1 and 2, or an intermediate rejected in a later judged run,
+   costs only the track; the final output is checked on its own runs, and a crash there (or its
+   rejection in a later run) is a REJECT; once `every` is lost, no canary of outputs 1 and 2 is
+   checked.
+9. The replay audit: a MISMATCH refusal logged in a timed pass (the third included), a MISMATCH in the
+   service's final stats, or `replays ≠ timed_runs · signatures` (one SIGN missing or extra over the
+   three passes) is the entry's REJECT. A step record without exactly three timed times is
+   `MalformedStream` (the organiser's ERROR).
 10. Before every request the page cache of the setup directory and the prover binary is warmed (every
     regular file read in full, no link followed), and the warm-up's time is recorded; every request
     gets its own empty socket directory, into which the service's socket is linked only at `go`.
@@ -45,7 +53,7 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh import bench as bench_mod, digest, draws, signed  # noqa: E402
-from rfh.bench import Bench, Fail, Params, score  # noqa: E402
+from rfh.bench import Bench, Fail, MalformedStream, Params, score  # noqa: E402
 from rfh.prover import Step  # noqa: E402
 
 KEY = "ab" * 32
@@ -55,14 +63,15 @@ class FakeSvc:
     vk, sock_dir, info = b"k" * 32, "/nonexistent", {}
     proc = SimpleNamespace(poll=lambda: None)
 
-    def __init__(self, mism=()):
-        self.replays, self.mism = 0, list(mism)
+    def __init__(self, mism=(), mism_from=1):
+        self.replays, self.mism, self.mism_from = 0, list(mism), mism_from
 
     def refusals(self, n=8):
         return []
 
     def mismatches(self):
-        return list(self.mism)
+        """The logged MISMATCH refusals, from the timed pass `mism_from` on."""
+        return list(self.mism) if self.replays >= self.mism_from else []
 
     def replay(self):
         self.replays += 1
@@ -74,19 +83,20 @@ def proof(i, pi_bytes=100):
     return signed.Signed(f"step{i}".encode().ljust(pi_bytes, b".")).encode()
 
 
-def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok=(), out_bytes=None, differ=None,
-         cap_at=None, crash=(), recheck_reject=(), stats=None, mism=()):
+def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes=None, differ=None,
+         cap_at=None, crash=(), reject_later=(), stats=None, mism=(), mism_from=1):
     """A Bench over the smoke season with stubs: the service run's request i takes times[i] s, timed pass
-    t's timed[t][i] s; outputs `proof(i)` (or `out_bytes[i]`); `acc` rejects the steps in `reject`;
-    V_i = V[i] ns (default 1 ms), the two extra timings `recheck[i]`; the canaries (step, name) in
-    `canary_ok` accepted; timed pass t's step i differs at byte 7 for (t, i) = `differ`; the cap is
-    reached at the request tagged `cap_at`; a badge run whose description contains a string of `crash`
-    crashes; re-timing rejects the steps in `recheck_reject`; the service's stats are `stats` (default:
-    the timed passes replayed every signature) and its logged MISMATCH refusals `mism`."""
+    t's timed[t][i] s; outputs `proof(i)` (or `out_bytes[i]`); `acc` rejects the steps in `reject` in
+    every judged run and those in `reject_later` in judged runs 2 and 3 only; V_i in judged run r is
+    V[i][r - 1] ns (V[i] three times, or one number for all three; default 1 ms); the canaries (step,
+    name) in `canary_ok` accepted; timed pass t's step i differs at byte 7 for (t, i) = `differ`; the
+    cap is reached at the request tagged `cap_at`; a badge run whose description contains a string of
+    `crash` crashes; the service's stats are `stats` (default: the timed passes replayed every
+    signature) and its logged MISMATCH refusals `mism`, from timed pass `mism_from` on."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     p.M = M
     p.calib_idle_s = 0.0
-    p.v_cap_ms = Params.load(os.path.join(ROOT, "harness", "season.toml")).v_cap_ms     # the season's 128 ms
+    p.v_cap_ms = Params.load(os.path.join(ROOT, "harness", "season.toml")).v_cap_ms     # the season's 64 ms
     times = times or {i: 0.01 for i in range(1, M + 1)}
     timed = timed or {t: {i: 0.001 * t for i in range(1, M + 1)} for t in range(1, p.timed_runs + 1)}
     V = V or {}
@@ -96,7 +106,8 @@ def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok
     b.work = tempfile.mkdtemp(prefix="rf-stream-", dir=os.environ.get("RF_TEST_TMP"))
     b.store = os.path.join(b.work, "store")
     b.leafdata = os.path.join(b.work, "leafdata")
-    b.calls, b.reqs, b.svc, b.verify_calls, b.data_seen = [], {}, FakeSvc(mism), [], []
+    b.calls, b.reqs, b.svc, b.verify_calls, b.data_seen = [], {}, FakeSvc(mism, mism_from), [], []
+    b.timeouts = []
     b.service = lambda name: b.svc
     b.stop = lambda svc, rec: rec.update(service_stats=stats or {"signatures": 7 * M, "replays": 7 * M * p.timed_runs,
                                                                  "mismatches": 0})
@@ -104,22 +115,24 @@ def make(times=None, timed=None, M=4, reject=(), V=None, recheck=None, canary_ok
 
     def verify(items, what, timeout, warm=False):
         b.verify_calls.append((what, [os.path.basename(rel) for _, _, rel in items]))
+        b.timeouts.append((what, timeout, warm))
         if any(c in what for c in crash):
             raise Fail(f"{what}: verify: exit -11, 0 of {len(items)} answers", kind="crash")
+        run = int(what.split("judged run ")[1].split()[0]) if "judged run " in what else None
         out = []
         for vk, c, rel in items:
             i = int(os.path.basename(rel).split(".")[0][4:])
             if what.endswith("canaries"):
                 out.append((False, 1))
-            elif "timed again" in what:
-                out.append((i not in recheck_reject, recheck[i].pop(0)))
             else:
-                out.append((i not in reject, V.get(i, 10 ** 6)))
+                v = V.get(i, 10 ** 6)
+                out.append((i not in reject and not (i in reject_later and run > 1),
+                            v[run - 1] if isinstance(v, list) else v))
         return out
     b.verify = verify
 
-    def canary_check(vk, targets, what, timeout=None):
-        res, n = Bench.canary_check(b, vk, targets, what, timeout)
+    def canary_check(vk, targets, what, bounded=False):
+        res, n = Bench.canary_check(b, vk, targets, what, bounded)
         for k, name in canary_ok:
             if k in res:
                 res[k].append(name)
@@ -160,7 +173,9 @@ def main():
         fails += not cond
 
     times = {1: 0.5, 2: 0.6, 3: 0.7, 4: 0.8}
-    timed = {1: {1: 0.010, 2: 0.020, 3: 0.004, 4: 0.040}, 2: {1: 0.012, 2: 0.018, 3: 0.003, 4: 0.050}}
+    # pass totals 0.074, 0.083, 0.080 s: the median pass is pass 3 (not the per-step minima, nor pass 1)
+    timed = {1: {1: 0.010, 2: 0.020, 3: 0.004, 4: 0.040}, 2: {1: 0.012, 2: 0.018, 3: 0.003, 4: 0.050},
+             3: {1: 0.011, 2: 0.019, 3: 0.005, 4: 0.045}}
     b = make(times, timed)
     rec = b.stream_run()
     st = rec["steps"]
@@ -187,7 +202,7 @@ def main():
     check(all(b.reqs[f"service{i}"][1]["leaf.bin"] == xs[i - 1] and len(xs[i - 1]) == 32 * p.n for i in range(1, 5))
           and len(set(xs)) == 4
           and all(b.reqs[f"timed{t}-step{i}"][1][k] == b.reqs[f"service{i}"][1][k]
-                  for t in (1, 2) for i in range(1, 5) for k in ("leaf.bin", "leaf.json")),
+                  for t in (1, 2, 3) for i in range(1, 5) for k in ("leaf.bin", "leaf.json")),
           "every step gets its own data as leaf.bin (32 n bytes, SHAKE-256(domain ‖ s_i)); every timed pass gets the "
           "service run's leaf.bin and leaf.json byte for byte")
     check(rec["leaf_data"] == {"xof": "shake256", "domain": "recursion.fast/leaf-data/v1"}
@@ -200,22 +215,29 @@ def main():
           "the data of all M steps is written before the first request, to a runner-only directory beside the store "
           "(never under it), and removed after the stream")
     t1 = [b.reqs[f"timed1-step{i}"] for i in range(1, 5)]
-    check(b.calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2) for i in range(1, 5)]
-          and b.svc.replays == 2
+    check(b.calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2, 3) for i in range(1, 5)]
+          and b.svc.replays == 3
           and all(ins["oracle.key"] == (KEY + "\n").encode() for _, ins in t1)
           and t1[2][1]["prev.bin"] == proof(2) and t1[0][0] == "first"
           and sorted(t1[1][1]) == sorted(leaf + ["prev.bin", "prev.stmt", "oracle.key"]),
-          "two timed passes after a replay each; a timed request gets oracle.key and the service run's previous output")
-    check([s["P_s"] for s in st] == [0.010, 0.018, 0.003, 0.040] and [s["P_service_s"] for s in st] == [0.5, 0.6, 0.7, 0.8]
-          and st[3]["P_timed_s"] == [0.040, 0.050],
-          f"P_i is the minimum of the timed passes; the service run's times are recorded: {[s['P_s'] for s in st]}")
+          "three timed passes after a replay each; a timed request gets oracle.key and the service run's previous output")
+    check(all("P_s" not in s for s in st) and st[3]["P_timed_s"] == [0.040, 0.050, 0.045],
+          "the timed passes record each step's times in pass order (P_timed_s), and no P_s of their own")
     sc = score(p, rec)
-    Ptot = 0.010 + 0.018 + 0.003 + 0.040
-    check(abs(sc["P_total_s"] - Ptot) < 1e-12 and sc["final_pi_bytes"] == 100
-          and abs(sc["S"] - Ptot * 2 ** (100 / 2 ** 20)) < 1e-12 and "P_bar" not in sc and "n_ref" not in sc
-          and sc["tracks"] == {"final": "S", "every": "S"} and "tracks_reason" not in sc,
-          f"S = P_total · 2^(|π_M| / size_ref), both tracks: {sc['S']:.6g}, {sc['tracks']}")
-    check([x["before"] for x in b.samples] == ["service run, step 1", "timed pass 1", "timed pass 2", "closing"],
+    Ptot = 0.011 + 0.019 + 0.005 + 0.045
+    check(sc["median_pass"] == 3 and [s["P_s"] for s in st] == [0.011, 0.019, 0.005, 0.045]
+          and [s["P_service_s"] for s in st] == [0.5, 0.6, 0.7, 0.8]
+          and [round(x, 12) for x in sc["pass_totals_s"]] == [0.074, 0.083, 0.08],
+          f"P_total is the median pass total (pass 3 of {[round(x, 3) for x in sc['pass_totals_s']]}), P_i the step's time in "
+          f"that pass, not its least; the service run's times are recorded: {[s['P_s'] for s in st]}")
+    check(abs(sc["P_total_s"] - Ptot) < 1e-12 and sc["final_pi_bytes"] == 100 and p.size_ref == 1 << 19
+          and abs(sc["S"] - Ptot * 2 ** (100 / 2 ** 19)) < 1e-12 and "P_bar" not in sc and "n_ref" not in sc
+          and abs(sc["S_every"] - Ptot * 2 ** (100 / 2 ** 19)) < 1e-12 and sc["max_pi_bytes"] == 100
+          and sc["tracks"] == {"final": "S", "every": "S_every"} and "tracks_reason" not in sc,
+          f"S = P_total · 2^(|π_M| / size_ref), S_every = P_total · 2^(max |π_i| / size_ref): {sc['S']:.6g}, "
+          f"{sc['S_every']:.6g}, {sc['tracks']}")
+    check([x["before"] for x in b.samples] == ["service run, step 1", "timed pass 1", "timed pass 2", "timed pass 3",
+                                               "closing"],
           f"calibration samples: {[x['before'] for x in b.samples]}")
     check(sorted(b.canary_targets) == [1, 2, 4] and st[0]["canaries_accepted"] == [] and rec["canaries"] == 5,
           "statement canaries of outputs 1, 2 and M (stmt-bit each, first-child for outputs 2 and M: output 1 is a leaf)")
@@ -240,22 +262,27 @@ def main():
                out_bytes={2: stash}, reject={2})
     fails_with("an intermediate whose batch check crashed, its state in the trace (sized by its file)", not_acc,
                out_bytes={2: stash}, crash=("intermediate",))
-    fails_with("an intermediate rejected when timed again, its state in the trace (sized by its file)", not_acc,
-               out_bytes={2: stash}, V={2: 200e6}, recheck={2: [150e6, 140e6]}, recheck_reject={2})
-    fails_with("an intermediate whose re-timing crashed, its state in the trace (sized by its file)", not_acc,
-               out_bytes={2: stash}, V={2: 200e6}, crash=("timed again",))
-    fails_with("V_M above v_cap in all three timings", "above v_cap = 128 ms", V={4: 200e6}, recheck={4: [150e6, 190e6]})
+    fails_with("an intermediate rejected in a later judged run, its state in the trace (sized by its file)", not_acc,
+               out_bytes={2: stash}, reject_later={2})
+    fails_with("an intermediate whose second judged run crashed, its state in the trace (sized by its file)", not_acc,
+               out_bytes={2: stash}, crash=("intermediate outputs, judged run 2",))
+    fails_with("V_M above v_cap in all three judged runs", "above v_cap = 64 ms", V={4: [200e6, 150e6, 190e6]})
+    fails_with("V_M above v_cap in two of its three judged runs (the median counts, not the least)",
+               "takes V = 200.000 ms (the median of its three judged runs, [200.0, 10.0, 300.0] ms), above v_cap = 64 ms",
+               V={4: [200e6, 10e6, 300e6]})
     fails_with("a canary of the final output accepted", "statement canaries accepted by acc", canary_ok=[(4, "x")])
     fails_with("the stream's cap", "stream_s", cap_at="timed1-step2")
 
-    b = make(V={4: 200e6}, recheck={4: [100e6, 300e6]})
+    b = make(V={4: [200e6, 10e6, 20e6], 2: [5e6, 300e6, 6e6]})
     rec = b.stream_run()
-    check(rec["steps"][3]["V_ns"] == 100e6 and rec["steps"][3]["V_runs_ns"] == [200e6, 100e6, 300e6],
-          "V_M above the cap is timed twice more and the minimum counts (one slow check is not a breach)")
+    check(rec["steps"][3]["V_ns"] == 20e6 and rec["steps"][3]["V_runs_ns"] == [200e6, 10e6, 20e6]
+          and rec["steps"][1]["V_ns"] == 6e6 and rec["steps"][1]["V_runs_ns"] == [5e6, 300e6, 6e6]
+          and rec["every"]["eligible"],
+          "V_i is the median of its three judged times, in run order in V_runs_ns (one slow run is not a breach)")
 
     for what, kw, why in (("an intermediate output rejected", {"reject": {2}}, "output 2 rejected by acc"),
-                          ("an intermediate V above v_cap", {"V": {3: 200e6}, "recheck": {3: [150e6, 140e6]}},
-                           "output 3: V = 140.0 ms above v_cap"),
+                          ("an intermediate V above v_cap (the median of three)", {"V": {3: [200e6, 150e6, 140e6]}},
+                           "output 3: V = 150.0 ms above v_cap"),
                           ("a canary of output 1 accepted", {"canary_ok": [(1, "stmt-bit")]},
                            "output 1: statement canaries accepted")):
         b = make(**kw)
@@ -274,9 +301,10 @@ def main():
     for what, kw, why in (("a crashed check of intermediate outputs", {"crash": ("intermediate",)}, "its check failed"),
                           ("a crashed check of the canaries of outputs 1 and 2", {"crash": ("outputs 1 and 2",)},
                            "output 1: its statement canaries' check failed"),
-                          ("an intermediate rejected when timed again",
-                           {"V": {2: 200e6}, "recheck": {2: [150e6, 140e6]}, "recheck_reject": {2}},
-                           "output 2: rejected by acc when timed again")):
+                          ("an intermediate crashed in its third judged run",
+                           {"crash": ("intermediate outputs, judged run 3",)}, "its check failed"),
+                          ("an intermediate rejected in a later judged run", {"reject_later": {2}},
+                           "output 2: rejected by acc when checked again")):
         b = make(**kw)
         try:
             rec = b.stream_run()
@@ -287,18 +315,31 @@ def main():
             check(False, f"{what}: REJECT ({e})")
     b = make()
     b.stream_run()
-    finals = [f for w, f in b.verify_calls if w == "service run: the final output"]
+    finals = [(w, f) for w, f in b.verify_calls if w.startswith("service run: the final output, judged run")]
     inter = [f for w, f in b.verify_calls if "intermediate" in w]
-    check(finals == [["step4.bin"]] and all("step4.bin" not in f for f in inter) and sum(map(len, inter)) == 3,
-          f"the final output is checked on its own badge run, the intermediates apart: {finals}, {inter}")
-    fails_with("a crashed check of the final output", "service run: the final output: verify: exit -11", crash=("the final output",))
-    fails_with("the final output rejected when timed again", "is rejected when checked again",
-               V={4: 200e6}, recheck={4: [100e6, 100e6]}, recheck_reject={4})
-    b = make(reject={2}, V={3: 200e6}, recheck={3: [100e6, 100e6]})
+    check([f for _, f in finals] == [["step4.bin"]] * 3 and [w.endswith(f"judged run {r} of 3") for r, (w, _) in enumerate(finals, 1)] == [True] * 3
+          and all("step4.bin" not in f for f in inter) and inter == [["step1.bin", "step2.bin"]] * 3 + [["step3.bin"]] * 3,
+          f"every checked proof is judged in three separate badge runs, each checking it once; the final output in "
+          f"three runs of its own, the intermediates apart: {[f for _, f in finals]}, {inter}")
+    judged = [(w, t, warm) for w, t, warm in b.timeouts if "judged run" in w]
+    cv = [t for w, t, _ in b.timeouts if w.endswith("outputs 1 and 2 canaries")]
+    vc = b.p.v_cap_ms / 1e3
+    check(len(judged) == 9 and all(warm for _, _, warm in judged)
+          and [round(t, 9) for w, t, _ in judged if "intermediate" in w] == [round(60 + 2 * 3 * vc, 9)] * 3 + [round(60 + 2 * 2 * vc, 9)] * 3
+          and [t for w, t, _ in judged if "final" in w] == [130.0] * 3 and [round(t, 9) for t in cv] == [round(60 + 2 * 4 * vc, 9)],
+          f"each judged run is a fresh warmed badge run; a run of c intermediate outputs, and the canary run of outputs 1 "
+          f"and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap, the final output's by the stream's cap: "
+          f"{[(w[-24:], round(t, 3)) for w, t, _ in b.timeouts]}")
+    fails_with("a crashed check of the final output", "service run: the final output, judged run 1 of 3: verify: exit -11",
+               crash=("the final output",))
+    fails_with("a crash in the final output's third judged run", "service run: the final output, judged run 3 of 3: verify: exit -11",
+               crash=("the final output, judged run 3",))
+    fails_with("the final output rejected in a later judged run", "is rejected when checked again", reject_later={4})
+    b = make(reject={2})
     rec = b.stream_run()
     whats = [w for w, _ in b.verify_calls]
-    check(not any("timed again" in w or "outputs 1 and 2" in w for w in whats) and rec["steps"][2]["V_ns"] == 200e6,
-          f"once `every` is lost (output 2 rejected), no re-timing and no canaries of outputs 1 and 2: {whats}")
+    check(not any("outputs 1 and 2" in w for w in whats) and sum("intermediate" in w for w in whats) == 6,
+          f"once `every` is lost (output 2 rejected), no canaries of outputs 1 and 2: {whats}")
 
     # 9. the replay audit
     fails_with("a MISMATCH refusal logged in a timed pass",
@@ -309,6 +350,24 @@ def main():
                stats={"signatures": 28, "replays": 56, "mismatches": 1})
     fails_with("fewer replays than timed_runs · signatures", "the timed passes made 55 signatures, not timed_runs · signatures",
                stats={"signatures": 28, "replays": 55, "mismatches": 0})
+    fails_with("a SIGN missing in the third pass (replays = 3 · signatures - 1)",
+               "the timed passes made 83 signatures, not timed_runs · signatures = 3 · 28",
+               stats={"signatures": 28, "replays": 83, "mismatches": 0})
+    fails_with("an extra SIGN in the third pass (replays = 3 · signatures + 1)",
+               "the timed passes made 85 signatures, not timed_runs · signatures = 3 · 28",
+               stats={"signatures": 28, "replays": 85, "mismatches": 0})
+    fails_with("a MISMATCH refusal logged in the third timed pass", "timed pass 3: a SIGN in a timed pass differed",
+               mism=["rf-oracle: refused (status 4): replay at one-time key index 9: the trace digest differs"], mism_from=3)
+    b = make()
+    rec = b.stream_run()
+    check(b.p.timed_runs == 3 and rec["service_stats"]["replays"] == 3 * rec["service_stats"]["signatures"],
+          "three passes, each replaying every signature: replays = 3 · signatures passes the audit")
+    rec["steps"][1]["P_timed_s"] = rec["steps"][1]["P_timed_s"][:2]
+    try:
+        score(b.p, rec)
+        check(False, "a step with two timed times is scored")
+    except MalformedStream as e:
+        check("step 2" in str(e), f"a step with two timed times is MalformedStream (the organiser's ERROR): {e}")
     fails_with("no replay statistics", "the service reported no replay statistics", stats={"signatures": 28})
 
     # 10. the page cache is warmed before every request

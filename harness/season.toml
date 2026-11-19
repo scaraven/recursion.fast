@@ -6,11 +6,13 @@
 # so is a benchmark that reaches stream_s (a slow or hung check included).
 name = "season-1"
 
-[score]           # AGENTS.md §7: one score for both tracks (`final`, `every`), seconds, lower is better:
-                  # S = P_total · 2^(|π_M| / size_ref), P_total = Σ_i P_i (the stream's wall time,
-                  # P_i the least of step i's timed times)
-size_ref = 1048576   # 1 MiB: the final output's |π| multiplies S by 2^(|π_M| / size_ref) (×1.19 at
-                     # 256 KiB, ×1.41 at final_pi_cap); no other size and no verifier time is scored
+[score]           # AGENTS.md §7: seconds, lower is better, each track pricing its own proofs:
+                  # P_total = the median of the timed_runs pass totals T_t = Σ_i P_{i,t};
+                  # S = P_total · 2^(|π_M| / size_ref) (`final`),
+                  # S_every = P_total · 2^(max_i |π_i| / size_ref) (`every`)
+size_ref = 524288 # 512 KiB: `final` multiplies P_total by 2^(|π_M| / size_ref), `every` by
+                  # 2^(max_i |π_i| / size_ref) (×1.41 at 256 KiB, ×2 at final_pi_cap; up to ×4 in
+                  # `every`, whose intermediate proofs may reach pi_cap); no verifier time is scored
 
 [certificate]     # the certificate job's Lean steps, on the evaluation VM; a breach is the
                   # entry's REJECT, except the kernel's, which leaves the certificate unchecked
@@ -39,27 +41,30 @@ claim_bytes = 65536       # claim.json, the renderer's input
 [stream]          # the one IVC stream (AGENTS.md §6): PROVER first, then PROVER step, a fresh
                   # process each, run once against the service (the service run, untimed), then
                   # timed_runs times against its replay (the timed passes)
-M = 8             # steps per stream: one published constant, the same for every entry
+M = 16            # steps per stream: one published constant, the same for every entry
 n = 262144        # 2^18 blocks of 32 bytes per step (leafCap = 2^20): every step proves one leaf
                   # over its data xs_i (leaf.bin, 8 MiB), L_i = leafStmt (dataRoot xs_i) n, dataRoot a
                   # Keccak-256 Merkle root (2^18 block hashes and 2^18 − 1 tree nodes, about 2^19
                   # permutations); c_1 = L_1, c_i = nodeStmt c_{i-1} L_i. The data is the SHAKE-256
                   # expansion of a fresh secret seed s_i per step and evaluation, published after it
 ready_s = 10      # seconds from a request's process start to its `ready` line
-step_s = 60       # seconds per request from its inputs to the death of its last process
-stream_s = 3000   # wall seconds for the whole benchmark from its first calibration sample: the service
+step_s = 20       # seconds per request from its inputs to the death of its last process
+stream_s = 2000   # wall seconds for the whole benchmark from its first calibration sample: the service
                   # run, its checks and canaries, the timed passes and the calibration samples (no
-                  # check has a cap of its own); reaching it is the entry's REJECT. The timed passes
-                  # repeat the service run's requests, so about 3 × the stream's proving time is
-                  # needed. A later season may set another
-check_every = 8   # the service run's intermediate outputs checked in batches of this many, between
-                  # steps (no entry process alive); the final output is checked on its own after them
-timed_runs = 2    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
-                  # service run's; P_i = the minimum of step i's times (no re-timing fit)
+                  # check has a cap of its own); reaching it is the entry's REJECT. 64 requests
+                  # (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the checks, the samples and
+                  # the setup re-reads: the per-request caps bind first except when an entry uses
+                  # nearly every cap at once. The timed passes repeat the service run's requests, so
+                  # about 4 × the stream's proving time is needed. A later season may set another
+check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9–15 after step 16, the
+                  # final output on its own after them (no entry process alive during a check)
+timed_runs = 3    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
+                  # service run's; P_total = the median of the three pass totals (rfh.bench.score);
+                  # must be odd
 
 [calibration]     # AGENTS.md §6: interleaved samples with no entry process alive, medians used
-every = 8         # one sample before the service run's step 1 and every 8 steps after, one before each
-                  # timed pass and a closing one if 30 s of stream_s remain
+every = 8         # samples before the service run's steps 1 and 9, one before each timed pass and a
+                  # closing one if 30 s of stream_s remain: about 6 samples
 idle_s = 2.0      # the idle gap before a sample (1 s left residual load)
 rounds = 32       # the work of one `calib` run (harness/tools/calib.c)
 runs_per_sample = 3     # a sample is the median of this many short runs
@@ -83,12 +88,11 @@ badge_start_s = 2       # a warmed badge process, from its release to the answer
                         # input (start-up included: an entry's top-level constants are evaluated then,
                         # untimed); measured about 0.08 s; a breach is a failed check (the final
                         # output's: REJECT; an intermediate one's: the track `every`)
-v_cap_ms = 128          # one acc check of a checked proof (file read and parse included), one pinned
-                        # core, in a fresh badge process after its warm-up on the organiser's input,
-                        # timed by the runner around the request and by the badge, the larger counts;
-                        # above it the check is timed twice more, each in a fresh process, and the
-                        # minimum counts (a badge run of intermediate checks is bounded by 60 s +
-                        # 2 v_cap per check)
+v_cap_ms = 64           # one acc check of a checked proof (file read and parse included), one pinned
+                        # core, timed by the runner around the request and by the badge, the larger
+                        # counts; a checked proof is judged in three separate fresh badge runs (each
+                        # warmed on an organiser input) and the median of its three times counts (a
+                        # badge run of c intermediate checks is bounded by 60 s + 2 (c + 1) v_cap)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB

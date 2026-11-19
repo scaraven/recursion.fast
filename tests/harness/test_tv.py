@@ -4,19 +4,26 @@ synthetic steps.
 
   python3 tests/harness/test_tv.py
 
-1. `V_i` is one measurement, the batch warmed with an untimed first check; a rejected output is an
-   answer of the check, not a failure (the stream decides what it means); the badge run is bounded
-   only by the stream's cap plus 30 s; a badge run outside the stream has no time bound and is
-   refused.
-2. The score (AGENTS.md §7), pinned by hand-computed vectors: `S = P_total · 2^(|π_M| / size_ref)`,
-   `P_total = Σ_i P_i` (the stream's wall time; deferring work to the last step changes nothing;
-   `c_P` is a health check, never a factor: AGENTS.md §6) with the final output's `|π|` only; `V`
-   is not scored; the tracks: `final`
-   always, `every` only when every output is accepted within the caps and the canaries of outputs 1
-   and 2 are rejected, else `tracks_reason` says why.
-3. The season's constants (AGENTS.md §6, the v6 rules): `M = 8` steps of one leaf of `n = 2^18`
-   blocks of 32 bytes, 2 timed passes, the caps 1 MiB, 512 KiB and 128 ms, the prover's 8 GiB; `Params.load` refuses a
-   malformed shape (`n` above `leafCap = 2^20` among them, `n = 2^20` accepted); the seeds are fresh OS CSPRNG draws,
+1. One badge run gives one measurement per item, the run warmed with an untimed first check; a
+   rejected output is an answer of the check, not a failure (the stream decides what it means); the
+   badge run is bounded only by the stream's cap plus 30 s; a badge run outside the stream has no
+   time bound and is refused. The verifier check (`Bench.judged`): every proof of a batch is judged
+   in three separate fresh, warmed badge runs, each checking it once; `V` is the median of its three
+   times; a rejection in the first run is a rejection, in a later run a rejection when checked again;
+   a run of `c` checks whose failure costs only `every` is bounded by `60 s + 2 (c + 1) v_cap`.
+2. The score (AGENTS.md §7), pinned by hand-computed vectors: `T_t = Σ_i P_{i,t}` per timed pass,
+   `P_total = T_{t*}` the median of the three (ties: the lowest index), `P_i = P_{i,t*}`;
+   `S = P_total · 2^(|π_M| / size_ref)` and, when eligible for `every`, `S_every = P_total ·
+   2^(max_i |π_i| / size_ref)` (`size_ref` = 512 KiB: 256 KiB gives exactly √2); deferring work to the
+   last step changes nothing; `c_P` is a health check, never a factor (AGENTS.md §6); `V` is not
+   scored; the tracks: `final` always, `every` only when every output is accepted within the caps and
+   the canaries of outputs 1 and 2 are rejected, else `tracks_reason` says why; a step without
+   exactly three timed times is `MalformedStream`.
+3. The season's constants (AGENTS.md §6, the v6 rules): `M = 16` steps of one leaf of `n = 2^18`
+   blocks of 32 bytes, 3 timed passes, `step_s` 20 s, `stream_s` 2,000 s, the caps 1 MiB, 512 KiB and
+   64 ms, `size_ref` 512 KiB, the prover's 8 GiB; the smoke's one exception (its `v_cap_ms` 128, its
+   size caps and `size_ref` the season's); `Params.load` refuses a malformed shape (`n` above
+   `leafCap = 2^20` among them, `n = 2^20` accepted, an even `timed_runs`); the seeds are fresh OS CSPRNG draws,
    with no seeded generator, expanded by SHAKE-256 under the published domain; the runner's leaf statements through
    `rf-oracle --data-roots` equal the pure-Python reference; the local season copy keeps every parameter but the two
    it changes.
@@ -35,7 +42,7 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh import draws  # noqa: E402
-from rfh.bench import Bench, Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.bench import Bench, MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
 
 
 class StubBadge:
@@ -46,6 +53,7 @@ class StubBadge:
         self.calls += 1
         self.warm.append(warm)
         self.timeouts.append(timeout)
+        self.items = getattr(self, "items", []) + [[rel for _, _, rel in items]]
         return [((self.calls, k) not in self.reject, self.script.pop(0)) for k in range(len(items))]
 
 
@@ -80,47 +88,103 @@ def main():
     except RuntimeError:
         check(b.badge.calls == 0, "a badge run outside the stream is refused (it would have no time bound)")
 
+    # the verifier check: three separate fresh badge runs per batch, the median of each proof's times
+    b = bench([30, 900, 70, 10, 40, 60])
+    b.p = SimpleNamespace(v_cap_ms=64.0)
+    res = b.judged(two, "batch", bounded=True)
+    check(res == [(True, True, [30, 70, 40], 40), (True, True, [900, 10, 60], 60)] and b.badge.calls == 3
+          and b.badge.warm == [True] * 3 and b.badge.items == [["f", "g"]] * 3,
+          f"each proof judged in three separate warmed badge runs, each checking it once; V the median of its three "
+          f"times (one fast or one slow run decides nothing): {res}")
+    vc = 64.0 / 1e3
+    check([round(t, 9) for t in b.badge.timeouts] == [round(60 + 2 * 3 * vc, 9)] * 3
+          and abs(Bench.bounded(b, 1) - (60 + 4 * vc)) < 1e-12
+          and abs(Bench.bounded(b, 10 ** 6) - b.capped()) < 1,
+          f"a run of c checks whose failure costs only `every` is bounded by 60 s + 2 (c + 1) v_cap, within the "
+          f"stream's cap: {b.badge.timeouts}")
+    b = bench([1] * 6, reject={(1, 0), (2, 1)})
+    b.p = SimpleNamespace(v_cap_ms=64.0)
+    res = b.judged(two, "batch")
+    check([(ok, again) for ok, again, _, _ in res] == [(False, False), (True, False)]
+          and 1029 < b.badge.timeouts[0] <= 1030,
+          "rejected in the first run: rejected; accepted in the first and rejected in a later run: rejected when "
+          "checked again (both recorded); without `bounded` a run is bounded by the stream's cap plus 30 s")
+
     p = Params.load(os.path.join(ROOT, "harness", "season.toml"))
     cal = {"c_P": 1.0}
     N = 1 << 18
 
-    def mk(i, P, pi=100, n=N, **kw):
-        return dict({"index": i, "n": n, "P_s": P, "P_service_s": 2 * P, "V_ns": 10 ** 6, "pi_bytes": pi,
-                     "accepted": True}, **kw)
+    def mk(i, P, pi=100, n=N, times=None, **kw):
+        """A step of P s in each of the three timed passes (or `times`)."""
+        return dict({"index": i, "n": n, "P_timed_s": times or [P] * 3, "P_service_s": 2 * P, "V_ns": 10 ** 6,
+                     "pi_bytes": pi, "accepted": True}, **kw)
 
     def stream(steps, c_P=1.0):
         for s in steps[:2]:
             s.setdefault("canaries_accepted", [])
         return {"steps": steps, "calibration": dict(cal, c_P=c_P)}
-    # vector 1: two steps at 1 s and 2 s, |π_M| = 256 KiB: P_total = 3 s, the size factor 2^(1/4) =
-    # 1.189207115002721, S = 3.5676213450081633
+    # vector 1: two steps at 1 s and 2 s, |π_M| = 256 KiB: P_total = 3 s, the size factor 2^(1/2) =
+    # 1.4142135623730951, S = 4.242640687119285
     sc = score(p, stream([mk(1, 1.0, pi=1 << 30), mk(2, 2.0, pi=256 << 10)]))
-    check(sc["P_total_s"] == 3.0 and abs(sc["size_factor"] - 1.189207115002721) < 1e-15
-          and abs(sc["S"] - 3.5676213450081633) < 1e-14 and sc["final_pi_bytes"] == 256 << 10
+    check(sc["P_total_s"] == 3.0 and sc["size_factor"] == 2 ** 0.5 and p.size_ref == 524288
+          and abs(sc["S"] - 4.242640687119285) < 1e-14 and sc["final_pi_bytes"] == 256 << 10
           and "P_bar" not in sc and "n_ref" not in sc,
-          f"vector 1: S = P_total · 2^(|π_M| / 1 MiB), the final |π| only (output 1's 1 GiB ignored): {sc['S']!r}")
+          f"vector 1: S = P_total · 2^(|π_M| / 512 KiB), |π_M| = 256 KiB gives exactly √2, the final |π| only (output "
+          f"1's 1 GiB ignored): {sc['S']!r}")
     sc_f = score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10, file_bytes=(256 << 10) + 4840)]))
     check(sc_f["final_file_bytes"] == (256 << 10) + 4840 and sc_f["S"] == score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10)]))["S"],
           "the final output's whole file size is published beside |π_M| (final_file_bytes), never scored")
     check(sc["tracks"] == {"final": "S"} and "output 1: |π| = 1073741824 bytes above pi_cap" in sc["tracks_reason"]["every"],
           f"an intermediate |π| above pi_cap (recorded): `final` only: {sc['tracks_reason']}")
-    # vector 2: the season's shape, P_i = i s (i = 1 … 8), |π_M| = 512 KiB: P_total = 36 s, S = 36 √2
-    st = stream([mk(i, float(i), pi=512 << 10) for i in range(1, 9)])
+    # vector 2: the season's shape, P_i = i s (i = 1 … 16), |π_i| = 256 KiB: P_total = 136 s, S = S_every = 136 √2
+    st = stream([mk(i, float(i), pi=256 << 10) for i in range(1, 17)])
     sc = score(p, st)
-    check(sc["P_total_s"] == 36.0 and abs(sc["S"] - 50.91168824543143) < 1e-12
-          and sc["tracks"] == {"final": "S", "every": "S"} and "tracks_reason" not in sc and sc["M"] == 8,
-          f"vector 2 (M = 8): P_total = Σ P_i = 36 s, S = 36 √2, both tracks: {sc['S']!r}")
-    check(sc["P_total_service_run_s"] == 72.0 and abs(sum(s["share_P"] for s in st["steps"]) - 1) < 1e-12
-          and st["steps"][7]["share_P"] == 8 / 36,
+    check(sc["P_total_s"] == 136.0 and abs(sc["S"] - 136 * 2 ** 0.5) < 1e-12 and sc["S_every"] == sc["S"]
+          and sc["tracks"] == {"final": "S", "every": "S_every"} and "tracks_reason" not in sc and sc["M"] == 16,
+          f"vector 2 (M = 16): P_total = Σ P_i = 136 s, S = S_every = 136 √2, both tracks: {sc['S']!r}")
+    check(sc["P_total_service_run_s"] == 272.0 and abs(sum(s["share_P"] for s in st["steps"]) - 1) < 1e-12
+          and st["steps"][15]["share_P"] == 16 / 136,
           "the service run's total and each step's share of P_total are published")
-    even = score(p, stream([mk(i, 1.0) for i in range(1, 9)]))["S"]
-    late = score(p, stream([mk(i, 0.0 if i < 8 else 8.0) for i in range(1, 9)]))["S"]
+    # the median of three pass totals: passes of 5, 3 and 4 s over two steps: P_total = 4 s (pass 3)
+    st = stream([mk(1, 0, times=[2.0, 1.0, 1.5], pi=256 << 10), mk(2, 0, times=[3.0, 2.0, 2.5], pi=256 << 10)])
+    sc = score(p, st)
+    check(sc["pass_totals_s"] == [5.0, 3.0, 4.0] and sc["median_pass"] == 3 and sc["P_total_s"] == 4.0
+          and [s["P_s"] for s in st["steps"]] == [1.5, 2.5] and [s["share_P"] for s in st["steps"]] == [1.5 / 4, 2.5 / 4]
+          and sc["S"] == 4.0 * 2 ** 0.5,
+          f"P_total is the median of the pass totals {sc['pass_totals_s']} (pass {sc['median_pass']}), not the sum of "
+          f"each step's least time (2.5 s); P_i and share_P from that pass: {[s['P_s'] for s in st['steps']]}")
+    for totals, want in (([4.0, 3.0, 4.0], 1), ([3.0, 4.0, 4.0], 2), ([4.0, 4.0, 3.0], 1), ([5.0, 4.0, 4.0], 2),
+                         ([2.0, 2.0, 2.0], 1)):
+        st = stream([mk(1, 0, times=[t / 2 for t in totals]), mk(2, 0, times=[t / 2 for t in totals])])
+        sc = score(p, st)
+        check(sc["median_pass"] == want and sc["P_total_s"] == sorted(totals)[1],
+              f"ties: pass totals {totals}: the median {sorted(totals)[1]} s, the lowest index among the passes with it: "
+              f"pass {sc['median_pass']}")
+    # S_every prices the largest proof: |π| 384, 128, 256 KiB (final): S = 3 · 2^(1/2), S_every = 3 · 2^(3/4)
+    sc = score(p, stream([mk(1, 1.0, pi=384 << 10), mk(2, 1.0, pi=128 << 10), mk(3, 1.0, pi=256 << 10)]))
+    check(sc["S"] == 3.0 * 2 ** 0.5 and sc["S_every"] == 3.0 * 2 ** 0.75 and sc["max_pi_bytes"] == 384 << 10
+          and sc["size_factor_every"] == 2 ** 0.75 and sc["final_pi_bytes"] == 256 << 10,
+          f"S prices |π_M| (256 KiB), S_every the largest |π_i| (384 KiB): {sc['S']!r}, {sc['S_every']!r}")
+    sc = score(p, stream([mk(1, 1.0, pi=384 << 10, accepted=False), mk(2, 1.0, pi=128 << 10)]))
+    check(sc["tracks"] == {"final": "S"} and not any(k in sc for k in ("S_every", "size_factor_every", "max_pi_bytes")),
+          f"not eligible for `every`: no S_every, the track absent: {sorted(sc)}")
+    for what, t in (("two timed times", [1.0, 1.0]), ("four", [1.0] * 4), ("none", None), ("a string", [1.0, "1", 1.0]),
+                    ("a negative time", [1.0, -1.0, 1.0]), ("NaN", [1.0, float("nan"), 1.0])):
+        steps = [mk(1, 1.0), mk(2, 1.0)]
+        steps[1]["P_timed_s"] = t
+        try:
+            score(p, stream(steps))
+            check(False, f"a step with {what} is scored")
+        except MalformedStream as e:
+            check("step 2" in str(e), f"a step with {what} is MalformedStream: {e}")
+    even = score(p, stream([mk(i, 1.0) for i in range(1, 17)]))["S"]
+    late = score(p, stream([mk(i, 0.0 if i < 16 else 16.0) for i in range(1, 17)]))["S"]
     check(even == late, f"deferring all work to the last step changes nothing: {even} = {late}")
-    check(abs(score(p, stream([mk(i, float(i), pi=512 << 10) for i in range(1, 9)], c_P=2.0))["S"] - sc["S"]) < 1e-15,
-          "c_P does not scale the score")
+    st2 = [mk(i, float(i), pi=256 << 10) for i in range(1, 17)]
+    check(abs(score(p, stream(st2, c_P=2.0))["S"] - 136 * 2 ** 0.5) < 1e-12, "c_P does not scale the score")
     slow_v = stream([mk(1, 1.0), mk(2, 1.0, V_ns=10 ** 12), mk(3, 1.0)])
     check(score(p, slow_v)["S"] == score(p, stream([mk(1, 1.0), mk(2, 1.0), mk(3, 1.0)]))["S"]
-          and "output 2: V = 1000000.0 ms above v_cap = 128 ms" in score(p, slow_v)["tracks_reason"]["every"],
+          and "output 2: V = 1000000.0 ms above v_cap = 64 ms" in score(p, slow_v)["tracks_reason"]["every"],
           "V is not scored; an intermediate V above v_cap only leaves `every`")
     for what, steps, why in (
             ("output 2 rejected", [mk(1, 1.0), mk(2, 1.0, accepted=False), mk(3, 1.0)], "output 2 rejected by acc"),
@@ -130,8 +194,8 @@ def main():
              "output 1: statement canaries not checked"),
             ("output 2's check crashed", [mk(1, 1.0), mk(2, 1.0, check_error="`verify: exit -11`"), mk(3, 1.0)],
              "output 2: its check failed (`verify: exit -11`)"),
-            ("output 2 rejected when timed again", [mk(1, 1.0), mk(2, 1.0, recheck_rejected=True), mk(3, 1.0)],
-             "output 2: rejected by acc when timed again"),
+            ("output 2 rejected when checked again", [mk(1, 1.0), mk(2, 1.0, recheck_rejected=True), mk(3, 1.0)],
+             "output 2: rejected by acc when checked again"),
             ("the canaries' check of output 1 crashed", [mk(1, 1.0, canary_error="`x`"), mk(2, 1.0)],
              "output 1: its statement canaries' check failed (`x`)")):
         sc = score(p, stream(steps))
@@ -153,21 +217,30 @@ def main():
     check(len(p.fingerprint) == 64 and all(c in "0123456789abcdef" for c in p.fingerprint),
           "season 1's fingerprint is a sha256 in hex")
 
-    # the season's constants (the v6 rules, D5)
-    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s) == (8, 1 << 18, 2, 60, 3000) and not hasattr(p, "chains")
-          and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 128.0)
-          and (p.size_ref, p.mem_prover) == (1 << 20, "8G") and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
-          f"season 1: M = 8 steps of one leaf of 2^18 blocks, 2 timed passes, caps 1 MiB / 512 KiB / 128 ms, prover 8G")
+    # the season's constants (the v6 rules)
+    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s, p.ready_s) == (16, 1 << 18, 3, 20, 2000, 10)
+          and not hasattr(p, "chains")
+          and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 64.0)
+          and (p.size_ref, p.mem_prover) == (524288, "8G") and (p.check_every, p.calib_every) == (8, 8)
+          and p.badge_start_s == 2 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
+          f"season 1: M = 16 steps of one leaf of 2^18 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
+          f"/ 512 KiB / 64 ms, size_ref 512 KiB, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
-    check((sp.timed_runs, sp.pi_cap, sp.final_pi_cap) == (2, p.pi_cap, p.final_pi_cap) and sp.v_cap_ms == p.v_cap_ms,
-          f"the smoke: 2 timed passes, the season's caps, v_cap {sp.v_cap_ms:g} ms (M = {sp.M}, n = {sp.n})")
+    check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap, sp.size_ref)
+          == (p.pi_cap, p.final_pi_cap, p.file_cap, p.size_ref)
+          and sp.v_cap_ms == 128.0 and p.v_cap_ms == 64.0 and (sp.step_s, sp.stream_s) == (60, 300),
+          f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps and size_ref; the one documented exception, "
+          f"its v_cap {sp.v_cap_ms:g} ms (the season's {p.v_cap_ms:g}); its own time caps")
     season_text = open(os.path.join(ROOT, "harness", "season.toml")).read()
     for what, pat, new, want in (("n above leafCap", r"(?m)^n = 262144", "n = 1048577", "leafCap = 2^20"),
                                  ("n = 2^22, the v5 cap", r"(?m)^n = 262144", "n = 4194304", "leafCap = 2^20"),
                                  ("n zero", r"(?m)^n = 262144", "n = 0", "n not a positive integer"),
-                                 ("M a string", r"(?m)^M = 8", 'M = "8"', "M not a positive integer"),
+                                 ("M a string", r"(?m)^M = 16", 'M = "16"', "M not a positive integer"),
                                  ("no n", r"(?m)^n = 262144", "", "n not a positive integer"),
-                                 ("no timed pass", r"(?m)^timed_runs = 2", "timed_runs = 0", "timed_runs")):
+                                 ("no timed pass", r"(?m)^timed_runs = 3", "timed_runs = 0", "timed_runs"),
+                                 ("an even number of timed passes", r"(?m)^timed_runs = 3", "timed_runs = 2",
+                                  "timed_runs = 2, not an odd positive integer"),
+                                 ("timed_runs a float", r"(?m)^timed_runs = 3", "timed_runs = 3.0", "timed_runs")):
         bad, k = re.subn(pat, new, season_text, count=1)
         assert k == 1
         with tempfile.TemporaryDirectory(prefix="rf-shape-") as bd:

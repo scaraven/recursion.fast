@@ -21,15 +21,16 @@ own `NS`, so a badge whose in-process timer under-reports (a compiler or runtime
 that is not what it should be) gains nothing. The external time adds the request's round trip
 through two pipes, reading the file and parsing the two hex strings: about 0.3 ms plus about
 0.4 ms per MiB of file from the page cache (measured by `tests/harness/accprobe/run.py`, which
-prints it: 0.3 ms for a 5 KB file, 3.6 to 5.7 ms for a 9.2 MB one), against `v_cap` = 128 ms; the
+prints it: 0.3 ms for a 5 KB file, 3.6 to 5.7 ms for a 9.2 MB one), against `v_cap` = 64 ms; the
 checked files are at most `file_cap`. The first request of a process also pays the process's
 start-up (about 80 ms there).
 
 **The warm-up.** Every run whose times are judged is a fresh process that first checks the
 organiser's warm-up input (`warm_file`: a fixed, well-formed signed proof under a fresh random key
-and statement, rejected at the signature) and drops that answer; then the items, all distinct. A
-re-timing is another fresh, warmed process. So no judged check runs in a process that has seen its
-input: an entry's verifier can keep state across the checks of one process (a top-level constant
+and statement, rejected at the signature) and drops that answer; then the items, all distinct. Each
+checked proof is judged in three such runs (`Bench.judged`: three fresh, warmed processes, each
+checking every proof of its batch once), and the median of its three times is its `V`. So no judged
+check runs in a process that has seen its input: an entry's verifier can keep state across the checks of one process (a top-level constant
 is one object for the life of the process, and a `Thunk` in it is forced once), and a warm-up on
 the judged input itself would have paid a memoised verifier's work untimed (review R7,
 `tests/harness/accprobe/MemoSub.lean`). The warm-up is recognisable, which costs nothing: it only
@@ -37,8 +38,8 @@ pays the start-up and the page-in. The start-up, from the sandbox's release to t
 answer, is capped by the season's `badge_start_s` (2 s, against about 0.08 s measured), since the
 entry's top-level constants are evaluated then, untimed; past it the run fails like a timed-out
 one. Work done inside a judged check is that check's. The runner's own
-thread is not pinned, so its scheduling can only add to the external time, never subtract (a check
-near the cap is timed twice more and the least counts). An answer that arrives before its request
+thread is not pinned, so its scheduling can only add to the external time, never subtract (one slow
+run of three does not decide: the median counts). An answer that arrives before its request
 was written, or more than one answer to a request, is a crash.
 
 Only checks about the entry are made here: a proof the entry produced, accepted for its
@@ -123,7 +124,8 @@ class Badge:
         With `warm` (every run whose times are judged), the process first checks the organiser's
         warm-up input (`warm_file`, under a fresh random key and statement), so that no timed item
         is the process's first, coldest check, and no timed item is one the process has seen: the
-        items of a run are distinct, and a re-timing is a fresh run (`Bench.v_capped`). The warm-up
+        items of a run are distinct, and each of a proof's three judged runs is a fresh process
+        (`Bench.judged`). The warm-up
         is recognisable (an entry may detect it); it only pays the start-up and the page-in. The
         start-up, from release to the warm-up's answer, is capped by `start_s`: work an entry's
         top-level constants do when the process starts is untimed, and this bounds it. `timeout`

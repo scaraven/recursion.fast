@@ -12,13 +12,16 @@ runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, i
 the service run, every step a fresh process, every output checked, the final output's caps and
 statement canaries, the track `every`'s conditions; then `timed_runs` timed passes against the
 service's replay mode, every output byte-identical to the service run's; interleaved `c_P`
-samples); the score (`rfh.bench.score`: `S = P_total · 2^(|π_M| / size_ref)`, the tracks the run is
-in). One stream per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and
-into the result. The first failure ends the run with `benchmark: fail` and its reason; so does
-reaching `stream_s`. A machine whose fingerprint is missing, unreadable or not the season's
+samples); the score (`rfh.bench.score`: `P_total` the median of the pass totals,
+`S = P_total · 2^(|π_M| / size_ref)` in `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` in
+`every`, the tracks the run is in). One stream per evaluation, no repeats. The per-step JSON lines
+go to WORK/stream.jsonl and into the result. The first failure ends the run with `benchmark: fail`
+and its reason; so does reaching `stream_s`. A machine whose fingerprint is missing, unreadable or not the season's
 (AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and a `c_P` that
 drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
-machine was not in its calibrated state, the organiser's failure, never a score change.
+machine was not in its calibrated state, the organiser's failure, never a score change. A stream
+record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
+`timed_runs` timed times) is a runner fault: `benchmark: error` named `malformed`, never the entry's.
 """
 import argparse
 import glob
@@ -31,16 +34,18 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Bench, Fail, Params, build_calib, fingerprint_problem, fs_free, machine, printable, score  # noqa: E402
+from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, fingerprint_problem, fs_free,  # noqa: E402
+                       machine, printable, score)
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream"]
 
 
 class Drift(Exception):
-    """The machine is not in the season's state: its fingerprint is missing, unreadable or another,
-    or its calibration drifted (AGENTS.md §6). An organiser ERROR, never the entry's verdict;
-    `kind` names it for the bot (`fingerprint`, `drift`)."""
+    """An organiser ERROR, never the entry's verdict: the machine is not in the season's state (its
+    fingerprint is missing, unreadable or another, or its calibration drifted, AGENTS.md §6), or the
+    runner wrote a stream record the score cannot be computed from. `kind` names it for the bot
+    (`fingerprint`, `drift`, `malformed`)."""
 
     def __init__(self, msg, kind):
         super().__init__(msg)
@@ -151,13 +156,21 @@ def main():
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
             log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), (a health check)")
-            res["score"] = score(p, res["stream"])
+            try:
+                res["score"] = score(p, res["stream"])
+            except MalformedStream as e:
+                raise Drift(f"organiser ERROR: the stream's record is malformed ({e}): a runner fault, not the "
+                            "entry's", "malformed")
             with open(os.path.join(work, "stream.jsonl"), "w") as f:
                 for s in res["stream"]["steps"]:
                     f.write(json.dumps(s) + "\n")
             sc = res["score"]
-            log(f"score: S = {sc['S']:.4f} (P_total {sc['P_total_s']:.4f} s, size factor {sc['size_factor']:.4f} at "
-                f"|π_M| = {sc['final_pi_bytes']} B), tracks {sorted(sc['tracks'])}"
+            log(f"score: S = {sc['S']:.4f} (P_total {sc['P_total_s']:.4f} s, the median of the pass totals "
+                f"{[round(x, 4) for x in sc['pass_totals_s']]} s, pass {sc['median_pass']}; size factor "
+                f"{sc['size_factor']:.4f} at |π_M| = {sc['final_pi_bytes']} B)"
+                + (f", S_every = {sc['S_every']:.4f} (size factor {sc['size_factor_every']:.4f} at max |π_i| = "
+                   f"{sc['max_pi_bytes']} B)" if "S_every" in sc else "")
+                + f", tracks {sorted(sc['tracks'])}"
                 + (f"; not in `every`: {sc['tracks_reason']['every'][:300]}" if "tracks_reason" in sc else ""))
             if not cal["c_P_ok"]:
                 raise Drift(f"organiser ERROR: c_P = {cal['c_P']:.4f} drifted by {cal['c_P_drift']:.4f} from the "

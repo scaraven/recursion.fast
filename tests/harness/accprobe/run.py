@@ -27,11 +27,12 @@ that external time is printed).
    byte longer. With the glue elaborated beside the entry (the badge before this fix), the proof
    is rejected: the hex parser reads the key as zeros and the length word 7 as 1000.
 3. `MemoSub`: a verifier of about 0.5 to 1 s per statement that memoises across the checks of one
-   process (a closed-term trie of thunks). Judged as the runner judges the final output (one
-   fresh process warmed with the organiser's input, then `Bench.v_capped`'s two re-timings, each
-   in a fresh process), its time must be above `v_cap`, so the entry would be REJECTed; warmed with
-   the judged input itself (the runner before review R7) the judged check answers from the memo,
-   below `v_cap`, which the test also shows.
+   process (a closed-term trie of thunks). Judged as the runner judges the final output
+   (`Bench.judged`: three separate fresh processes, each warmed with the organiser's input and
+   checking the proof once, the median of the three times), it gains nothing: each of its three
+   judged times is a first check in a fresh process, above `v_cap`, so the entry would be REJECTed;
+   warmed with the judged input itself (the runner before review R7) the judged check answers from
+   the memo, below `v_cap`, which the test also shows.
 4. The gate's rule 9 (`--wiring`) passes on every per-entry module (the hostile instances change
    nothing there).
 
@@ -155,13 +156,13 @@ def main():
     b = Bench.__new__(Bench)
     b.p, b.badge, b.store = SEASON, badge("memo"), D
     b.deadline = (time.monotonic() + 600, "the test's bound")
-    ((ok, ns),) = b.check([item], "the final output")
-    v, runs, again = b.v_capped(item, ns, "the final output (V above v_cap, timed again)")
+    ((ok, again, runs, v),) = b.judged([item], "the final output")
     cap = SEASON.v_cap_ms * 1e6
-    good = ok and again and v > cap
+    good = ok and again and v > cap and len(runs) == 3 and all(r > cap for r in runs) and b.badge.n == 3
     fails += not good
-    print(f"{'ok  ' if good else 'FAIL'} memo, judged as the final output: V = {v / 1e6:.2f} ms (the least of "
-          f"{[round(r / 1e6, 2) for r in runs]}), above v_cap = {SEASON.v_cap_ms:g} ms: REJECT (must be above)")
+    print(f"{'ok  ' if good else 'FAIL'} memo, judged as the final output in {b.badge.n} fresh badge runs: V = "
+          f"{v / 1e6:.2f} ms (the median of {[round(r / 1e6, 2) for r in runs]}, each a first check in its process), "
+          f"above v_cap = {SEASON.v_cap_ms:g} ms: REJECT (must be above)")
     old = run("memo", [(svc.vk, zero, mf), (svc.vk, zero, mf)], warm=False)
     good = all(r[0] for r in old) and old[1][1] < cap
     fails += not good

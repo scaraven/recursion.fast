@@ -32,7 +32,7 @@
 #                whether a slow build fits can depend on the cache hitting.
 #   benchmark    prover build, setup, the runs, the checks, the score; untrusted code runs only
 #                inside the sandbox. **One job**: the calibration and the one IVC stream
-#                (interleaved `c_P` samples, the service run and its two timed passes); one run, no repeats.
+#                (interleaved `c_P` samples, the service run and its three timed passes); one run, no repeats.
 #                The input `split` is kept for callers and selects the same one job. The parts are defined once, in `harness/aggregate.py` (the `plan` job
 #                prints them), and the aggregation requires exactly that set: a missing, duplicated
 #                or mismatched part is ERROR, never ACCEPT. The VM provides the machine
@@ -45,7 +45,7 @@
 # job's fixed steps stay below its limit, so no job is killed with its entry (a missing part and an
 # ERROR): a step over its cap is the entry's REJECT with the reason (a kernel over its cap leaves
 # the certificate unchecked); a stream that reaches `stream_s`, a slow or hung check included, is
-# truncated and not comparable (REJECT if no step was checked). The limits:
+# the entry's REJECT. The limits:
 #   setup, setup-tools, plan, attest: 30, 30, 10, 10 minutes;
 #   certificate: the entry's capped steps render_s 30 + source_rule_s 120 + build_s 1200 + kernel_s
 #     600 + gate_s 120 + badge_s 180 = 2250 s (37.5 min; 47.5 with nanoda's second kernel_s), limit
@@ -55,9 +55,9 @@
 #     6 min remain;
 #   benchmark: one benchmark of at most PART_S = 64 min (harness/evaluate.py), limit 70: inside
 #     PART_S the entry's capped steps build_s 120 + setup_s 240 + the setup tree's hash 60 +
-#     stream_s 3000 = 3420 s (57 min), 7 min for the organiser's own steps (the calibration
-#     instance, the leaf digests, the 30 s a check batch may run past stream_s, the service's stop,
-#     the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
+#     stream_s 2000 = 2420 s (40.3 min), the rest (23.7 min) for the organiser's own steps (the
+#     calibration instance, the leaf data and digests, the 30 s a check batch may run past
+#     stream_s, the service's stop, the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
 #     restore, the certificate download, the fetch, the result upload). The server kills a bench
 #     VM 90 minutes after its job starts (infra/slots.json `hard_limit_s`), 20 above this limit.
 # Worst case 200 minutes (210 with nanoda); with the core commit's caches in place the `rf-bench`
