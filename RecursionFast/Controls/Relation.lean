@@ -330,22 +330,22 @@ theorem wrong_root (acc : Digest → Signed → Bool) : ¬ Rel acc (leafStmt s0 
 /-- **Wrong block**: the statement of the leaf `[s0]` is not witnessed by `[s1]`, under every
 `acc`. -/
 theorem wrong_block (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (dataRoot [s0]) 1) (.leaf [s1]) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+    ¬ Rel acc (leafStmt (dataRoot [s0]) 1) (.leaf [s1]) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
 /-- **Wrong count**: the root of `[s0, s1]` committed with the count `1` is not witnessed by
 `[s0, s1]`, under every `acc` (the statement binds the number of blocks). -/
 theorem wrong_count (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 1) (.leaf [s0, s1]) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 1) (.leaf [s0, s1]) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
 /-- **One block dropped**: the statement of `[s0, s1]` is not witnessed by `[s0]`, under every
 `acc`. -/
 theorem dropped_block (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s0]) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s0]) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
 /-- **One block added**: the statement of `[s0]`, and its root committed with the count `2`, are
@@ -358,8 +358,8 @@ theorem extra_block (acc : Digest → Signed → Bool) :
 /-- **Two blocks swapped**: the statement of `[s0, s1]` is not witnessed by `[s1, s0]`, under
 every `acc` (the data tree is ordered). -/
 theorem swapped_blocks (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s1, s0]) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
+    ¬ Rel acc (leafStmt (dataRoot [s0, s1]) 2) (.leaf [s1, s0]) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
 /-- **The carry-up is not a duplication**: the root of three blocks is not the root of the four
@@ -380,8 +380,8 @@ theorem root_not_xor : dataRoot [s0, s1] ≠ xor2 (leafItem s0) (leafItem s1) :=
 /-- **The XOR's statement is rejected**: the statement committing to the XOR of the two block
 hashes is not witnessed by the two blocks, under every `acc`. -/
 theorem xor_rejected (acc : Digest → Signed → Bool) :
-    ¬ Rel acc (leafStmt (xor2 (leafItem s0) (leafItem s1)) 2) (.leaf [s0, s1]) := fun h => by
-  revert h; rw [Rel, ← leafStmtF_eq, ← dataRootF_eq, ← leafItemF_eq]
+    ¬ Rel acc (leafStmt (xor2 (leafItem s0) (leafItem s1)) 2) (.leaf [s0, s1]) := by
+  rw [Rel, ← leafStmtF_eq, ← dataRootF_eq, ← leafItemF_eq]
   decide +kernel
 
 /-! ## Signed leaf proofs -/

@@ -279,11 +279,8 @@ private theorem length_iterate_treeLevel_pow : ∀ (r : ℕ) (xs : List Digest),
 
 /-- A digest that some number of levels reaches alone is the root. -/
 private theorem treeRoot_of_iterate {cs : List Digest} {x : Digest} (k : ℕ)
-    (h : treeLevel^[k] cs = [x]) : treeRoot cs = x := by
-  -- `k` more levels change nothing after `|cs|`, and `|cs|` more change nothing after `k`.
-  rw [treeRoot, ← iterate_treeLevel_of_length_le_one (length_iterate_length_le_one cs) k,
-    ← Function.iterate_add_apply, Nat.add_comm k, Function.iterate_add_apply, h,
-    iterate_treeLevel_of_length_le_one (by simp), List.headD_cons]
+    (h : treeLevel^[k] cs = [x]) : treeRoot cs = x :=
+  (treeRoot_eq cs).trans (root_of_iterate _ k (treeLevel_eq ▸ h))
 
 /-- **The root over two halves of `2^r` digests** is the node statement of the halves' roots. -/
 theorem treeRoot_append {r : ℕ} {xs ys : List Digest} (hx : xs.length = 2 ^ r)
@@ -392,17 +389,14 @@ def iterateCollision : (k : ℕ) → (ds es : List Digest) → ds.length = es.le
 theorem iterate_eq_of_dataRoot_eq {xs ys : List Digest} (hl : xs.length = ys.length)
     (h : dataRoot xs = dataRoot ys) :
     dataLevel^[xs.length] (xs.map leafItem) = dataLevel^[xs.length] (ys.map leafItem) := by
-  have hd : dataLevel = level dataNode := funext dataLevel_eq
   rw [dataRoot, dataRoot, ← hl] at h
-  rw [hd] at h ⊢
+  rw [dataLevel_eq] at h ⊢
   have hlen := length_iterate_level_eq dataNode dataNode
     (show (xs.map leafItem).length = (ys.map leafItem).length by simp [hl]) xs.length
   have h1 := length_iterate_length_le_one' dataNode (xs.map leafItem)
   rw [List.length_map] at h1
-  revert h hlen h1
-  generalize (level dataNode)^[xs.length] (xs.map leafItem) = A
-  generalize (level dataNode)^[xs.length] (ys.map leafItem) = B
-  intro h hlen h1
+  generalize (level dataNode)^[xs.length] (xs.map leafItem) = A at h hlen h1 ⊢
+  generalize (level dataNode)^[xs.length] (ys.map leafItem) = B at h hlen h1 ⊢
   match A, B, hlen, h1 with
   | [], [], _, _ => rfl
   | [a], [b], _, _ => simpa using h
@@ -418,43 +412,28 @@ def dataCollision {xs ys : List Digest} (hne : xs ≠ ys) (hl : xs.length = ys.l
   else iterateCollision xs.length (xs.map leafItem) (ys.map leafItem) (by simp [hl]) hm
     (iterate_eq_of_dataRoot_eq hl h)
 
-theorem itemCollision_preimages : ∀ (xs ys : List Digest) (hne : xs ≠ ys)
-    (h : xs.map leafItem = ys.map leafItem),
-    DataPreimage (itemCollision xs ys hne h).x ∧ DataPreimage (itemCollision xs ys hne h).y
-  | x :: xs, y :: ys, hne, h => by
-    unfold itemCollision
-    split
-    · exact itemCollision_preimages xs ys _ _
-    · exact ⟨.inl ⟨x, rfl⟩, .inl ⟨y, rfl⟩⟩
-  | [], [], hne, _ => absurd rfl hne
-  | [], _ :: _, _, h => absurd h (by simp)
-  | _ :: _, [], _, h => absurd h (by simp)
+theorem itemCollision_preimages (xs ys : List Digest) (hne : xs ≠ ys)
+    (h : xs.map leafItem = ys.map leafItem) :
+    DataPreimage (itemCollision xs ys hne h).x ∧ DataPreimage (itemCollision xs ys hne h).y := by
+  fun_induction itemCollision xs ys hne h
+  · assumption
+  · exact ⟨.inl ⟨_, rfl⟩, .inl ⟨_, rfl⟩⟩
 
-theorem levelCollision_preimages : ∀ (ds es : List Digest) (hl : ds.length = es.length)
-    (hne : ds ≠ es) (h : dataLevel ds = dataLevel es),
-    DataPreimage (levelCollision ds es hl hne h).x ∧ DataPreimage (levelCollision ds es hl hne h).y
-  | a :: b :: ds, c :: d :: es, hl, hne, h => by
-    unfold levelCollision
-    split
-    · exact levelCollision_preimages ds es _ _ _
-    · exact ⟨.inr ⟨a, b, rfl⟩, .inr ⟨c, d, rfl⟩⟩
-  | [], [], _, hne, _ => absurd rfl hne
-  | [_], [_], _, hne, h => absurd h hne
-  | [], _ :: _, hl, _, _ => absurd hl (by simp)
-  | _ :: _, [], hl, _, _ => absurd hl (by simp)
-  | [_], _ :: _ :: _, hl, _, _ => absurd hl (by simp)
-  | _ :: _ :: _, [_], hl, _, _ => absurd hl (by simp)
+theorem levelCollision_preimages (ds es : List Digest) (hl : ds.length = es.length)
+    (hne : ds ≠ es) (h : dataLevel ds = dataLevel es) :
+    DataPreimage (levelCollision ds es hl hne h).x ∧
+      DataPreimage (levelCollision ds es hl hne h).y := by
+  fun_induction levelCollision ds es hl hne h
+  · assumption
+  · exact ⟨.inr ⟨_, _, rfl⟩, .inr ⟨_, _, rfl⟩⟩
 
-theorem iterateCollision_preimages : ∀ (k : ℕ) (ds es : List Digest) (hl : ds.length = es.length)
-    (hne : ds ≠ es) (h : dataLevel^[k] ds = dataLevel^[k] es),
+theorem iterateCollision_preimages (k : ℕ) (ds es : List Digest) (hl : ds.length = es.length)
+    (hne : ds ≠ es) (h : dataLevel^[k] ds = dataLevel^[k] es) :
     DataPreimage (iterateCollision k ds es hl hne h).x ∧
-      DataPreimage (iterateCollision k ds es hl hne h).y
-  | 0, _, _, _, hne, h => absurd h hne
-  | k + 1, ds, es, hl, hne, h => by
-    unfold iterateCollision
-    split
-    · exact levelCollision_preimages _ _ _ _ _
-    · exact iterateCollision_preimages k _ _ _ _ _
+      DataPreimage (iterateCollision k ds es hl hne h).y := by
+  fun_induction iterateCollision k ds es hl hne h
+  · exact levelCollision_preimages _ _ _ _ _
+  · assumption
 
 /-- **The data collision is over the data tree**: both its preimages are a block's hash input or a
 data node's. -/
@@ -466,6 +445,21 @@ theorem dataCollision_preimages {xs ys : List Digest} (hne : xs ≠ ys)
   · exact itemCollision_preimages _ _ _ _
   · exact iterateCollision_preimages _ _ _ _ _ _
 
+/-- Two different lists of one length differ at a pair of their zip. -/
+private theorem exists_mem_zip_ne {α : Type} {l₁ l₂ : List α} (hl : l₁.length = l₂.length)
+    (hne : l₁ ≠ l₂) : ∃ q ∈ l₁.zip l₂, q.1 ≠ q.2 := by
+  by_contra! hc
+  exact hne (List.forall₂_eq_eq_eq ▸ List.forall₂_iff_zip.mpr ⟨hl, fun h => hc _ h⟩)
+
+/-- Returned data with the roots of the runner's data `xss` (`n` blocks each) pair each leaf's
+two block lists with one length and one root. -/
+theorem zip_pairs_of_forall₂ {n : ℕ} {xss yss : List (List Digest)}
+    (h : List.Forall₂ (fun ys h => dataRoot ys = h ∧ ys.length = n) yss (xss.map dataRoot))
+    (hlen : ∀ xs ∈ xss, xs.length = n) :
+    ∀ q ∈ yss.zip xss, q.1.length = q.2.length ∧ dataRoot q.1 = dataRoot q.2 := fun _ hq =>
+  have ⟨hr, hn⟩ := (List.forall₂_iff_zip.mp (List.forall₂_map_right_iff.mp h)).2 hq
+  ⟨hn.trans (hlen _ (List.of_mem_zip hq).2).symm, hr⟩
+
 /-- **Returned data against the runner's**: data `yss` of `n` blocks per leaf with the roots of
 the runner's data `xss` (`n` blocks each) are the runner's data, or some leaf's two block lists
 differ with one length and one root, and `dataCollision` of them is a Keccak-256 collision of two
@@ -476,19 +470,10 @@ theorem data_or_collision {n : ℕ} {xss yss : List (List Digest)}
     yss = xss ∨ ∃ (ys xs : List Digest) (hne : ys ≠ xs) (hl : ys.length = xs.length)
       (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ yss.zip xss ∧
         DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y := by
-  induction xss generalizing yss with
-  | nil => rw [List.map_nil, List.forall₂_nil_right_iff] at h; exact .inl h
-  | cons xs xss ih =>
-    rw [List.map_cons] at h
-    obtain ⟨ys, yss, ⟨hr, hn⟩, h', rfl⟩ := List.forall₂_cons_right_iff.mp h
-    have hl : ys.length = xs.length := hn.trans (hlen xs (List.mem_cons_self ..)).symm
-    by_cases hyx : ys = xs
-    · rcases ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) with
-        he | ⟨a, b, hne, hl', hr', hm, hp⟩
-      · exact .inl (by rw [hyx, he])
-      · exact .inr ⟨a, b, hne, hl', hr', by simp [List.zip_cons_cons, hm], hp⟩
-    · exact .inr ⟨ys, xs, hyx, hl, hr, by simp [List.zip_cons_cons],
-        dataCollision_preimages hyx hl hr⟩
+  refine or_iff_not_imp_left.mpr fun he => ?_
+  obtain ⟨⟨ys, xs⟩, hm, hne⟩ := exists_mem_zip_ne (by simpa using h.length_eq) he
+  obtain ⟨hl, hr⟩ := zip_pairs_of_forall₂ h hlen _ hm
+  exact ⟨ys, xs, hne, hl, hr, hm, dataCollision_preimages hne hl hr⟩
 
 /-- Membership of the relation is decidable: digests, leaf sizes and acceptance are. -/
 instance decRel (acc : Digest → Signed → Bool) (c : Digest) : (w : Wit) → Decidable (Rel acc c w)
@@ -931,11 +916,9 @@ theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {
     (ho : walkFrom L n hn c₀ p₀ d 0 hs hr p bs hd hacc hmem = o) (hin : ∀ e ∈ p.tr, e ∈ L)
     {xs : List Digest} (hE : S.E (treeRoot (hs.map fun h => leafStmt h n)) p.π L = some (.leaf xs))
     (hend : dataRoot xs = h) (hlen : xs.length = n) : o.data? = some [xs] := by
-  subst hh ho
-  have hR : Rel (S.acc vk) (treeRoot ([h].map fun h => leafStmt h n)) (.leaf xs) :=
-    ⟨hlen ▸ hn, show leafStmt h n = leafStmt (dataRoot xs) xs.length by rw [hend, hlen]⟩
+  subst hh ho hend hlen
   unfold walkFrom
-  simp only [extract_of_E hacc hin hE hR, hend, hlen, and_self, dite_true, Outcome.data?]
+  simp only [extract_of_E hacc hin hE ⟨hn, rfl⟩, and_self, dite_true, Outcome.data?]
 
 /-! ## The stream: `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` -/
 
@@ -1029,30 +1012,8 @@ def pairsCollision : (ps : List (List Digest × List Digest)) →
   | [], _, h => absurd h (by simp)
   | (a, b) :: ps, hp, h =>
     if hab : a = b then
-      pairsCollision ps (fun q hq => hp q (List.mem_cons_of_mem _ hq)) (by
-        obtain ⟨q, hq, hne⟩ := h
-        rcases List.mem_cons.mp hq with rfl | hq
-        · exact absurd hab hne
-        · exact ⟨q, hq, hne⟩)
+      pairsCollision ps (fun q hq => hp q (List.mem_cons_of_mem _ hq)) (by simpa [hab] using h)
     else dataCollision hab (hp _ (List.mem_cons_self ..)).1 (hp _ (List.mem_cons_self ..)).2
-
-/-- Returned data with the roots of the runner's data `xss` (`n` blocks each) pair each leaf's
-two block lists with one length and one root. -/
-theorem zip_pairs_of_forall₂ {n : ℕ} {xss : List (List Digest)} :
-    ∀ {yss : List (List Digest)},
-    List.Forall₂ (fun ys h => dataRoot ys = h ∧ ys.length = n) yss (xss.map dataRoot) →
-    (∀ xs ∈ xss, xs.length = n) →
-    ∀ q ∈ yss.zip xss, q.1.length = q.2.length ∧ dataRoot q.1 = dataRoot q.2 := by
-  induction xss with
-  | nil => intro yss h _ q hq; rw [List.zip_nil_right] at hq; simp at hq
-  | cons xs xss ih =>
-    intro yss h hlen q hq
-    rw [List.map_cons] at h
-    obtain ⟨ys, yss, ⟨hr, hn⟩, h', rfl⟩ := List.forall₂_cons_right_iff.mp h
-    rw [List.zip_cons_cons, List.mem_cons] at hq
-    rcases hq with rfl | hq
-    · exact ⟨hn.trans (hlen xs (List.mem_cons_self ..)).symm, hr⟩
-    · exact ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) q hq
 
 /-- **The outcome against the runner's data**: returned data other than the runner's `xss`
 (`n` blocks each) become the data collision of the first leaf whose two block lists differ
@@ -1062,10 +1023,8 @@ def Outcome.toRunner {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Dige
     Outcome S vk L n (xss.map dataRoot) c₀ p₀ d → Outcome S vk L n (xss.map dataRoot) c₀ p₀ d
   | .data yss h =>
     if heq : yss = xss then .data yss h else
-      .collision (pairsCollision (yss.zip xss) (zip_pairs_of_forall₂ h hlen) (by
-        rcases Compose.data_or_collision h hlen with he | ⟨ys, xs, hne, -, -, hm, -⟩
-        · exact absurd he heq
-        · exact ⟨(ys, xs), hm, hne⟩))
+      .collision (pairsCollision (yss.zip xss) (zip_pairs_of_forall₂ h hlen)
+        (exists_mem_zip_ne (by simpa using h.length_eq) heq))
   | o => o
 
 /-- **Its data are the runner's**: the data `toRunner` returns are `xss`. -/
@@ -1077,10 +1036,9 @@ theorem Outcome.toRunner_data? {L : Log} {n : ℕ} {xss : List (List Digest)} {c
   | data zss hz =>
     simp only [Outcome.toRunner] at h
     split at h
-    · simp only [Outcome.data?, Option.some.injEq] at h
-      subst h; assumption
-    · simp [Outcome.data?] at h
-  | _ => simp [Outcome.toRunner, Outcome.data?] at h
+    next heq => exact (Option.some.inj h).symm.trans heq
+    next => cases h
+  | _ => cases h
 
 /-- `toRunner` escapes exactly when the outcome does. -/
 theorem Outcome.toRunner_escaped {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest}

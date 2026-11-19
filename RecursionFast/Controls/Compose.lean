@@ -448,13 +448,7 @@ theorem no_collision_on_runner_data (xss : List (List Digest)) :
       (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ xss.zip xss ∧
         DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y := by
   rintro ⟨ys, xs, hne, -, -, hm, -⟩
-  induction xss with
-  | nil => simp at hm
-  | cons a t ih =>
-    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at hm
-    rcases hm with ⟨rfl, rfl⟩ | hm
-    · exact hne rfl
-    · exact ih hm
+  exact hne ((List.forall₂_iff_zip.mp (List.forall₂_refl xss)).2 hm)
 
 /-- The witness-sending node witness of the three-leaf stream: the signed node proof over the
 first two leaves and the signed leaf proof of the third (key `3`). -/

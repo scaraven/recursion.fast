@@ -203,22 +203,15 @@ theorem dataLevelF_go : ∀ ds acc : List Digest,
     dataLevelF.go ds acc = acc.reverse ++ dataLevel ds
   | a :: b :: t, acc => by
     rw [dataLevelF.go, dataLevelF_go t, dataLevel, dataNodeF_eq]; simp
-  | [], acc => by simp [dataLevelF.go, dataLevel, List.reverseAux_eq]
-  | [_], acc => by simp [dataLevelF.go, dataLevel, List.reverseAux_eq]
+  | [], acc | [_], acc => by simp [dataLevelF.go, dataLevel, List.reverseAux_eq]
 
-theorem dataLevelF_eq : dataLevelF = dataLevel := by
-  funext ds
-  rw [dataLevelF, dataLevelF_go]; rfl
+theorem dataLevelF_eq : dataLevelF = dataLevel := funext fun ds => dataLevelF_go ds []
 
 /-- The loop's `k` levels, stopping at one digest, are `k` levels of `dataLevel`. -/
 theorem dataRootF_go : ∀ (k : ℕ) (ds : List Digest),
     dataRootF.go k ds = (dataLevel^[k] ds).headD (Vector.replicate 32 0)
-  | k, [] => by
-    rw [show dataLevel = level dataNode from funext dataLevel_eq,
-      iterate_level_of_length_le_one _ (by simp)]; cases k <;> rfl
-  | k, [d] => by
-    rw [show dataLevel = level dataNode from funext dataLevel_eq,
-      iterate_level_of_length_le_one _ (by simp)]; cases k <;> rfl
+  | k, [] | k, [_] => by
+    rw [dataLevel_eq, iterate_level_of_length_le_one _ (by simp)]; cases k <;> rfl
   | 0, _ :: _ :: _ => rfl
   | k + 1, a :: b :: t => by
     show dataRootF.go k (dataLevelF (a :: b :: t)) = _

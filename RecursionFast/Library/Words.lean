@@ -259,11 +259,9 @@ theorem readTrace_logWords (tr : Trace) (hl : tr.length < 2 ^ 64)
 theorem readSig_sigWords (σ : Sig) (hi : σ.idx < 2 ^ 64) (ho : σ.ots.length = wotsLen)
     (hp : σ.path.length = sigHeight) (o : List Word) :
     readSig.run (sigWords σ ++ o) = some (σ, o) := by
-  have hd := readList_flatMap readDigest (fun d => packBytes d.toList) (fun _ => True)
-    (fun d _ o => readDigest_packBytes d o)
   simp only [readSig, sigWords, List.cons_append, List.append_assoc, StateT.run_bind,
-    readNat_toWord hi, Option.bind_eq_bind, Option.bind_some, ← ho, ← hp,
-    hd σ.ots (fun _ _ => trivial), hd σ.path (fun _ _ => trivial), StateT.run_pure]
+    readNat_toWord hi, Option.bind_eq_bind, Option.bind_some, ← ho, ← hp, readList_digests,
+    StateT.run_pure]
   rfl
 
 theorem readSigned_signedWords (p : Signed) (h : p.Fits) (o : List Word) :
