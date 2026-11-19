@@ -221,11 +221,17 @@ key.
   read-only after setup).
 - **The prover cannot:** reach the network (only Unix sockets can be opened), another process, the
   key during the service run, the signing seed ever, the leaf data before `go` or the seeds it is
-  drawn from, any file outside its sandbox, or the machine's counters (the sandbox's `/proc` shows
-  its own processes and no machine-wide file, [`harness/PROVER.md`](harness/PROVER.md) §2); work
-  after reporting `done` (the clock
-  stops only when its whole process tree is dead); choose its statement (the runner computes every
-  statement and checks each output against its own).
+  drawn from, any file outside its sandbox, or the machine's counters (below); work after
+  reporting `done` (the clock stops only when its whole process tree is dead); choose its
+  statement (the runner computes every statement and checks each output against its own).
+- **The machine's counters.** The prover cannot read machine-wide counters: every machine-wide
+  `/proc` entry and the live part of `/sys/devices/system/cpu` read empty; only `AF_UNIX` sockets
+  can be created; `statfs`, `fstatfs` and `ustat` fail with EPERM; no pidfd can be made
+  (`pidfd_open`, `clone` with `CLONE_PIDFD`, `SO_PEERPIDFD` and `SO_PASSPIDFD` fail with EPERM;
+  `clone3` fails with ENOSYS, and libc falls back to `clone`); `SO_COOKIE` fails. Each request's
+  `/work` is a private tmpfs, its socket directory has a random name, and before every request the
+  runner moves every CPU's inode counters to a fresh batch at a random offset
+  ([`harness/PROVER.md`](harness/PROVER.md) §2; what is left open, §12).
 - The native prover is never proved. Only its signed proofs are checked, by `acc`. It need not
   agree with the Lean `P`.
 
@@ -269,20 +275,27 @@ comes from a run in which the prover never had the key.
   process, and `V_i` is the median of its three times, one from each run (published as
   `V_runs_ns`, in run order, and `V_ns`). One time is one check, the file's read and parse
   included, pinned to one core. All three runs must accept: a proof accepted in one run and
-  rejected in another is rejected (`recheck_rejected`). The intermediate outputs are checked in
-  batches of `check_every` = 8 between steps, each batch in three runs that each check every
-  proof of the batch once; the final output is judged the same way, in three runs of its own.
+  rejected in another is rejected (`recheck_rejected`). The intermediate outputs are checked
+  between steps, every `check_every` = 8 steps; every output, intermediate or final, is judged in
+  three runs of its own that check it and nothing else (48 judged runs per stream; a run costs about 0.2 s beyond its checks, the sandbox and the
+  start-up included, measured on an organiser workstation: about 8 s per stream more than judging
+  the intermediates in batches).
   Every judged run first checks the organiser's warm-up input (a fixed signed file under a fresh
   random key and statement, never an output; an entry can tell it apart, and that gains nothing)
-  and then distinct outputs: no proof is checked twice in one process, so a verifier that
-  remembers its work across checks pays it inside every judged window. The process's start-up, to
+  and then its one output: no proof is checked twice in one process, and no judged run checks two
+  outputs of the stream (output `i + 1` contains `π_i`, so a verifier that memoised its children's
+  acceptance would answer the check of `π_i` inside it from the memo). A verifier that remembers
+  its work across checks pays it inside every judged window (`tests/harness/accprobe/`:
+  `MemoSub`, `MemoChildSub`). The process's start-up, to
   the warm-up's answer, is at most `badge_start_s` = 2 s (the entry's top-level constants are
   evaluated then, untimed; measured about 0.08 s); past it the check fails (a REJECT for the final
   output, the track `every`'s for an intermediate one). Each check is timed twice at once: by the
   runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per MiB of file beyond
   the check itself), and by the badge's own clock; the larger counts
-  ([`harness/rfh/checks.py`](harness/rfh/checks.py)). A judged run of `c` intermediate proofs is
-  bounded by `60 s + 2 (c + 1) · v_cap`; the final output's runs by the stream's cap alone.
+  ([`harness/rfh/checks.py`](harness/rfh/checks.py)). A judged run of an intermediate output is
+  bounded by `60 s + 4 · v_cap`, a canary run of `c` canaries of outputs 1 and 2 by `60 s + 2 (c +
+  1) · v_cap`; the final output's runs by the stream's cap alone. All badge runs share one bound,
+  30 s past `stream_s`, and none starts once `stream_s` is reached (the entry's REJECT, `stream-cap`).
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
   (a leaf: only the flipped statement) and 2 also. Each canary is checked once, in one badge run:
@@ -305,9 +318,11 @@ comes from a run in which the prover never had the key.
   request's `/work` is a private tmpfs of its own, gone with the request, so no file, inode number
   or free-space count of it reaches a later request; `/setup` is read-only, and before every
   request the runner reads every file of the setup and the prover binary, so their page-cache
-  state carries nothing; a request's directories outside the sandbox have random names, so
-  nothing a prover can read (`/proc/self/mountinfo` included) names its pass or its step
-  <!-- c4: confirm -->. Every `SIGN` of a timed pass must be the service run's at the same index:
+  state carries nothing, and every CPU's inode counters are moved to a fresh batch at a random
+  offset (§5); the one host directory a request sees by name, its socket directory (bound at
+  `/run/rf`; `/proc/self/mountinfo` shows its path), has 16 random hex characters for a name, fresh
+  for every request, so no name a prover can read tells its pass or its step (counters that
+  advance with every sandbox, and the clock, still roughly do: §12). Every `SIGN` of a timed pass must be the service run's at the same index:
   any `MISMATCH`, or a pass that re-issues fewer or more signatures than the service run made
   (the service's `replays` must be `3 · signatures`), is the entry's REJECT, so a refused `SIGN`
   cannot be used as a probe. A pass that does not finish (a request's failure, `stream_s`
@@ -388,7 +403,9 @@ result's `score` holds `S`, `P_total_s` (`T_{t*}`), `size_factor`, `final_pi_byt
 with the reason in `tracks_reason`). Every result also publishes the per-step records
 (`stream.jsonl`: the service run's time, the three timed times `P_timed_s` in pass order, `P_s` the
 time in pass `t*`, `share_P`, `|π_i|`, `V_i` where checked). A step record without exactly three
-timed times is a runner fault, an organiser ERROR named `malformed` (§8).
+timed times, or a passed record not of the season's shape (`rfh.bench.check_record`: steps 1 … M,
+each `V_i` the median of its three judged times, the final output accepted within its caps), is a
+runner fault, an organiser ERROR named `malformed` (§8).
 
 | Symbol | Value | Meaning |
 |---|---|---|
@@ -404,7 +421,7 @@ timed times is a runner fault, an organiser ERROR named `malformed` (§8).
 |---|---|
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
-| REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (the certificate job), `prover` (the prover's build or setup), `request` (a service-run request failed: a timeout, an exit, a cap), `check` (an output's check by the badge failed or broke a cap, the canaries included), `timed-pass` (a byte or replay mismatch, or a timed request failed) or `stream-cap` (`stream_s` reached) <!-- c4: confirm --> |
+| REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (a rejected certificate; it takes precedence), `prover` (the prover's build, its setup or the setup's hash, anything before the stream, or the benchmark job's `PART_S` reached during them), `request` (a service-run request failed: an exit, a timeout, no `ready` line, memory, `/work`; or its output's size broke `pi_cap` as it arrived, or `final_pi_cap`), `check` (a badge run failed: a crash, a timeout, a slow start-up; the final output rejected in any judged run, or its `V` above `v_cap`; a statement canary accepted; an output above `pi_cap` only because a rejection sized it by its file), `timed-pass` (a byte mismatch, a failed timed request, the service not entering replay mode, a replay `MISMATCH` or the replay audit) or `stream-cap` (`stream_s` reached before a request or a badge run, or ending a request; `PART_S` reached from the calibration on). A failure with no stage of its own (the service dying) takes the phase's: `request` in the service run, `timed-pass` after |
 | ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
 
 A result is **comparable** iff it is ACCEPT and the job plan matched (an ACCEPT is always on the
@@ -499,9 +516,15 @@ charged to the runner too; a copy the prover makes counts toward its cap and `wo
 
 `stream_s` covers 64 requests (16 in the service run, 48 in the timed passes), each up to
 `ready_s + step_s` = 30 s (1,920 s in all), plus the checks, the calibration samples and the
-runner's re-read of the setup before every request. So the per-request caps bind first, except
-when an entry uses nearly every cap at once (start-ups near 10 s, steps near 20 s, a setup
-directory near 4 GiB); there `stream_s` binds.
+runner's work before every request (the re-read of the setup, the inode counters' scrub). So the
+per-request caps bind first, except when an entry uses nearly every cap at once (start-ups near
+10 s, steps near 20 s, a setup directory near 4 GiB); there `stream_s` binds, and **an entry
+within every per-request cap can still reach it**, which is its REJECT: 64 requests at their caps
+leave 80 s for the 50 badge runs (48 judged, 2 of canaries: about 12 s at `V` near 40 ms, but a
+start-up may take up to `badge_start_s` = 2 s in each, and a failed run of an intermediate
+output's check, which costs only the track `every`, up to `60 s + 4 · v_cap`), about six calibration
+samples (2 s idle and three short runs each), the scrub (about 0.1 s per request) and 64 re-reads
+of a setup of up to 4 GiB.
 
 ## 10. Hard rules for the Lean side
 
@@ -546,7 +569,9 @@ directory near 4 GiB); there `stream_s` binds.
   `build_s`, so a slow build may fit only when the cache hits. A REJECT the cache can have caused
   (`reject_stage` `certificate`, or `check`: a restored module's `.c` is what the badge is compiled
   from) is re-run without it by the submissions repository's bot; a REJECT at any other stage is
-  final, since the prover is built from the entry's `.s`, not from the cache <!-- c4: confirm -->.
+  final, since the prover is built from the entry's `.s`, not from the cache. A `check` re-run
+  whose clean badge has the first run's `badge_sha256` (the cache changed nothing the badge is
+  built from) keeps the first REJECT.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
   on the eight tagged domains, and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF (also under the signing seed: the chain starts `chainStart` are
@@ -657,16 +682,29 @@ directory near 4 GiB); there `stream_s` binds.
   request); the replay service's answers (a refused `SIGN` is a REJECT); `/proc`'s machine-wide
   counters and the live counters of `/sys/devices/system/cpu` (masked); sockets other than Unix
   ones (refused, so no network counter moves); the inode numbers and free space of `/work` (a
-  tmpfs of its own per request); and the request's directory names (random)
-  <!-- c4: confirm -->. Left open:
+  tmpfs of its own per request); free disk space (`statfs`, `fstatfs`, `ustat` refused); pidfs
+  inode numbers, which count every process the machine started (no pidfd can be made); socket
+  cookies (`SO_COOKIE` refused); the per-CPU inode counters behind pipe, socket and memfd inode
+  numbers (moved to a fresh batch at a random offset on every CPU before every request,
+  [`harness/tools/scrub.c`](harness/tools/scrub.c), about 0.1 s, `scrub_s` in each request's
+  record); and the request directories' names (random). Left open, from a service-run request to a
+  later one:
+  - **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a
+    CPU takes next counts the batches taken machine-wide, which a request moves by making inodes
+    on every CPU: at most about 20 bits each per stream (an upper bound measured with no
+    background noise; the evaluation machine's background is not measured);
+  - **the load averages of `sysinfo(2)`** (masked in `/proc/loadavg`; the call stays, since libc
+    and the Lean runtime use it): a request sets the number of runnable tasks at the kernel's 5 s
+    samples, and the averages decay over minutes: of order 10 bits per average (an estimate);
   - **the clocks**: a service-run step can stretch its own untimed duration, and a timed step can
     read the clock against a timestamp kept in `/setup`: about 9 bits per stream (an estimate);
     accepted;
-  - **kernel-wide counters the sandbox cannot mask**: `sysinfo(2)` (the load averages, free memory,
-    the number of processes) and the inode numbers of pipes, sockets and memfds, which come from
-    one counter of the kernel's; their capacity is not measured <!-- c4: confirm -->;
   - **micro-architectural state** (CPU caches, predictors), not cleared between requests; the
     calibration runs between requests disturb it.
+
+  A request can tell its pass and its step from counters that advance with every sandbox (unique
+  mount ids, the network namespace's cookie) and roughly from the clock; nothing it wrote passes
+  through them.
 
   The price is determinism: a prover whose output depends on thread timing or fresh randomness
   fails the byte comparison.
@@ -732,8 +770,8 @@ are indicative only, except where a bullet says "on the machine".
 - **The verifier cap is per proof and includes parsing.** The first recursive entry's verifier
   took about 500 ms per check; the optimised lvm2-style entries about 40 ms. A recursive `V` that
   re-checks history grows with the stream and breaks the 64 ms cap.
-- **Your verifier's start-up is on the stream clock.** Each check batch starts three badge
-  processes (one per judged run) and the canaries one more, each start-up capped by
+- **Your verifier's start-up is on the stream clock.** Each output starts three badge processes
+  (one per judged run: 48 per stream) and the canaries two more, each start-up capped by
   `badge_start_s` (2 s); one entry's `V` took 11.7 s to initialise on a runner.
 - **Determinism is a rule.** Seed every randomised choice from the inputs and the oracle's answers;
   search grinding nonces in a fixed order and take the first; never let the thread schedule pick

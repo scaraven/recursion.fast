@@ -44,9 +44,11 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 | `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes and holds no machine-wide counter: every top-level entry but the pid directories, `self` and `thread-self` reads empty (`stat`, `vmstat`, `meminfo`, `loadavg`, `interrupts`, `pressure`, `cpuinfo`, …; use `cpuid`); the links `mounts` and `net` lead into `self` |
 | `/sys/devices/system/cpu` | the CPU topology, read-only, its static description only (`cpuidle`, `cpufreq` and `power` read empty) |
 
-Nothing else exists: no `/usr`, no shell, no network, no other process. The host directories
-bound into a request (which `/proc/self/mountinfo` names) have random names, so nothing in the
-sandbox tells a request its pass or its step <!-- c4: confirm -->. The environment is
+Nothing else exists: no `/usr`, no shell, no network, no other process. The one host directory
+bound into a request by name, its socket directory at `/run/rf` (`/proc/self/mountinfo` shows its
+path), is `svc/requests/<16 random hex characters>`, fresh for every request, so no name in the
+sandbox tells a request its pass or its step (counters that advance with every sandbox, such as
+mount ids, and the clock still roughly do: AGENTS.md §12). The environment is
 `RF_ORACLE=/run/rf/oracle.sock`, `RF_SETUP=/setup`, `HOME=/work`, `TMPDIR=/tmp`, `PATH=/prover`.
 Resources: every CPU of the machine (shared with the service, which computes the oracle on the same
 CPUs), memory capped by a cgroup (`memory.prover` of the season, 8 GiB in season 1; the service
@@ -55,8 +57,18 @@ has its own 2 GiB), `oom_score_adj = 1000`. The runner reads `/setup` in full be
 of read-only setup can be resident beyond the prover's 8 GiB. A seccomp filter fails (EPERM) `ptrace`,
 `process_vm_*`, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_*`, key management, mounts,
 namespaces and module loading, and `socket` and `socketpair` for every domain but `AF_UNIX` (the
-oracle's socket is the only one a prover needs). When a request ends, every process the prover
-started is killed. The same `/proc` and CPU-tree masks and the same filter apply to `prover setup`
+oracle's socket is the only one a prover needs). It also refuses what would read a machine-wide
+counter that one request could set for a later one: `statfs`, `fstatfs` (so `statvfs`) and `ustat`
+fail with EPERM (free disk space); no pidfd can be made, since a pidfd's inode number counts every
+process the machine started (`pidfd_open`, `clone` with `CLONE_PIDFD`, `getsockopt` `SO_PEERPIDFD`
+and `setsockopt` `SO_PASSPIDFD` fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to
+`clone`, so `fork`, `posix_spawn` and threads work); `getsockopt` `SO_COOKIE` fails (socket cookies
+come from a machine-wide counter). Before every request (after the page-cache warm-up below) the
+runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
+files and memfds) to the end of their batch and then a uniform random offset into a fresh one
+(`harness/tools/scrub.c`, one pinned thread per CPU, about 0.1 s, recorded as `scrub_s`), so a
+pipe's or memfd's inode number says nothing of what an earlier request did on that CPU. When a
+request ends, every process the prover started is killed. The same `/proc` and CPU-tree masks and the same filter apply to `prover setup`
 and to every badge run of the benchmark job (which runs the entry's compiled `V`).
 
 ## 3. Invocations
@@ -199,13 +211,15 @@ runner's own writes fail, an output that cannot be read.
 
 - every output's size is at most `pi_cap` (1 MiB): its `|π|` if it parses as a signed proof
   (`harness/FORMAT.md`) that `acc` accepts, else its file size;
-- **every checked proof is judged in three separate badge runs**, each a fresh process that first
-  checks an organiser warm-up input (never an output) and then checks every proof of its batch
-  once, so no proof is checked twice in one process; `V_i` is the median of the proof's three
-  times (each one check on one pinned core, the file's read and parse included), and all three runs
-  must accept (accepted in one run and rejected in another is rejected);
+- **every checked proof is judged in three separate badge runs of its own**, each a fresh process
+  that first checks an organiser warm-up input (never an output) and then that one proof, and
+  nothing else: no proof is checked twice in one process, and no judged run checks two outputs of
+  the stream (output `i + 1` contains `π_i`: a memo of the children's acceptance gains nothing); `V_i`
+  is the median of the proof's three times (each one check on one pinned core, the file's read and
+  parse included), and all three runs must accept (accepted in one run and rejected in another is
+  rejected);
 - the intermediate outputs are checked with `acc` under the run's `vk` against the runner's
-  statements `c_i`, in batches of `check_every` (8) between steps;
+  statements `c_i`, between steps, every `check_every` (8) steps;
 - the **final** output (step `M`) is then judged on its own, in three runs of its own: it must be
   accepted, with `|π_M| ≤ final_pi_cap` (512 KiB) and `V_M ≤ v_cap` (64 ms, the median of its three
   times), and its statement canaries rejected (`c_M` with its first bit flipped, and its first
@@ -216,10 +230,12 @@ runner's own writes fail, an output that cannot be read.
   (output 1, a leaf, has no first child: only its flipped statement). An entry that meets `final` but not `every` is
   scored in `final` only, the result saying why (`score.tracks_reason`); intermediate outputs need
   not be proofs at all. A crash or timeout of an intermediate check, or of the canaries of outputs
-  1 and 2, costs only the track `every` (such a badge run of `c` checks is bounded by
-  `60 s + 2 (c + 1) · v_cap`); once the track is lost, those canaries are skipped.
+  1 and 2, costs only the track `every` (a judged run of an intermediate output is bounded by
+  `60 s + 4 · v_cap`, the canary run of `c` canaries by `60 s + 2 (c + 1) · v_cap`); once the track
+  is lost, those canaries are skipped.
 
-The final output's checks have no time cap of their own. Calibration samples (AGENTS.md §6) are
+The final output's checks have no time cap of their own. Every badge run ends within one bound
+shared by all of them, 30 s past `stream_s`, and none starts once `stream_s` is reached. Calibration samples (AGENTS.md §6) are
 taken before the service run's step 1 (and every `every` steps), before each timed pass, and a
 closing one if 30 s of `stream_s` remain. The whole benchmark, the service run, every request, check,
 canary, calibration sample and the three timed passes, runs within `stream_s` (2,000 s, wall time;
@@ -270,14 +286,19 @@ filesystem error the prover caused in `/work`; the service dying during the run;
 that does not finish; the benchmark reaching `stream_s`. `stream_s` (2,000 s) covers the 64
 requests at `ready_s + step_s` each (1,920 s) and the checks, samples and setup re-reads, so it
 binds only when an entry uses nearly every cap at once (start-ups near 10 s, steps near 20 s, a
-setup directory near 4 GiB). An intermediate output that `acc` rejects (in any of its three judged
+setup directory near 4 GiB); such an entry can reach it within every per-request cap (AGENTS.md
+§9). An intermediate output that `acc` rejects (in any of its three judged
 runs), or above `v_cap`, a canary of output 1 or 2 that `acc` accepts, or a crash or timeout of
 their checks, does not fail the run: it leaves the entry out of the track `every`. Every job of an
 evaluation ends within 30 minutes, the certificate job within 50 and the benchmark job within 70,
 and these caps are nested inside them. The first failure ends the
-evaluation (`harness/run-benchmark.py`). The result names the stage (`reject_stage`: `prover`,
-`request`, `check`, `timed-pass` or `stream-cap`; `certificate` for the certificate job)
-<!-- c4: confirm --> and the reason names the cause: the prover's
+evaluation (`harness/run-benchmark.py`). The result names the stage (`reject_stage`,
+`rfh.bench.REJECT_STAGES`): `prover` (the build, the setup, the setup's hash, anything before the
+stream), `request` (a service-run request failed, or its output broke `pi_cap` as it arrived, or
+`final_pi_cap`), `check` (a badge run failed, the final output rejected or above `v_cap`, a
+canary accepted, an output above `pi_cap` only because a rejection sized it by its file),
+`timed-pass` (a byte or replay mismatch, a failed timed request), `stream-cap` (`stream_s`
+reached), `certificate` for a rejected certificate, first. The reason names the cause: the prover's
 output (its first 16 KiB and last 48 KiB are kept; the reason quotes the tail), the service's
 refusals of this run (`rf-oracle: refused (status S): MESSAGE`, e.g. a query above 2^20 bytes, or a
 replay `MISMATCH`), and a kill by the memory cgroup (`killed: out of memory (cap …, peak …)`).
