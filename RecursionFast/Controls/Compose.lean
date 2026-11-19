@@ -1,5 +1,5 @@
 /-
-# Controls: the composition walk and its probability (`Library/Compose.lean`)
+# Controls: the composition walks and their probability (`Library/Compose.lean`)
 
 Negative (what the outcome types do not say). `forgery_trivial`, for the capped `Forgery`:
 under the key of any known signer and for every log within `logCap`, a `Forgery` exists with no
@@ -41,7 +41,22 @@ accepted by the one-query verifier `oneQuery qMax` (`Controls/Relation.lean`):
 * Negative: if the service's signed traces include the forged trace, the forgery is no EUF-CMA
   forgery and `Honest` fails (`forgery_signed_not_euf`), so the hypothesis is what makes the
   forgery an EUF-CMA one; `noExt`'s `walkSigned` escapes (`noExt_walkSigned_escaped`).
-Symbolic (`decode_encode`, `sigOk_sign`, `extract_of_E`, `walkFrom_leaf`); no hash is evaluated.
+The stream walk (`walkStream`, over the benchmark's shape `c_1 = L_1`,
+`c_i = nodeStmt c_(i-1) L_i`), on the witness-sending submission under the reference signer's
+key, with the empty log:
+* Positive: `walkStream_two_leaves`, on the two-leaf stream whose proof is the signed node proof
+  over the two signed leaf proofs, returns `[s₁, s₂]`; `walkStream_three_leaves`, on the
+  three-leaf stream whose proof is the signed node proof over that node proof and a third signed
+  leaf proof (`streamSigned`), returns `[s₁, s₂, s₃]`; `walkStreamSigned_two_leaves`: against a
+  service that signed nothing (the traces are empty), the same seeds.
+* Negative: `noExt`'s stream walk escapes at the root of the two-leaf stream
+  (`noExt_walkStream_escaped`), so the adversary that outputs that proof makes
+  `compose_prob_stream`'s event certain (`noExt_stream_escape_prob`).
+* `ws_compose_prob_stream`: under every key and against every adversary, the witness-sending
+  stream walk escapes with probability `0` (`compose_prob_stream` at `ε = 0`, `qV = 0`).
+
+Symbolic (`decode_encode`, `sigOk_sign`, `extract_of_E`, `walkFrom_leaf`, `walkStreamFrom_one`,
+`walkStreamFrom_succ_succ`, `walkStreamFrom_escape`); no hash is evaluated.
 -/
 import RecursionFast.Library.Compose
 import RecursionFast.Library.WitnessSending
@@ -298,5 +313,123 @@ theorem walkSigned_queryLeaf_seeds (sk : ℕ → ℕ → Digest) (s a : Digest) 
       (queryLeaf sk s a n) (acc_queryLeaf sk s a n)).seeds? = some [s] :=
   (Outcome.seeds?_reduce _ _).trans (walkFrom_leaf hn rfl rfl (by simp [queryLeaf])
     (decode_encode (.leaf s n) (hn.trans_lt (by decide))) rfl)
+
+/-! ## The stream walk: `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` -/
+
+/-- The signed node proof over two signed leaf proofs is accepted for the two-leaf stream's
+digest (the same digest as the two-leaf tree's root). -/
+theorem acc_nodeSigned_stream (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    submission.acc (Signer.pk sk) (streamStmt n [leafValue s₁ n, leafValue s₂ n])
+      (nodeSigned sk s₁ s₂ n) = true :=
+  acc_nodeSigned sk s₁ s₂ hn
+
+/-- **The stream walk on a two-leaf stream** returns the two leaves' seeds. -/
+theorem walkStream_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    (walkStream [] n hn [leafValue s₁ n, leafValue s₂ n] (nodeSigned sk s₁ s₂ n)
+      (acc_nodeSigned_stream sk s₁ s₂ hn)).seeds? = some [s₁, s₂] := by
+  have hn64 : n < 2 ^ 64 := hn.trans_lt (by decide)
+  have hR := Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn
+  unfold walkStream
+  exact walkStreamFrom_succ_succ (L := []) (k := 0) (hs := [leafValue s₁ n, leafValue s₂ n])
+    (p := nodeSigned sk s₁ s₂ n) hn (List.cons_ne_nil _ _) nofun
+    (decode_encode _ (fits_of_rel hR)) hR
+    (fun _ _ _ _ => walkStreamFrom_one (p := leafSigned sk 0 s₁ n) hn nofun
+      (decode_encode (.leaf s₁ n) hn64) rfl) nofun
+    (s := s₂) (decode_encode (.leaf s₂ n) hn64) rfl
+
+/-- The witness-sending node witness of the three-leaf stream: the signed node proof over the
+first two leaves and the signed leaf proof of the third (key `3`). -/
+abbrev streamWit (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) (n : ℕ) : Wit :=
+  .node (nodeStmt (leafStmt (leafValue s₁ n) n) (leafStmt (leafValue s₂ n) n))
+    (leafStmt (leafValue s₃ n) n) (nodeSigned sk s₁ s₂ n) (leafSigned sk 3 s₃ n)
+
+/-- The signed proof of the three-leaf stream: the empty trace, signed with key `4`. -/
+def streamSigned (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) (n : ℕ) : Signed :=
+  ⟨encode (streamWit sk s₁ s₂ s₃ n), [], Signer.sign sk 4 (traceDigest [])⟩
+
+/-- The three-leaf stream's node witness is in the relation. -/
+theorem rel_streamWit (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    Rel (submission.acc (Signer.pk sk))
+      (streamStmt n [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n])
+      (streamWit sk s₁ s₂ s₃ n) :=
+  ⟨rfl, acc_nodeSigned sk s₁ s₂ hn, acc_leafSigned sk (by decide) s₃ hn⟩
+
+/-- The signed proof of the three-leaf stream is accepted for its digest. -/
+theorem acc_streamSigned (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    submission.acc (Signer.pk sk)
+      (streamStmt n [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n])
+      (streamSigned sk s₁ s₂ s₃ n) = true := by
+  have h₁ : (encode (nodeWit sk s₁ s₂ n)).size < 2 ^ 20 := by
+    rw [size_encode]
+    simp [witWords, signedWords, bytesWords, logWords, packBytes_length, sigWords_sign_length,
+      leafSigned, size_encode_leaf]
+  have hsize : (encode (streamWit sk s₁ s₂ s₃ n)).size < 2 ^ 64 := by
+    rw [size_encode]
+    simp only [witWords, signedWords, bytesWords, logWords, List.length_cons, List.length_append,
+      packBytes_length, sigWords_sign_length, nodeSigned, leafSigned, ← size_eq_length]
+    simp [size_encode_leaf]
+    omega
+  rw [acc_eq, streamSigned, decide_eq_true hsize]
+  simp [Signer.sigOk_sign sk 4 (by decide), check_encode (rel_streamWit sk s₁ s₂ s₃ hn)]
+
+/-- **The stream walk on a three-leaf stream** returns the three leaves' seeds. -/
+theorem walkStream_three_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    (walkStream [] n hn [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n]
+      (streamSigned sk s₁ s₂ s₃ n) (acc_streamSigned sk s₁ s₂ s₃ hn)).seeds? =
+      some [s₁, s₂, s₃] := by
+  have hn64 : n < 2 ^ 64 := hn.trans_lt (by decide)
+  have hR := rel_streamWit sk s₁ s₂ s₃ hn
+  have hR₂ := Controls.Relation.node_of_two_leaves sk s₁ s₂ hn hn
+  unfold walkStream
+  exact walkStreamFrom_succ_succ (L := []) (k := 1)
+    (hs := [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n]) (p := streamSigned sk s₁ s₂ s₃ n)
+    hn (List.cons_ne_nil _ _) nofun (decode_encode _ (fits_of_rel hR)) hR
+    (fun _ _ _ _ => walkStreamFrom_succ_succ (L := []) (k := 0)
+      (hs := [leafValue s₁ n, leafValue s₂ n]) (p := nodeSigned sk s₁ s₂ n)
+      hn (List.cons_ne_nil _ _) nofun (decode_encode _ (fits_of_rel hR₂)) hR₂
+      (fun _ _ _ _ => walkStreamFrom_one (p := leafSigned sk 0 s₁ n) hn nofun
+      (decode_encode (.leaf s₁ n) hn64) rfl) nofun
+      (s := s₂) (decode_encode (.leaf s₂ n) hn64) rfl) nofun
+    (s := s₃) (decode_encode (.leaf s₃ n) hn64) rfl
+
+/-- **`noExt`'s stream walk escapes**: on the honest two-leaf stream it ends in an escape at the
+root. -/
+theorem noExt_walkStream_escaped (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    (walkStream (S := noExt) [] n hn [leafValue s₁ n, leafValue s₂ n] (nodeSigned sk s₁ s₂ n)
+      (acc_nodeSigned_stream sk s₁ s₂ hn)).Escaped := by
+  unfold walkStream
+  exact walkStreamFrom_escape (k := 0) (hs := [leafValue s₁ n, leafValue s₂ n])
+    (p := nodeSigned sk s₁ s₂ n) hn nofun (by simp [noExt])
+
+/-- **`compose_prob_stream`'s event is certain** for `noExt` and the adversary that outputs the
+honest two-leaf stream's signed proof. -/
+theorem noExt_stream_escape_prob (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    prob (fun p L => ∃ hacc : noExt.acc (Signer.pk sk)
+        (streamStmt n [leafValue s₁ n, leafValue s₂ n]) p = true,
+      (walkStream L n hn [leafValue s₁ n, leafValue s₂ n] p hacc).Escaped)
+      (.ret (nodeSigned sk s₁ s₂ n)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, noExt_walkStream_escaped sk s₁ s₂ hn⟩)
+
+/-- **The witness-sending stream walk escapes with probability `0`**, under every key and against
+every adversary asking at most `Q ≤ logCap` queries. -/
+theorem ws_compose_prob_stream (vk : Digest) {n : ℕ} (hn : n ≤ leafCap) (hs : List Digest)
+    (A : OProg Signed) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q ≤ logCap) :
+    prob (fun p L => ∃ hacc : submission.acc vk (streamStmt n hs) p = true,
+      (walkStream L n hn hs p hacc).Escaped) A [] = 0 :=
+  le_antisymm ((compose_prob_stream (ks vk) n hn hs A hA (by simpa [submission] using hQ)).trans
+    (by simp [submission])) bot_le
+
+/-- **Positive** (against signed traces): on the honest two-leaf stream, whose traces are empty,
+the stream walk against a service that signed nothing returns the two seeds. -/
+theorem walkStreamSigned_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    (walkStreamSigned [] [] ⟨nofun, nofun⟩ n hn [leafValue s₁ n, leafValue s₂ n]
+      (nodeSigned sk s₁ s₂ n) (acc_nodeSigned_stream sk s₁ s₂ hn)).seeds? = some [s₁, s₂] :=
+  (Outcome.seeds?_reduce _ _).trans (walkStream_two_leaves sk s₁ s₂ hn)
 
 end RecursionFast.Controls.Compose

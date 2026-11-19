@@ -35,9 +35,10 @@ once and refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 Lean reference signer and the theorem that its signatures pass `SigOk` are in
 `Library/Signer.lean`). Unforgeability (EUF-CMA of this scheme with each index used once) is an
 assumption of the design argued on paper, not a theorem of the contract; the composition walk
-(`Library/Compose.lean`, `walkSigned`) returns an explicit EUF-CMA forgery against the service's
-signed traces, or a collision, when it is what fails. Security against signature-only forgery
-(Chiesa–Tromer, ICS 2010) is not needed: the walk matches signed traces by message.
+(`Library/Compose.lean`, `walkStreamSigned`, `walkSigned`) returns an explicit EUF-CMA forgery
+against the service's signed traces, or a collision, when it is what fails. Security against
+signature-only forgery (Chiesa–Tromer, ICS 2010) is not needed: the walk matches signed traces by
+message.
 -/
 import RecursionFast.Contract.Relation
 

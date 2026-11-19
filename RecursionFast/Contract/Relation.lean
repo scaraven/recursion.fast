@@ -35,8 +35,11 @@ inside the relation.
   answer without the key, or a public tagged hash that equals one, is the PRF assumption.
 
 **Leaf bound.** A leaf witness covers at most `leafCap = 2^22` hashes, checked before
-any hash: completeness does not ask for proofs of leaves no prover handles, and a verifier that
-recomputes leaves is not driven past its time cap by a proof declaring a huge size.
+any hash: completeness and knowledge soundness are asked only for leaves up to the season's
+size, `2^22`, about one Ethereum slot's Keccak work in leanVM's deployment model (22,400
+signatures × about 187 permutations). It bounds what checking a leaf witness costs, whatever
+size a proof declares: the composition walk's leaf checks (`Library/Compose.lean`), and any
+decoder or extractor that checks a leaf, hash at most `2^22` items per leaf.
 
 `Digest` is a 32-byte vector (a closure would be re-evaluated on every byte read).
 -/

@@ -6,12 +6,12 @@ Positive, for every digests (by `rfl`, no hash is evaluated):
   digests hash up pairwise, left to right, level by level (`nodeStmt`).
 * `treeRoot_eight`: three levels.
 * `treeRoot_three`, `treeRoot_nil`: the conventions for an odd level (the last digest is carried
-  up) and the empty list (the zero digest), which no benchmark run uses.
+  up) and the empty list (the zero digest), which the tree composition theorem does not use.
 * `treeRoot_recursive`: for every list, the root of two or more digests is the root of the level
   above (`Library/Tree.lean`, which also proves that `|cs|` levels suffice).
 Known answer (`decide +kernel`, three permutations): `treeRoot_kat`, the root of the four digests
-`00…00`, `01…01`, `02…02`, `03…03`, against the runner's Python reference
-(`harness/rfh/keccak.py`); the runner's `treeRoot` is tested against this value.
+`00…00`, `01…01`, `02…02`, `03…03`, against the harness's Python Keccak-256 reference
+(`harness/rfh/keccak.py`).
 
 Negative: `treeRoot_order`: the order of the leaves matters (`[d₀, d₁]` and `[d₁, d₀]`).
 -/

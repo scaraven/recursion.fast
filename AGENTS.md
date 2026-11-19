@@ -449,11 +449,12 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
   on the seven tagged domains, and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF. The signature's unforgeability (EUF-CMA, each index used once)
-  follows from these (on paper). The composition across the tree needs EUF-CMA and collision
+  follows from these (on paper). The composition across the stream needs EUF-CMA and collision
   resistance only. A signed trace the log does not hold is reduced, for any tree shape, to an
   EUF-CMA forgery against the service's signed traces or an explicit collision
   ([`Library/Compose.lean`](RecursionFast/Library/Compose.lean), `Forgery.reduce`); the walk
-  around it (`walkSigned`, `compose_prob_signed`) is kernel for balanced trees. Security against
+  around it is kernel for the stream (`walkStreamSigned`, `compose_prob_stream_signed`, a union
+  bound over its `2M - 1` members) and for balanced trees (`walkSigned`). Security against
   signature-only forgery, which the original signed-oracle construction (Chiesa–Tromer, ICS 2010)
   also assumes, is not used: the walk matches a signed proof to the log by its trace, the signed
   message, not by its signature.
@@ -541,9 +542,9 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   the key would be accept-all.
 - **On paper, not in the kernel**: unforgeability of the signature (EUF-CMA) and the bounds on the
   probabilities of the walk's EUF-CMA and collision outcomes (the per-run reduction to them, given
-  the service's signed traces, is kernel; the model has no signing oracle), the PRF step from the
-  random oracle to the keyed deployment, and the composition across the stream's comb (the union bound
-  over any finite set of paths is kernel; the walk is kernel for balanced trees only).
+  the service's signed traces, is kernel; the model has no signing oracle), and the PRF step from
+  the random oracle to the keyed deployment. The composition across the stream is kernel
+  (`compose_prob_stream`, `compose_prob_stream_signed`).
 - **`KS` is textbook knowledge soundness only for adversaries that ask the verifier's queries
   themselves**: its extractor also reads the verifier's answers, so for an adversary that leaves
   fresh queries to the verifier it is weaker than the textbook notion (`Controls/Security.lean`,

@@ -3,15 +3,16 @@
 
 The root digest of `2^r` leaves, computed from the
 leaf digests by hashing up (`nodeStmt`, adjacent pairs, level by level), never from a digest a
-prover supplies. No prover is benchmarked on a tree (the benchmark is one stream of
-`nodeStmt` steps); the runner computes this root for the instance of the trivial checker
-that measures `T_triv,best`, and the library's composition theorem (`Library/Compose.lean`) is
-stated over it. The runner's Python `treeRoot` is tested against this definition by a
-known-answer control (`Controls/Tree.lean`).
+prover supplies. No prover is benchmarked on a tree, and the runner computes no tree root: the
+benchmark is one stream of `nodeStmt` steps (`c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i`), which
+the library's stream walk covers (`Library/Compose.lean`, `walkStream`, `compose_prob_stream`).
+The tree is the setting of the library's tree composition theorem (`walk`, `compose_prob`) and
+of its known-answer control (`Controls/Tree.lean`, `treeRoot_kat`, against a value computed with
+the harness's Python Keccak-256 reference).
 
-**Convention.** The runner always has a power of two of leaves. `treeRoot` is total:
+**Convention.** The tree composition theorem has a power of two of leaves. `treeRoot` is total:
 on an odd level the last digest is carried up unhashed, a single digest is its own root, and the
-empty list has the zero digest. None of these cases occurs in a benchmark run.
+empty list has the zero digest. The theorem uses none of these cases but the single digest.
 -/
 import RecursionFast.Contract.Relation
 import Mathlib.Logic.Function.Iterate
