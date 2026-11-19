@@ -1,11 +1,12 @@
 /-
 # Contract: the relation over digests                                             (TRUSTED)
 
-One relation over
-32-byte statement digests, parameterised by an acceptance predicate `acc` on **signed proofs**
+One relation over 32-byte statement digests, parameterised by an acceptance predicate `acc` on **signed proofs**
 (`Certificate.lean` plugs in `Submission.acc` under a public key). A **leaf** digest commits to
 the XOR of `n ≤ leafCap` independent Keccak-256 hashes of a seed (one per index `j < n`) and to
-`n`; its witness is the seed and `n`. A **node** digest commits to two child digests; its witness
+`n`; its witness is the seed and `n` (at `n = 0` the statement is the same for every seed, a
+public statement with every seed a witness; the runner's statements have `1 ≤ n`, its shape
+check). A **node** digest commits to two child digests; its witness
 is two signed proofs that `acc` accepts.
 
 **Why signed proofs.** Under the signed random oracle the oracle is a keyed
@@ -30,16 +31,16 @@ inside the relation.
 * The trace digest and the signature's hashes are in `Signature.lean`.
 * Tags: `H` leaf item, `L` leaf, `N` node, `T` trace, `W` WOTS chain step,
   `K` WOTS leaf, `M` signature Merkle node: seven distinct first bytes, one per hash input of the
-  contract (`Controls/Relation.lean`, `tags_separate`). The oracle has no tag: the
-  deployed oracle is keyed: its input starts with the secret 32-byte key, so computing an
-  answer without the key, or a public tagged hash that equals one, is the PRF assumption.
+  contract (`Controls/Relation.lean`, `tags_separate`). The oracle has no tag. The deployed
+  oracle is keyed (its input starts with the secret 32-byte key), so computing an answer without
+  the key, or a public tagged hash that equals one, is the PRF assumption.
 
 **Leaf bound.** A leaf witness covers at most `leafCap = 2^22` hashes, checked before
 any hash: completeness and knowledge soundness are asked only for leaves up to the season's
 size, `2^22`, about one Ethereum slot's Keccak work in leanVM's deployment model (22,400
 signatures × about 187 permutations). It bounds what checking a leaf witness costs, whatever
 size a proof declares: the composition walk's leaf checks (`Library/Compose.lean`), and any
-check through `Rel` (which decides `n ≤ leafCap` first), hash at most `2^22` items per leaf.
+check through `Rel` (whose first conjunct is `n ≤ leafCap`), hash at most `2^22` items per leaf.
 
 `Digest` is a 32-byte vector (a closure would be re-evaluated on every byte read).
 -/

@@ -1,7 +1,7 @@
 /-
 # Contract: the hash Keccak-256 (FIPS 202 with Ethereum's padding)     (TRUSTED, Lean core only)
 
-The contract's one hash. It is the chain step and the statement hash of the relation
+The contract's one hash. It is the leaf item and the leaf and node statement hashes of the relation
 (`Relation.lean`), and the trace digest, the WOTS chain step, leaf and Merkle node of the
 signature check (`Signature.lean`); every one of them is public, unkeyed Keccak-256. It is **not**
 the oracle: the deployed oracle is Keccak-256 of a secret 32-byte key followed by the query,

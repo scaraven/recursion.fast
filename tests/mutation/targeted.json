@@ -1,0 +1,98 @@
+[
+ {
+  "id": "rel-leafcap-2^23",
+  "file": "Relation.lean",
+  "breaks": "the leaf bound is 2^23, not the season's 2^22",
+  "expect": "a pin of leafCap's value (none before this run)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.6,
+   "build": 135.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 161,
+  "error": "Tactic `decide` proved that the proposition ¬2 ^ 22 + 1 ≤ leafCap is false - RecursionFast.Controls.Relation",
+  "failing": [
+   [
+    "RecursionFast.Controls.Relation",
+    161
+   ]
+  ],
+  "seconds": 150.8
+ },
+ {
+  "id": "ext-computes-small-domain",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for proofs of at most 16 MiB",
+  "expect": "Controls.Extractor.halt_not_big (added after this mutant survived)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 21.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 113,
+  "error": "Application type mismatch: The argument h₂ has type ByteArray.size π ≤ 8 * outCap but is expected to have type ByteArray.size π ≤ outCap in the application",
+  "failing": [
+   [
+    "RecursionFast.Controls.Extractor",
+    113
+   ]
+  ],
+  "seconds": 32.5
+ },
+ {
+  "id": "ext-computes-short-queries",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for logs of queries under 2^32 bytes",
+  "expect": "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 21.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 132,
+  "error": "unsolved goals q : ByteArray a : Digest h : q.size = 2 ^ 64 - 1 hc : Computes haltProg Equery fun x => 1 ⊢ False",
+  "failing": [
+   [
+    "RecursionFast.Controls.Extractor",
+    132
+   ]
+  ],
+  "seconds": 32.7
+ },
+ {
+  "id": "ext-computes-short-tape",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for tapes of at most 2^32 words",
+  "expect": "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 21.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 135,
+  "error": "Tactic `decide` proved that the proposition (32 + 7) / 8 + (0 + 1) + (ByteArray.empty.size + 7) / 8 + ((2 ^ 64 - 1 + 7) / 8 + 1 + (32 + 7) / 8 + 1) ≤ 2 ^ 32 is false",
+  "failing": [
+   [
+    "RecursionFast.Controls.Extractor",
+    135
+   ]
+  ],
+  "seconds": 33.1
+ }
+]

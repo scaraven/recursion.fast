@@ -12,6 +12,10 @@
 #      package tree (a throw-away executable that imports `RecursionFast`, the CompPoly roots and
 #      `RF_BADGE_OBJECTS`, default `Mathlib.Tactic`), so that a badge build in the sandbox compiles
 #      only the modules an entry adds beyond these, within its cap (`badge_s`);
+#   4b. hash the organiser's own compiled code (`.c` and objects under .lake/build/ir/RecursionFast,
+#      the badge's glue and `accF` included: what a badge links of the organiser) into
+#      ORG/.lake/rf/objects.sha256 (`scripts/olean-manifest.py objects-gen`), which the
+#      certificate job checks after every badge build (the build mounts .lake/build read-only);
 #   5. build the service (`cargo build --release`), unless `RF_ORG_SERVICE=0` (the evaluation's
 #      `setup` job, whose `setup-tools` job builds and caches the service).
 #
@@ -69,6 +73,10 @@ json.dump(m, open(os.path.join(x, "lake-manifest.json"), "w"), indent=1)
 EOF
 (cd "$X" && timeout 540 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
 rm -rf "$X"
+step "4b the organiser's compiled code, hashed"
+timeout 60 python3 -I "$ORG/scripts/olean-manifest.py" objects-gen --org "$ORG" "$ORG/.lake/rf/objects.sha256" \
+  > "$LOG/objects.log" 2>&1 || { cat "$LOG/objects.log"; exit 1; }
+tail -1 "$LOG/objects.log"
 if [[ "${RF_ORG_SERVICE:-1}" != 0 ]]; then
   step "5 service"
   (cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }

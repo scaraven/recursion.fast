@@ -50,8 +50,14 @@ knowledge content is the named extractor `E` with its program and budget (`Secur
 
 **Deployment.** The harness's service answers a query with Keccak-256 of a secret
 32-byte key, drawn after `V` is frozen, followed by the query (`service/PROTOCOL.md` §2), and signs
-the trace of each `sign` request; `vk` is published per run. The theorems are for a random oracle. Completeness over a random oracle does not imply
-that honest proofs pass `acc` under the deployment: the harness checks that concretely.
+the trace of each `sign` request; `vk` is published per run. The theorems are for a random
+oracle. Completeness over a random oracle does not imply that honest proofs pass `acc` under the
+deployment: the oracle is keyed Keccak-256, a node's witness carries its children's traces from
+the same oracle (the game draws its oracle after the witness), and `acc` has conjuncts the game
+does not see (`Security.lean`); the harness checks that concretely. A signed proof is one `sign`
+request, whose body the service caps at 16 MiB (`service/PROTOCOL.md` §3), below the
+`qV · queryCap` bytes of trace `acc` admits: an entry whose honest traces are larger is complete
+in the model and cannot be signed.
 A certified `V` that computes the deployed oracle, were the oracle a public hash, is excluded by
 the deployment, not by this file: such a `V` is still certified (`Controls/Backdoor.lean`), but
 no public function it can compute is the keyed oracle.
@@ -59,9 +65,10 @@ no public function it can compute is the keyed oracle.
 **Rendering.** A challenge renders the claim as
 organiser data (`Declared`): the declared knowledge error, completeness error, query bound and
 fuel. `CertificateR` binds them: the submission's numbers are within the declared ones, and the
-declared fuel is within the budget, so the harness may run the program with it.
-The program is not rendered: it is a term of the submission, executed by the compiled contract
-interpreter. Everything else a record states is measured by the benchmark run.
+declared fuel is within the budget. The program is not rendered: it is a term of the submission,
+and no evaluation runs it (that it computes `E` is the kernel-checked `Computes`; the core CI runs
+the compiled contract interpreter on the witness-sending entry's program only). Everything else a
+record states is measured by the benchmark run.
 -/
 import RecursionFast.Contract.Security
 import RecursionFast.Contract.Extractor

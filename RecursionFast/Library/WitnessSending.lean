@@ -30,9 +30,9 @@
     proofs of every size up to about `2^65` bytes (`Controls/Relation.lean`, `deep_accepted`), and
     the prover copies whatever it is given.
   * **Extractor.** `E c π L := decode π` (no key), and the program `ext` (5 memory words,
-    21 statements) copies the proof's packed words from the input tape to the
-    output, 8 steps per word (`computes`), on the contract's domain of proofs up to `8 · outCap`
-    bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
+    28 statements, 21 of them run on the empty proof) copies the proof's packed words from the
+    input tape to the output, 8 steps per word (`computes`), on the contract's domain of proofs
+    up to `8 · outCap` bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
     `ws_output_beyond_domain`).
   * **Security.** `KS` at `ε = 0`, `qV = 0` (`ks`), through the potential `μ := 0` (`kstate`,
     `KState.zero`) and the bridge `KState.ks` (`Library/PaperTheorem.lean`): an accepted proof

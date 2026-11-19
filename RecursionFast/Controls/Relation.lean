@@ -11,7 +11,11 @@ symbolically (`sigOk_sign`, no hash evaluated).
 
 Positive:
 * `item0_kat`, `item1_kat`, `value2_kat` (the XOR of the first two), `value16_kat`, `leafStmt_kat`,
-  `nodeStmt_kat`: the byte layouts.
+  `nodeStmt_kat`: the byte layouts; `itemBig_kat` (the index `0x123456`) and `leafStmt_season_kat`
+  (the count `2^22`, the season's `n`) with `enc64` beyond its first byte (`enc64_season`,
+  `enc64_kat`: 8 bytes, little-endian).
+* `leafStmt_zero_seed`: at `n = 0` the leaf statement does not depend on the seed (the runner
+  enforces `1 ≤ n`).
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
@@ -25,7 +29,8 @@ Positive:
 Negative:
 * `wrong_value` (the seed in place of the value), `wrong_seed` (another seed),
   `wrong_count` (one hash dropped), `extra_item` (one hash added), `leaf_over_leafCap` (every
-  `acc`).
+  `acc`); `leaf_over_season`: the bound is the season's `2^22` (a leaf of `2^22 + 1` hashes is
+  rejected under every `acc`; `tests/mutation`'s `rel-leafcap-2^23`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
@@ -42,7 +47,9 @@ Negative:
   trace longer than its `qV`; the instance at `qV + 1 = 2` entries.
 * `acc_over_word`, `acc_query_over_cap`: every submission's `acc` rejects a proof of `2^64`
   bytes or more (its length does not fit a word) and a trace with a query above
-  `queryCap`; `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
+  `queryCap`; `acc_query_over_2pow20`: the cap is the service's `2^20` bytes (a query of
+  `2^20 + 1` bytes is rejected; `tests/mutation`'s `rel-querycap-2^21`);
+  `deep_accepted_but_unwritable`: the witness-sending verifier accepts a 51-level
   proof of `9704 · 2^51 − 9656` bytes (its children within the word) that `acc` then rejects, so
   the word bound is what rejects it.
 
@@ -124,6 +131,33 @@ theorem nodeStmt_kat :
   rw [← nodeStmtF_eq]
   decide +kernel
 
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'H'+bytes(range(32))+(0x123456).to_bytes(8,'little')).hex())"` (an index of three bytes) -/
+theorem itemBig_kat : (leafItem s0 0x123456).toList =
+    hex "4108d62c512e966239d26cd4c4aef290b39aa29163b76e29d2a84b033a15f7f4" := by
+  rw [← leafItemF_eq]
+  decide +kernel
+
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; v=bytes(32)
+for j in range(16): v=bytes(a^b for a,b in zip(v,K(b'H'+bytes(range(32))+j.to_bytes(8,'little'))))
+print(K(b'L'+v+(2**22).to_bytes(8,'little')).hex())"` (the value of `value16_kat` with the season's
+count `n = 2^22`) -/
+theorem leafStmt_season_kat : (leafStmt (leafValue s0 16) (2 ^ 22)).toList =
+    hex "c2b4bbe1ba4ed9ca2dfbb3c8439bdd7f795b82cda72e44d726327f14eb90c817" := by
+  rw [← leafStmtF_eq, ← leafValueF_eq]
+  decide +kernel
+
+/-- The season's `n = 2^22` in 8 little-endian bytes: its one set bit is in the third byte. -/
+theorem enc64_season : enc64 (2 ^ 22) = [0, 0, 0x40, 0, 0, 0, 0, 0] := by decide
+
+/-- `enc64` writes 8 bytes, low byte first. -/
+theorem enc64_kat : enc64 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
+
+/-- **At `n = 0` the leaf statement does not depend on the seed**: the value of no hashes is
+zero, whatever the seed. Harmless because the runner draws `n` with `1 ≤ n`. -/
+theorem leafStmt_zero_seed (s t : Digest) :
+    leafStmt (leafValue s 0) 0 = leafStmt (leafValue t 0) 0 := rfl
+
 /-! ## Tags -/
 
 /-- **Tags separate**: the seven tags are distinct bytes, and each hash input of the contract
@@ -150,6 +184,12 @@ theorem leaf_at_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
 theorem leaf_over_leafCap (acc : Digest → Signed → Bool) (s : Digest) :
     ¬ Rel acc (leafStmt (leafValue s (leafCap + 1)) (leafCap + 1)) (.leaf s (leafCap + 1)) :=
   fun h => absurd h.1 (by omega)
+
+/-- **The leaf bound is the season's `2^22`**: a leaf of `2^22 + 1` hashes is not in the
+relation, under every `acc`. -/
+theorem leaf_over_season (acc : Digest → Signed → Bool) (s : Digest) :
+    ¬ Rel acc (leafStmt (leafValue s (2 ^ 22 + 1)) (2 ^ 22 + 1)) (.leaf s (2 ^ 22 + 1)) :=
+  fun h => absurd h.1 (by decide)
 
 /-- The statement of the seed is not the statement of its leaf's value (`s0`, `n = 1`). -/
 theorem seed_ne_value : leafStmt s0 1 ≠ leafStmt (leafValue s0 1) 1 := by
@@ -317,6 +357,13 @@ theorem acc_query_over_cap (S : Submission) (vk c : Digest) (p : Signed) {e : By
   unfold Submission.acc
   rw [decide_eq_false this]
   simp
+
+/-- **The query cap is the service's `2^20` bytes**: every submission's `acc` rejects a trace whose
+query has `2^20 + 1` bytes, whatever its answer, proof and signature. -/
+theorem acc_query_over_2pow20 (S : Submission) (vk c a : Digest) (π : Proof) (σ : Sig) :
+    S.acc vk c ⟨π, [(⟨Array.replicate (2 ^ 20 + 1) 0⟩, a)], σ⟩ = false :=
+  acc_query_over_cap S vk c _ (List.mem_singleton_self _)
+    (show queryCap < (Array.replicate _ _).size by rw [Array.size_replicate]; decide)
 
 /-- The verifier that asks the one query `q` and accepts, declaring `qV = 1` (the
 witness-sending submission otherwise). -/

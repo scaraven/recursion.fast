@@ -3,7 +3,7 @@
 
 The byte layouts are normative here and in `harness/FORMAT.md` and `service/PROTOCOL.md`: the
 service, this file and the runner agree byte for byte. The service signs, per `sign` request, the
-digest of the whole trace it answered (hash-then-sign), with a **stateful hash-based signature**:
+digest of the request's trace, its queries with the answers it computed (hash-then-sign), with a **stateful hash-based signature**:
 Winternitz one-time signatures (WOTS) with base-4 digits (`w = 4`, chains of 3 steps), 133 chains
 per key, under a Merkle tree of `2^16` one-time keys whose root is the public key `vk`. Every hash
 below is public Keccak-256 under its own tag (`Relation.lean`).

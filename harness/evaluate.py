@@ -36,9 +36,14 @@ kernel's, which leaves the certificate unchecked):
      manifest before the build and after the badge build (step 6), and the result records the
      manifest's and the allowlist's hashes (`environment`);
   5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
-  6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
-     in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
-     import closure lies inside the verified one).
+  6. the badge executable `verify`: its per-entry module rendered from `harness/badge/Verify.lean.in`
+     (the solution and the organiser's prebuilt glue `RecursionFast/Badge.lean`, wired by one
+     definition) and built in the sandbox in that tree within `badge_s`; it must neither build nor
+     change an entry module (the badge's import closure lies inside the verified one) nor, with the
+     organiser's build mounted read-only, an organiser artifact (the olean manifest and the hashes
+     of the organiser's compiled objects, `org-setup.sh` step 4b, are checked after it), and the
+     gate's rule 9 (`--wiring`, within `gate_s`) must find in that module `main := RFBadge.main
+     RecursionFast.Challenge.submission` and nothing else. Entry module roots `RFBadge*` are refused.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
   result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
@@ -146,6 +151,9 @@ def mkfresh(t, org, entry, challenge, files):
     dirs = [os.path.join(org, ".lake/build/lib/lean"), os.path.join(lean_prefix(org), "lib/lean")]
     dirs += [os.path.join(pk, p, ".lake/build/lib/lean") for p in os.listdir(pk)]
     mods = [f[:-5] for f in files]
+    for r in sorted({m.split(".")[0] for m in mods}):
+        if r.startswith("RFBadge"):
+            raise Reject(f"module root {r}: roots starting with RFBadge are reserved for the badge")
     for r in sorted({m.split(".")[0] for m in mods + [CHALLENGE_MODULE]}):
         for d in dirs:
             if os.path.isdir(os.path.join(d, r)) or os.path.exists(os.path.join(d, r + ".olean")):
@@ -189,8 +197,9 @@ class Org:
         self.packages = packages_dir(self.dir)
         rf = os.path.join(self.dir, ".lake", "rf")
         self.manifest, self.allowlist = os.path.join(rf, "manifest.sha256"), os.path.join(rf, "allowlist.txt")
+        self.objects = os.path.join(rf, "objects.sha256")
         self.tools = os.path.join(REPO, "harness", "lean-tools", ".lake", "build", "bin")
-        for p in (self.manifest, self.allowlist, os.path.join(self.tools, "gate")):
+        for p in (self.manifest, self.allowlist, self.objects, os.path.join(self.tools, "gate")):
             if not os.path.exists(p):
                 raise SystemExit(f"evaluate: {p} missing (run harness/org-setup.sh first)")
 
@@ -202,6 +211,11 @@ class Org:
     def manifest_ok(self, log):
         return sh([sys.executable, "-I", os.path.join(REPO, "scripts", "olean-manifest.py"), "check", "--org", self.dir,
                    self.manifest], log=log) == 0
+
+    def objects_ok(self, log):
+        """The organiser's compiled objects (what a badge links) are those `org-setup.sh` hashed."""
+        return sh([sys.executable, "-I", os.path.join(REPO, "scripts", "olean-manifest.py"), "objects-check", "--org",
+                   self.dir, self.objects], log=log) == 0
 
     def environment(self):
         """What the certificate was checked against: the organiser's commit and the
@@ -405,10 +419,17 @@ def cert_job(a):
         badge = build_badge(org, tree, logs["badge"], caps["badge_s"], res)
         # the badge's import closure lies inside the verified one: its build adds no entry
         # module and changes no verified artifact
-        after = {k: v for k, v in artifacts(tree).items() if "/RFBadge" not in "/" + k.split("/", 2)[-1]}
+        after = {k: v for k, v in artifacts(tree).items() if not badge_artifact(k)}
         moved = sorted(k for k in set(after) | set(arts) if after.get(k) != arts.get(k))
         if moved:
             raise Reject(f"the badge build built or changed entry modules outside the verified closure: {moved[:3]}")
+        # rule 9: the per-entry module, elaborated with the entry's instances and notations in scope,
+        # holds `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else
+        rc = sandboxed(org, [gate, "--wiring", "RFBadgeVerify", "--manifest", org.manifest], tree, logs["badge"],
+                       env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)), timeout=caps["gate_s"])
+        if rc != 0:
+            rejects = [l for l in open(logs["badge"], errors="replace").read().splitlines() if l.startswith("gate: REJECT")]
+            raise Reject("the badge's per-entry module (gate rule 9): " + "; ".join(rejects[:3] or [f"exit {rc}"]))
         res["badge_dir"] = badge
         res["badge_sha256"] = {b: hashlib.sha256(open(os.path.join(badge, b), "rb").read()).hexdigest()
                                for b in os.listdir(badge)}
@@ -434,24 +455,33 @@ def cert_job(a):
     return res
 
 
+def badge_artifact(k):
+    """`k` (`lib/lean/…` or `ir/…`, `artifacts`) is an artifact of the badge's per-entry module
+    `RFBadgeVerify`, which the badge build adds (entry roots `RFBadge*` are refused, `mkfresh`)."""
+    rel = k[len("lib/lean/"):] if k.startswith("lib/lean/") else k[len("ir/"):] if k.startswith("ir/") else None
+    return rel is not None and "/" not in rel and rel.split(".", 1)[0] == "RFBadgeVerify"
+
+
 def build_badge(org, tree, log, timeout, res):
-    """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
-    solution module) and build it in the sandbox within `timeout`, recording its duration as
-    `res["badge_s"]`; returns the directory holding `verify`."""
+    """Render the badge executable `verify`'s per-entry module into `tree`
+    (`harness/badge/Verify.lean.in`: the solution module and the organiser's prebuilt glue
+    `RecursionFast.Badge`, wired by one definition) and build it in the sandbox within `timeout`,
+    recording its duration as `res["badge_s"]`; returns the directory holding `verify`. (The caller
+    then runs the gate's rule 9 on that module.)"""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
-    for name in ("Common", "Verify"):
-        src = open(os.path.join(HERE, "badge", f"{name}.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
-        open(os.path.join(bdir, f"RFBadge{name}.lean"), "w").write(src)
+    src = open(os.path.join(HERE, "badge", "Verify.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
+    open(os.path.join(bdir, "RFBadgeVerify.lean"), "w").write(src)
     with open(os.path.join(tree, "lakefile.toml"), "a") as f:
-        f.write('\n[[lean_lib]]\nname = "RFBadge"\nsrcDir = "badge"\nroots = ["RFBadgeCommon"]\n'
-                '\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
+        f.write('\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
     # An executable links the compiled object of every module it imports. `org-setup.sh` built those
-    # of the organiser's closure; the objects of other modules an entry imports are compiled here,
-    # into the package tree, so its build directories are writable for this step. No entry code runs
-    # in it (the entry's modules are loaded, not elaborated; gate rule 3 excludes load-time code),
-    # and the olean manifest is checked afterwards.
-    rw = [os.path.join(tree, ".lake"), os.path.join(org.dir, ".lake", "build")]
+    # of the organiser's closure (the organiser's own, the glue's included, hashed in its step 4b),
+    # so the organiser's build directory stays read-only here; the objects of other modules an entry
+    # imports are compiled here, into the package tree, so its build directories are writable for
+    # this step. No entry code runs in it (the entry's modules are loaded, not elaborated; gate rule
+    # 3 excludes load-time code), and the olean manifest and the objects' hashes are checked
+    # afterwards.
+    rw = [os.path.join(tree, ".lake")]
     rw += [os.path.join(org.packages, p, ".lake") for p in sorted(os.listdir(org.packages))
            if os.path.isdir(os.path.join(org.packages, p, ".lake"))]
     t0 = time.monotonic()
@@ -464,6 +494,8 @@ def build_badge(org, tree, log, timeout, res):
         raise Reject(f"badge build failed ({rc}): " + open(log, errors="replace").read()[-400:])
     if not org.manifest_ok(log):
         raise Reject("organiser .olean changed during the build, the comparator, the gate or the badge build")
+    if not org.objects_ok(log):
+        raise Reject("the organiser's compiled objects (what the badge links) are not those org-setup.sh hashed")
     out = os.path.join(os.path.dirname(tree), "badge")
     os.makedirs(out)
     shutil.copy(os.path.join(tree, ".lake", "build", "bin", "verify"), out)

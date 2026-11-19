@@ -1,0 +1,1776 @@
+[
+ {
+  "id": "rel-no-leafcap",
+  "file": "Relation.lean",
+  "breaks": "a leaf witness of any size is in the relation (no leafCap bound)",
+  "expect": "Controls.Relation.leaf_over_leafCap",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.5,
+   "build": 55.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 330,
+  "error": "(kernel) declaration type mismatch, 'RecursionFast.Compose.decRel._aux_1' has type (Digest → Signed → Bool) → (c s : Digest) → (n : ℕ) → Decidable (n ≤ leafCap ∧ c = leafStmt (leafValue s n) n) but it is expected to have type (acc : Digest → Signed → Bool) → (c s : Digest) → (n : ℕ) → Decidable (Rel",
+  "seconds": 71.1
+ },
+ {
+  "id": "rel-leafcap-2^23",
+  "file": "Relation.lean",
+  "breaks": "the leaf bound is 2^23, not the season's 2^22",
+  "expect": "Controls.Relation.leaf_over_season (added after this mutant survived an earlier version)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.1,
+   "build": 63.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 312,
+  "error": "Application type mismatch: The argument hc has type 2 ^ 22 < 2 ^ 64 but is expected to have type leafCap < 2 ^ 64 in the application",
+  "seconds": 78.2
+ },
+ {
+  "id": "rel-querycap-2^21",
+  "file": "Relation.lean",
+  "breaks": "acc accepts queries of up to 2^21 bytes, above the service's 2^20 cap",
+  "expect": "Controls.Relation.acc_query_over_2pow20 (added after this mutant survived)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.0,
+   "build": 238.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 366,
+  "error": "Tactic `decide` proved that the proposition queryCap < 2 ^ 20 + 1 is false - RecursionFast.Controls.Relation",
+  "seconds": 253.3
+ },
+ {
+  "id": "rel-nodestmt-swap",
+  "file": "Relation.lean",
+  "breaks": "the node layout hashes the children in the wrong order",
+  "expect": "Controls.Relation.nodeStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.5,
+   "build": 21.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 197,
+  "error": "unsolved goals a b : Digest ⊢ keccakDigest (tagNode :: (Vector.toList a ++ Vector.toList b)) = keccakDigest (tagNode :: (Vector.toList b ++ Vector.toList a))",
+  "seconds": 37.5
+ },
+ {
+  "id": "rel-tagitem-eq-tagleaf",
+  "file": "Relation.lean",
+  "breaks": "leaf items and leaf statements share a domain tag",
+  "expect": "Controls.Relation.tags_separate / item0_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.8,
+   "build": 225.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 88,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (leafItemF s0 0) = hex \"da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11\") = true →",
+  "seconds": 240.8
+ },
+ {
+  "id": "rel-enc64-big-endian",
+  "file": "Relation.lean",
+  "breaks": "enc64 is big-endian, not Rust's u64::to_le_bytes",
+  "expect": "Controls.Relation.item1_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 16.3,
+   "build": 13.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 70,
+  "error": "Tactic `rewrite` failed: Did not find an occurrence of the pattern ofLE (List.ofFn fun i => (?x / 256 ^ ↑i).toUInt8) in the target expression ofLE (List.ofFn fun i => (n / 256 ^ (7 - ↑i)).toUInt8) = n % 2 ^ 64 n : ℕ ⊢ ofLE (List.ofFn fun i => (n / 256 ^ (7 - ↑i)).toUInt8) = n % 2 ^ 64",
+  "seconds": 30.2
+ },
+ {
+  "id": "rel-leafvalue-shift",
+  "file": "Relation.lean",
+  "breaks": "the leaf value XORs items 1 … n, dropping item 0 and adding item n",
+  "expect": "Controls.Relation.value2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.7,
+   "build": 21.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 186,
+  "error": "Type mismatch rfl has type ?m.37 = ?m.37 but is expected to have type digestXor (leafValue s j) (leafItem s j) = leafValue s (j + 1)",
+  "seconds": 36.7
+ },
+ {
+  "id": "rel-leafvalue-nonzero-start",
+  "file": "Relation.lean",
+  "breaks": "the leaf value starts from a nonzero digest",
+  "expect": "Controls.Relation.value2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.1,
+   "build": 22.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 190,
+  "error": "Type mismatch rfl has type ?m.30 = ?m.30 but is expected to have type Vector.replicate 32 0 = leafValue s 0",
+  "seconds": 37.1
+ },
+ {
+  "id": "rel-xor-or",
+  "file": "Relation.lean",
+  "breaks": "the leaf value combines items by OR, not XOR",
+  "expect": "Controls.Relation.value2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.6,
+   "build": 218.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 103,
+  "error": "Tactic `decide` failed for proposition Vector.toList (leafValueF s0 2) = hex \"987811b1565b57a5360e5a6fbe442fab425363ce2a9326cf512e5aeec7eba08e\" because its `Decidable` instance instDecidableEqList (Vector.toList (leafValueF s0 2)) (hex \"987811b1565b57a5360e5a6fbe442fab425363ce2a9326cf512e5aeec7eba08",
+  "seconds": 234.1
+ },
+ {
+  "id": "rel-leafstmt-no-count",
+  "file": "Relation.lean",
+  "breaks": "the leaf statement does not commit to the number of hashes",
+  "expect": "Controls.Relation.leafStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 17.7,
+   "build": 22.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 193,
+  "error": "unsolved goals h : Digest n : ℕ ⊢ keccakDigest (tagLeaf :: (Vector.toList h ++ enc64 n)) = keccakDigest (tagLeaf :: Vector.toList h)",
+  "seconds": 41.2
+ },
+ {
+  "id": "rel-node-drop-acc2",
+  "file": "Relation.lean",
+  "breaks": "a node's second child is not checked",
+  "expect": "Controls.Relation.second_child_rejected",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.6,
+   "build": 57.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 332,
+  "error": "(kernel) declaration type mismatch, 'RecursionFast.Compose.decRel._aux_3' has type (acc : Digest → Signed → Bool) → (c c₁ c₂ : Digest) → (p₁ p₂ : Signed) → Decidable (c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true ∧ acc c₂ p₂ = true) but it is expected to have type (acc : Digest → Signed → Bool) → (c c₁ c₂ :",
+  "seconds": 72.5
+ },
+ {
+  "id": "rel-node-acc2-wrong-child",
+  "file": "Relation.lean",
+  "breaks": "a node's second proof is checked against the first child's digest",
+  "expect": "Controls.Relation.node_of_two_leaves / second_child_rejected",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.7,
+   "build": 49.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 199,
+  "error": "Application type mismatch: The argument h.right has type submission.acc vk c₂ p₂ = true but is expected to have type submission.acc vk c₁ p₂ = true in the application",
+  "seconds": 66.1
+ },
+ {
+  "id": "rel-docstring-only",
+  "file": "Relation.lean",
+  "breaks": "nothing: only a docstring changes",
+  "expect": "survives (equivalent)",
+  "calibrate": "survive",
+  "equivalent": true,
+  "stage_seconds": {
+   "contract": 14.6,
+   "build": 254.1
+  },
+  "status": "SURVIVED",
+  "seconds": 269.9
+ },
+ {
+  "id": "tree-stream-args-swapped",
+  "file": "Tree.lean",
+  "breaks": "the stream step hashes the new leaf before the previous statement",
+  "expect": "Controls.Tree.streamStmt_three / streamStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 7.3,
+   "build": 23.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 769,
+  "error": "Type mismatch List.foldl_append has type List.foldl ?m.40 ?m.41 (?m.42 ++ ?m.43) = List.foldl ?m.40 (List.foldl ?m.40 ?m.41 ?m.42) ?m.43 but is expected to have type streamStmt n (h₀ :: hs ++ [h]) = nodeStmt (streamStmt n (h₀ :: hs)) (leafStmt h n)",
+  "seconds": 31.1
+ },
+ {
+  "id": "tree-stream-reversed",
+  "file": "Tree.lean",
+  "breaks": "the stream folds its later leaves newest first",
+  "expect": "Controls.Tree.streamStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.8,
+   "build": 20.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 769,
+  "error": "Type mismatch List.foldl_append has type List.foldl ?m.40 ?m.41 (?m.42 ++ ?m.43) = List.foldl ?m.40 (List.foldl ?m.40 ?m.41 ?m.42) ?m.43 but is expected to have type streamStmt n (h₀ :: hs ++ [h]) = nodeStmt (streamStmt n (h₀ :: hs)) (leafStmt h n)",
+  "seconds": 29.6
+ },
+ {
+  "id": "tree-level-swap",
+  "file": "Tree.lean",
+  "breaks": "the tree pairs adjacent digests right to left",
+  "expect": "Controls.Tree.treeRoot_two",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 7.3,
+   "build": 19.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Compose",
+  "line": 283,
+  "error": "Tactic `rfl` failed: The left-hand side treeLevel ([a] ++ [b]) is not definitionally equal to the right-hand side [nodeStmt a b] r : ℕ xs ys : List Digest hx : xs.length = 2 ^ r",
+  "seconds": 27.5
+ },
+ {
+  "id": "tree-root-half-levels",
+  "file": "Tree.lean",
+  "breaks": "the root iterates |cs|/2 levels: equal on powers of two, wrong on 3 leaves",
+  "expect": "Controls.Tree.treeRoot_three",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 7.2,
+   "build": 4.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 52,
+  "error": "Tactic `rewrite` failed: Did not find an occurrence of the pattern ?f^[Nat.succ ?n] ?x in the target expression (treeLevel^[(m + (treeLevel (a :: b :: cs)).length + 1) / 2] (a :: b :: cs)).headD (Vector.replicate 32 0) = (treeLevel^[(treeLevel (a :: b :: cs)).length / 2] (treeLevel (a :: b :: cs))).",
+  "seconds": 12.6
+ },
+ {
+  "id": "oracle-runseq-leftover",
+  "file": "Oracle.lean",
+  "breaks": "runSeq accepts a trace with entries left over (no exact consumption)",
+  "expect": "Controls.Oracle.prog_runSeq_extra / Controls.Relation.child_trace_nonempty",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.1,
+   "build": 15.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Trace",
+  "line": 47,
+  "error": "Not a definitional equality: the left-hand side runSeq (e :: tr) (ret a) is not definitionally equal to the right-hand side none",
+  "seconds": 29.6
+ },
+ {
+  "id": "oracle-runseq-no-query-check",
+  "file": "Oracle.lean",
+  "breaks": "runSeq answers a query by an entry for another query",
+  "expect": "Controls.Oracle.prog_runSeq_wrong_query",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.5,
+   "build": 17.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Trace",
+  "line": 65,
+  "error": "Tactic `cases` failed with a nested error: Dependent elimination failed: Failed to solve equation some b = runSeq tr (k a) at case `Eq.refl` Option.ite_none_right_eq_some Hint: Omit it from the simp argument list. [apply] simp only [runSeq] at h",
+  "seconds": 31.8
+ },
+ {
+  "id": "oracle-runlog-last-entry",
+  "file": "Oracle.lean",
+  "breaks": "runLog reads the last entry for a query, not the first (prob's table reads the first)",
+  "expect": "Controls.Oracle.prog_runLog_first",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.8,
+   "build": 9.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Oracle",
+  "line": 44,
+  "error": "Type mismatch ih (H e.fst) fun q' h' => hq q' (List.mem_cons_of_mem e.fst h') has type runLog L (k (H e.fst)) = some (run H (k (H e.fst))) but is expected to have type ((List.find? (fun e_1 => decide (e_1.fst = e.fst)) (List.reverse L)).bind fun e => runLog L (k e.snd)) = some (run H (k (H e.fst)))",
+  "seconds": 25.2
+ },
+ {
+  "id": "oracle-queries-drop-head",
+  "file": "Oracle.lean",
+  "breaks": "queries omits each query asked, so qV and Q bound nothing",
+  "expect": "Controls.Oracle.prog_queries / Controls.Security.queryThenAccept_ks_ge_one",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.3,
+   "build": 9.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Oracle",
+  "line": 37,
+  "error": "Application type mismatch: The argument List.mem_cons_self has type ?m.54 ∈ ?m.54 :: ?m.55 but is expected to have type q ∈ queries H (query q k) in the application",
+  "seconds": 23.5
+ },
+ {
+  "id": "oracle-bind-ignores-answer",
+  "file": "Oracle.lean",
+  "breaks": "bind feeds the zero digest to the program instead of the oracle's answer",
+  "expect": "Library proofs (completeness, KS bridge)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.6,
+   "build": 9.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Oracle",
+  "line": 56,
+  "error": "Type mismatch ih (H q) has type run H ((k (H q)).bind f) = run H (f (run H (k (H q)))) but is expected to have type run H ((query q k).bind f) = run H (f (run H (query q k)))",
+  "seconds": 22.4
+ },
+ {
+  "id": "cert-acc-no-qv",
+  "file": "Certificate.lean",
+  "breaks": "acc accepts traces longer than the declared qV",
+  "expect": "Controls.Relation.acc_trace_over_qV",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.6,
+   "build": 11.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.5
+ },
+ {
+  "id": "cert-acc-no-querycap",
+  "file": "Certificate.lean",
+  "breaks": "acc accepts trace queries of any length",
+  "expect": "Controls.Relation.acc_query_over_cap",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.4,
+   "build": 11.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.6
+ },
+ {
+  "id": "cert-acc-no-sigok",
+  "file": "Certificate.lean",
+  "breaks": "acc does not check the signature on the trace",
+  "expect": "Controls.Relation.child_other_key",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.4,
+   "build": 11.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.2
+ },
+ {
+  "id": "cert-acc-runlog",
+  "file": "Certificate.lean",
+  "breaks": "acc reads the trace by lookup, not in order and used up exactly",
+  "expect": "Controls.Relation.child_trace_nonempty",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.8,
+   "build": 11.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 21.0
+ },
+ {
+  "id": "cert-acc-word-le",
+  "file": "Certificate.lean",
+  "breaks": "acc accepts a proof of exactly 2^64 bytes, whose length no 64-bit word writes",
+  "expect": "Controls.Relation.acc_over_word",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.1,
+   "build": 11.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.3
+ },
+ {
+  "id": "cert-acc-qv-lt",
+  "file": "Certificate.lean",
+  "breaks": "acc rejects a trace of exactly qV entries",
+  "expect": "Controls.Relation.acc_query_at_cap",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.4,
+   "build": 11.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.4
+ },
+ {
+  "id": "cert-acc-querycap-lt",
+  "file": "Certificate.lean",
+  "breaks": "acc rejects a query of exactly queryCap bytes",
+  "expect": "Controls.Relation.acc_query_at_cap",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.6,
+   "build": 10.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 210,
+  "error": "unsolved goals S : Submission vk c : Digest p : Signed ⊢ (decide (ByteArray.size p.π < 2 ^ 64) && decide (List.length p.tr ≤ S.qV) && decide (∀ e ∈ p.tr, e.1.size ≤ queryCap) && SigOk vk (traceDigest p.tr) p.σ &&",
+  "seconds": 20.3
+ },
+ {
+  "id": "cert-secure-one-key",
+  "file": "Certificate.lean",
+  "breaks": "knowledge soundness under one fixed key, not every key",
+  "expect": "Controls.Certificate.sigTrust_no_certificate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.3,
+   "build": 16.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 369,
+  "error": "Type mismatch ks has type ∀ (vk : Digest), KS (Rel (submission.acc vk)) (submission.V vk) submission.E submission.ε submission.qV but is expected to have type KS (Rel (submission.acc 0)) (submission.V 0) submission.E submission.ε submission.qV",
+  "seconds": 25.5
+ },
+ {
+  "id": "cert-no-complete",
+  "file": "Certificate.lean",
+  "breaks": "the certificate asks no completeness",
+  "expect": "Controls.Certificate.rejectAll_no_certificate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.4,
+   "build": 17.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 370,
+  "error": "`complete` is not a field of structure `Certificate`",
+  "seconds": 26.4
+ },
+ {
+  "id": "cert-complete-error-1",
+  "file": "Certificate.lean",
+  "breaks": "completeness at error 1 (vacuous), not the declared delta",
+  "expect": "Controls.Certificate.rejectAll_no_certificate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.9,
+   "build": 16.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 370,
+  "error": "Type mismatch complete has type ∀ (vk : Digest), CompleteWithError (Rel (submission.acc vk)) (submission.P vk) (submission.V vk) submission.δ but is expected to have type ∀ (vk : Digest), CompleteWithError (Rel (submission.acc vk)) (submission.P vk) (submission.V vk) 1",
+  "seconds": 26.6
+ },
+ {
+  "id": "cert-no-computes",
+  "file": "Certificate.lean",
+  "breaks": "the extractor program need not compute E",
+  "expect": "Controls.Extractor.halt_not_ws-style negatives, Library proofs",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.6,
+   "build": 17.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 371,
+  "error": "`computes` is not a field of structure `Certificate`",
+  "seconds": 27.5
+ },
+ {
+  "id": "cert-cap-qv-2^17",
+  "file": "Certificate.lean",
+  "breaks": "the certificate admits 2^17 verifier queries",
+  "expect": "Controls.Certificate (small_of_caps uses the 2^16 cap)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.4,
+   "build": 183.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 101,
+  "error": "Application type mismatch: The argument h.cap.right.right.left has type S.qV ≤ 2 ^ 17 but is expected to have type S.qV ≤ 2 ^ 16 in the application",
+  "seconds": 192.6
+ },
+ {
+  "id": "cert-cap-no-fuel",
+  "file": "Certificate.lean",
+  "breaks": "the fuel is not bounded by the budget",
+  "expect": "Controls.Certificate.fuel_over_budget_no_certificate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 9.1,
+   "build": 17.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 372,
+  "error": "Application type mismatch: The argument fun t => ?m.23 has type (t : ?m.21) → ?m.24 t but is expected to have type True in the application",
+  "seconds": 26.8
+ },
+ {
+  "id": "cert-cap-no-progcap",
+  "file": "Certificate.lean",
+  "breaks": "the extractor program may have any size",
+  "expect": "Controls.Certificate.big_program_no_certificate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.8,
+   "build": 189.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 124,
+  "error": "invalid `▸` notation, the equality hp has type S.ext.body = rep (2 ^ 19) but neither side of the equality is mentioned in the type True",
+  "seconds": 198.6
+ },
+ {
+  "id": "certr-bounds-flipped",
+  "file": "Certificate.lean",
+  "breaks": "the declared errors and query bound are lower bounds, not upper bounds",
+  "expect": "Controls.Certificate.ws_certificateR_loose (added after this mutant survived)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.3,
+   "build": 187.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 80,
+  "error": "Application type mismatch: The argument Nat.zero_le ?m.21 has type 0 ≤ ?m.21 but is expected to have type declaredLoose.qV ≤ submission.qV in the application",
+  "seconds": 196.6
+ },
+ {
+  "id": "certr-fuel-flipped",
+  "file": "Certificate.lean",
+  "breaks": "the declared fuel is a lower bound of the submission's",
+  "expect": "Controls.Certificate.fuel_low_claim",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.7,
+   "build": 189.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 80,
+  "error": "Application type mismatch: The argument certificate.cap.right.right.right.left t has type submission.fuel t ≤ extractorBudget t but is expected to have type declaredLoose.fuel t ≤ submission.fuel t in the application",
+  "seconds": 199.0
+ },
+ {
+  "id": "certr-no-budget",
+  "file": "Certificate.lean",
+  "breaks": "the declared fuel may exceed the budget",
+  "expect": "Controls.Certificate.fuel_over_budget_claim",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 8.6,
+   "build": 193.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 65,
+  "error": "Application type mismatch: The argument certificate.cap.right.right.right.left t has type submission.fuel t ≤ extractorBudget t but is expected to have type True in the application",
+  "seconds": 203.2
+ },
+ {
+  "id": "sec-errorcap-2^-64",
+  "file": "Security.lean",
+  "breaks": "the knowledge error cap is 2^-64 per query, not 2^-128",
+  "expect": "Controls.Potential (a bound stated at 2^-128)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.8,
+   "build": 32.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Potential",
+  "line": 251,
+  "error": "maximum recursion depth has been reached use `set_option maxRecDepth <num>` to increase limit use `set_option diagnostics true` to get diagnostic information",
+  "seconds": 45.2
+ },
+ {
+  "id": "sec-completenesscap-2^-20",
+  "file": "Security.lean",
+  "breaks": "the completeness error cap is 2^-20, not 2^-40",
+  "expect": "Controls.Completeness (a bound stated at 2^-40)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.5,
+   "build": 38.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Completeness",
+  "line": 161,
+  "error": "Expected type must not contain metavariables 0 < ?m.16",
+  "seconds": 51.1
+ },
+ {
+  "id": "sec-logcap-2^64",
+  "file": "Security.lean",
+  "breaks": "knowledge soundness is claimed only up to 2^64 queries",
+  "expect": "Controls.Potential (a bound stated at 2^96)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.5,
+   "build": 34.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Potential",
+  "line": 432,
+  "error": "mod_cast has type Nat.card { a // colBool.bad L q a } ≤ logCap but is expected to have type Nat.card { a // colBool.bad L q a } ≤ 2 ^ 96",
+  "seconds": 47.1
+ },
+ {
+  "id": "sec-ks-no-qv-conjunct",
+  "file": "Security.lean",
+  "breaks": "KS does not bound the verifier's own queries by qV",
+  "expect": "Controls.Security.queryThenAccept_ks_ge_one-style controls, Library KS lemmas",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.1,
+   "build": 20.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KS",
+  "line": 88,
+  "error": "Application type mismatch: The argument hq has type ∀ (H : ByteArray → Digest) (c : Digest) (π : Proof), (OProg.queries H (V c π)).length ≤ qV but is expected to have type True in the application",
+  "seconds": 33.2
+ },
+ {
+  "id": "sec-ks-extractor-no-log",
+  "file": "Security.lean",
+  "breaks": "the extractor is given the empty log instead of the final query log",
+  "expect": "Controls.Security.lucky_ks / Library KState.ks",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.5,
+   "build": 20.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KS",
+  "line": 57,
+  "error": "Type mismatch h.right A Q hA hQ has type prob (fun x L => OProg.runLog L (V x.1 x.2) = some true ∧ ¬∃ w, E x.1 x.2 [] = some w ∧ R x.1 w) (A.bind fun x => (V x.1 x.2).bind fun x_1 => OProg.ret x) [] ≤ (↑Q + ↑qV) * ε but is expected to have type",
+  "seconds": 34.4
+ },
+ {
+  "id": "sec-ks-no-qv-charge",
+  "file": "Security.lean",
+  "breaks": "the verifier's own queries are not charged in the error",
+  "expect": "Library KState.ks (PaperTheorem) / Controls.Security.queryThenAccept_ks_one",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.6,
+   "build": 19.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KS",
+  "line": 57,
+  "error": "Type mismatch h.right A Q hA hQ has type prob (fun x L => OProg.runLog L (V x.1 x.2) = some true ∧ ¬∃ w, E x.1 x.2 L = some w ∧ R x.1 w) (A.bind fun x => (V x.1 x.2).bind fun x_1 => OProg.ret x) [] ≤ ↑Q * ε but is expected to have type",
+  "seconds": 32.3
+ },
+ {
+  "id": "sec-ks-logcap-only-q",
+  "file": "Security.lean",
+  "breaks": "the logCap restriction ignores the verifier's queries",
+  "expect": "Controls.Security.acceptAll_ks_above_logCap",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.7,
+   "build": 22.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KS",
+  "line": 57,
+  "error": "Application type mismatch: The argument hQ has type Q + qV ≤ logCap but is expected to have type Q ≤ logCap in the application",
+  "seconds": 35.3
+ },
+ {
+  "id": "sec-ks-verdict-empty-log",
+  "file": "Security.lean",
+  "breaks": "the adversary's win reads the verifier's verdict on the empty log",
+  "expect": "Controls.Security.queryThenAccept_ks_ge_one",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.8,
+   "build": 22.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KS",
+  "line": 57,
+  "error": "Type mismatch h.right A Q hA hQ has type prob (fun x L => OProg.runLog [] (V x.1 x.2) = some true ∧ ¬∃ w, E x.1 x.2 L = some w ∧ R x.1 w) (A.bind fun x => (V x.1 x.2).bind fun x_1 => OProg.ret x) [] ≤ (↑Q + ↑qV) * ε but is expected to have type",
+  "seconds": 34.9
+ },
+ {
+  "id": "sec-complete-b-true",
+  "file": "Security.lean",
+  "breaks": "completeness bounds the probability of acceptance, not of rejection",
+  "expect": "Controls.Security.ws_complete / rejectAll_not_complete",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.8,
+   "build": 19.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Completeness",
+  "line": 48,
+  "error": "unsolved goals R : Digest → Wit → Prop P : Digest → Wit → OProg Proof V : Digest → Proof → OProg Bool δ : ℝ≥0 ⊢ (∀ (c : Digest) (w : Wit), R c w → prob (fun b x => b = true) ((P c w).bind (V c)) [] ≤ δ) ↔ ∀ (c : Digest) (w : Wit), R c w → prob (fun b x => b = false) ((P c w).bind (V c)) [] ≤ δ",
+  "seconds": 34.5
+ },
+ {
+  "id": "sec-prob-not-recorded",
+  "file": "Security.lean",
+  "breaks": "a fresh answer is not recorded: a repeated query is re-sampled (no function)",
+  "expect": "Library prob lemmas",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.1,
+   "build": 16.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Prob",
+  "line": 91,
+  "error": "unsolved goals case none α : Type B : α → Log → Prop q : ByteArray k : Digest → OProg α L : Log",
+  "seconds": 29.6
+ },
+ {
+  "id": "sec-prob-weight",
+  "file": "Security.lean",
+  "breaks": "a fresh answer is weighted 2^-255, so prob is not a probability",
+  "expect": "Library prob lemmas (total mass 1)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.9,
+   "build": 16.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Prob",
+  "line": 91,
+  "error": "unsolved goals case none α : Type B : α → Log → Prop q : ByteArray k : Digest → OProg α L : Log",
+  "seconds": 29.4
+ },
+ {
+  "id": "sig-no-checksum",
+  "file": "Signature.lean",
+  "breaks": "the checksum digits are constant: a signature advances to another message",
+  "expect": "Controls.Signature.wotsDigits_zero / wotsDigits_dominates",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.9,
+   "build": 20.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Signer",
+  "line": 193,
+  "error": "unsolved goals m : Digest t : ℕ ht : t < 5 ⊢ [0, 0, 0, 0, 0][t] = (List.map (fun x => 3 - x) (msgDigits m)).sum / 4 ^ t % 4",
+  "seconds": 33.5
+ },
+ {
+  "id": "sig-checksum-no-complement",
+  "file": "Signature.lean",
+  "breaks": "the checksum sums the digits, not their complements (no domination)",
+  "expect": "Controls.Signature.wotsDigits_ff / wotsDigits_dominates",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.7,
+   "build": 22.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Signer",
+  "line": 193,
+  "error": "unsolved goals m : Digest t : ℕ ht : t < 5 ⊢ (msgDigits m).sum / 4 ^ t % 4 = (List.map (fun x => 3 - x) (msgDigits m)).sum / 4 ^ t % 4",
+  "seconds": 34.5
+ },
+ {
+  "id": "sig-msgdigits-high-first",
+  "file": "Signature.lean",
+  "breaks": "message digits are taken high bits first",
+  "expect": "Controls.Signature.wotsDigits_order",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.6,
+   "build": 22.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Signer",
+  "line": 126,
+  "error": "unsolved goals m : Digest h : ∀ (l : List UInt8), ofDigits4 (List.flatMap (fun b => [b.toNat / 4 ^ 0 % 4, b.toNat / 4 ^ 1 % 4, b.toNat / 4 ^ 2 % 4, b.toNat / 4 ^ 3 % 4]) l) =",
+  "seconds": 34.8
+ },
+ {
+  "id": "sig-step-no-key-index",
+  "file": "Signature.lean",
+  "breaks": "the chain step is not tweaked by the key index",
+  "expect": "Controls.Signature.wotsStep_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.0,
+   "build": 11.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 92,
+  "error": "unsolved goals j i s : ℕ x : Digest ⊢ keccakDigest (tagWots :: (enc64 j ++ UInt8.ofNat i :: UInt8.ofNat s :: Vector.toList x)) = keccakDigest (tagWots :: UInt8.ofNat i :: UInt8.ofNat s :: Vector.toList x)",
+  "seconds": 25.5
+ },
+ {
+  "id": "sig-step-no-position",
+  "file": "Signature.lean",
+  "breaks": "the chain step is not tweaked by the position",
+  "expect": "Controls.Signature.wotsStep_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.0,
+   "build": 11.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 92,
+  "error": "unsolved goals j i s : ℕ x : Digest ⊢ keccakDigest (tagWots :: (enc64 j ++ UInt8.ofNat i :: UInt8.ofNat s :: Vector.toList x)) = keccakDigest (tagWots :: (enc64 j ++ UInt8.ofNat i :: Vector.toList x))",
+  "seconds": 24.7
+ },
+ {
+  "id": "sig-ends-to-2",
+  "file": "Signature.lean",
+  "breaks": "the verifier walks each chain to position 2, not to its end",
+  "expect": "Library Signer.sigOk_sign",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.6,
+   "build": 12.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 150,
+  "error": "Tactic `rfl` failed: The left-hand side decide (σ.idx < 2 ^ sigHeight) && decide (σ.ots.length = wotsLen) && decide (σ.path.length = sigHeight) && decide (sigRoot σ.idx (wotsLeaf σ.idx (List.mapIdx (fun i e => wotsChain σ.idx i e.1 (3 - e.1) e.2) ((wotsDigits m).zip σ.ots))) σ.path = vk)",
+  "seconds": 24.6
+ },
+ {
+  "id": "sig-leaf-no-index",
+  "file": "Signature.lean",
+  "breaks": "the WOTS leaf does not commit to its key index",
+  "expect": "Controls.Signature.wotsLeaf_length / tags_separate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.7,
+   "build": 11.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 117,
+  "error": "unsolved goals j : ℕ ends : List Digest ⊢ keccakDigest (tagWotsLeaf :: (enc64 j ++ List.flatMap Vector.toList ends)) = keccakDigest (tagWotsLeaf :: List.flatMap Vector.toList ends)",
+  "seconds": 24.2
+ },
+ {
+  "id": "sig-root-swap",
+  "file": "Signature.lean",
+  "breaks": "the Merkle path takes the current value as the right child at even index",
+  "expect": "Controls.Signature.sigRoot_bits",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.0,
+   "build": 11.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 138,
+  "error": "unsolved goals case cons s : Digest p : List Digest ih : ∀ (j : ℕ) (x : Digest), sigRootF j x p = sigRoot j x p j : ℕ x : Digest",
+  "seconds": 24.5
+ },
+ {
+  "id": "sig-no-idx-check",
+  "file": "Signature.lean",
+  "breaks": "a signature index of 2^16 or more is accepted",
+  "expect": "Controls.Signature.sigOk_idx_out_of_range",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.9,
+   "build": 11.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 150,
+  "error": "Tactic `rfl` failed: The left-hand side decide (σ.idx < 2 ^ sigHeight) && decide (σ.ots.length = wotsLen) && decide (σ.path.length = sigHeight) && decide (sigRoot σ.idx (wotsLeaf σ.idx (List.mapIdx (fun i e => wotsChain σ.idx i e.1 (3 - e.1) e.2) ((wotsDigits m).zip σ.ots))) σ.path = vk)",
+  "seconds": 24.5
+ },
+ {
+  "id": "sig-no-path-length",
+  "file": "Signature.lean",
+  "breaks": "a signature with a path of any length is accepted",
+  "expect": "Controls.Signature.sigOk_path_length",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.5,
+   "build": 11.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 150,
+  "error": "Tactic `rfl` failed: The left-hand side decide (σ.idx < 2 ^ sigHeight) && decide (σ.ots.length = wotsLen) && decide (σ.path.length = sigHeight) && decide (sigRoot σ.idx (wotsLeaf σ.idx (List.mapIdx (fun i e => wotsChain σ.idx i e.1 (3 - e.1) e.2) ((wotsDigits m).zip σ.ots))) σ.path = vk)",
+  "seconds": 23.8
+ },
+ {
+  "id": "sig-trace-no-length",
+  "file": "Signature.lean",
+  "breaks": "the trace encoding drops each query's length (not injective)",
+  "expect": "Controls.Signature.traceBytes_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.6,
+   "build": 11.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 74,
+  "error": "unsolved goals case cons tr✝ : Trace e : ByteArray × Digest tr : List (ByteArray × Digest) ih : ∀ (b : ByteArray),",
+  "seconds": 24.4
+ },
+ {
+  "id": "sig-trace-no-tag",
+  "file": "Signature.lean",
+  "breaks": "the trace digest has no domain tag",
+  "expect": "Controls.Signature.traceDigest_layout",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.4,
+   "build": 11.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 82,
+  "error": "unsolved goals tr : Trace ⊢ keccakDigest (tagTrace :: traceBytes tr) = keccakDigest (traceBytes tr)",
+  "seconds": 24.0
+ },
+ {
+  "id": "keccak-pad-0x06",
+  "file": "Hash/Keccak.lean",
+  "breaks": "SHA3-256's domain suffix instead of Keccak's padding",
+  "expect": "Controls.Keccak.empty_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 17.8,
+   "build": 16.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 266,
+  "error": "unsolved goals case isFalse b : ByteArray hl : b.data.toList.length = b.size h✝ : ¬rate - b.size % rate = 1 ⊢ b.data.toList ++ 1 :: (List.replicate (rate - b.size % rate - 2) 0 ++ [128]) = b.data.toList ++ 6 :: (List.replicate (rate - b.size % rate - 2) 0 ++ [128])",
+  "seconds": 35.2
+ },
+ {
+  "id": "keccak-pad-single-0x01",
+  "file": "Hash/Keccak.lean",
+  "breaks": "a single padding byte omits the final 0x80 bit",
+  "expect": "Controls.Keccak.len135_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.8,
+   "build": 16.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 265,
+  "error": "unsolved goals case isTrue b : ByteArray hl : b.data.toList.length = b.size h✝ : rate - b.size % rate = 1 ⊢ b.data.toList ++ [129] = b.data.toList ++ [1]",
+  "seconds": 33.4
+ },
+ {
+  "id": "keccak-rc5",
+  "file": "Hash/Keccak.lean",
+  "breaks": "one round constant (round 5) is wrong",
+  "expect": "Controls.Keccak.rc_spec",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.9,
+   "build": 64.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Signature",
+  "line": 64,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (traceDigestF tr₁) = hex \"e5cc8a06d51540b2fc64a644b349a1cd55301b5ad68ed46d593161500463dbc8\") = true →",
+  "seconds": 80.7
+ },
+ {
+  "id": "keccak-rho4",
+  "file": "Hash/Keccak.lean",
+  "breaks": "one rho offset (lane 4) is wrong",
+  "expect": "Controls.Keccak.rho_spec / rho_ones",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.6,
+   "build": 49.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 121,
+  "error": "(deterministic) timeout at `whnf`, maximum number of heartbeats (200000) has been reached Note: Use `set_option maxHeartbeats <num>` to set the limit. Hint: Additional diagnostic information may be available using the `set_option diagnostics true` command.",
+  "seconds": 66.2
+ },
+ {
+  "id": "keccak-rate-135",
+  "file": "Hash/Keccak.lean",
+  "breaks": "the sponge's rate is 135 bytes",
+  "expect": "Controls.Keccak.len135_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.7,
+   "build": 20.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 226,
+  "error": "Type mismatch rfl has type ?m.25 = ?m.25 but is expected to have type rate = 136",
+  "seconds": 37.0
+ },
+ {
+  "id": "keccak-out-31",
+  "file": "Hash/Keccak.lean",
+  "breaks": "the output is 31 bytes",
+  "expect": "INVALID: keccakDigest's length proof (Relation.lean)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 6.3
+  },
+  "status": "INVALID",
+  "by": "RecursionFast.Contract.Relation",
+  "line": 66,
+  "error": "unsolved goals m : List UInt8 ⊢ False - RecursionFast.Contract.Relation",
+  "seconds": 7.3
+ },
+ {
+  "id": "keccak-chi-mirrored",
+  "file": "Hash/Keccak.lean",
+  "breaks": "chi negates the wrong neighbour",
+  "expect": "Controls.Keccak.chi_unit",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.9,
+   "build": 18.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 131,
+  "error": "unsolved goals s : S25 ⊢ #v[s.a0 ^^^ s.a1 &&& ~~~s.a2, s.a1 ^^^ s.a2 &&& ~~~s.a3, s.a2 ^^^ s.a3 &&& ~~~s.a4, s.a3 ^^^ s.a4 &&& ~~~s.a0, s.a4 ^^^ s.a0 &&& ~~~s.a1, s.a5 ^^^ s.a6 &&& ~~~s.a7, s.a6 ^^^ s.a7 &&& ~~~s.a8, s.a7 ^^^ s.a8 &&& ~~~s.a9, s.a8 ^^^ s.a9 &&& ~~~s.a5, s.a9 ^^^ s.a5 &&& ~~~s.a6, s.",
+  "seconds": 38.3
+ },
+ {
+  "id": "keccak-theta-swapped",
+  "file": "Hash/Keccak.lean",
+  "breaks": "theta's neighbouring columns are swapped",
+  "expect": "Controls.Keccak.theta_unit",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.7,
+   "build": 18.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 116,
+  "error": "unsolved goals s : S25 ⊢ #v[s.a0 ^^^ (s.a1 ^^^ s.a6 ^^^ s.a11 ^^^ s.a16 ^^^ s.a21 ^^^ rotK (s.a4 ^^^ s.a9 ^^^ s.a14 ^^^ s.a19 ^^^ s.a24) 1), s.a1 ^^^ (s.a2 ^^^ s.a7 ^^^ s.a12 ^^^ s.a17 ^^^ s.a22 ^^^ rotK (s.a0 ^^^ s.a5 ^^^ s.a10 ^^^ s.a15 ^^^ s.a20) 1), s.a2 ^^^ (s.a3 ^^^ s.a8 ^^^ s.a13 ^^^ s.a18 ^^",
+  "seconds": 37.7
+ },
+ {
+  "id": "keccak-23-rounds",
+  "file": "Hash/Keccak.lean",
+  "breaks": "the permutation has 23 rounds",
+  "expect": "Controls.Keccak.keccakF_zero_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 17.0,
+   "build": 16.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 148,
+  "error": "unsolved goals s : S25 ⊢ (List.foldl roundF s (List.take 23 rc.toList)).toVec = (List.foldl roundF s rc.toList).toVec",
+  "seconds": 34.5
+ },
+ {
+  "id": "keccak-blocklane-xor",
+  "file": "Hash/Keccak.lean",
+  "breaks": "nothing: the eight shifted bytes are disjoint, so OR and XOR agree",
+  "expect": "survives (equivalent), unless a proof depends on the form",
+  "calibrate": "survive",
+  "equivalent": true,
+  "stage_seconds": {
+   "contract": 15.7,
+   "build": 23.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 218,
+  "error": "Not a definitional equality: the left-hand side blockLane a i is not definitionally equal to the right-hand side 0 ||| (a.getD (8 * i) 0).toUInt64 <<< 0 ||| (a.getD (8 * i + 1) 0).toUInt64 <<< 8 ||| (a.getD (8 * i + 2) 0).toUInt64 <<< 16 ||| (a.getD (8 * i + 3) 0).toUInt64 <<< 24 ||| (a.getD (8 * i ",
+  "seconds": 39.7
+ },
+ {
+  "id": "ext-tag-swap",
+  "file": "Extractor.lean",
+  "breaks": "the output's tags 0 and 1 are swapped",
+  "expect": "Controls.Extractor.decodeWit_leaf_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.7,
+   "build": 10.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 275,
+  "error": "Tactic `rfl` failed: The left-hand side (StateT.run readDigest (toWord n :: ([] ++ o))).bind fun a => (StateT.run readSigned a.2).bind fun a_1 => (StateT.run readSigned a_1.2).bind fun a_2 => pure (Wit.node s a.1 a_1.1 a_2.1, a_2.2) is not definitionally equal to the right-hand side some (Wit.leaf s",
+  "seconds": 21.6
+ },
+ {
+  "id": "ext-readbytes-lenient",
+  "file": "Extractor.lean",
+  "breaks": "a byte field that runs past the end decodes (not strict)",
+  "expect": "Controls.Extractor.decodeWit_long_proof",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 29.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Backdoor",
+  "line": 181,
+  "error": "Not a definitional equality: the left-hand side StateT.run readDigest [x, y, z] is not definitionally equal to the right-hand side none",
+  "seconds": 40.6
+ },
+ {
+  "id": "ext-logwords-no-count",
+  "file": "Extractor.lean",
+  "breaks": "the log on the tape carries no entry count",
+  "expect": "Controls.Extractor.extractorInput_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 10.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 246,
+  "error": "Type mismatch: After simplification, term readEntry_run e he o has type StateT.run readEntry (bytesWords e.1.data.toList ++ (packBytes (Vector.toList e.2) ++ o)) = some (e, o) but is expected to have type StateT.run readEntry (?m.60 e ++ o) = some (e, o)",
+  "seconds": 22.1
+ },
+ {
+  "id": "ext-pack-big-endian",
+  "file": "Extractor.lean",
+  "breaks": "bytes are packed big-endian",
+  "expect": "Controls.Extractor.extractorInput_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.4,
+   "build": 9.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 34,
+  "error": "Not a definitional equality: the left-hand side ofLE (d :: ds) is not definitionally equal to the right-hand side d.toNat + 256 * ofLE ds",
+  "seconds": 22.1
+ },
+ {
+  "id": "ext-readsig-counts-swapped",
+  "file": "Extractor.lean",
+  "breaks": "the signature's chain values and path are read with each other's counts",
+  "expect": "Controls.Extractor.decodeWit_node_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.5,
+   "build": 10.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 256,
+  "error": "Tactic `rfl` failed: The left-hand side (StateT.run (readList readDigest σ.path.length) (List.flatMap (fun d => packBytes (Vector.toList d)) σ.ots ++ (List.flatMap (fun d => packBytes (Vector.toList d)) σ.path ++ o))).bind fun a => (StateT.run (readList readDigest σ.ots.length) a.2).bind fun a_1 => ",
+  "seconds": 21.7
+ },
+ {
+  "id": "ext-budget-2^17",
+  "file": "Extractor.lean",
+  "breaks": "the budget charges 2^17 steps per input word",
+  "expect": "Controls.Certificate.fuel_over_budget_per_word_claim (added after this mutant survived)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.1,
+   "build": 206.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Certificate",
+  "line": 91,
+  "error": "Tactic `decide` proved that the proposition ¬(let __src := declared; { ε := __src.ε, δ := __src.δ, qV := __src.qV, fuel := fun t => 2 ^ 48 + 2 ^ 16 * t + t }).fuel 1 ≤ extractorBudget 1 is false",
+  "seconds": 217.5
+ },
+ {
+  "id": "ext-outcap-2^25",
+  "file": "Extractor.lean",
+  "breaks": "the output cap is 2^25 words, so the proof domain 256 MiB",
+  "expect": "Controls.Extractor.toolong_not_computes (2^24 + 1 output words)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.5,
+   "build": 41.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 222,
+  "error": "Tactic `decide` proved that the proposition ¬2 ^ 24 + 1 ≤ outCap is false",
+  "seconds": 52.8
+ },
+ {
+  "id": "ext-computes-small-domain",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for proofs of at most 16 MiB",
+  "expect": "Controls.Extractor.halt_not_big (added after this mutant survived)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 10.4,
+   "build": 42.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 124,
+  "error": "Application type mismatch: The argument h₂ has type ByteArray.size π ≤ 8 * outCap but is expected to have type ByteArray.size π ≤ outCap in the application",
+  "seconds": 53.5
+ },
+ {
+  "id": "ext-computes-no-outcap",
+  "file": "Extractor.lean",
+  "breaks": "the extractor's output is not capped",
+  "expect": "Controls.Extractor.toolong_not_computes",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.6,
+   "build": 21.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 363,
+  "error": "Insufficient number of fields for `⟨...⟩` constructor: Constructor `Eq.refl` does not have explicit fields, but 2 were provided",
+  "seconds": 34.3
+ },
+ {
+  "id": "mach-sub-reversed",
+  "file": "Machine.lean",
+  "breaks": "sub computes b - a",
+  "expect": "Controls.Machine.eval_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.5,
+   "build": 16.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Machine",
+  "line": 49,
+  "error": "Tactic `decide` proved that the proposition XOp.add.eval (-1) 2 = 1 ∧ XOp.sub.eval 0 1 = -1 ∧ XOp.mul.eval (2 ^ 63) 2 = 0 ∧ XOp.mulhu.eval (2 ^ 63) 4 = 2 ∧ XOp.divu.eval 7 0 = 0 ∧ XOp.remu.eval 7 0 = 7 ∧",
+  "seconds": 28.6
+ },
+ {
+  "id": "mach-remu-zero",
+  "file": "Machine.lean",
+  "breaks": "x % 0 is 0, not x",
+  "expect": "Controls.Machine.eval_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.8,
+   "build": 16.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Machine",
+  "line": 49,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (XOp.add.eval (-1) 2 = 1 ∧",
+  "seconds": 29.1
+ },
+ {
+  "id": "mach-shl-unmasked",
+  "file": "Machine.lean",
+  "breaks": "shl shifts by the whole word, not its low 6 bits",
+  "expect": "Controls.Machine.eval_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.5,
+   "build": 17.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Machine",
+  "line": 49,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (XOp.add.eval (-1) 2 = 1 ∧",
+  "seconds": 29.4
+ },
+ {
+  "id": "mach-clmulh-63",
+  "file": "Machine.lean",
+  "breaks": "clmulh returns the wrong window of the carry-less product",
+  "expect": "Controls.Machine.eval_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.0,
+   "build": 18.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Machine",
+  "line": 49,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (XOp.add.eval (-1) 2 = 1 ∧",
+  "seconds": 33.0
+ },
+ {
+  "id": "mach-ite-swapped",
+  "file": "Machine.lean",
+  "breaks": "ite runs p when the cell is zero",
+  "expect": "Controls.Extractor.ws_computes (the witness-sending program branches)",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.5,
+   "build": 13.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 92,
+  "error": "Type mismatch hp m ks has type exec I (n + m) M o (p :: ks) = exec I m M' o' ks but is expected to have type exec I (n + m) M o (q :: ks) = exec I m M' o' ks",
+  "seconds": 28.7
+ },
+ {
+  "id": "mach-mem-free",
+  "file": "Machine.lean",
+  "breaks": "memory is not charged",
+  "expect": "Controls.Machine.mem_charged / straight_short",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.8,
+   "build": 11.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 146,
+  "error": "Tactic `rewrite` failed: Did not find an occurrence of the pattern f - p.memFor input.length in the target expression exec input.toArray f (Array.replicate (p.memFor input.length) 0) #[] [p.body] = some o'.toList p : XProg input : List Word n f : ℕ",
+  "seconds": 24.2
+ },
+ {
+  "id": "mach-output-reversed",
+  "file": "Machine.lean",
+  "breaks": "the output words come out in reverse order",
+  "expect": "Controls.Machine.straight_run",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.8,
+   "build": 11.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 29,
+  "error": "Tactic `rfl` failed: The left-hand side exec I 0 M o [] is not definitionally equal to the right-hand side some o.toList case zero I M o : Array Word ⊢ exec I 0 M o [] = some o.toList",
+  "seconds": 24.3
+ },
+ {
+  "id": "mach-loop-size-free",
+  "file": "Machine.lean",
+  "breaks": "a loop statement does not count toward the program size cap",
+  "expect": "Controls.Machine.size_kat (added after this mutant survived)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.2,
+   "build": 16.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Machine",
+  "line": 205,
+  "error": "Tactic `decide` proved that the proposition (loop 0 ((const 0 0).seq (XStmt.ite 0 (out 0) (out 1)))).size = 6 is false",
+  "seconds": 29.4
+ },
+ {
+  "id": "mach-loop-no-fuel",
+  "file": "Machine.lean",
+  "breaks": "a loop iteration consumes no fuel",
+  "expect": "INVALID: the structural recursion on fuel no longer terminates",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 4.1
+  },
+  "status": "INVALID",
+  "by": "RecursionFast.Contract.Machine",
+  "line": 110,
+  "error": "fail to show termination for RecursionFast.XStmt.exec with errors failed to infer structural recursion: Not considering parameter I of RecursionFast.XStmt.exec: it is unchanged in the recursive calls Cannot use parameter #2:",
+  "seconds": 5.0
+ },
+ {
+  "id": "rel-tagsignode-eq-tagnode",
+  "file": "Relation.lean",
+  "breaks": "signature Merkle nodes and relation nodes share a domain tag",
+  "expect": "Controls.Relation.tags_separate / Controls.Signature.sigNode_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 15.0,
+   "build": 72.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Signature",
+  "line": 138,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (sigNodeF (Vector.replicate 32 1) (Vector.replicate 32 2)) =",
+  "seconds": 88.6
+ },
+ {
+  "id": "keccak-pi-transposed",
+  "file": "Hash/Keccak.lean",
+  "breaks": "pi reads A[y, x + 3y]",
+  "expect": "Controls.Keccak.pi_idx",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 21.4,
+   "build": 20.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.KeccakFast",
+  "line": 126,
+  "error": "unsolved goals s : S25 ⊢ #v[s.a0, s.a5, s.a10, s.a15, s.a20, s.a16, s.a21, s.a1, s.a6, s.a11, s.a7, s.a12, s.a17, s.a22, s.a2, s.a23, s.a3, s.a8, s.a13, s.a18, s.a14, s.a19, s.a24, s.a4, s.a9] = #v[s.a0, s.a6, s.a12, s.a18, s.a24, s.a3, s.a9, s.a10, s.a16, s.a22, s.a1, s.a7, s.a13, s.a19, s.a20, s.a",
+  "seconds": 43.1
+ },
+ {
+  "id": "ext-readstring-off-by-one",
+  "file": "Extractor.lean",
+  "breaks": "a byte string is read one byte longer than its length word",
+  "expect": "Controls.Extractor.decodeWit_node_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.8,
+   "build": 14.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 208,
+  "error": "unsolved goals b : ByteArray h : b.size < 2 ^ 64 o : List Word hs : b.data.toList.length < 2 ^ 64 ⊢ ((StateT.run (readBytes (b.size + 1)) (packBytes b.data.toList ++ o)).bind fun a => some ({ data := a.1.toArray }, a.2)) =",
+  "seconds": 27.9
+ },
+ {
+  "id": "ext-progcap-2^21",
+  "file": "Extractor.lean",
+  "breaks": "the program-size cap is 2^21 statements: a 17-bit lookup-table extractor fits",
+  "expect": "Controls.Certificate.big_program_no_certificate; Controls.Extractor's lookup-table control (added for review R5 LOW-1) on its own",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.1,
+   "build": 43.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 325,
+  "error": "omega could not prove the goal: a possible counterexample may satisfy the constraints 131072 ≤ b ≤ 209715 a ≥ 17 where a := ↑k b := ↑2 ^ k",
+  "seconds": 56.6
+ },
+ {
+  "id": "ext-computes-short-queries",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for logs of queries under 2^32 bytes",
+  "expect": "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.2,
+   "build": 43.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.LogScan",
+  "line": 343,
+  "error": "Application type mismatch: The argument hq has type ∀ e ∈ L, e.1.size < 2 ^ 32 but is expected to have type ∀ e ∈ L, e.1.size < 2 ^ 64 in the application",
+  "seconds": 58.0
+ },
+ {
+  "id": "ext-computes-short-tape",
+  "file": "Extractor.lean",
+  "breaks": "efficient extraction is asked only for tapes of at most 2^32 words",
+  "expect": "Controls.Extractor.halt_not_longQuery / halt_not_longTape (added: the first kill, in Controls/LogScan.lean, is incidental)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 11.4,
+   "build": 43.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.LogScan",
+  "line": 342,
+  "error": "Application type mismatch: The argument ht has type T.length ≤ 2 ^ 32 but is expected to have type T.length ≤ 2 ^ 64 in the application",
+  "seconds": 56.0
+ },
+ {
+  "id": "mach-load-address",
+  "file": "Machine.lean",
+  "breaks": "load copies the address cell instead of the cell it names",
+  "expect": "Controls.Machine.indirect_run",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.2,
+   "build": 12.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 67,
+  "error": "Type mismatch rfl has type ?m.16 = ?m.16 but is expected to have type exec I (m + 1) M o (load d a :: x✝) = exec I m (M.setIfInBounds d (M.getD (BitVec.toNat (M.getD a 0)) 0)) o x✝",
+  "seconds": 27.7
+ },
+ {
+  "id": "mach-input-past-end-one",
+  "file": "Machine.lean",
+  "breaks": "an input read past the tape's end is 1, not 0",
+  "expect": "Controls.Machine.bounds_run",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.7,
+   "build": 12.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 75,
+  "error": "Type mismatch rfl has type ?m.16 = ?m.16 but is expected to have type exec I (m + 1) M o (input d a :: x✝) = exec I m (M.setIfInBounds d (I.getD (BitVec.toNat (M.getD a 0)) 0)) o x✝",
+  "seconds": 27.1
+ },
+ {
+  "id": "mach-run-mem-lt",
+  "file": "Machine.lean",
+  "breaks": "a run needs one step more than its memory before any statement",
+  "expect": "Controls.Machine.straight_exact",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 12.5,
+   "build": 11.5
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Machine",
+  "line": 144,
+  "error": "unsolved goals p : XProg input : List Word n f : ℕ M' o' : Array Word h : Runs input.toArray p.body (Array.replicate (p.memFor input.length) 0) #[] n M' o' hf : p.memFor input.length + n ≤ f",
+  "seconds": 25.0
+ }
+]

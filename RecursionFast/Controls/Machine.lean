@@ -14,6 +14,8 @@ Positive:
 * `indirect_run`: `store` and `load` address memory through a cell.
 * `count_run`: the program that counts a cell down from `k` halts in exactly `2k + 7` steps, for
   every `k < 2^64`.
+* `size_kat`: the statement count of the program-size cap (`progCap`) counts every statement,
+  a loop's and a branch's included (`tests/mutation`'s `mach-loop-size-free`).
 * `poke_affine`: memory is affine in the tape: with `memPerWord = 4`, a cell named by
   an input word exists on an 8-word tape and keeps what is written to it.
 
@@ -195,5 +197,11 @@ theorem spin_run (t : List Word) (f : ℕ) : spin.run t f = none := by
       rw [show Array.replicate 1 (0 : Word) = #[0] from rfl]
       simpa [exec] using spin_loop _ _ n
   · rfl
+
+/-! ## The statement count -/
+
+/-- **Every statement counts toward the size**: a loop around a sequence of a constant and a
+branch of two outputs is 6 statements. -/
+theorem size_kat : (loop 0 (seq (const 0 0) (ite 0 (out 0) (out 1)))).size = 6 := by decide
 
 end RecursionFast.Controls.Machine

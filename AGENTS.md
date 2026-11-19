@@ -59,7 +59,14 @@ The root is size-capped (§9, `[entry]` of the season file), checked before anyt
 `RecursionFast.Challenge.submission : Submission` and proves
 `RecursionFast.Challenge.certified : CertificateR declared submission`, with `declared` copied
 verbatim. The comparator checks that the theorem proved is exactly the rendered one and that
-`submission` is the only changed definition; a mismatch, like any proof the kernel rejects, makes
+`submission` is the only definition of the rendered challenge that changed. The entry's modules may
+add any other declarations, instances and notations included, which the comparator does not
+compare. They reach the badge's checks through `submission`, and two more ways (§6, §11): the
+entry's compiled modules are linked into the badge, so their top-level constants are evaluated when
+it starts (untimed, capped by `badge_start_s`) and keep their values across the checks of one
+process; and the entry's notations are in scope where the badge's one per-entry module is
+elaborated, which gate rule 9 checks after the build. A mismatch, like any proof the
+kernel rejects, makes
 the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors 0 and not
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
@@ -76,9 +83,9 @@ judged by a *signed proof* `(π, tr, σ)`: the proof, the oracle answers its ver
 trace), and the service's signature on the trace. Checking a child therefore never evaluates the
 secret-keyed oracle: it checks a signature and runs `V` on the trace.
 
-- **Relation** `Rel acc` ([`Relation.lean#L141-L146`](RecursionFast/Contract/Relation.lean#L141-L146)):
+- **Relation** `Rel acc` ([`Relation.lean#L142-L147`](RecursionFast/Contract/Relation.lean#L142-L147)):
   `c = leafStmt (leafValue s n) n` with `n ≤ leafCap = 2^22`
-  ([`#L60-L61`](RecursionFast/Contract/Relation.lean#L60-L61)), or
+  ([`#L61-L62`](RecursionFast/Contract/Relation.lean#L61-L62)), or
   `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`.
 - **Byte layouts** (normative; the contract, the service and the runner hash the same bytes):
   `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)`, `leafValue s n` the XOR of `leafItem s j` over
@@ -87,16 +94,16 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   Ethereum's: FIPS 202's sponge over `Keccak-f[1600]`, rate 136 bytes, padding `0x01 … 0x80` (not
   SHA3-256's `0x06`), 32-byte output ([`Hash/Keccak.lean`](RecursionFast/Contract/Hash/Keccak.lean));
   a leaf item is 41 bytes, one permutation
-  ([`Relation.lean#L67-L108`](RecursionFast/Contract/Relation.lean#L67-L108)); the trace digest and
-  the signature ([`Signature.lean#L18-L33`](RecursionFast/Contract/Signature.lean#L18-L33)).
+  ([`Relation.lean#L68-L109`](RecursionFast/Contract/Relation.lean#L68-L109)); the trace digest and
+  the signature ([`Signature.lean#L18-L32`](RecursionFast/Contract/Signature.lean#L18-L32)).
 - **Acceptance** `Submission.acc S vk c p`
-  ([`Certificate.lean#L96-L104`](RecursionFast/Contract/Certificate.lean#L96-L104)), in this order:
+  ([`Certificate.lean#L102-L110`](RecursionFast/Contract/Certificate.lean#L102-L110)), in this order:
   `|π| < 2^64`; `|tr| ≤ qV`; every query in `tr` at most `queryCap = 2^20` bytes
-  ([`Relation.lean#L57-L58`](RecursionFast/Contract/Relation.lean#L57-L58));
+  ([`Relation.lean#L58-L59`](RecursionFast/Contract/Relation.lean#L58-L59));
   `SigOk vk (traceDigest tr) σ` ([`Signature.lean#L105-L110`](RecursionFast/Contract/Signature.lean#L105-L110));
   and `(V vk c π).runSeq tr = some true`: `V`'s `i`-th query is answered by the `i`-th entry of
   `tr`, which must be for that query, and the trace is used up exactly
-  ([`Oracle.lean#L49-L56`](RecursionFast/Contract/Oracle.lean#L49-L56)).
+  ([`Oracle.lean#L48-L55`](RecursionFast/Contract/Oracle.lean#L48-L55)).
 - `acc` is the node clause of the relation, the harness's check of every proof, and anyone's check
   later with the published `vk`. There is no proof-size cap in `acc`: the runner caps `|π|` and the
   verifier's time (§6), and the score prices the final proof's size (§7).
@@ -109,48 +116,48 @@ convinces it, both in the random-oracle model and **for every public key `vk`**.
 the theorem's adversary may hold the signing key, so a verifier that trusts a signature cannot be
 certified; only `acc` trusts signatures.
 
-`Certificate S` ([`Certificate.lean#L106-L118`](RecursionFast/Contract/Certificate.lean#L106-L118))
+`Certificate S` ([`Certificate.lean#L112-L124`](RecursionFast/Contract/Certificate.lean#L112-L124))
 has four fields, and `CertificateR declared S`
-([`#L131-L136`](RecursionFast/Contract/Certificate.lean#L131-L136)) adds that the submission's
+([`#L137-L142`](RecursionFast/Contract/Certificate.lean#L137-L142)) adds that the submission's
 `ε`, `δ`, `qV`, `fuel` are within the declared ones and the declared fuel within the budget.
 
 - **`secure : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV`**
-  ([`Security.lean#L143-L155`](RecursionFast/Contract/Security.lean#L143-L155)). `V` asks at most
+  ([`Security.lean#L150-L162`](RecursionFast/Contract/Security.lean#L150-L162)). `V` asks at most
   `qV` queries on every input and every oracle function; and for every adversary, a query program
   asking at most `Q` queries on every oracle function and outputting `(c, π)`, with
   `Q + qV ≤ logCap`, run and then followed by `V` against one lazily sampled random oracle
-  (`prob`, [`#L132-L141`](RecursionFast/Contract/Security.lean#L132-L141)), the probability that
+  (`prob`, [`#L140-L148`](RecursionFast/Contract/Security.lean#L140-L148)), the probability that
   `V` accepts on the final query log while `E c π log` returns no witness of the relation is at most
   `(Q + qV) · ε`. The extractor reads the final log, the verifier's answers included (how this
   relates to the textbook notion: §12). The adversary is computationally unbounded, bounded only in
   queries.
 - **`complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ`**
-  ([`Security.lean#L157-L161`](RecursionFast/Contract/Security.lean#L157-L161)): on every statement
+  ([`Security.lean#L164-L168`](RecursionFast/Contract/Security.lean#L164-L168)): on every statement
   and witness of the relation, `P`'s proof, produced and then verified against one random oracle,
   is rejected with probability at most `δ`. Grinding is admitted. It is required for **every**
   witness, node witnesses with any accepted children included.
 - **`computes : Computes S.ext S.E S.fuel`**
-  ([`Extractor.lean#L180-L188`](RecursionFast/Contract/Extractor.lean#L180-L188)): the program
+  ([`Extractor.lean#L187-L195`](RecursionFast/Contract/Extractor.lean#L187-L195)): the program
   `ext` of the contract's step-counting machine
-  ([`Machine.lean#L97-L133`](RecursionFast/Contract/Machine.lean#L97-L133)), on the input tape
-  `extractorInput c π L` ([`Extractor.lean#L105-L108`](RecursionFast/Contract/Extractor.lean#L105-L108)),
+  ([`Machine.lean#L95-L131`](RecursionFast/Contract/Machine.lean#L95-L131)), on the input tape
+  `extractorInput c π L` ([`Extractor.lean#L112-L115`](RecursionFast/Contract/Extractor.lean#L112-L115)),
   halts within `fuel t` steps (`t` the tape's length in words) with at most `outCap` words that
-  denote `E c π L` through `decodeWit` ([`#L165-L167`](RecursionFast/Contract/Extractor.lean#L165-L167)).
+  denote `E c π L` through `decodeWit` ([`#L172-L174`](RecursionFast/Contract/Extractor.lean#L172-L174)).
   This holds for every statement, proof of at most `8 · outCap` bytes (128 MiB) and log whose
   queries are below `2^64` bytes and whose tape is at most `2^64` words. The tape and output formats
-  are normative ([`#L13-L33`](RecursionFast/Contract/Extractor.lean#L13-L33)). `E` takes no `vk`.
+  are normative ([`#L11-L31`](RecursionFast/Contract/Extractor.lean#L11-L31)). `E` takes no `vk`.
 - **`cap`**: the numbers below.
 
 | Cap | Value | Lean |
 |---|---|---|
-| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L125-L126`](RecursionFast/Contract/Security.lean#L125-L126) |
-| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L163-L164`](RecursionFast/Contract/Security.lean#L163-L164) |
-| `qV ≤` | `2^16` | [`Certificate.lean#L117`](RecursionFast/Contract/Certificate.lean#L117) |
-| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L171-L172`](RecursionFast/Contract/Extractor.lean#L171-L172) |
-| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L177-L178`](RecursionFast/Contract/Extractor.lean#L177-L178) |
-| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L128-L130`](RecursionFast/Contract/Security.lean#L128-L130) |
-| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L174-L175`](RecursionFast/Contract/Extractor.lean#L174-L175) |
-| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L57-L61`](RecursionFast/Contract/Relation.lean#L57-L61) |
+| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L132-L133`](RecursionFast/Contract/Security.lean#L132-L133) |
+| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L170-L171`](RecursionFast/Contract/Security.lean#L170-L171) |
+| `qV ≤` | `2^16` | [`Certificate.lean#L123`](RecursionFast/Contract/Certificate.lean#L123) |
+| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L178-L179`](RecursionFast/Contract/Extractor.lean#L178-L179) |
+| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L184-L185`](RecursionFast/Contract/Extractor.lean#L184-L185) |
+| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L135-L137`](RecursionFast/Contract/Security.lean#L135-L137) |
+| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L181-L182`](RecursionFast/Contract/Extractor.lean#L181-L182) |
+| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L58-L62`](RecursionFast/Contract/Relation.lean#L58-L62) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
 kernel-checked) offers routes and parts: a potential on logs, `KState`, with its bridge
@@ -164,8 +171,9 @@ of Keccak-256 and `SigOk` proved equal to the contract's
 
 **A node witness must fit `outCap`.** A child's signed file of `f` bytes with `m` trace entries
 takes at most `(f + 7(m + 1))/8` words of output; with the previous step's output within the 64 MiB
-file cap, the leaf child may take up to about 64 MiB, but two children both near the file cap do
-not fit ([`Extractor.lean#L57-L67`](RecursionFast/Contract/Extractor.lean#L57-L67)). A certifiable
+file cap, the leaf child may take up to about 64 MiB, but two children both within about
+458,800 bytes of the file cap may not fit (with word-aligned fields they fit up to 36 bytes below
+it) ([`Extractor.lean#L59-L71`](RecursionFast/Contract/Extractor.lean#L59-L71)). A certifiable
 `V` bounds the children it accepts.
 
 ## 5. The deployment: the signed random oracle
@@ -233,9 +241,20 @@ which the prover never had the key.
   checks outputs with the compiled `acc` against its own statements: the final output (step `M`)
   always, every intermediate output for the track `every`. **Caps:** every output's size is at
   most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof that `acc` accepts, else its file size); the final `|π|`
-  is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, parse included, pinned to
-  one core, after an untimed warm-up of its batch) is at most `v_cap` = 128 ms; a check above it is
-  timed twice more and the least of the three counts.
+  is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, the file's read and parse
+  included, pinned to one core) is at most `v_cap` = 128 ms; a check above it is timed twice more
+  and the least of the three counts. Every badge run whose times count is a fresh process that
+  first checks the organiser's warm-up input (a fixed signed file under a fresh random key and
+  statement, never an output; an entry can tell it apart, and that gains nothing) and then
+  distinct outputs, and each re-timing is another fresh process: no judged check runs in a
+  process that has already seen its input, so a verifier that remembers its work across checks
+  pays it inside the judged window. The process's start-up, to the warm-up's answer, is at most
+  `badge_start_s` = 2 s (the entry's top-level constants are evaluated then, untimed; measured
+  about 0.08 s); past it the check fails (a REJECT for the final output, the track `every`'s for
+  an intermediate one). Each check is timed twice
+  at once: by the runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per
+  MiB of file beyond the check itself), and by the badge's own clock; the larger counts
+  ([`harness/rfh/checks.py`](harness/rfh/checks.py)).
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
   (a leaf: only the flipped statement) and 2 also.
@@ -247,8 +266,10 @@ which the prover never had the key.
   stream `timed_runs` = 2 more times. Each step is a fresh process with the same seed, the runner's
   statement, the service run's previous output as `prev.bin`, and the file `oracle.key` (`k` as 64
   hex characters), all renamed into `/work` when the clock starts; the oracle socket
-  `/run/rf/oracle.sock` also appears only then, in both runs, so nothing key-dependent or
-  service-dependent can run in the untimed start-up (connect after `go`). Every output must be
+  `/run/rf/oracle.sock` also appears only then, in both runs, so nothing that depends on `k`, the
+  seed, the statement or the service can run in the untimed start-up (connect after `go`). The
+  start-up (up to `ready_s` = 10 s, on every core) does see `vk.hex`, already in `/work`, and may do
+  any work that depends on nothing else (pre-fault memory, build tables). Every output must be
   byte-identical to the service run's output of that step; a difference is the entry's REJECT, with
   the step, the pass and the first differing byte. Nothing of the service run's requests survives
   into the timed passes (each request's directory is removed; `/setup` is read-only, and before
@@ -400,12 +421,19 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | start-up to `ready`; one request (`step_s`) | 10 s; 60 s |
 | the service run, its checks and canaries, and both timed passes (`stream_s`) | 3,000 s wall (reached: REJECT) |
 | an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 128 ms (least of three checks above it) |
+| a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
 | a timed pass's output | byte-identical to the service run's |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 8 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
 | jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 70 min; 30 min; 10 min |
 | the benchmark VM; evaluations at a time | 4 cores / 8 threads, 16 GB; 1 |
+
+The prover's 8 GiB is its memory cgroup's charge. The page cache of the setup directory and the
+prover binary is read by the runner before every request (§6), so those pages are charged to the
+runner's cgroup, not the request's: read-only setup data (at most 4 GiB) that a prover maps or
+reads is in effect outside the 8 GiB. This is open to every entry. (Charging it to the request
+would mean evicting and re-reading the setup from disk before every request.)
 
 ## 10. Hard rules for the Lean side
 
@@ -425,7 +453,9 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   `csimp`, `cpass`, `computed_field`); `V`, `P` and `ext` of `submission` have compiled code; no
   entry definition refers to the compiler's or the environment's API; the module declaring
   `submission` reaches, transitively, only entry modules and the import allowlist; organiser modules
-  match the olean manifest.
+  match the olean manifest; and, after the badge build, the badge's per-entry module holds
+  `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else (rule 9: an entry's
+  `notation` can turn the text `RFBadge.main` into another term in every module that imports it).
 - **Imports**: an entry module imports only its own modules and the import closure of `Mathlib`,
   `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`,
   `CompPoly.Fields.Binary.BF64.Ext3` and `CompPoly.Fields.Binary.BF64.Bytes`
@@ -473,7 +503,20 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   signed-oracle construction (Chiesa–Tromer, ICS 2010) also assumes, is not used: the walk
   matches a signed proof to the log by its trace, the signed message, not by its signature.
 - **The badge**: the code Lean's compiler emits for `acc`, built from the same build the kernel
-  checked; and the harness tools (gate, source rule, manifest, renderer, sandbox).
+  checked, and the badge's glue (the file and hex parsers, the timer, the command line:
+  [`RecursionFast/Badge.lean`](RecursionFast/Badge.lean)), compiled with the organiser's package
+  before any entry exists (its `.olean` in the olean manifest, and the compiled code a badge links,
+  the glue's and every organiser module's `.c` and objects, hashed after `org-setup.sh` builds them
+  and checked after every badge build, which sees the organiser's build read-only), so that no
+  instance or notation an
+  entry declares is in scope where it is elaborated. The one module elaborated with the entry in
+  scope ([`harness/badge/Verify.lean.in`](harness/badge/Verify.lean.in)) passes `submission` to the
+  glue and holds nothing else (gate rule 9). The executed code is still compiled code, not the
+  kernel's term: an elaboration-time metaprogram that rewrites the compiler's data (the known raw
+  route passes the gate; only the lexical source rule stops it) or a compiler bug would make it
+  differ from the certified `acc`
+  ([`docs/assurance/CONTRACT-REVIEW-2026-11.md`](docs/assurance/CONTRACT-REVIEW-2026-11.md), the
+  open item). And the harness tools (gate, source rule, manifest, renderer, sandbox).
 - **The runner and the service**, tested, not proved (the service's replay mode included: it
   re-issues only signatures it already made at the same index) ([`tests/`](tests/), [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 - **The machine**: the trust anchor is the organiser's server, which runs every job of
@@ -534,8 +577,14 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   requests disturb it. The price is determinism: a prover whose output depends on thread timing or
   fresh randomness fails the byte comparison.
 - **A trace is not size-capped beyond `file_cap`.** The caps count `|π|`; an accepted proof's trace
-  (at most `qV ≤ 2^16` queries of at most `2^20` bytes, all asked by `V`, so within `v_cap`) is
-  bounded only by the file cap. An output `acc` rejects is sized by its whole file.
+  (at most `qV ≤ 2^16` queries of at most `2^20` bytes, all asked by `V`) is bounded only by the
+  file cap. Its queries are a function of `vk`, `c`, `π` and the answers, so it moves no data out of
+  `π`. Asking them takes `V`'s time, which `v_cap` bounds where `V` is capped: the final output,
+  and every output for the track `every`; an intermediate output of an entry scored in `final`
+  only is accepted or rejected but not `V`-capped. An output `acc` rejects is sized by its whole
+  file. A signed proof is one `SIGN`, whose request body the service caps at 16 MiB, below the
+  `qV · 2^20` bytes `acc` admits: an entry whose honest traces are larger can be complete in the
+  model and still unable to sign them.
 - **`k` is revealed after the service run.** It then protects nothing: no signature can be made
   without the seed, which never leaves the service, and replay mode re-issues only the service
   run's own signatures. A timed pass may still leak `k` (in its timing or its output), harmlessly.
@@ -567,10 +616,14 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 - **`KS` is textbook knowledge soundness only for adversaries that ask the verifier's queries
   themselves**: its extractor also reads the verifier's answers, so for an adversary that leaves
   fresh queries to the verifier it is weaker than the textbook notion (`Controls/Security.lean`,
-  `lucky_ks`). Every prover of the service run asks the service for every answer it signs, so none
-  is of that kind.
-- **Efficient extraction** is claimed only for proofs up to 128 MiB and logs up to about `2^61`
-  entries; beyond, `KS` holds with an unconstrained extractor.
+  `lucky_ks`). In the service run every signed answer is in the run's log (`SIGN` computes the
+  answers it signs), so the run as a whole, the prover together with the service's evaluations,
+  is of the normalised kind; the composition matches every signed trace to that log or reduces it
+  to a forgery (`Library/Compose.lean`).
+- **Efficient extraction** is claimed only for proofs up to 128 MiB and logs whose queries are
+  below `2^64` bytes each and whose tape is at most `2^64` words (about `2^61` entries); beyond,
+  `KS` holds with an unconstrained extractor. (One query of `2^64` bytes takes a log out of the
+  domain; `acc` rejects any query above `2^20` bytes, so no accepted trace has one.)
 - **The source rule raises the bar; it is not a proof** that no elaboration-time code runs.
 - **Per-step service traffic is not published** (the service keeps lifetime totals only).
 

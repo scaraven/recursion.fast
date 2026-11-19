@@ -49,7 +49,12 @@ words denotes children of at most `8 · outCap` bytes (`Controls/Extractor.lean`
 number's low 64 bits, so a query of `2^64` bytes or more would make the tape ambiguous (two logs
 with different answers, one tape). A log entry takes at least five words, so efficient extraction
 is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The
-program has at most `progCap = 2^20` statements.
+program has at most `progCap = 2^20` statements. That cap is what stops a lookup table: `ext` is
+never executed, and a short Lean definition can denote an exponentially large decision tree that
+computes any function of `k` tape bits in about `k` steps, so without it a table of a brute-force
+inversion would meet any fuel (`Controls/Extractor.lean`: a `k`-bit table has about `10 · 2^k`
+statements, past the cap from `k = 17`). Within the cap `ext` can still carry about `2^20` words
+of constants, non-uniform advice fixed before the run's key and seeds are drawn.
 
 **Output cap.** `outCap = 2^24` words (128 MiB). A leaf witness takes 6
 words; a node witness `9 + Σ` over its two children of `w = (1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 +
@@ -59,7 +64,9 @@ so with `m ≤ qV ≤ 2^16` a file within the deployment's cap of `2^26` bytes t
 `2^23 + 57,344` words. Under the benchmark (one IVC stream) a node's first child is the previous
 step's output, delivered within that cap, and its second the proof of a leaf: whatever the leaf
 proof's size up to `2^23 − 57,353` words (about 64 MiB), the node fits. Two children both within
-about `458,800` bytes of the file cap do not fit: there `outCap` binds before the file cap. A node
+about `458,800` bytes of the file cap may not fit (with the most padding); with word-aligned fields
+they fit up to 36 bytes below it (two files of `2^26 − 1000` bytes, no trace, take `16,776,975 ≤
+2^24` words), so near the cap `outCap` may bind before the file cap. A node
 whose children do not fit cannot be extracted, so its verifier is not certifiable, which is the
 intended outcome: the entry's `V` bounds the children it accepts.
 
