@@ -52,8 +52,10 @@ step_s = 20       # seconds per request from its inputs to the death of its last
 stream_s = 2000   # wall seconds for the whole benchmark from its first calibration sample: the service
                   # run, its checks and canaries, the timed passes and the calibration samples (no
                   # check has a cap of its own); reaching it is the entry's REJECT. 64 requests
-                  # (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the checks, the samples and
-                  # the scrubs: the per-request caps bind first except when an entry uses
+                  # (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the checks, the samples, the
+                  # scrubs and the runner's copies (the setup's before each timed pass, 3 × up to
+                  # about 6.5 s at setup_cap; each badge run's and each sandbox's: about 20–40 s in
+                  # all, AGENTS.md §9): the per-request caps bind first except when an entry uses
                   # nearly every cap at once. The timed passes repeat the service run's requests, so
                   # about 4 × the stream's proving time is needed. A later season may set another
 check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9–15 after step 16, the
@@ -98,8 +100,9 @@ v_cap_ms = 64           # one acc check of a checked proof (file read and parse 
                         # 60 s + 4 v_cap, a canary run of c canaries by 60 s + 2 (c + 1) v_cap)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
-setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB; copied to the runner's tmpfs,
-                        # where it stays resident for the benchmark, charged to the runner ([memory])
+setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB; copied to the runner's tmpfs
+                        # afresh for the service run and each timed pass (one copy at a time), resident
+                        # while its pass runs, charged to the runner ([memory])
 work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size
 build_s = 120           # the prover's build
 

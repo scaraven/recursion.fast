@@ -3,7 +3,9 @@ timed passes and the score (the rules are in `AGENTS.md` §6, §7). One stream p
 its own service lifetime: first the **service run** (the stream against the service, untimed, every
 output checked before any secret is revealed), then `timed_runs` **timed passes** against the
 service's replay mode, each output byte-identical to the service run's. Every request is a fresh
-sandboxed process; every check and every calibration sample runs while no entry process is alive.
+sandboxed process; the service run and each timed pass bind their own copy of the binary and the
+setup (`Bench.fresh_copy`), every badge run its own copies of what it sees (`checks.Badge`); every
+check and every calibration sample runs while no entry process is alive.
 Every step the entry controls is capped by the season file, inside its job's time limit: a request
 over its cap, and a benchmark that reaches `stream_s` (a slow or hung check included), fails with
 the reason.
@@ -347,12 +349,23 @@ class Bench:
         memo (`MemoChildSub.lean`). Returns (accepted in the first run, accepted in every run, its
         three times in run order, their median `V`). A rejection is an answer; a failed run (timed
         out, too slow to start, crashed) raises `Fail` and the caller decides. Each run ends within
-        `bounded(1)` with `bounded`, else within 30 s of the stream's cap."""
-        runs = []
+        `bounded(1)` with `bounded`, else within 30 s of the stream's cap. **All three runs are made
+        even when one fails** (the first failure is raised after them, unless it is the stream's cap):
+        the number of sandboxes the benchmark creates (their mount and namespace ids, the inode
+        numbers of their copies on the runner's tmpfs) must not depend on the entry's verifier
+        crashing, which a later request could read (review LR5 L1)."""
+        runs, failed = [], None
         for r in range(1, JUDGED_RUNS + 1):
-            (got,) = self.check([item], f"{what}, judged run {r} of {JUDGED_RUNS}",
-                                self.bounded(1) if bounded else None)
-            runs.append(got)
+            try:
+                (got,) = self.check([item], f"{what}, judged run {r} of {JUDGED_RUNS}",
+                                    self.bounded(1) if bounded else None)
+                runs.append(got)
+            except Fail as e:
+                if e.stage == "stream-cap":
+                    raise
+                failed = failed or e
+        if failed:
+            raise failed
         times = [ns for _, ns in runs]
         return runs[0][0], all(ok for ok, _ in runs), times, statistics.median(times)
 
@@ -555,6 +568,11 @@ class Bench:
                "statements": [c.hex() for c in stmts], "steps": [],
                "truncated": False, "timed_runs": p.timed_runs,
                "request_dir": "a private tmpfs per request"}
+        if self.run.view is None or self.run.seen:      # the service run's own copy (`fresh_copy`)
+            self.fresh_copy(rec, "the service run")
+        else:
+            n, dt = self.run.copies[-1]
+            rec["copies"] = [{"for": "the service run", "bytes": n, "seconds": dt}]
         self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
         try:
             try:
@@ -588,6 +606,18 @@ class Bench:
         rec["calibration"] = self.calibration()
         return rec
 
+    def fresh_copy(self, rec, what):
+        """A fresh copy of the prover binary and the setup on the runner's tmpfs for the service run or
+        a timed pass (`Run.publish`, the previous copy removed first), recorded in `rec["copies"]`.
+        Only the steps of one pass share a copy: a tmpfs file keeps state a request holding it
+        read-only can set (its shared memory policy; review LR5 H1), which would otherwise carry
+        work from the untimed service run into a timed pass, or from one timed pass to the next
+        (the median of three totals would then take a pass another had precomputed for). A timed
+        pass's copy is made inside the stream, so its time counts toward `stream_s` (AGENTS.md §9);
+        the service run's is made before the stream's cap starts."""
+        n, dt = self.run.publish()
+        rec.setdefault("copies", []).append({"for": what, "bytes": n, "seconds": dt})
+
     def service_run(self, svc, rec, data, stmts, first):
         """The service run (AGENTS.md §6), untimed: the stream against the service, every output
         kept. Its times are recorded (`P_service_s`), never scored. Every output's size is at most
@@ -603,8 +633,9 @@ class Bench:
         with no entry process alive, the **final** output on its own, in three runs of its own: it must be accepted against `c_M` in all three, with
         `|π_M| ≤ final_pi_cap`, `V_M ≤ v_cap` (the median of its three times) and its statement
         canaries (`stmt-bit`, `first-child`) rejected; any breach, and any failure of its checks, is
-        the entry's REJECT. Last the track `every`: the canaries of outputs 1 and 2, skipped once the
-        track is lost. A breach of the track's conditions, or a failed (crashed or timed-out) check
+        the entry's REJECT. Last the track `every`: the canaries of outputs 1 and 2, checked even once
+        the track is lost (so that the number of badge runs never depends on the entry's outputs,
+        review LR5 L1; likewise every judged run is made after a failed one, `judged`). A breach of the track's conditions, or a failed (crashed or timed-out) check
         of an intermediate output or of those canaries, is recorded per step and only excludes the
         entry from that track (`every_reasons`)."""
         p, steps, pending, M = self.p, rec["steps"], [], self.p.M
@@ -684,9 +715,10 @@ class Bench:
         if bad[M]:
             raise Fail(f"service run: the final output (step {M}): statement canaries accepted by acc (a proof "
                        f"accepted for another statement): {bad[M]}", stage="check")
-        # the track `every`: never the run's failure; skipped once lost
+        # the track `every`: never the run's failure. The canary run is made even once the track is
+        # lost, so that the number of badge runs does not depend on the entry's outputs (review LR5 L1)
         ks = [k for k in (1, 2) if k < M]
-        if ks and not every_reasons(p, rec, canaries=False):
+        if ks:
             try:
                 bad, n = self.canary_check(svc.vk, [(k, steps[k - 1]["file"], stmts[k - 1], [("first-child", first[k - 1])])
                                                     for k in ks], "service run: outputs 1 and 2", bounded=True)
@@ -725,8 +757,9 @@ class Bench:
 
     def timed(self, svc, rec, data, stmts):
         """The timed passes (AGENTS.md §6): `timed_runs` passes of steps `1 … M`, each a fresh
-        sandbox as in the service run, after the service run's request directories are gone. Before
-        each pass the service enters replay mode (`Service.replay`) and reveals its PRF key `k`; a
+        sandbox as in the service run, after the service run's request directories are gone. Each
+        pass binds a fresh copy of the binary and the setup, the previous pass's removed first
+        (`fresh_copy`). Before each pass the service enters replay mode (`Service.replay`) and reveals its PRF key `k`; a
         timed request gets the same leaf (`leaf.json` and `leaf.bin`, the same bytes), the runner's
         statement, the **service run's** output of step `i - 1` as `prev.bin`, and `oracle.key`.
         Each output must be byte-identical to the service run's output of that step, else the
@@ -735,6 +768,7 @@ class Bench:
         its `timed_runs` times in pass order (`P_timed_s`); `score` takes the median pass."""
         p, steps = self.p, rec["steps"]
         for t in range(1, p.timed_runs + 1):
+            self.fresh_copy(rec, f"timed pass {t}")
             self.sample(f"timed pass {t}")
             try:
                 key = svc.replay()

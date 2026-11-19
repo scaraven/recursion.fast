@@ -169,8 +169,13 @@ def main():
         print("memory caps: the prlimit fallback (RF_ALLOW_PRLIMIT=1 for this smoke)", flush=True)
     if a.mock:
         # the Python stand-in badge needs the host's Python library: its sandbox binds the host's
-        # /usr (test-only; the real badge gets a tmpfs tree of what it loads, `rfh.checks.lib_view`)
+        # /usr (test-only, refused without RF_TEST_OVERRIDES=1; the real badge gets a tmpfs tree of
+        # what it loads, `rfh.checks.lib_view`)
         os.environ["RF_TEST_BADGE_HOST_ROOT"] = "1"
+        os.environ["RF_TEST_OVERRIDES"] = "1"
+    # a part run under a test-only override is an organiser ERROR in the aggregation unless the
+    # tests' flag says otherwise (it records them; the workflow never passes it)
+    agg_test = ["--allow-test-overrides"] if a.mock or memcap_method() == "prlimit" else []
     tmp = a.work or tempfile.mkdtemp(prefix="rf-smoke-", dir=os.environ.get("RF_TEST_TMP"))
     os.makedirs(tmp, exist_ok=True)
     fails = []
@@ -204,7 +209,9 @@ def main():
     expect = {"BROKEN_LEAF": final_rejected, "BROKEN_UNSIGNED": final_rejected, "BROKEN_STALE": final_rejected,
               "BROKEN_CAP": "refused (status 2): a query above 2^20 bytes",            # named
               # the cgroup kills it; under the prlimit fallback the allocation fails, exit 1
-              "BROKEN_OOM": "killed: out of memory (cap 256M" if memcap_method() == "systemd" else "service1: exit 1",
+              # (`oom_label`: "killed: out of memory (cap 256M, …" once the scope's memory events or its
+              # peak show the cap's OOM, else "killed by the OOM killer (cap 256M, …")
+              "BROKEN_OOM": "(cap 256M" if memcap_method() == "systemd" else "service1: exit 1",
               "BROKEN_NONDET": "timed pass 1, step 1: the output differs from the service run's output of the step, "
                                "first at byte offset",
               "BROKEN_PROBE": "timed pass 1: a SIGN in a timed pass differed from the service run's"}
@@ -263,7 +270,8 @@ def main():
             for name, verdict in (("same", "ACCEPT"), ("other", "ERROR")):
                 agg = os.path.join(tmp, f"single-{name}.json")
                 subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"), "--plan", "single",
-                                "--season", seasons[name], "--cert", cj, "--out", agg, out], check=True, capture_output=True)
+                                "--season", seasons[name], "--cert", cj, "--out", agg, *agg_test, out], check=True,
+                               capture_output=True)
                 g = load(agg)
                 check(g.get("verdict") == verdict and g.get("comparable") is (verdict == "ACCEPT")
                       and (g.get("runner") or {}).get("name") == "rf-bench-smoke"
@@ -382,11 +390,17 @@ def main():
         json.dump({"status": "ok", "reasons": []}, open(cert_file, "w"))
 
     def aggregate_check():
-        agg = lambda files, out: (subprocess.run([sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"),  # noqa: E731
-                                                  "--plan", "single", "--season", os.path.join(ROOT, "harness", "smoke.toml"),
-                                                  "--cert", cert_file, "--out", out, *files], check=True,
-                                                 capture_output=True), load(out))[1]
+        agg = lambda files, out, flag=agg_test: (subprocess.run(  # noqa: E731
+            [sys.executable, "-I", os.path.join(ROOT, "harness", "aggregate.py"), "--plan", "single", "--season",
+             os.path.join(ROOT, "harness", "smoke.toml"), "--cert", cert_file, "--out", out, *flag, *files], check=True,
+            capture_output=True), load(out))[1]
         whole = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-whole.json"))
+        if agg_test:            # the same part without the tests' flag: an organiser ERROR (review LR5 L2)
+            strict = agg([os.path.join(tmp, "result-honest.json")], os.path.join(tmp, "agg-strict.json"), [])
+            check(strict.get("verdict") == "ERROR" and strict.get("organiser_error") == "fingerprint"
+                  and whole.get("test_overrides"),
+                  f"aggregate: a part run under test-only overrides {whole.get('test_overrides')} is an organiser ERROR "
+                  f"without --allow-test-overrides: {strict.get('verdict')} ({strict.get('organiser_error')})")
         dropped = agg([], os.path.join(tmp, "agg-dropped.json"))
         check(whole.get("verdict") == "ACCEPT" and dropped.get("verdict") == "ERROR" and not dropped.get("comparable"),
               f"aggregate: the planned part gives {whole.get('verdict')}; the part dropped gives {dropped.get('verdict')}")

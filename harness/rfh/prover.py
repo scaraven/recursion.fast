@@ -6,7 +6,9 @@ interface). Every step runs in `sandbox.Sandbox`.
   toolchain's versions and the binary's hash recorded.
 * `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
   read-only afterwards, and once hashed it and the binary are copied to the runner's tmpfs
-  (`Run.publish`), which every request binds instead of the work disk.
+  (`Run.publish`), which every request binds instead of the work disk: a fresh copy for the service
+  run and for each timed pass, the previous one removed first (review LR5 H1: a tmpfs file keeps
+  state a read-only handle can set, its shared memory policy among them).
 * `request`: one `prover first /work` or `prover step /work` in a fresh process, its /work a
   private tmpfs (a superblock of its own, so inode numbers and free space carry nothing from one
   request to the next): the process starts and prints `ready` (within `ready_s`, untimed); the
@@ -28,7 +30,7 @@ import threading
 import time
 
 from .files import OutputError, read_output
-from .sandbox import Sandbox, copy_tree, remove_tree, runner_dir, runner_path  # noqa: F401 (remove_tree: re-exported)
+from .sandbox import Sandbox, copy_tree, parse_bytes, remove_tree, runner_dir, runner_path  # noqa: F401 (remove_tree: re-exported)
 
 PROVER = "/prover/prover"
 SOCK_IN = "/run/rf"
@@ -70,12 +72,34 @@ class Drain(threading.Thread):
         return bytes(self.head) + gap + bytes(self.tail)
 
 
-def oom_status(sb, mem):
-    """The status of a sandbox the memory cgroup killed, or None."""
-    oom, peak = sb.oom()
+def oom_status(sb, mem, events=None, peak=None):
+    """The status of a sandbox the kernel's OOM killer killed, or None (`oom_label`). `events`, `peak`:
+    the scope's `memory.events` and `memory.peak` as read while it existed (`Sandbox.memory_events`),
+    if they were."""
+    oom, scope_peak = sb.oom()
     if not oom:
         return None
-    return f"killed: out of memory (cap {mem}" + (f", peak {peak / 2 ** 30:.2f} GiB)" if peak else ")")
+    return oom_label(mem, peak or scope_peak, events)
+
+
+def oom_label(mem, peak=None, events=None):
+    """What a kill by the OOM killer of a process of the sandbox's scope (systemd's `Result=oom-kill`)
+    was. The scope's result does not say whose OOM it was: cgroup v2's `oom_kill` counts a kill by
+    any OOM killer, the scope's own (its usage reached `MemoryMax`: `oom` counts that too) or the
+    machine's (a global OOM: `oom_kill` without `oom`). With the scope's `memory.events` read, it
+    says which; else, with its peak at its cap (within 64 MiB), the cap's; else it says it may have
+    been a global OOM, an organiser-side question (AGENTS.md §12): the caps of §9 are meant to make
+    one impossible."""
+    pk = f", peak {peak / 2 ** 30:.2f} GiB" if peak else ""
+    if events is not None and events.get("oom", 0) > 0:
+        return f"killed: out of memory (cap {mem}{pk})"
+    if events is not None and events.get("oom_kill", 0) > 0:
+        return (f"killed (SIGKILL) by a global out-of-memory kill below its cap {mem}{pk}: the machine ran out of "
+                "memory (an organiser-side question, AGENTS.md §12)")
+    if peak is not None and peak >= parse_bytes(mem) - (64 << 20):
+        return f"killed: out of memory (cap {mem}{pk})"
+    return (f"killed by the OOM killer (cap {mem}, {pk[2:] or 'peak unknown'}; its cap's, or possibly a global OOM: "
+            "an organiser-side question, AGENTS.md §12)")
 
 
 def toolchain_versions():
@@ -139,40 +163,54 @@ def build(entry_prover_dir, out_dir, mem, timeout):
 
 class Run:
     """Where a prover runs: its binary directory, its setup directory (both on the work disk), the
-    memory cap, and once `publish`ed their copies on the runner's tmpfs (`view`), which every
-    later sandbox binds instead."""
+    memory cap, and once `publish`ed their current copies on the runner's tmpfs (`view`), which
+    every later sandbox binds instead."""
 
     def __init__(self, bin_dir, setup_dir, mem):
         self.bin_dir, self.setup_dir, self.mem = bin_dir, setup_dir, mem
-        self.view = None
+        self.view = self.root = None
+        self.seen = False                    # whether a sandbox has bound the current copy
+        self.copies = []                     # (bytes, seconds) of every copy made
 
     def publish(self):
-        """After `setup` and the setup's hash, before any request: copy the binary directory and the
-        setup directory to a fresh directory on the runner's tmpfs (`sandbox.copy_tree`: every
-        byte written, files read-only, directories, files and links only), which every request
-        binds read-only at /prover and /setup from then on (`binds`). No request sees the work
-        disk's directories, whose lookups leave negative dentries and whose page-cache folios keep
-        a shape a later request could read (review LR4 H1, H2), and the copies are always resident
-        (no re-read before a request is needed). The copies (at most `setup_cap` and the binary) are
-        charged to the runner's memory and removed when the runner exits. A tmpfs without room for
-        them is the runner's failure (a RuntimeError). Returns (bytes copied, seconds)."""
+        """After `setup` and the setup's hash: a **fresh** copy of the binary directory and the setup
+        directory on the runner's tmpfs (`sandbox.copy_tree`: every byte written, files read-only,
+        directories, files and links only), which every request binds read-only at /prover and
+        /setup from then on (`binds`), the previous copy removed first. The benchmark makes one before
+        the service run and one before each timed pass (`Bench.timed`), so that only the steps of
+        one pass, on one clock, share a copy: a tmpfs file keeps state that a process holding it
+        read-only can set and a later one read (its shared memory policy, `mbind` on a read-only
+        `MAP_SHARED` mapping, read back with `get_mempolicy`: review LR5 H1; page flags), and a
+        service-run request could otherwise move untimed work into a timed pass, or one timed pass
+        precompute for the next. No request sees the work disk's directories, whose lookups leave
+        negative dentries and whose page-cache folios keep a shape a later request could read
+        (review LR4 H1, H2), and the copies are always resident (no re-read before a request). A
+        copy (at most `setup_cap` and the binary) is charged to the runner's memory; at most one
+        exists at a time, and the last is removed when the runner exits. A tmpfs without room is the
+        runner's failure (a RuntimeError). Returns (bytes copied, seconds)."""
         import time as _t
         t0 = _t.monotonic()
+        if self.root is not None:
+            if not remove_tree(self.root):
+                raise RuntimeError(f"the previous copy of the setup ({self.root}) could not be removed")
+            self.view = self.root = None
         make_accessible(self.setup_dir)
         need = tree_bytes(self.setup_dir) + tree_bytes(self.bin_dir)
         st = os.statvfs(runner_dir())
         if need == float("inf") or need + (64 << 20) > st.f_bavail * st.f_frsize:
             raise RuntimeError(f"the runner's tmpfs ({runner_dir()}) has {st.f_bavail * st.f_frsize} bytes free, "
                                f"not enough for the setup and the binary ({need} bytes)")
-        root = runner_path("prover")
+        self.root = root = runner_path("prover")
         n = copy_tree(self.bin_dir, os.path.join(root, "bin")) + copy_tree(self.setup_dir, os.path.join(root, "setup"))
-        self.view = (os.path.join(root, "bin"), os.path.join(root, "setup"))
-        return n, _t.monotonic() - t0
+        self.view, self.seen = (os.path.join(root, "bin"), os.path.join(root, "setup")), False
+        self.copies.append((n, _t.monotonic() - t0))
+        return self.copies[-1]
 
     def binds(self, work, sock_dir=None, setup_rw=False):
         """The prover's mounts; `work` None: a private tmpfs at /work. Once `publish`ed, /prover and
         /setup are the tmpfs copies (`setup_rw`, the setup's own run, binds the work disk's)."""
         bin_dir, setup = self.view if self.view and not setup_rw else (self.bin_dir, self.setup_dir)
+        self.seen = self.seen or bool(self.view and not setup_rw)     # the copy has been bound (`Bench.fresh_copy`)
         b = [("ro", bin_dir, "/prover"), ("rw" if setup_rw else "ro", setup, "/setup"),
              ("rw", work, "/work") if work is not None else ("tmpfs", None, "/work")]
         if sock_dir:
@@ -289,6 +327,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
     import select
     cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
     r = Step()
+    events = None
     t_spawn = time.monotonic()
     private = work is None
     binds = run.binds(work, sock_dir) + [("file", data, f"/work/{name}") for name, data in (preset or {}).items()]
@@ -383,7 +422,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
             left = cap(t0 + step_s) - time.monotonic()
             w = "dead" if left > 0 and select.select([sb.pidfd], [], [], left)[0] else "timeout"
         t_seen = time.monotonic()
-        r.mem_peak = sb.memory_peak()
+        r.mem_peak, events = sb.memory_peak(), sb.memory_events()     # while the scope exists (`oom_label`)
         dead, t1, t1_ns = sb.kill_tree()
         if not dead:
             raise EntryFailure("the prover's sandbox did not die within 30 s of SIGKILL")
@@ -405,7 +444,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
     finally:
         try:
             if r.status != "ok":
-                r.status = oom_status(sb, run.mem) or r.status
+                r.status = oom_status(sb, run.mem, events, r.mem_peak) or r.status
         finally:
             sb.kill()                               # kill_unit and the outer process, after the clock
             err.join(5)
@@ -419,7 +458,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
                     r.status = (f"the prover left {r.work_bytes} bytes in /work (or more than 65,536 entries), "
                                 f"above work_cap = {work_cap}")
         except OutputError as e:
-            r.status = oom_status(sb, run.mem) or str(e)
+            r.status = oom_status(sb, run.mem, events, r.mem_peak) or str(e)
         except Exception as e:  # noqa: BLE001 (an unusable directory is the entry's failure)
             r.status = f"the prover made /work unusable (reading its outputs: {type(e).__name__}: {e})"
     return r

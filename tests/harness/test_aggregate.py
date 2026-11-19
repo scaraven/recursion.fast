@@ -25,7 +25,10 @@ which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts 
 (`M`, `n`) is not the season's (one of them changed, none recorded) is an organiser ERROR
 named `lengths`, whatever the entry did; a rejected certificate stays REJECT. A season file whose
 `[stream]` shape is malformed is named `lengths` by `--check-machine`, `--organiser-error` (whatever
-kind the workflow passed) and `--plan`.
+kind the workflow passed) and `--plan`. A part that ran under a test-only override
+(`machine.memcap_override`, `machine.badge_host_root`, `machine.memcap = prlimit`) is an organiser
+ERROR named `fingerprint` whatever the entry did, unless the tests' `--allow-test-overrides`, which
+records the overrides in `test_overrides` (review LR5 L2).
 """
 import json
 import os
@@ -67,7 +70,7 @@ def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP
     return r
 
 
-def run(tmp, parts, cert_status="ok", plan="split", season=SEASON):
+def run(tmp, parts, cert_status="ok", plan="split", season=SEASON, flags=()):
     files = []
     for k, r in enumerate(parts):
         f = os.path.join(tmp, f"p{len(os.listdir(tmp))}-{k}.json")
@@ -76,8 +79,8 @@ def run(tmp, parts, cert_status="ok", plan="split", season=SEASON):
     cert = os.path.join(tmp, f"cert-{len(os.listdir(tmp))}.json")
     json.dump({"status": cert_status, "reasons": [] if cert_status != "reject" else ["x"]}, open(cert, "w"))
     out = os.path.join(tmp, f"out-{len(os.listdir(tmp))}.json")
-    subprocess.run([sys.executable, "-I", AGG, "--plan", plan, "--season", season, "--cert", cert, "--out", out, *files],
-                   check=True, capture_output=True)
+    subprocess.run([sys.executable, "-I", AGG, "--plan", plan, "--season", season, "--cert", cert, "--out", out, *flags,
+                    *files], check=True, capture_output=True)
     return json.load(open(out))
 
 
@@ -209,6 +212,26 @@ def main():
         check(r, "ERROR", f"fingerprint {why.split()[0]} (benchmark {prt['benchmark']}): the organiser's ERROR")
         holds(any(f"machine fingerprint is {why}" in x for x in r["reasons"]), f"... the reason says which: {r['reasons'][-1:]}")
     check(run(tmp, [], cert_status="reject", season=fixed), "REJECT", "a rejected certificate (no benchmark) stays REJECT")
+    # review LR5 L2: a part run under a test-only override is the organiser's ERROR (`fingerprint`), unless the
+    # tests' --allow-test-overrides, which records them
+    for what, extra in (("RF_ALLOW_PRLIMIT=1", {"memcap": "prlimit", "memcap_override": True}),
+                        ("the prlimit fallback, unrecorded override", {"memcap": "prlimit"}),
+                        ("RF_TEST_BADGE_HOST_ROOT=1", {"memcap": "systemd", "badge_host_root": True})):
+        for bench in ("pass", "fail"):
+            prt = part(A, benchmark=bench)
+            prt["machine"].update(extra)
+            r = run(tmp, [prt], season=fixed)
+            check(r, "ERROR", f"a part run under a test-only override ({what}, benchmark {bench}): the organiser's ERROR")
+            holds(r.get("organiser_error") == "fingerprint" and "score" not in r
+                  and any("test-only overrides" in x for x in r["reasons"]), f"... named fingerprint: {r['reasons'][-1:]}")
+        prt = part(A)
+        prt["machine"].update(extra)
+        r = run(tmp, [prt], season=fixed, flags=["--allow-test-overrides"])
+        check(r, "ACCEPT", f"... with the tests' --allow-test-overrides ({what})")
+        holds(bool(r.get("test_overrides")), f"... the overrides recorded: {r.get('test_overrides')}")
+    prt = part(A)
+    prt["machine"]["memcap"] = "systemd"
+    check(run(tmp, [prt], season=fixed), "ACCEPT", "a part under systemd scopes and no override: ACCEPT")
     # the named organiser errors (they never count against the author in the bot's fair order)
     holds(run(tmp, [part(A, fp="e" * 64)], season=fixed).get("organiser_error") == "fingerprint", "a fingerprint ERROR is named")
     drift = part(A, benchmark="error")

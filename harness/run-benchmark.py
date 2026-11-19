@@ -24,7 +24,11 @@ before any entry code runs. A machine whose fingerprint is missing, unreadable o
 (AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and so does a machine with no systemd
 user manager (the sandboxes' memory caps would fall back to prlimit and share the runner's cgroup,
 `organiser_error: fingerprint`; `RF_ALLOW_PRLIMIT=1` lets tests and local runs proceed, recorded as
-`machine.memcap_override`); a `c_P` that
+`machine.memcap_override`), and so does `RF_TEST_BADGE_HOST_ROOT=1` (the tests' stand-in badge with
+the host's /usr) unless `RF_TEST_OVERRIDES=1` is set too (recorded as `machine.badge_host_root`;
+`aggregate.py` makes a result with either record, or `machine.memcap = prlimit`, an organiser ERROR);
+the binary and the setup are copied afresh for the service run and for each timed pass
+(`rfh.bench.Bench.fresh_copy`, recorded in `stream.copies`); a `c_P` that
 drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
 machine was not in its calibrated state, the organiser's failure, never a score change. A stream
 record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
@@ -141,7 +145,14 @@ def main():
             m["memcap_override"] = True       # RF_ALLOW_PRLIMIT=1: tests and local runs only
             log("memory caps: the prlimit fallback, allowed by RF_ALLOW_PRLIMIT=1 (not the season's machine state)")
         if os.environ.get("RF_TEST_BADGE_HOST_ROOT") == "1":       # the tests' Python stand-in badge only
+            # a test-only weakening of the badge's sandbox (the host's /usr bound): refused unless the
+            # tests' switch is set too, and then recorded, which the aggregation refuses (review LR5 L2)
+            if os.environ.get("RF_TEST_OVERRIDES") != "1":
+                raise Drift("organiser ERROR: RF_TEST_BADGE_HOST_ROOT=1 (the host's /usr in the badge's sandbox) is a "
+                            "test-only override, refused without RF_TEST_OVERRIDES=1: the machine is not in the "
+                            "season's state", "fingerprint")
             m["badge_host_root"] = True
+            log("badge sandbox: the host's /usr bound, allowed by RF_TEST_OVERRIDES=1 (tests only)")
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
         scrub_bin, res["scrub"] = build_scrub(os.path.join(work, "tools"))
         save("prover build")

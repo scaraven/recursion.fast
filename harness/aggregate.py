@@ -12,8 +12,14 @@ entries provisionally.
                                   --harness-commit SHA [--job URL]      the ERROR result of a run that
                                   stopped on the organiser's side before any benchmark
 
+`--plan … --allow-test-overrides` (tests only; the evaluation workflow never passes it) aggregates a
+part that ran under a test-only override as if it had not, recording the overrides in
+`test_overrides`: the smoke on a machine without a systemd user manager, or with its stand-in badge.
+
 **Organiser errors** are named (`organiser_error` in the result): `fingerprint` (AGENTS.md §6, the machine, or
-no systemd user manager for the sandboxes' memory scopes, `run-benchmark.py`), `lengths`
+no systemd user manager for the sandboxes' memory scopes, `run-benchmark.py`; also a part that ran under
+a test-only override, `TEST_OVERRIDES`: `machine.memcap_override`, `machine.badge_host_root` or
+`machine.memcap = prlimit`, review LR5 L2), `lengths`
 (the stream's shape, `M` and the leaf size `n`, is not the season's, or the season
 file's `[stream]` shape is malformed; the name is kept from the chain-length list of earlier
 seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
@@ -82,6 +88,21 @@ ALL_PARTS = "calibrate,stream"
 PLANS = {"split": ["all"], "single": ["all"]}
 ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed")
 
+
+def test_overrides(machine):
+    """The test-only overrides a part's `machine` record shows (each weakens the sandbox: the memory
+    caps' prlimit fallback, where every sandbox shares the runner's cgroup, `RF_ALLOW_PRLIMIT=1`;
+    the host's /usr in the badge's sandbox, `RF_TEST_BADGE_HOST_ROOT=1`), [] if none."""
+    m = machine if isinstance(machine, dict) else {}
+    out = []
+    if m.get("memcap_override"):
+        out.append("memcap_override")
+    if m.get("memcap") == "prlimit" and "memcap_override" not in out:
+        out.append("memcap = prlimit")
+    if m.get("badge_host_root"):
+        out.append("badge_host_root")
+    return out
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rfh.bench import (REJECT_STAGES, MalformedStream, Params, check_record, fingerprint,  # noqa: E402
                        fingerprint_problem, score)
@@ -111,6 +132,7 @@ def main():
     ap.add_argument("--organiser-error", choices=sorted(ORGANISER_ERRORS))
     ap.add_argument("--reason", default="")
     ap.add_argument("--harness-commit", default=None)
+    ap.add_argument("--allow-test-overrides", action="store_true", help="tests only: see the module's doc")
     ap.add_argument("parts", nargs="*")
     a = ap.parse_args()
     if a.check_machine:
@@ -155,16 +177,18 @@ def main():
     p, defect = load_season(a.season)
     season_sha = hashlib.sha256(open(a.season, "rb").read()).hexdigest()
     res = combine(p, a.plan, season_sha, a.job, json.load(open(a.cert)), [json.load(open(f)) for f in sorted(a.parts)],
-                  shape_defect=defect)
+                  shape_defect=defect, allow_test_overrides=a.allow_test_overrides)
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {res['verdict']} ({len(res['parts'])} part(s), comparable {res['comparable']}, "
           f"fingerprint {'matches' if res['machine']['matches'] else 'does not match'})")
     return 0
 
 
-def combine(p, plan, season_sha, job, cert, parts, shape_defect=None):
+def combine(p, plan, season_sha, job, cert, parts, shape_defect=None, allow_test_overrides=False):
     """One entry's result from its certificate and its benchmark parts: the plan check, the verdict, the score.
-    `shape_defect`: why the season file's `[stream]` shape is malformed, if it is."""
+    `shape_defect`: why the season file's `[stream]` shape is malformed, if it is. A part that ran
+    under a test-only override (`test_overrides`) makes the verdict an organiser ERROR
+    (`fingerprint`) unless `allow_test_overrides` (tests only), which records them instead."""
     res = {"schema": "recursion.fast/v6/result-1", "season": p.name, "season_sha256": season_sha, "job": job,
            "certificate": {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels",
                                                      "second_kernel", "kernel_runs", "gate", "badge_sha256", "claim",
@@ -211,7 +235,17 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None):
         verdict = "REJECT"
     else:
         verdict = "ACCEPT" if cert.get("status") == "ok" else "PROVISIONAL"
-    if fp_why and cert.get("status") in ("ok", "provisional"):
+    overrides = sorted({o for r in parts for o in test_overrides(r.get("machine"))})
+    if overrides and allow_test_overrides:
+        res["test_overrides"] = overrides           # tests only (`--allow-test-overrides`)
+    elif overrides and not fp_why:
+        # a sandbox weakened for the tests is not the season's machine state (review LR5 L2)
+        fp_why = "test-overrides"
+    if fp_why == "test-overrides" and cert.get("status") in ("ok", "provisional"):
+        verdict = "ERROR"
+        res["reasons"].append(f"organiser ERROR: the benchmark ran under test-only overrides {overrides} (the "
+                              "sandbox weakened for the tests): the machine is not in the season's state")
+    elif fp_why and cert.get("status") in ("ok", "provisional"):
         # not the season's machine is the organiser's condition, never the entry's verdict
         verdict = "ERROR"
         why = (f"fingerprint {fp}, the season expects {p.fingerprint}" if fp_why == "mismatched"

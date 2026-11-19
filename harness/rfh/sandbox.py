@@ -14,12 +14,21 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     disk filesystem or sysfs, and a disk file's page-cache folios keep a shape (a PMD folio after a
     `MADV_HUGEPAGE` fault): both persist into a later sandbox that sees the same directory or file
     and can time the lookup or read `/proc/self/smaps` (review LR4 H1, H2). tmpfs keeps no negative
-    dentry, and a file the runner wrote in full there is resident, order-0 and unchangeable through a
-    read-only bind. So the prover binary and the setup are copied there once the setup is hashed
-    (`prover.Run.publish`), the badge, its libraries and every checked file too (`checks.Badge`),
-    the services' socket directories live there, the mask sources are there, and the CPU tree is a
-    static copy there (`sys_cpu_view`). The build and setup sandboxes alone bind host
-    directories (the toolchain, the build and setup directories), which no later sandbox sees;
+    dentry, and a file the runner wrote in full there is resident and order-0. The build and setup
+    sandboxes alone bind host directories (the toolchain, the build and setup directories), which no
+    later sandbox sees;
+  * **no tmpfs file shared across a boundary that matters**: a tmpfs inode keeps state that a
+    process with only a read-only handle on it can set and a later process with another handle can
+    read: its shared memory policy (`mbind` on a read-only `MAP_SHARED` mapping, read back with
+    `get_mempolicy(MPOL_F_ADDR)`: 6,144 of 6,144 bits across requests and badge runs, review LR5 H1),
+    and plausibly page flags (`Referenced` in `/proc/self/smaps`). A read-only bind does not stop
+    that, so the copies are separate where a boundary matters: the prover binary and the setup get
+    a fresh copy for the service run and for each timed pass (`prover.Run.publish`), shared only by
+    the steps of one pass (one clock); every badge run gets fresh copies of everything it sees
+    (`checks.Badge`); every sandbox gets its own mask sources and its own copy of the CPU tree
+    (`SandboxView`); a request's socket directory and /work are its own. The mbind family is
+    refused besides (ENOSYS: `mbind`, `migrate_pages`, `move_pages`, `set_mempolicy_home_node`;
+    `set_mempolicy` and `get_mempolicy` act on the calling task and stay);
   * **no machine-wide counter in /proc** (`proc_masks`): the host's /proc top level is listed when
     the sandbox is built (the set depends on the kernel), and an empty file is bound over every file
     and an empty directory over every directory of it but the pid directories, `self` and
@@ -38,8 +47,9 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     counters, `/proc/self/net/softnet_stat`), fails the calls that read or write other machine-wide
     state a request could leave for a later one (`statfs`/`fstatfs`/`ustat`, ENOSYS: free space;
     pidfds: pidfs inode numbers; `SO_COOKIE`; `setsid`: the autogroup counter; `MADV_COLD`,
-    `MADV_PAGEOUT`, `process_madvise`: reclaim of the runner's tmpfs pages; `seccomp_program`), and
-    kills a process that uses another syscall ABI;
+    `MADV_PAGEOUT`, `process_madvise`: reclaim of the runner's tmpfs pages; the mbind family, ENOSYS:
+    a tmpfs file's shared memory policy; `seccomp_program`), and kills a process that uses another
+    syscall ABI;
   * a memory cap on the whole process tree: a transient systemd scope with `MemoryMax` and no swap
     (`systemd-run --user --scope`), or, where no user systemd manager is reachable, an address-space
     limit (`prlimit --as`), which is recorded as the weaker method: every sandbox then shares the
@@ -83,8 +93,11 @@ DENY = {
 }
 # x86-64 system call numbers failed with ENOSYS: free disk space (`seccomp_program`); glibc's
 # `pathconf` falls back to its defaults on ENOSYS (on EPERM it fails); `clone3` (libc falls back to
-# `clone`, where `CLONE_PIDFD` is refused)
-ENOSYS = {"statfs": 137, "fstatfs": 138, "ustat": 136, "clone3": 435}
+# `clone`, where `CLONE_PIDFD` is refused); the mbind family, which sets a memory policy on a shared
+# file's pages (a tmpfs inode keeps it for the next process that maps the file, review LR5 H1) or
+# moves another process's pages (libnuma treats ENOSYS as "no NUMA support")
+ENOSYS = {"statfs": 137, "fstatfs": 138, "ustat": 136, "clone3": 435, "mbind": 237, "migrate_pages": 256,
+          "move_pages": 279, "set_mempolicy_home_node": 450}
 
 
 AF_UNIX = 1
@@ -108,7 +121,11 @@ def seccomp_program() -> bytes:
     shows (the prover is a session leader already, bubblewrap's `--new-session`); and `madvise`
     with `MADV_COLD` or `MADV_PAGEOUT` and `process_madvise`, which could push pages of the
     runner's read-only tmpfs copies (`/setup`, `/prover`) out to swap, where one request could
-    leave a pattern for a later one."""
+    leave a pattern for a later one; and, with ENOSYS, `mbind`, `migrate_pages`, `move_pages` and
+    `set_mempolicy_home_node`: `mbind` on a `MAP_SHARED` mapping of a tmpfs file sets the file's
+    shared memory policy, which persists in the inode for the next process that maps it (review LR5
+    H1; the copies are separate per pass and per badge run besides), and the others move pages of
+    other processes or set a policy on shared ranges."""
     LD, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06   # BPF_LD|W|ABS, BPF_JMP|JEQ|K, JGE, JSET, BPF_RET|K
     ALLOW, ERRNO = 0x7FFF0000, 0x00050000                 # SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO
     ins = [(LD, 0, 0, 4),                               # seccomp_data.arch
@@ -177,9 +194,13 @@ SYS_CPU_NEVER = ("power",)                        # runtime counters, at any dep
 # (review LR4 H1), and a disk file's page-cache folios keep a shape (a PMD folio after a
 # MADV_HUGEPAGE fault, 64 KiB ones after a re-read) that a later sandbox can read in
 # /proc/self/smaps (H2). tmpfs keeps no negative dentry (`always_delete_dentry`), and a file the
-# runner wrote in full is resident, order-0 (`huge=never`) and unchangeable through a read-only bind:
-# fadvise is a no-op, MADV_COLLAPSE fails without huge pages, no hole can be faulted in, and the
-# calls that would swap a page out are refused (`seccomp_program`).
+# runner wrote in full is resident and order-0 (`huge=never`): fadvise is a no-op, MADV_COLLAPSE
+# fails without huge pages, no hole can be faulted in, and the calls that would swap a page out are
+# refused (`seccomp_program`). A read-only bind does not make a tmpfs file stateless, though: its
+# inode keeps a shared memory policy that `mbind` on a read-only MAP_SHARED mapping sets and
+# `get_mempolicy` reads back (review LR5 H1), and its pages keep flags. So no copy is shared across
+# a boundary that matters (a pass, a badge run, a sandbox for the mask sources and the CPU tree),
+# and the mbind family is refused besides.
 
 def remove_tree(path):
     """Remove `path` and everything under it, after giving the runner access to every directory
@@ -323,7 +344,7 @@ def copy_file(src, dst, mode=None):
         out = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         n = 0
         try:
-            buf = bytearray(1 << 20)
+            buf = bytearray(min(1 << 20, st.st_size + 1))     # not 1 MiB zeroed for each small file
             while (k := os.readv(fd, [buf])) > 0:
                 view = memoryview(buf)[:k]
                 while view:
@@ -361,29 +382,10 @@ def copy_tree(src, dst):
     return total
 
 
-_MASK = None
-
-
-def mask_sources():
-    """(an empty read-only file, an empty read-only directory) on the runner's tmpfs, made once per
-    process: what bubblewrap binds over a masked entry (a lookup in the directory leaves nothing)."""
-    global _MASK
-    if _MASK is None:
-        d = runner_path("mask")
-        f, e = os.path.join(d, "empty"), os.path.join(d, "dir")
-        open(f, "wb").close()
-        os.mkdir(e)
-        os.chmod(f, 0o444)
-        os.chmod(e, 0o555)
-        _MASK = (f, e)
-    return _MASK
-
-
-def masks(root, keep):
-    """bubblewrap arguments that bind the empty file over every file and the empty directory over
-    every directory directly in the host directory `root`, as listed now, except the names `keep`
-    accepts; symbolic links are left (a bind over a link would bind over its target)."""
-    f, e = mask_sources()
+def masks(root, keep, f, e):
+    """bubblewrap arguments that bind the empty file `f` over every file and the empty directory `e`
+    over every directory directly in the host directory `root`, as listed now, except the names
+    `keep` accepts; symbolic links are left (a bind over a link would bind over its target)."""
     out = []
     for ent in sorted(os.scandir(root), key=lambda x: x.name):
         if keep(ent.name) or ent.is_symlink():
@@ -396,76 +398,130 @@ def masks(root, keep):
     return out
 
 
-def proc_masks():
-    """The masks over the top level of the sandbox's /proc: every entry but the pid directories,
-    `self` and `thread-self`. The host's /proc is listed (the sandbox's is a fresh mount of the same
-    kernel's procfs, whose entries are the same but the pids); a host /proc that does not list its
-    machine-wide files (mounted with `subset=pid`) cannot be listed for them, and is refused."""
+def proc_masks(f, e):
+    """The masks over the top level of the sandbox's /proc (`f`, `e`: the sandbox's own empty file and
+    directory, `SandboxView`): every entry but the pid directories, `self` and `thread-self`. The
+    host's /proc is listed (the sandbox's is a fresh mount of the same kernel's procfs, whose entries
+    are the same but the pids); a host /proc that does not list its machine-wide files (mounted with
+    `subset=pid`) cannot be listed for them, and is refused."""
     if not os.path.isfile("/proc/stat"):
         raise RuntimeError("the host's /proc lists no /proc/stat (subset=pid?): its machine-wide entries "
                            "cannot be enumerated to mask them in the sandbox")
-    return masks("/proc", lambda n: n.isdigit() or n in PROC_ALLOW)
+    return masks("/proc", lambda n: n.isdigit() or n in PROC_ALLOW, f, e)
 
 
-_SYS_CPU_VIEW = None
+def _read_sys(path):
+    try:
+        return open(path, "rb").read()
+    except OSError:
+        return None
 
 
-def _copy_static(src, dst):
-    """Copy the sysfs directory `src` to `dst`: its readable regular files' current contents and its
-    subdirectories but `SYS_CPU_NEVER`; links and unreadable files are left out."""
-    os.mkdir(dst, 0o700)
+def _snapshot_static(src, rel, out):
+    """Append to `out` the sysfs directory `src` (at `rel`): its readable regular files' current
+    contents and its subdirectories but `SYS_CPU_NEVER`; links and unreadable files are left out."""
+    out.append((rel, None))
     for ent in sorted(os.scandir(src), key=lambda x: x.name):
         if ent.is_symlink() or ent.name in SYS_CPU_NEVER:
             continue
+        r = os.path.join(rel, ent.name)
         if ent.is_dir(follow_symlinks=False):
-            _copy_static(ent.path, os.path.join(dst, ent.name))
-        else:
-            _copy_sys_file(ent.path, os.path.join(dst, ent.name))
-    os.chmod(dst, 0o555)
+            _snapshot_static(ent.path, r, out)
+        elif (data := _read_sys(ent.path)) is not None:
+            out.append((r, data))
 
 
-def _copy_sys_file(src, dst):
-    try:
-        data = open(src, "rb").read()
-    except OSError:
-        return
-    with open(dst, "wb") as f:
-        f.write(data)
-    os.chmod(dst, 0o444)
+_SYS_CPU = None
 
 
-def sys_cpu_view():
-    """A static copy of the host's `/sys/devices/system/cpu` on the runner's tmpfs, made once per
-    process, bound read-only at that path in every sandbox (None without it): only its static
-    description (`SYS_CPU_ALLOW`, and in each `cpuN` `SYS_CPU_N_ALLOW`, recursively, without any
-    `power` directory), each file's contents as read when the copy was made; `cpuidle`, `cpufreq`
-    and `power` (live counters), links, and whatever a kernel adds are absent. So no sandbox sees
-    the host's sysfs (whose lookups leave negative dentries, review LR4 H1)."""
-    global _SYS_CPU_VIEW
-    if _SYS_CPU_VIEW is None and os.path.isdir(SYS_CPU):
-        root = os.path.join(runner_path("sys"), "cpu")
-        os.mkdir(root, 0o700)
-
-        def put(path, name, into):
-            if os.path.islink(path):
-                return
-            if os.path.isdir(path):
-                _copy_static(path, os.path.join(into, name))
-            else:
-                _copy_sys_file(path, os.path.join(into, name))
+def sys_cpu_snapshot():
+    """The static description of the host's `/sys/devices/system/cpu`, read once per process (None
+    without it): [(path relative to it, the file's bytes, or None for a directory)], parents first.
+    Only `SYS_CPU_ALLOW`, and in each `cpuN` `SYS_CPU_N_ALLOW`, recursively, without any `power`
+    directory, each file's contents as read now; `cpuidle`, `cpufreq` and `power` (live counters),
+    links, and whatever a kernel adds are absent. `SandboxView` writes it out for every sandbox, so
+    no sandbox sees the host's sysfs (whose lookups leave negative dentries, review LR4 H1) or a copy
+    another sandbox saw (review LR5 H1)."""
+    global _SYS_CPU
+    if _SYS_CPU is None and os.path.isdir(SYS_CPU):
+        out = [("", None)]
         for ent in sorted(os.scandir(SYS_CPU), key=lambda x: x.name):
+            if ent.is_symlink():
+                continue
             if ent.name in SYS_CPU_ALLOW:
-                put(ent.path, ent.name, root)
+                if ent.is_dir(follow_symlinks=False):
+                    _snapshot_static(ent.path, ent.name, out)
+                elif (data := _read_sys(ent.path)) is not None:
+                    out.append((ent.name, data))
             elif ent.name.startswith("cpu") and ent.name[3:].isdigit() and ent.is_dir(follow_symlinks=False):
-                d = os.path.join(root, ent.name)
-                os.mkdir(d, 0o700)
+                out.append((ent.name, None))
                 for sub in sorted(os.scandir(ent.path), key=lambda x: x.name):
-                    if sub.name in SYS_CPU_N_ALLOW:
-                        put(sub.path, sub.name, d)
-                os.chmod(d, 0o555)
-        os.chmod(root, 0o555)
-        _SYS_CPU_VIEW = root
-    return _SYS_CPU_VIEW
+                    if sub.name not in SYS_CPU_N_ALLOW or sub.is_symlink():
+                        continue
+                    r = os.path.join(ent.name, sub.name)
+                    if sub.is_dir(follow_symlinks=False):
+                        _snapshot_static(sub.path, r, out)
+                    elif (data := _read_sys(sub.path)) is not None:
+                        out.append((r, data))
+        _SYS_CPU = out
+    return _SYS_CPU
+
+
+def write_tree(root, entries):
+    """Write `entries` ([(relative path, bytes or None for a directory)], parents first) under the
+    new directory `root`: files mode 0444, directories 0555 once filled. Returns the directories."""
+    dirs = []
+    for rel, data in entries:
+        path = root + "/" + rel if rel else root
+        if data is None:
+            os.mkdir(path, 0o700)
+            dirs.append(path)
+        else:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o444)
+            try:
+                if data:
+                    os.write(fd, data)
+            finally:
+                os.close(fd)
+    for d in reversed(dirs):
+        os.chmod(d, 0o555)
+    return dirs
+
+
+class SandboxView:
+    """One sandbox's own files on the runner's tmpfs, made fresh for it and removed after it
+    (`Sandbox.kill`): the mask sources (an empty read-only file, an empty read-only directory: what
+    bubblewrap binds over a masked /proc entry; a lookup in the directory leaves nothing) and the
+    copy of the CPU tree (`sys_cpu_snapshot`), bound read-only at `/sys/devices/system/cpu`. Shared
+    with no other sandbox: a tmpfs file keeps a shared memory policy and page flags that a process
+    holding it read-only can set (review LR5 H1), even an empty one (a policy is kept per page
+    offset of a mapping, not per page)."""
+
+    def __init__(self):
+        self.dir = runner_path("sb")
+        self.empty, self.empty_dir = os.path.join(self.dir, "empty"), os.path.join(self.dir, "dir")
+        open(self.empty, "wb").close()
+        os.mkdir(self.empty_dir)
+        os.chmod(self.empty, 0o444)
+        os.chmod(self.empty_dir, 0o555)
+        snap = sys_cpu_snapshot()
+        self.cpu, self.dirs = None, []
+        if snap is not None:
+            self.cpu = os.path.join(self.dir, "cpu")
+            self.dirs = write_tree(self.cpu, snap)
+
+    def remove(self):
+        """Remove the directory (the sandbox, bound read-only, changed nothing in it: its directories
+        are the ones written)."""
+        import shutil
+        if self.dir:
+            try:
+                for d in self.dirs + [self.empty_dir]:
+                    os.chmod(d, 0o700)
+                shutil.rmtree(self.dir)
+            except OSError:
+                remove_tree(self.dir)
+            self.dir = None
 
 
 _MEMCAP = None
@@ -582,11 +638,13 @@ class Sandbox:
         os.write(sc_w, prog)
         os.close(sc_w)
         fds = [sc_r]
+        self.view = SandboxView()          # this sandbox's own mask sources and CPU tree, removed by `kill`
         args = ["bwrap", "--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts",
                 "--unshare-cgroup-try", "--disable-userns", "--die-with-parent", "--new-session", "--clearenv",
-                "--cap-drop", "ALL", "--dev", "/dev", "--proc", "/proc", *proc_masks(), "--tmpfs", "/tmp"]
-        if sys_cpu_view():
-            args += ["--ro-bind", sys_cpu_view(), SYS_CPU]
+                "--cap-drop", "ALL", "--dev", "/dev", "--proc", "/proc", *proc_masks(self.view.empty, self.view.empty_dir),
+                "--tmpfs", "/tmp"]
+        if self.view.cpu:
+            args += ["--ro-bind", self.view.cpu, SYS_CPU]
         for p in extra_ro_root:              # host directories visible at the same path (the build's /usr)
             if os.path.islink(p):
                 args += ["--symlink", os.readlink(p), p]
@@ -717,6 +775,17 @@ class Sandbox:
         except (OSError, ValueError):
             return None
 
+    def memory_events(self):
+        """The sandbox's cgroup's `memory.events` (`oom`, `oom_kill`, … → count), else None: whether
+        an OOM kill was its cap's (`oom` counts the times usage reached `MemoryMax`) or the
+        machine's (`oom_kill` alone; `prover.oom_label`)."""
+        try:
+            if not self.cgdir:
+                return None
+            return {k: int(v) for k, v in (l.split() for l in open(os.path.join(self.cgdir, "memory.events")))}
+        except (OSError, ValueError):
+            return None
+
     def kill_tree(self, timeout=30):
         """Kill every process of a tracked sandbox at once (`cgroup.kill`, else SIGKILL to the
         namespace's init, which takes the namespace with it) and wait until all are dead: (dead?,
@@ -776,3 +845,5 @@ class Sandbox:
             self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             pass
+        if self.proc.poll() is not None:
+            self.view.remove()                 # its own files, once nothing of it runs

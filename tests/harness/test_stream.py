@@ -37,14 +37,16 @@
 8. The track `every` never fails the run: a crashed check of intermediate outputs (in any judged
    run) or of the canaries of outputs 1 and 2, or an intermediate rejected in a later judged run,
    costs only the track; the final output is checked on its own runs, and a crash there (or its
-   rejection in a later run) is a REJECT; once `every` is lost, no canary of outputs 1 and 2 is
-   checked.
+   rejection in a later run) is a REJECT; the canaries of outputs 1 and 2 are checked even once
+   `every` is lost, and every judged run is made after a failed one: the same badge runs, in the
+   same order, whatever the entry's verifier does (review LR5 L1).
 9. The replay audit: a MISMATCH refusal logged in a timed pass (the third included), a MISMATCH in the
    service's final stats, or `replays ≠ timed_runs · signatures` (one SIGN missing or extra over the
    three passes) is the entry's REJECT. A step record without exactly three timed times is
    `MalformedStream` (the organiser's ERROR).
 10. Before every request nothing is re-read (the setup and the binary are the runner's tmpfs copies,
-    `Run.publish`); every request stages the same five unnamed inodes (its inputs and a placeholder
+    `Run.publish`): a fresh copy for the service run (run-benchmark's, if no sandbox has bound it)
+    and for each timed pass, made between the passes (review LR5 H1); every request stages the same five unnamed inodes (its inputs and a placeholder
     for each input it does not get, 65 bytes where the input has that fixed size); every request
     gets its own empty socket directory, named by 16 random hex characters (never its tag), into
     which the service's socket is linked only at `go`.
@@ -60,7 +62,9 @@
     record the score cannot be computed from (`MalformedStream`) as `benchmark: error`,
     `organiser_error: malformed`, with no reject stage; a machine whose memory caps fall back to
     prlimit is `benchmark: error`, `organiser_error: fingerprint`, before the prover's build, unless
-    `RF_ALLOW_PRLIMIT=1` (recorded as `machine.memcap_override`).
+    `RF_ALLOW_PRLIMIT=1` (recorded as `machine.memcap_override`), and so is `RF_TEST_BADGE_HOST_ROOT=1`
+    unless `RF_TEST_OVERRIDES=1` (recorded as `machine.badge_host_root`). A kill by the OOM killer
+    reads as the cap's only when the scope's memory events or its peak say so (`oom_label`).
 """
 import importlib.util
 import json
@@ -188,6 +192,13 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
         return r
     b.one = one
     b.left = lambda: 100.0
+
+    def publish():
+        b.calls.append("copy")
+        b.run.view, b.run.seen = ("bin", "setup"), False
+        b.run.copies.append((1000, 0.001))
+        return b.run.copies[-1]
+    b.run = SimpleNamespace(view=None, seen=False, copies=[], publish=publish)
     return b
 
 
@@ -236,13 +247,28 @@ def main():
           and draws.leaf_data(seeds[0], 2) == __import__("hashlib").shake_256(b"recursion.fast/leaf-data/v1" + seeds[0]).digest(64),
           f"the result publishes the seeds and the expansion: {rec['leaf_data']}")
     ld = os.path.realpath(b.leafdata)
-    check(b.data_seen == [[f"step{i}.bin" for i in range(1, 5)]] * len(b.calls) and not os.path.exists(b.leafdata)
+    check(b.data_seen == [[f"step{i}.bin" for i in range(1, 5)]] * len([c for c in b.calls if c != "copy"]) and not os.path.exists(b.leafdata)
           and os.path.dirname(ld) == os.path.realpath(b.work)
           and not ld.startswith(os.path.realpath(b.store) + os.sep) and ld != os.path.realpath(b.store),
           "the data of all M steps is written before the first request, to a runner-only directory beside the store "
           "(never under it), and removed after the stream")
     t1 = [b.reqs[f"timed1-step{i}"] for i in range(1, 5)]
-    check(b.calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2, 3) for i in range(1, 5)]
+    check(b.calls == ["copy"] + [f"service{i}" for i in range(1, 5)]
+          + [x for t in (1, 2, 3) for x in ["copy"] + [f"timed{t}-step{i}" for i in range(1, 5)]]
+          and [c["for"] for c in rec["copies"]] == ["the service run", "timed pass 1", "timed pass 2", "timed pass 3"],
+          f"the service run and each timed pass bind a fresh copy of the binary and the setup, made before the pass's "
+          f"first request and after the previous pass's last (review LR5 H1): {b.calls}, {rec['copies']}")
+    calls = [c for c in b.calls if c != "copy"]
+    b0 = make()
+    b0.run.view, b0.run.copies = ("bin", "setup"), [(5, 0.5)]   # run-benchmark's copy, bound by no sandbox yet
+    r0 = b0.stream_run()
+    b1 = make()
+    b1.run.view, b1.run.seen, b1.run.copies = ("bin", "setup"), True, [(5, 0.5)]
+    b1.stream_run()
+    check(r0["copies"][0] == {"for": "the service run", "bytes": 5, "seconds": 0.5} and b0.calls.count("copy") == 3
+          and b1.calls[0] == "copy" and b1.calls.count("copy") == 4,
+          "the service run uses run-benchmark's copy if no sandbox has bound it, else makes a fresh one")
+    check(calls == [f"service{i}" for i in range(1, 5)] + [f"timed{t}-step{i}" for t in (1, 2, 3) for i in range(1, 5)]
           and b.svc.replays == 3
           and all(ins["oracle.key"] == (KEY + "\n").encode() for _, ins in t1)
           and t1[2][1]["prev.bin"] == proof(2) and t1[0][0] == "first"
@@ -379,8 +405,25 @@ def main():
     b = make(reject={2})
     rec = b.stream_run()
     whats = [w for w, _ in b.verify_calls]
-    check(not any("outputs 1 and 2" in w for w in whats) and sum("intermediate" in w for w in whats) == 9,
-          f"once `every` is lost (output 2 rejected), no canaries of outputs 1 and 2: {whats}")
+    check(sum("outputs 1 and 2" in w for w in whats) == 1 and sum("intermediate" in w for w in whats) == 9
+          and score(b.p, rec)["tracks"] == {"final": "S"},
+          f"once `every` is lost (output 2 rejected), the canaries of outputs 1 and 2 are checked all the same (review "
+          f"LR5 L1), and the run stays out of `every`: {whats}")
+    # review LR5 L1: the number of badge runs (sandboxes) does not depend on the entry's verifier
+    base = make()
+    base.stream_run()
+    n0 = [w for w, _ in base.verify_calls]
+    counts = {}
+    for what, kw in (("an intermediate crashed in its first judged run", {"crash": ("intermediate output 1, judged run 1",)}),
+                     ("every judged run of an intermediate crashed", {"crash": ("intermediate output 2",)}),
+                     ("an intermediate rejected", {"reject": {2}}), ("the canaries of outputs 1 and 2 crashed",
+                                                                      {"crash": ("outputs 1 and 2",)})):
+        b = make(**kw)
+        b.stream_run()
+        counts[what] = [w for w, _ in b.verify_calls] == n0
+    check(len(n0) == 14 and all(counts.values()),
+          f"the same {len(n0)} badge runs, in the same order, whatever the entry's verifier does with the "
+          f"intermediate outputs and the canaries: {counts}")
 
     # a memo of the children's acceptance across the checks of one process (review LR2 M1): output i + 1
     # re-checks π_i inside it; a process that had just checked output i would answer that from the memo.
@@ -680,6 +723,21 @@ def main():
         os.environ.pop("RF_ALLOW_PRLIMIT")
     code, r = bench_result(good)
     check(code == 0 and "memcap_override" not in r["machine"], "run-benchmark.py: under systemd scopes no override")
+    # the tests' stand-in badge with the host's /usr: refused unless RF_TEST_OVERRIDES=1, then recorded
+    saved = {k: os.environ.pop(k, None) for k in ("RF_TEST_BADGE_HOST_ROOT", "RF_TEST_OVERRIDES")}
+    os.environ["RF_TEST_BADGE_HOST_ROOT"] = "1"
+    code, r = bench_result(good)
+    check(code == 2 and r["benchmark"] == "error" and r.get("organiser_error") == "fingerprint" and "prover" not in r
+          and any("RF_TEST_OVERRIDES" in x for x in r["reasons"]),
+          f"run-benchmark.py: RF_TEST_BADGE_HOST_ROOT=1 alone is an organiser ERROR before the prover's build: {r['reasons']}")
+    os.environ["RF_TEST_OVERRIDES"] = "1"
+    code, r = bench_result(good)
+    check(code == 0 and r["benchmark"] == "pass" and r["machine"].get("badge_host_root") is True,
+          "run-benchmark.py: with RF_TEST_OVERRIDES=1 too it proceeds, the override recorded (machine.badge_host_root)")
+    for k, v in saved.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
     code, r = bench_result(bad_rec)
     check(code == 2 and r["benchmark"] == "error" and r.get("organiser_error") == "malformed" and "score" not in r
           and "reject_stage" not in r and "traceback" not in r and any("malformed" in x for x in r["reasons"]),
@@ -699,6 +757,19 @@ def main():
         code, r = bench_result(outcome, build_ok)
         check(code == 1 and r["benchmark"] == "fail" and r.get("reject_stage") == want,
               f"run-benchmark.py: {what}: benchmark: fail, reject_stage {r.get('reject_stage')!r}")
+    # a kill by the OOM killer: the cap's or the machine's (review LR5 NIT)
+    from rfh.prover import oom_label
+    G = 1 << 30
+    labels = {"cap (memory.events oom)": oom_label("8G", 8 * G, {"oom": 1, "oom_kill": 1}),
+              "global (oom_kill alone)": oom_label("8G", 3 * G, {"oom": 0, "oom_kill": 1}),
+              "cap (peak at the cap)": oom_label("8G", 8 * G - (1 << 20)),
+              "unknown (peak below)": oom_label("8G", 3 * G), "unknown (nothing read)": oom_label("8G")}
+    check(labels["cap (memory.events oom)"].startswith("killed: out of memory (cap 8G")
+          and labels["cap (peak at the cap)"].startswith("killed: out of memory (cap 8G")
+          and "global out-of-memory kill below its cap 8G" in labels["global (oom_kill alone)"]
+          and all("possibly a global OOM" in labels[k] and not labels[k].startswith("killed: out of memory")
+                  for k in ("unknown (peak below)", "unknown (nothing read)")),
+          f"an OOM kill reads as the cap's only when the scope's memory events or its peak say so: {labels}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 

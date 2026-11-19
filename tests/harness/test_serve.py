@@ -83,6 +83,7 @@ def main():
         "import sys, time\nd = float(sys.argv[1]); log = sys.argv[2]\n"
         "for i, l in enumerate(sys.stdin):\n"
         "  open(log, 'a').write(l)\n"
+        "  if i == 0 and l.split()[2].endswith('/warm.bin'): open(log + '.warm', 'wb').write(open(l.split()[2], 'rb').read())\n"
         "  if i == 0: time.sleep(d)\n"
         "  print('accept 7', flush=True)\n")
     os.makedirs(os.path.join(tmp, "store"))
@@ -94,9 +95,10 @@ def main():
     check(len(res) == 2 and len(seen) == 3 and warm[2].endswith("/warm.bin")
           and warm[1] not in (b"c" * 32).hex() + (b"d" * 32).hex() and seen[1][1] == (b"c" * 32).hex(),
           f"a warmed run checks the organiser's warm-up input first (fresh key and statement), then the items: {len(seen)} requests")
-    wf = open(warm[2], "rb").read()
-    check(wf == warm_file() and parse(wf) is not None and parse(wf).trace == [],
-          "the warm-up file is the organiser's, a well-formed signed proof with no trace")
+    wf = open(log + ".warm", "rb").read()           # as the badge read it: the run's copy is gone after it
+    check(wf == warm_file() and parse(wf) is not None and parse(wf).trace == [] and not os.path.exists(warm[2]),
+          "the warm-up file is the organiser's, a well-formed signed proof with no trace, in a copy of the run's own "
+          "(removed after it)")
     open(log, "w").close()
     res2 = b.verify(items, os.path.join(tmp, "store"), 30, warm=True)
     w2 = open(log).read().splitlines()[0].split()

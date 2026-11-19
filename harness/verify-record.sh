@@ -22,7 +22,8 @@
 #    `rf-bench` or `rf-light`): a consistency check of what the server
 #    wrote, not evidence (the labels prove nothing; 1 is the evidence);
 # 4. the verdict is ACCEPT and the result is comparable (all planned parts present, the stream not
-#    truncated; a machine that is not the season's is an ERROR, never an ACCEPT);
+#    truncated; a machine that is not the season's is an ERROR, never an ACCEPT), with no test-only
+#    override recorded (`test_overrides`, the tests' `aggregate.py --allow-test-overrides`);
 # 5. the stream's shape (`stream.shape`: `M`, `n`) is the season's `[stream]` shape, read
 #    from `season.toml` beside this script (run it from the core checked out at `harness_commit`).
 # The trust anchor is the organiser's server: GitHub attests the workflow, the commit and the
@@ -60,6 +61,8 @@ if not (run.get("environment") == "self-hosted" and isinstance(name, str) and na
              "is not the organiser's rf-bench runner")
 if r.get("verdict") != "ACCEPT" or not r.get("comparable"):
     sys.exit(f"verify-record: verdict {r.get('verdict')}, comparable {r.get('comparable')}: not a record")
+if r.get("test_overrides"):
+    sys.exit(f"verify-record: aggregated with the tests' --allow-test-overrides ({r['test_overrides']}): not a record")
 s = tomllib.load(open(season, "rb"))["stream"]
 want = {k: s.get(k) for k in ("M", "n")}
 st = r.get("stream") if isinstance(r.get("stream"), dict) else {}

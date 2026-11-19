@@ -66,6 +66,14 @@ LD_CACHE = "/etc/ld.so.cache"
 HOST_ROOT = ("/usr", "/bin", "/lib", "/lib64", LD_CACHE)     # `host_root` (a test's stand-in badge) only
 
 
+def copy_bytes(path, data):
+    """Write `data` to the new read-only file `path`; its length."""
+    with open(path, "xb") as f:
+        f.write(data)
+    os.chmod(path, 0o444)
+    return len(data)
+
+
 def needed(path):
     """The host files a dynamically linked executable `path` loads (its interpreter and libraries, as
     the system's `ldd` lists them: the dynamic loader in its list mode, which runs none of the
@@ -113,22 +121,30 @@ def mirror(root, path, depth=0):
             raise OSError(f"{host} is neither a directory nor a regular file")
 
 
-def lib_view(root, executable, tools=()):
-    """A tree under `root` (on the runner's tmpfs) holding what the badge executable (already
-    copied, at `executable`) loads and the host executables `tools`: their interpreters and
-    libraries (`needed`), recursively, and the loader's cache, at their host paths (`mirror`).
-    Returns its binds for the sandbox's root: each top-level directory read-only, each top-level link
-    as a link."""
+def lib_files(executable, tools=(), skip=None):
+    """The host files the dynamically linked `executable` and the host executables `tools` load:
+    their interpreters and libraries (`needed`), recursively, and the loader's cache, as host paths
+    (sorted); paths under the directory `skip` (the badge directory, which /badge copies whole) left
+    out."""
     todo, seen = needed(executable) + list(tools), set()
-    if os.path.isfile(LD_CACHE):
-        mirror(root, LD_CACHE)
     while todo:
         p = todo.pop()
         if p in seen:
             continue
         seen.add(p)
-        mirror(root, p)
         todo += needed(p)
+    if os.path.isfile(LD_CACHE):
+        seen.add(LD_CACHE)
+    base = os.path.realpath(skip) + "/" if skip else None
+    return sorted(p for p in seen if not (base and os.path.realpath(p).startswith(base)))
+
+
+def lib_view(root, files):
+    """A tree under `root` (on the runner's tmpfs) holding the host files `files` (`lib_files`) at
+    their host paths (`mirror`). Returns its binds for the sandbox's root: each top-level directory
+    read-only, each top-level link as a link."""
+    for p in files:
+        mirror(root, p)
     out = []
     for n in sorted(os.listdir(root)):
         full = os.path.join(root, n)
@@ -164,13 +180,18 @@ class Badge:
     cap on a warmed run's start-up, from the moment the process may run to the warm-up's answer.
     Everything a badge run sees is on the runner's tmpfs (`sandbox.runner_dir`), never the work disk
     or the host's /usr (review LR4 H1: a lookup there leaves a negative dentry that a later badge
-    run, one of a proof's three judged runs, could time): a copy of the badge directory at /badge
-    and, at their host paths, the files `verify` loads (`lib_view`), both made at the first run; the
-    warm-up file at /warm; and, fresh for every run, a directory holding copies of that run's
-    checked files alone at /store (`stage`), removed after it. `tools`: host executables a stand-in
-    badge (a script, in the tests) runs, put in the same tree with what they load. `host_root`
-    (tests only: the Python stand-in badge of `smoke.py --mock` needs the host's Python library)
-    binds the host's /usr, /bin, /lib and /lib64 in place of that tree, as before review LR4."""
+    run, one of a proof's three judged runs, could time), and **fresh for every run**, removed after
+    it (`view`): a copy of the badge directory at /badge; at their host paths, copies of the files
+    `verify` loads (`lib_files`, listed once, at the first run) and of /etc/ld.so.cache; the warm-up
+    file at /warm; a directory holding copies of that run's checked files alone at /store (`stage`).
+    A tmpfs file keeps state a process holding it read-only can set (its shared memory policy,
+    `mbind` on a read-only `MAP_SHARED` mapping: review LR5 H1), so no badge run sees a file another
+    badge run, or a request, saw: one of a proof's three judged runs cannot leave a memo for the
+    next. `tools`: host executables a stand-in badge (a script, in the tests) runs, put in the same
+    tree with what they load. `host_root` (tests only: the Python stand-in badge of `smoke.py --mock`
+    needs the host's Python library; `run-benchmark.py` refuses it outside the tests, and the
+    aggregation refuses a result that used it) binds the host's /usr, /bin, /lib and /lib64 in place
+    of that tree, as before review LR4. `copies` records (bytes, seconds) of each run's copies."""
 
     def __init__(self, badge_dir, mem, scratch, start_s=None, tools=(), host_root=False):
         self.dir, self.mem, self.scratch, self.start_s, self.tools = badge_dir, mem, scratch, start_s, tuple(tools)
@@ -178,22 +199,16 @@ class Badge:
         self.core = pinned_core()
         self.n = 0
         self.last = []
-        self._warm = self._view = None
+        self.copies = []
+        self._libs = None
 
-    def warm_dir(self):
-        """The directory on the runner's tmpfs holding the warm-up file (`warm.bin`), written once."""
-        if self._warm is None:
-            d = runner_path("warm")
-            with open(os.path.join(d, "warm.bin"), "wb") as f:
-                f.write(warm_file())
-            os.chmod(os.path.join(d, "warm.bin"), 0o444)
-            self._warm = d
-        return self._warm
-
-    def stage(self, items, store):
-        """A fresh directory on the runner's tmpfs with a copy of each item's file (its path relative
-        to `store` kept): the /store of one badge run."""
-        d = runner_path("store")
+    def stage(self, items, store, d=None):
+        """A fresh directory on the runner's tmpfs (`d`, made here, or a new one) with a copy of each
+        item's file (its path relative to `store` kept): the /store of one badge run."""
+        if d is None:
+            d = runner_path("store")
+        else:
+            os.mkdir(d, 0o700)
         for rel in sorted({rel for _, _, rel in items}):
             dst = os.path.join(d, rel)
             os.makedirs(os.path.dirname(dst), mode=0o700, exist_ok=True)
@@ -201,30 +216,42 @@ class Badge:
                 copy_file(os.path.join(store, rel), dst, 0o444)
         return d
 
-    def view(self):
-        """(the badge directory's copy, the binds of what it loads), made at the first run."""
-        if self._view is None:
-            root = runner_path("badge")
+    def view(self, items, store, warm):
+        """The files of one badge run, made fresh in a new directory on the runner's tmpfs: (that
+        directory, its binds). The list of the files `verify` loads is made at the first run."""
+        import time as _t
+        t0 = _t.monotonic()
+        root = runner_path("badge")
+        try:
             bdir = os.path.join(root, "badge")
-            copy_tree(self.dir, bdir)            # directories, regular files (read-only) and links
-            libs = os.path.join(root, "root")
-            os.mkdir(libs, 0o700)
+            n = copy_tree(self.dir, bdir)            # directories, regular files (read-only) and links
             if self.host_root:
                 binds = [("symlink", os.readlink(p), p) if os.path.islink(p) else ("ro", p, p)
                          for p in HOST_ROOT if os.path.lexists(p)]
             else:
-                binds = lib_view(libs, os.path.join(bdir, "verify"), self.tools)
-            self._view = (bdir, binds)
-        return self._view
+                if self._libs is None:
+                    self._libs = lib_files(os.path.join(self.dir, "verify"), self.tools, skip=self.dir)
+                libs = os.path.join(root, "root")
+                os.mkdir(libs, 0o700)
+                binds = lib_view(libs, self._libs)
+                n += sum(os.lstat(os.path.join(r, f)).st_size for r, _, fs in os.walk(libs) for f in fs)
+            binds += [("ro", bdir, "/badge"), ("ro", self.stage(items, store, os.path.join(root, "store")), "/store")]
+            if warm:
+                wd = os.path.join(root, "warm")
+                os.mkdir(wd, 0o700)
+                n += copy_bytes(os.path.join(wd, "warm.bin"), warm_file())
+                binds.append(("ro", wd, "/warm"))
+        except BaseException:
+            remove_tree(root)
+            raise
+        self.copies.append((n, _t.monotonic() - t0))
+        return root, binds
 
-    def start(self, store, warm_dir):
-        """A fresh `verify --serve` process: (process, stop(), the monotonic time it was let run,
-        the store's path and the warm-up directory's path as the process sees them). The sandbox is
-        set up held, and the clock starts when it is released, so the start-up cap counts the
-        badge's own start-up, not the sandbox's."""
-        bdir, libs = self.view()
-        binds = libs + [("ro", bdir, "/badge"), ("ro", store, "/store")]
-        binds += [("ro", warm_dir, "/warm")] if warm_dir else []
+    def start(self, binds):
+        """A fresh `verify --serve` process with the run's binds (`view`): (process, stop(), the
+        monotonic time it was let run, the store's path and the warm-up directory's path as the
+        process sees them). The sandbox is set up held, and the clock starts when it is released, so
+        the start-up cap counts the badge's own start-up, not the sandbox's."""
         sb = Sandbox(["/badge/verify", "--serve"], binds, self.mem, env={"PATH": "/usr/bin:/bin"}, cwd="/",
                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                      cpus=self.core, hold=True)
@@ -249,16 +276,15 @@ class Badge:
         out, starts up too slowly or crashes raises `BadgeError`."""
         if not items:
             return []
-        wd = self.warm_dir() if warm else None
         self.n += 1
-        staged = self.stage(items, store)
+        root, binds = self.view(items, store, warm)
         try:
-            return self._verify(items, staged, timeout, warm, wd)
+            return self._verify(items, binds, timeout, warm)
         finally:
-            remove_tree(staged)
+            remove_tree(root)
 
-    def _verify(self, items, store, timeout, warm, wd):
-        proc, stop, t0, sp, wp = self.start(store, wd)
+    def _verify(self, items, binds, timeout, warm):
+        proc, stop, t0, sp, wp = self.start(binds)
         lines = [f"{os.urandom(32).hex()} {os.urandom(32).hex()} {wp}/warm.bin"] if warm else []
         lines += [f"{vk.hex()} {stmt.hex()} {sp}/{rel}" for vk, stmt, rel in items]
         first = t0 + self.start_s if warm and self.start_s else None

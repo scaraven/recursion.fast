@@ -14,7 +14,9 @@
  *     ENOSYS, while `fork` and `pthread_create` (libc falls back to `clone`) work; `SO_COOKIE`
  *     fails with EPERM; `setsid` in a child fails with EPERM (the autogroup counter); `madvise` with
  *     MADV_COLD or MADV_PAGEOUT, `process_madvise`, `quotactl_fd` and `open_tree_attr` fail with
- *     EPERM, other advice works.
+ *     EPERM, other advice works; `mbind`, `migrate_pages`, `move_pages` and
+ *     `set_mempolicy_home_node` fail with ENOSYS (a tmpfs file's shared memory policy, review LR5
+ *     H1), while `get_mempolicy` and `set_mempolicy` (the task's own) work.
  *
  * Request modes (the request's input `mode`, read at `go`): `probe` (the checks), `mlock N` (lock N
  * pages, which raises the machine-wide `unevictable_pgs_mlocked` by N), `ino K` (the inode number
@@ -25,10 +27,15 @@
  * guessed right, 0.5 by chance), `fold FILE R BITS` (for each 2 MiB region i < R of FILE whose bit i
  * of BITS is set: POSIX_FADV_DONTNEED, a MADV_HUGEPAGE mapping touched, MADV_COLLAPSE, MADV_PAGEOUT;
  * the page-cache folio shape, review LR4 H2), `pmd FILE R` (each region's FilePmdMapped in
- * /proc/self/smaps), `setsid K` (K children each try `setsid`), `autogroup` (/proc/self/autogroup).
- * A oneshot `inoK` does `ino K` without the handshake. The report is `proof.bin` (a request), `/setup/report.txt`
- * (setup), `/work/ino.txt` (a oneshot), or the badge's answer (`accept` when every check passed;
- * the report on stderr). */
+ * /proc/self/smaps), `setsid K` (K children each try `setsid`), `autogroup` (/proc/self/autogroup),
+ * `polw FILE N TAG` (map N pages of FILE read-only and MAP_SHARED, and `mbind` MPOL_PREFERRED on the
+ * pages whose bit is 1: the file's shared memory policy, review LR5 H1), `polr FILE N TAG` (read each
+ * page's policy back with `get_mempolicy(MPOL_F_ADDR)`: the share of bits right, 0.5 by chance).
+ * Several modes may be given, separated by `;`. A oneshot `inoK` does `ino K` without the handshake.
+ * The report is `proof.bin` (a request), `/setup/report.txt` (setup), `/work/ino.txt` (a oneshot),
+ * or the badge's answer: for a checked file that begins with `mode `, the modes it names are run
+ * and the answer is `accept R`, R the last `polr`'s count of bits right (or `polw`'s of policies
+ * set); otherwise `accept` when every check passed (the report on stderr). */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -244,6 +251,14 @@ static void checks(void) {
         FAIL("process_madvise: %s\n", strerror(errno));
     if (syscall(443 /* quotactl_fd */, 0, 0, 0, 0) == 0 || errno != EPERM) FAIL("quotactl_fd: %s\n", strerror(errno));
     if (syscall(467 /* open_tree_attr */, -100, "/", 0, 0, 0) >= 0 || errno != EPERM) FAIL("open_tree_attr: %s\n", strerror(errno));
+    /* the mbind family: ENOSYS; the task's own policy calls work */
+    static const struct { long nr; const char *name; } nopol[] = {
+        {237, "mbind"}, {256, "migrate_pages"}, {279, "move_pages"}, {450, "set_mempolicy_home_node"}};
+    for (size_t i = 0; i < sizeof nopol / sizeof *nopol; i++)
+        if (syscall(nopol[i].nr, 0, 0, 0, 0, 0, 0) == 0 || errno != ENOSYS) FAIL("%s: %s (not ENOSYS)\n", nopol[i].name, strerror(errno));
+    int pm = -1;
+    if (syscall(239 /* get_mempolicy */, &pm, 0, 0, 0, 0)) FAIL("get_mempolicy: %s\n", strerror(errno));
+    if (syscall(238 /* set_mempolicy */, 0 /* MPOL_DEFAULT */, 0, 0)) FAIL("set_mempolicy: %s\n", strerror(errno));
     /* pidfs: no pidfd, by any way */
     if (syscall(SYS_pidfd_open, getpid(), 0) >= 0 || errno != EPERM) FAIL("pidfd_open: %s\n", strerror(errno));
     if (syscall(SYS_clone3, NULL, 0) == 0 || errno != ENOSYS) FAIL("clone3: %s (not ENOSYS)\n", strerror(errno));
@@ -396,6 +411,45 @@ static void pmd(const char *f, long regions) {
     close(fd);
 }
 
+/* a tmpfs file's shared memory policy (review LR5 H1): set per page by `mbind` on a read-only
+ * MAP_SHARED mapping, kept in the inode, read back by another process's mapping */
+static long answer;
+static void polw(const char *p, long n, long tag) {
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) { add("polw open %s: %s\n", p, strerror(errno)); return; }
+    char *m = mmap(0, n * 4096, PROT_READ, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) { add("polw mmap %s: %s\n", p, strerror(errno)); close(fd); return; }
+    unsigned long mask = 1;
+    long ok = 0, bad = 0, err = 0;
+    for (long i = 0; i < n; i++)
+        if (bit(i, tag)) {
+            if (syscall(237, m + i * 4096, 4096, 1 /* MPOL_PREFERRED */, &mask, 64, 0)) bad++, err = errno;
+            else ok++;
+        }
+    add("polw %s n=%ld set=%ld failed=%ld errno=%ld\n", p, n, ok, bad, err);
+    answer = ok;
+    munmap(m, n * 4096);
+    close(fd);
+}
+static void polr(const char *p, long n, long tag) {
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) { add("polr open %s: %s\n", p, strerror(errno)); return; }
+    char *m = mmap(0, n * 4096, PROT_READ, MAP_SHARED, fd, 0);
+    if (m == MAP_FAILED) { add("polr mmap %s: %s\n", p, strerror(errno)); close(fd); return; }
+    long right = 0, pref = 0, err = 0;
+    for (long i = 0; i < n; i++) {
+        int mode = -1;
+        unsigned long mask = 0;
+        if (syscall(239 /* get_mempolicy */, &mode, &mask, 64, m + i * 4096, 2 /* MPOL_F_ADDR */)) { err++; continue; }
+        unsigned g = mode == 1;
+        pref += g, right += g == bit(i, tag);
+    }
+    add("polr %s n=%ld preferred=%ld right=%ld share=%.4f errors=%ld\n", p, n, pref, right, (double)right / n, err);
+    answer = right;
+    munmap(m, n * 4096);
+    close(fd);
+}
+
 static void ino(long k) {
     int fd = open("a", O_WRONLY | O_CREAT | O_EXCL, 0644);
     struct stat st;
@@ -420,35 +474,8 @@ static void put(const char *path) {
     }
 }
 
-int main(int argc, char **argv) {
-    if (argc > 1 && !strcmp(argv[1], "--serve")) {          /* the badge */
-        char line[4096];
-        while (fgets(line, sizeof line, stdin)) {
-            fails = 0, len = 0;
-            checks();
-            fputs(rep, stderr);
-            printf("%s 1\n", fails ? "reject" : "accept");
-            fflush(stdout);
-        }
-        return fails ? 3 : 0;
-    }
-    if (argc > 1 && !strcmp(argv[1], "setup")) {
-        checks();
-        put("/setup/report.txt");
-        return 0;
-    }
-    if (argc > 1 && !strncmp(argv[1], "ino", 3)) {          /* a oneshot, no handshake */
-        ino(atol(argv[1] + 3));
-        put("/work/ino.txt");
-        return 0;
-    }
-    puts("ready");
-    fflush(stdout);
-    char b[8], mode[64] = {0};
-    if (!fgets(b, sizeof b, stdin)) return 9;
-    int fd = open("mode", O_RDONLY);
-    if (fd < 0 || read(fd, mode, sizeof mode - 1) < 0) return 8;
-    close(fd);
+static void run_mode(const char *mode) {
+    while (*mode == ' ') mode++;
     if (!strncmp(mode, "probe", 5)) checks();
     else if (!strncmp(mode, "ino ", 4)) ino(atol(mode + 4));
     else if (!strncmp(mode, "inos", 4)) percpu(0, 1);
@@ -481,7 +508,58 @@ int main(int argc, char **argv) {
         char *m = mmap(0, n * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (m == MAP_FAILED || mlock(m, n * pg)) FAIL("mlock %ld pages: %s\n", n, strerror(errno));
         else add("mlocked %ld pages\n", n), munlock(m, n * pg);
+    } else if (!strncmp(mode, "polw ", 5) || !strncmp(mode, "polr ", 5)) {
+        char f[256];
+        long n = 0, tag = 0;
+        if (sscanf(mode + 5, "%255s %ld %ld", f, &n, &tag) == 3) (mode[3] == 'w' ? polw : polr)(f, n, tag);
     }
+}
+static void run_modes(char *modes) {
+    char *save, *m = strtok_r(modes, ";\n", &save);
+    for (; m; m = strtok_r(0, ";\n", &save)) run_mode(m);
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--serve")) {          /* the badge */
+        char line[4096];
+        while (fgets(line, sizeof line, stdin)) {
+            fails = 0, len = 0;
+            char vk[80], st[80], path[1024], m[512] = {0};
+            int f = sscanf(line, "%79s %79s %1023s", vk, st, path) == 3 ? open(path, O_RDONLY) : -1;
+            long k = f >= 0 ? read(f, m, sizeof m - 1) : -1;
+            if (f >= 0) close(f);
+            if (k > 5 && !strncmp(m, "mode ", 5)) {
+                answer = 0;
+                run_modes(m + 5);
+                fputs(rep, stderr);
+                printf("accept %ld\n", answer);
+            } else {
+                checks();
+                fputs(rep, stderr);
+                printf("%s 1\n", fails ? "reject" : "accept");
+            }
+            fflush(stdout);
+        }
+        return fails ? 3 : 0;
+    }
+    if (argc > 1 && !strcmp(argv[1], "setup")) {
+        checks();
+        put("/setup/report.txt");
+        return 0;
+    }
+    if (argc > 1 && !strncmp(argv[1], "ino", 3)) {          /* a oneshot, no handshake */
+        ino(atol(argv[1] + 3));
+        put("/work/ino.txt");
+        return 0;
+    }
+    puts("ready");
+    fflush(stdout);
+    char b[8], mode[512] = {0};
+    if (!fgets(b, sizeof b, stdin)) return 9;
+    int fd = open("mode", O_RDONLY);
+    if (fd < 0 || read(fd, mode, sizeof mode - 1) < 0) return 8;
+    close(fd);
+    run_modes(mode);
     put("proof.bin");
     puts("done");
     fflush(stdout);

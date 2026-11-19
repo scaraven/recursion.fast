@@ -50,7 +50,18 @@
     step 1 and step i, in the service run and a timed pass; without the placeholders, the control,
     2, 3, 4 and 5).
 
-The requests of 6.-8. and 10.-12. run as the benchmark's do, /work a private tmpfs (`request` with
+13. what one sandbox leaves for a later one in the shared memory policy of a tmpfs file (review LR5
+    H1: `mbind` on a read-only MAP_SHARED mapping, read back with `get_mempolicy(MPOL_F_ADDR)`): with
+    the filter, `mbind` fails with ENOSYS and a later request reads the default policy everywhere
+    (`/setup`, `/prover`, a masked /proc entry, the CPU tree); with `mbind` allowed (the class
+    test, the filter changed for it alone), a request of the same pass reads the bits back from
+    the copy the steps of one pass share (the control), while a request after `Run.publish` (the
+    next pass's copy), a later request through the mask file and the CPU tree (each sandbox's
+    own), and a later badge run through /badge, its library tree and /store (each run's own) read
+    nothing; no sandbox's or badge run's directory is left on the runner's tmpfs, and one copy of the
+    setup at a time.
+
+The requests of 6.-8. and 10.-13. run as the benchmark's do, /work a private tmpfs (`request` with
 no host directory).
 """
 import os
@@ -262,6 +273,102 @@ def channels(tmp, svc, iso_run, iso_req):
               f"control, {plain}; the service's socket directory is on the runner's tmpfs")
     finally:
         gsvc.stop()
+
+
+def policies(tmp, iso_run, iso_req, probe):
+    """13. The shared memory policy of a tmpfs file (review LR5 H1), across requests of one pass,
+    across passes, across sandboxes (the mask file, the CPU tree) and across badge runs."""
+    import random
+    import rfh.sandbox as sbx
+    from rfh.checks import Badge, BadgeError
+    from rfh.prover import tree_bytes
+    files = [("/setup/big", REGIONS << 9), ("/prover/prover", 64), ("/proc/stat", 64),
+             ("/sys/devices/system/cpu/online", 64)]
+
+    def got(r, key):
+        line = next((l for l in (r.proof or b"").decode(errors="replace").splitlines() if l.startswith(key)), "")
+        return dict(w.split("=", 1) for w in line.split() if "=" in w)
+    refused, read = {}, {}
+    for f, n in files:
+        tag = random.getrandbits(24)
+        w = got(iso_req(f"polw {f} {n} {tag}"), "polw")
+        r = got(iso_req(f"polr {f} {n} {tag}"), "polr")
+        refused[f] = (w.get("set"), w.get("errno"))
+        read[f] = (r.get("preferred"), r.get("share"))
+    check(all(v == ("0", "38") for v in refused.values()) and all(p == "0" for p, _ in read.values()),
+          f"mbind on a read-only MAP_SHARED mapping fails with ENOSYS in every file a request sees (set, errno: "
+          f"{refused}); a later request reads the default policy everywhere (preferred, share right: {read})")
+    saved = dict(sbx.ENOSYS)
+    del sbx.ENOSYS["mbind"]                       # the class test: the copies' boundaries alone
+    try:
+        n = REGIONS << 9
+        tag = random.getrandbits(24)
+        w = got(iso_req(f"polw /setup/big {n} {tag}"), "polw")
+        same = got(iso_req(f"polr /setup/big {n} {tag}"), "polr")
+        old_root = iso_run.root
+        nb, dt = iso_run.publish()                # the next pass's copy
+        nxt = got(iso_req(f"polr /setup/big {n} {tag}"), "polr")
+        check(int(w.get("set", 0)) > n // 3 and same.get("right") == str(n) and nxt.get("preferred") == "0"
+              and not os.path.exists(old_root),
+              f"with mbind allowed: {w.get('set')} policies set on /setup/big are read back by a request of the same "
+              f"pass ({same.get('right')} of {n} right: the copy the steps of one pass share, the control) and by none "
+              f"after Run.publish, the next pass's copy ({nxt.get('preferred')} preferred, share {nxt.get('share')}; "
+              f"the previous copy removed; {nb} bytes in {dt:.3f} s)")
+        per = {}
+        for f in ("/proc/stat", "/sys/devices/system/cpu/online"):
+            tag = random.getrandbits(24)
+            w = got(iso_req(f"polw {f} 64 {tag}"), "polw")
+            r = got(iso_req(f"polr {f} 64 {tag}"), "polr")
+            per[f] = (w.get("set"), r.get("preferred"))
+        check(all(int(a or 0) > 10 and b == "0" for a, b in per.values()),
+              f"... through the mask file and the CPU tree (each sandbox's own): set, then read back preferred by a later "
+              f"request: {per}")
+        # badge runs: the probe as `verify`; a checked file that begins with `mode ` names what it does
+        bdir, store = os.path.join(tmp, "pol-badge"), os.path.join(tmp, "pol-store")
+        os.makedirs(bdir)
+        os.makedirs(store)
+        shutil.copy(probe, os.path.join(bdir, "verify"))
+        badge = Badge(bdir, "256M", os.path.join(tmp, "hang-scratch"))
+        tag = random.getrandbits(24)
+        targets = ["/badge/verify", "/etc/ld.so.cache", "/store/w.bin"]
+        targets = [t for t in targets if t != "/etc/ld.so.cache" or os.path.isfile(t)]
+        open(os.path.join(store, "w.bin"), "w").write("mode " + ";".join(f"polw {t} 16 {tag}" for t in targets)
+                                                       + f";polr /badge/verify 16 {tag}")
+        for k, t in enumerate(targets):
+            open(os.path.join(store, f"r{k}.bin"), "w").write(f"mode polr {t} 16 {tag}")
+        try:
+            badge.verify([(b"v" * 32, b"c" * 32, "w.bin")], store, timeout=30)
+            inside = badge.last[0][1]
+            # w.bin last (a run's /store holds its own items alone): its policies are read before it runs again
+            badge.verify([(b"v" * 32, b"c" * 32, f"r{k}.bin") for k in range(len(targets))]
+                         + [(b"v" * 32, b"c" * 32, "w.bin")], store, timeout=30)
+            later = [own for _, own in badge.last][:len(targets)]
+            why = ""
+        except BadgeError as e:
+            inside, later, why = None, None, str(e)[-300:]
+        want = sum(1 for i in range(16) if bit(i, tag))
+        check(inside == 16 and later is not None and all(abs(x - (16 - want)) == 0 for x in later),
+              f"... a badge run's policies on {targets} are read back inside it ({inside} of 16 right) and by no later "
+              f"badge run (each run's own copies: {later} right, the default policy's {16 - want}) {why}")
+        c = badge.copies[-1]
+        print(f"note one badge run's copies: {c[0]} bytes in {c[1] * 1e3:.1f} ms")
+    finally:
+        sbx.ENOSYS.clear()
+        sbx.ENOSYS.update(saved)
+    left = sorted(n for n in os.listdir(runner_dir()) if n.split("-")[0] in ("sb", "badge", "store"))
+    check(not left and tree_bytes(iso_run.root) > 0 and len(iso_run.copies) == 2,
+          f"no sandbox's or badge run's directory is left on the runner's tmpfs ({left}); the setup's copies were made "
+          f"one at a time ({iso_run.copies})")
+
+
+def bit(i, tag):
+    """isoprobe.c's `bit`."""
+    m = (1 << 64) - 1
+    x = (i * 0x9E3779B97F4A7C15 & m) ^ tag
+    x ^= x >> 29
+    x = x * 0xBF58476D1CE4E5B9 & m
+    x ^= x >> 32
+    return x & 1
 
 
 def main():
@@ -527,6 +634,8 @@ def main():
 
     # 12. what one request leaves for a later one through the real binds (review LR4)
     channels(tmp, svc, iso_run, iso_req)
+    # 13. the shared memory policy of a tmpfs file, and the copies' boundaries (review LR5)
+    policies(tmp, iso_run, iso_req, probe)
     svc.stop()
 
     # 5. the memory cap
