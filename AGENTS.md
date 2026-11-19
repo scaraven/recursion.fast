@@ -448,26 +448,30 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   `build_s`, so a slow build may fit only when the cache hits.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
   on the seven tagged domains, and `Keccak-256(k ‖ ·)` with a secret
-  32-byte key `k` as a PRF, and the one-wayness of the tweaked WOTS chain step `wotsStep` (no
-  adversary outputs a chain value below every position the signer revealed, except with small
-  probability; for a key the signer never used, that is guessing a value derived from the PRF). The signature's unforgeability (EUF-CMA, each index used once) is reduced in the
-  kernel to a Keccak-256 collision or such a chain inversion
+  32-byte key `k` as a PRF (also under the signing seed: the chain starts `chainStart` are
+  pseudorandom), and **tweakable multi-target one-wayness of the WOTS chain step** `wotsStep`
+  with pseudorandom starts: no adversary outputs *the honest* chain value at a position below
+  every position the signer revealed of that chain, except with small probability (about
+  `2^16 · 133` targets, each tweak `(j, i, s)` targeting one value; for a key the signer never
+  used, that is guessing a value derived from the PRF). It is hard only because the starts are
+  random and unknown: a forger with `sk` built in reaches it for every fixed `sk`. The
+  signature's unforgeability (EUF-CMA, one message per index) is reduced in the kernel to a
+  Keccak-256 collision or such a chain inversion
   ([`Library/WotsReduce.lean`](RecursionFast/Library/WotsReduce.lean), `wotsReduce`,
-  `eufReduce`), against the record of each signed trace's index and digest; that the service's
-  signatures are the reference signer's `sign sk j (traceDigest tr)` (which makes the revealed
-  positions those of the record) is its specification, not a hypothesis of the theorem. That the
-  chain starts are pseudorandom (`chainStart`, the PRF under the signing seed) and the
-  inversion's probability stay on paper. The composition across the stream needs
-  collision resistance, the PRF and the chain's one-wayness only. A signed trace the log does not
-  hold is reduced, for any tree shape, to an EUF-CMA forgery against the service's signed traces
-  or an explicit collision ([`Library/Compose.lean`](RecursionFast/Library/Compose.lean),
-  `Forgery.reduce`); the walk around it is kernel for the stream (`walkStreamSigned`,
-  `compose_prob_stream_signed`, a union bound over its `2M - 1` members, and
-  `compose_prob_stream_wots`, its EUF-CMA term split into a collision and a chain inversion) and
-  for balanced trees (`walkSigned`). Security against
-  signature-only forgery, which the original signed-oracle construction (Chiesa–Tromer, ICS 2010)
-  also assumes, is not used: the walk matches a signed proof to the log by its trace, the signed
-  message, not by its signature.
+  `eufReduce`), given that the signed traces are the service's **complete** transcript
+  (`Transcript`: every signature the reference signer's `sign sk j (traceDigest tr)`, one message
+  per index, replays allowed); an issued signature missing from it can be replayed and is then
+  reported as an inversion. The inversion's probability stays on paper. The composition across
+  the stream needs collision resistance, the PRF and the chain's one-wayness only. A signed trace
+  the log does not hold is reduced, for any tree shape, to an EUF-CMA forgery against the
+  service's signed traces or an explicit collision
+  ([`Library/Compose.lean`](RecursionFast/Library/Compose.lean), `Forgery.reduce`); the walk
+  around it is kernel for the stream (`walkStreamSigned`, `compose_prob_stream_signed`, a union
+  bound over its `2M - 1` members, and `compose_prob_stream_wots`, its EUF-CMA term split into a
+  collision and a chain inversion) and for balanced trees (`walkSigned`, `compose_prob_signed`,
+  `compose_prob_wots`). Security against signature-only forgery, which the original
+  signed-oracle construction (Chiesa–Tromer, ICS 2010) also assumes, is not used: the walk
+  matches a signed proof to the log by its trace, the signed message, not by its signature.
 - **The badge**: the code Lean's compiler emits for `acc`, built from the same build the kernel
   checked; and the harness tools (gate, source rule, manifest, renderer, sandbox).
 - **The runner and the service**, tested, not proved (the service's replay mode included: it
@@ -552,14 +556,14 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   the key would be accept-all.
 - **On paper, not in the kernel**: that the signature's chain starts are pseudorandom, and the
   bounds on the probabilities of the walk's collision and chain-inversion outcomes (the per-run
-  reduction to them, given the service's signed traces with one index per message, signed by the
-  reference signer as the service's specification says, is kernel:
-  `Forgery.reduce`, then `eufReduce` from EUF-CMA to a collision or a chain value below every
-  revealed position; the model has no signing oracle), lazy sampling against
-  a random function, randomised adversaries (an average of deterministic ones), and the PRF step
-  from the random oracle to the keyed deployment. The composition across the stream is kernel for
-  one deterministic query program against the lazily sampled oracle, given the service's signed
-  traces (`compose_prob_stream`, `compose_prob_stream_signed`).
+  reduction to them is kernel: `Forgery.reduce`, then `eufReduce` from EUF-CMA to a collision or
+  the honest chain value below every revealed position, given the service's complete signing
+  transcript, `Transcript`: the reference signer's signatures, one message per index; the model
+  has no signing oracle), lazy sampling against a random function, randomised adversaries (an
+  average of deterministic ones), and the PRF step from the random oracle to the keyed
+  deployment. The composition across the stream is kernel for one deterministic query program
+  against the lazily sampled oracle, given the service's signed traces (`compose_prob_stream`,
+  `compose_prob_stream_signed`, `compose_prob_stream_wots`).
 - **`KS` is textbook knowledge soundness only for adversaries that ask the verifier's queries
   themselves**: its extractor also reads the verifier's answers, so for an adversary that leaves
   fresh queries to the verifier it is weaker than the textbook notion (`Controls/Security.lean`,

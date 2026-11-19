@@ -6,8 +6,9 @@
   `walk` (`Library/Compose.lean`).
 
   Fix the secret chain starts `sk` of the reference signer (`Library/Signer.lean`) and its
-  signing record `R`, the (index, message) pairs it signed, each index once
-  (`(R.map Prod.fst).Nodup`); the signature it issued for `(j, m₀)` is `sign sk j m₀`, which
+  signing record `R`, the (index, message) pairs it signed, one message per index (`OneMsg`: the
+  service signs each index once; a replay re-issues the same pair, so an index may repeat); the
+  signature it issued for `(j, m₀)` is `sign sk j m₀`, which
   reveals chain `i` of key `j` at position `dᵢ(m₀)`, the `i`-th WOTS digit of `m₀`
   (`sign_ots_getElem?`), so every position above it too. A forgery is `SigOk (pk sk) m σ` with `m`
   among no message of `R`. With `j = σ.idx`, the reduction:
@@ -29,8 +30,9 @@
   is the honest value `hv sk σ.idx i dᵢ(m)`, that `dᵢ(m) < 3`, and that `dᵢ(m) < dᵢ(m₀)` for every
   `(σ.idx, m₀) ∈ R`. So it exists only when the forger output an honest chain value at an
   unrevealed position: no chain value of an issued signature, on its own message, is an inversion
-  (`Controls/WotsReduce.lean`, `not_inversion_issued`), and with an index used twice there may be
-  no unrevealed position at all (`not_inversion_twice`). The `collision` carries a
+  (`Controls/WotsReduce.lean`, `not_inversion_issued`), and with an index used for two messages
+  (which `OneMsg` excludes) there may be no unrevealed position at all (`not_inversion_twice`).
+  The `collision` carries a
   `Collision`, two different byte strings with one digest; such a pair exists by pigeonhole
   (`Controls/Compose.lean`, `collision_nonempty`), so as for `Outcome` the type alone is not the
   statement of the collision branch: its content is the compiled `wotsReduce`, which computes the
@@ -39,19 +41,28 @@
   is reduced to an inversion (`wotsReduce_sign`, for every `sk`): the outcome is reachable.
 
   **Against the composition.** `eufReduce` takes an EUF-CMA forgery against `issued T` (the
-  service's signed traces, `Library/Unforgeability.lean`) under `pk sk`, the traces' signature
-  indices pairwise distinct, to a `WotsBreak` against `record T` (each trace's index and digest).
-  The reduction reads the traces' digests and indices, never their signatures, as the EUF-CMA event
-  does (`eufForgery_issued_iff`); by the service's specification those are `sign sk j (traceDigest
-  tr)`, which is what makes the `unrevealed` positions unrevealed. `SignedOutcome.IsEuf.wots`
-  splits the walk's EUF-CMA outcome into the reduction's two outcomes, and
-  `compose_prob_stream_wots` is `compose_prob_stream_signed` with its EUF-CMA term so split: the
-  stream composition fails with probability at most the escape bound plus the probabilities of a
-  collision (the walk's, or the signature reduction's) and of a chain inversion.
+  service's signed traces, `Library/Unforgeability.lean`) under `pk sk` to a `WotsBreak` against
+  `record T` (each trace's index and digest), given that `T` is the service's transcript
+  (`Transcript`): every signature is the reference signer's `sign sk j (traceDigest tr)`, and one
+  index signs one message. The reduction reads only the record, as the EUF-CMA event reads no
+  signature (`eufForgery_issued_iff`); `Transcript.signed` is what makes the `unrevealed`
+  positions unrevealed (`Transcript.reveals`: the transcript's signatures carry exactly the chain
+  values at the record's digits). `T` must be the **complete** transcript: an issued signature
+  missing from `T` can be replayed, on its own message, as an EUF-CMA forgery against `T`, and is
+  then reported as an inversion. `SignedOutcome.IsEuf.wots` splits the walk's EUF-CMA outcome
+  into the reduction's two outcomes; `compose_prob_stream_wots` and `compose_prob_wots` are
+  `compose_prob_stream_signed` and `compose_prob_signed` with their EUF-CMA terms so split: the
+  composition fails with probability at most the escape bound plus the probabilities of a
+  collision (the walk's, or the signature reduction's) and of a chain inversion. Through the walk,
+  the inversion term is reached (`Controls/WotsReduce.lean`, `queryLeaf_inversion_prob`).
 
-  On paper: that the chain starts (`chainStart`) are pseudorandom, and the probability that an
-  adversary outputs an honest chain value at an unrevealed position (one-wayness of the tweaked
-  chain step, a preimage of `wotsStep` or, for an unused key, a guess of a pseudorandom value).
+  On paper: the probability of an inversion, that an adversary outputs **the honest** chain value
+  at a position below every revealed one. That is hard only when the chain starts are random and
+  unknown to it (a forger with `sk` built in reaches it for every fixed `sk`, `wotsReduce_sign`):
+  tweakable multi-target one-wayness of the chain step with pseudorandom starts (`chainStart`, the
+  PRF under the signing seed), about `2^16 · 133` targets, each tweak `(j, i, s)` targeting one
+  value (a preimage of `wotsStep` under that tweak or, for an unused key, a guess of a
+  pseudorandom value).
 -/
 import RecursionFast.Library.Signer
 import RecursionFast.Library.Compose
@@ -110,8 +121,16 @@ theorem toList_append_inj {a b c d : Digest} {u v : List UInt8} (hl : u.length =
 theorem flatMap_toList_inj : ∀ {E E' : List Digest},
     E.flatMap Vector.toList = E'.flatMap Vector.toList → E = E'
   | [], [], _ => rfl
-  | [], _ :: _, h => by have := congrArg List.length h; simp at this; omega
-  | _ :: _, [], h => by have := congrArg List.length h; simp at this
+  | [], _ :: _, h => by
+    have := congrArg List.length h
+    simp only [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+      Vector.length_toList] at this
+    omega
+  | _ :: _, [], h => by
+    have := congrArg List.length h
+    simp only [List.flatMap_nil, List.flatMap_cons, List.length_nil, List.length_append,
+      Vector.length_toList] at this
+    omega
   | a :: E, b :: E', h => by
     simp only [List.flatMap_cons] at h
     obtain ⟨h1, h2⟩ := List.append_inj h (by simp)
@@ -173,9 +192,13 @@ def firstBelow (d b : ℕ → ℕ) (h : ∃ i < wotsLen, d i < b i) : {i // i < 
   | none => absurd h fun ⟨i, hi, hlt⟩ =>
       List.find?_eq_none.mp hf i (List.mem_range.mpr hi) (decide_eq_true hlt)
 
+/-- **One message per index**: two entries of the signing record with one index have one message.
+The service signs each index once; a replay re-issues the same pair, so an index may repeat. -/
+def OneMsg (R : List (ℕ × Digest)) : Prop := ∀ a ∈ R, ∀ b ∈ R, a.1 = b.1 → a.2 = b.2
+
 /-- **The chain to compare** for a forgery on `m` with key `j`: one whose digit of `m` is below 3
 and below its digit of every message `R` signed with key `j`. -/
-def pick (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup) (j : ℕ) (m : Digest)
+def pick (R : List (ℕ × Digest)) (hR : OneMsg R) (j : ℕ) (m : Digest)
     (hm : ∀ x ∈ R, x.2 ≠ m) :
     {i // i < wotsLen ∧ (wotsDigits m).getD i 0 < 3 ∧
       ∀ m₀, (j, m₀) ∈ R → (wotsDigits m).getD i 0 < (wotsDigits m₀).getD i 0} :=
@@ -187,7 +210,7 @@ def pick (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup) (j : ℕ) (m :
     match firstBelow (fun i => (wotsDigits m).getD i 0) (fun i => (wotsDigits x.2).getD i 0)
         (wotsDigits_dominates (hm x hx)) with
     | ⟨i, hi, hlt⟩ => ⟨i, hi, lt_of_lt_of_le hlt (wotsDigits_getD_le _ _), fun m₀ hm₀ => by
-        obtain rfl : (j, m₀) = x := List.inj_on_of_nodup_map hR hm₀ hx hj.symm
+        obtain rfl : m₀ = x.2 := hR (j, m₀) hm₀ x hx hj.symm
         exact hlt⟩
   | none =>
     match firstBelow (fun i => (wotsDigits m).getD i 0) (fun _ => 3) (wotsDigits_lt_three m) with
@@ -215,9 +238,9 @@ theorem pubEnds_getElem? {j i d : ℕ} (hi : i < wotsLen) (hd : d ≤ 3) :
   conv_lhs => rw [← Nat.add_sub_cancel' hd, wotsChain_add, Nat.zero_add]
 
 /-- **The reduction of a forgery**, computed: a valid signature `σ` under `pk sk` on a message
-`m` that the signing record `R` (each index once) never signed is a `sigNode`, `wotsLeaf` or
-`wotsStep` collision, or the honest chain value at an unrevealed position (`WotsBreak`). -/
-def wotsReduce (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup) (m : Digest) (σ : Sig)
+`m` that the signing record `R` (one message per index) never signed is a `sigNode`, `wotsLeaf`
+or `wotsStep` collision, or the honest chain value at an unrevealed position (`WotsBreak`). -/
+def wotsReduce (R : List (ℕ × Digest)) (hR : OneMsg R) (m : Digest) (σ : Sig)
     (hσ : SigOk (pk sk) m σ = true) (hm : ∀ x ∈ R, x.2 ≠ m) : WotsBreak sk R m σ :=
   have hσ' : ((σ.idx < 2 ^ sigHeight ∧ σ.ots.length = wotsLen) ∧ σ.path.length = sigHeight) ∧
       sigRoot σ.idx (wotsLeaf σ.idx (wotsEnds σ.idx m σ.ots)) σ.path = pk sk := by
@@ -248,7 +271,7 @@ def wotsReduce (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup) (m : Dig
 /-- **A forger that knows the key is reduced to an inversion**: for every `sk`, record `R` and
 key index `j < 2^16`, the honest signature `sign sk j m` on a message `R` never signed reduces to
 the honest chain value at an unrevealed position, whether `R` used `j` or not. -/
-theorem wotsReduce_sign (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup) {j : ℕ}
+theorem wotsReduce_sign (R : List (ℕ × Digest)) (hR : OneMsg R) {j : ℕ}
     (hj : j < 2 ^ sigHeight) (m : Digest) (hm : ∀ x ∈ R, x.2 ≠ m) :
     (wotsReduce sk R hR m (sign sk j m) (sigOk_sign sk j hj m) hm).IsInversion := by
   have he : wotsEnds (sign sk j m).idx m (sign sk j m).ots = pubEnds sk (sign sk j m).idx :=
@@ -261,13 +284,19 @@ theorem wotsReduce_sign (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup)
   obtain ⟨i, hi, hb, hu⟩ := P
   dsimp only
   split
-  · rename_i x hx
+  next x hx =>
     rw [sign_ots_getElem? sk j m hi, Option.some.injEq] at hx
     rw [dite_eq_left_of_eq_true (eq_true (by rw [← hx]; rfl))]
     trivial
-  · rename_i hx
-    rw [sign_ots_getElem? sk j m hi] at hx
-    exact absurd hx (by simp)
+  next hx => exact absurd ((sign_ots_getElem? sk j m hi).symm.trans hx) (by simp)
+
+/-- `wotsReduce_sign` for a signature equal to the honest one. -/
+theorem wotsReduce_of_eq_sign (R : List (ℕ × Digest)) (hR : OneMsg R) {j : ℕ}
+    (hj : j < 2 ^ sigHeight) (m : Digest) (hm : ∀ x ∈ R, x.2 ≠ m) {σ : Sig}
+    (hσ : SigOk (pk sk) m σ = true) (h : σ = sign sk j m) :
+    (wotsReduce sk R hR m σ hσ hm).IsInversion := by
+  subst h
+  exact wotsReduce_sign sk R hR hj m hm
 
 /-! ## Against the service's signed traces -/
 
@@ -275,80 +304,149 @@ theorem wotsReduce_sign (R : List (ℕ × Digest)) (hR : (R.map Prod.fst).Nodup)
 def record (T : List (Trace × Sig)) : List (ℕ × Digest) :=
   T.map fun x => (x.2.idx, traceDigest x.1)
 
-/-- **An EUF-CMA forgery against the service's signed traces, reduced**: under `pk sk`, with the
-signed traces' indices pairwise distinct, a `WotsBreak` against their record. -/
-def eufReduce (T : List (Trace × Sig)) (hT : (T.map fun x => x.2.idx).Nodup) {m : Digest}
-    {σ : Sig} (h : EufForgery (SigOk (pk sk)) (issued T) m σ) : WotsBreak sk (record T) m σ :=
-  wotsReduce sk (record T) (by simpa [record, List.map_map, Function.comp_def] using hT) m σ h.1
-    fun x hx => by
-      obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
-      exact (eufForgery_issued_iff.mp h).2 y hy
+/-- **The service's signing transcript, as its specification says**: every signed trace's
+signature is the reference signer's `sign sk j` on the trace's digest, and one index signs one
+message (a replay re-issues the same trace and signature, so an index may repeat). `signed` is
+what makes the inversion's `unrevealed` positions unrevealed: the transcript reveals of key `j`
+exactly the chain values its signatures carry (`Transcript.reveals`); the reduction itself reads
+only the record. `T` must be the service's **complete** transcript: an issued signature missing
+from `T` can be replayed by a forger and is then reported as an inversion. -/
+structure Transcript (T : List (Trace × Sig)) : Prop where
+  /-- Every signature is the reference signer's on its trace's digest. -/
+  signed : ∀ x ∈ T, x.2 = sign sk x.2.idx (traceDigest x.1)
+  /-- One message per index. -/
+  oneMsg : ∀ x ∈ T, ∀ y ∈ T, x.2.idx = y.2.idx → traceDigest x.1 = traceDigest y.1
+
+/-- **What a transcript reveals**: the signature of a signed trace carries, for chain `i`, the
+honest chain value at position `dᵢ` of the trace's digest, and so every position above it. -/
+theorem Transcript.reveals {T : List (Trace × Sig)} (hS : Transcript sk T) {x : Trace × Sig}
+    (hx : x ∈ T) {i : ℕ} (hi : i < wotsLen) :
+    x.2.ots[i]? = some (hv sk x.2.idx i ((wotsDigits (traceDigest x.1)).getD i 0)) := by
+  conv_lhs => rw [hS.signed x hx]
+  exact sign_ots_getElem? sk _ _ hi
+
+/-- A transcript's record has one message per index. -/
+theorem Transcript.oneMsg_record {T : List (Trace × Sig)} (hS : Transcript sk T) :
+    OneMsg (record T) := by
+  intro a ha b hb hab
+  obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+  obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hb
+  exact hS.oneMsg x hx y hy hab
+
+/-- **An EUF-CMA forgery against the service's signed traces, reduced**: under `pk sk`, against
+the service's transcript `T`, a `WotsBreak` against its record. -/
+def eufReduce (T : List (Trace × Sig)) (hS : Transcript sk T) {m : Digest} {σ : Sig}
+    (h : EufForgery (SigOk (pk sk)) (issued T) m σ) : WotsBreak sk (record T) m σ :=
+  wotsReduce sk (record T) hS.oneMsg_record m σ h.1 fun x hx => by
+    obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hx
+    exact (eufForgery_issued_iff.mp h).2 y hy
 
 end RecursionFast.WotsReduce
 
-/-! ## The stream composition's failure: a collision or a chain inversion -/
+/-! ## The composition's failure: a collision or a chain inversion -/
 
-namespace RecursionFast.Compose.SignedOutcome
+namespace RecursionFast.Compose
 open RecursionFast RecursionFast.Signer RecursionFast.WotsReduce
 open scoped NNReal
 
 variable {S : Submission} {sk : ℕ → ℕ → Digest} {L : Log} {T : List (Trace × Sig)} {n : ℕ}
   {hs : List Digest} {c₀ : Digest} {p₀ : Signed} {d : ℕ}
 
+namespace SignedOutcome
+
 /-- The outcome is an EUF-CMA forgery that `eufReduce` reduces to a collision. -/
-def IsWotsCollision (hN : (T.map fun x => x.2.idx).Nodup) :
-    SignedOutcome S (pk sk) L T n hs c₀ p₀ d → Prop
-  | .euf _ _ _ _ h => (eufReduce sk T hN h).IsCollision
+def IsWotsCollision (hS : Transcript sk T) : SignedOutcome S (pk sk) L T n hs c₀ p₀ d → Prop
+  | .euf _ _ _ _ h => (eufReduce sk T hS h).IsCollision
   | _ => False
 
 /-- The outcome is an EUF-CMA forgery that `eufReduce` reduces to a chain inversion. -/
-def IsWotsInversion (hN : (T.map fun x => x.2.idx).Nodup) :
-    SignedOutcome S (pk sk) L T n hs c₀ p₀ d → Prop
-  | .euf _ _ _ _ h => (eufReduce sk T hN h).IsInversion
+def IsWotsInversion (hS : Transcript sk T) : SignedOutcome S (pk sk) L T n hs c₀ p₀ d → Prop
+  | .euf _ _ _ _ h => (eufReduce sk T hS h).IsInversion
   | _ => False
 
-/-- **The walk's EUF-CMA forgery is a collision or a chain inversion**, under `pk sk` with the
-signed traces' indices pairwise distinct. -/
-theorem IsEuf.wots (hN : (T.map fun x => x.2.idx).Nodup)
-    {o : SignedOutcome S (pk sk) L T n hs c₀ p₀ d} (h : o.IsEuf) :
-    o.IsWotsCollision hN ∨ o.IsWotsInversion hN := by
+/-- **The walk's EUF-CMA forgery is a collision or a chain inversion**, under `pk sk` against the
+service's transcript. -/
+theorem IsEuf.wots (hS : Transcript sk T) {o : SignedOutcome S (pk sk) L T n hs c₀ p₀ d}
+    (h : o.IsEuf) : o.IsWotsCollision hS ∨ o.IsWotsInversion hS := by
   cases o with
-  | euf _ _ _ _ he => exact (eufReduce sk T hN he).cases
+  | euf _ _ _ _ he => exact (eufReduce sk T hS he).cases
   | _ => exact absurd h id
 
-/-- The union bound for two events. -/
-private theorem prob_or_le {α : Type} (B₁ B₂ : α → Log → Prop) (p : OProg α) (L : Log) :
-    prob (fun x L => B₁ x L ∨ B₂ x L) p L ≤ prob B₁ p L + prob B₂ p L := by
-  have h := prob_exists_le {true, false} (fun b => if b then B₁ else B₂) p L
-  rw [Finset.sum_pair (by decide)] at h
-  refine (prob_mono (fun x L hx => ?_) p L).trans h
-  rcases hx with hx | hx
-  · exact ⟨true, by simp, hx⟩
-  · exact ⟨false, by simp, hx⟩
+/-- The EUF-CMA term of the composition theorems, split by `IsEuf.wots`. -/
+theorem prob_euf_le {α : Type} {T' : α → Log → List (Trace × Sig)} {c : α → Digest}
+    {q : α → Signed} (A : OProg α) (P : α → Log → Prop)
+    (o : ∀ x L, P x L → SignedOutcome S (pk sk) L (T' x L) n hs (c x) (q x) d)
+    (hS : ∀ x L, Transcript sk (T' x L)) :
+    prob (fun x L => ∃ h : P x L, (o x L h).IsEuf) A [] ≤
+      prob (fun x L => ∃ h : P x L, (o x L h).IsWotsCollision (hS x L)) A [] +
+      prob (fun x L => ∃ h : P x L, (o x L h).IsWotsInversion (hS x L)) A [] :=
+  (prob_mono (fun x L ⟨h, he⟩ => (he.wots (hS x L)).imp (⟨h, ·⟩) (⟨h, ·⟩)) A []).trans
+    (prob_or_le _ _ A [])
+
+end SignedOutcome
+
+/-- **A forgery outcome on an honest signature at an index the transcript never used for its
+message is reduced to a chain inversion**: if no signed trace of `T` has the forged trace's
+digest and the forged signature is `sign sk j` on it, the reduced outcome is a chain inversion. -/
+theorem Outcome.isWotsInversion_reduce_forgery {L : Log} {T : List (Trace × Sig)}
+    (hT : Honest T L) (hS : Transcript sk T) {n : ℕ} {hs : List Digest} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} (f : Forgery (pk sk) L) (c : Digest) (bs : List Bool)
+    (m : InTree S L c₀ p₀ bs c f.p) (hno : ∀ x ∈ T, traceDigest x.1 ≠ traceDigest f.p.tr)
+    {j : ℕ} (hj : j < 2 ^ sigHeight) (hσ : f.p.σ = sign sk j (traceDigest f.p.tr)) :
+    ((Outcome.forgery f c bs m : Outcome S (pk sk) L n hs c₀ p₀ d).reduce hT).IsWotsInversion
+      hS := by
+  simp only [Outcome.reduce]
+  split
+  next h _ => exact wotsReduce_of_eq_sign sk _ _ hj _ _ h.1 hσ
+  next col _ =>
+    obtain ⟨⟨x, y, _, heq⟩, t, ht, hx, hy⟩ := col
+    simp only at hx hy
+    subst hx hy
+    exact absurd heq (hno t ht)
+
+/-- **The composition theorem over balanced trees, down to Keccak-256 and the chains**:
+`compose_prob_signed` under the reference signer's public key `pk sk`, against the service's
+transcripts `T p L`, with its EUF-CMA term split into the probabilities that the forgery reduces
+to a collision and to a chain inversion (`eufReduce`). -/
+theorem compose_prob_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest)
+    (hks : KS (Rel (S.acc (pk sk))) (S.V (pk sk)) S.E ε qV) (n : ℕ) (hn : n ≤ leafCap) (r : ℕ)
+    (hs : List Digest) (hr : hs.length = 2 ^ r) (A : OProg Signed) {Q : ℕ}
+    (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
+    (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L)
+    (hS : ∀ p L, Transcript sk (T p L)) :
+    prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+      (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).seeds? = none) A [] ≤
+      (2 ^ (r + 1) - 1 : ℕ) * ((Q + qV) * ε) +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+        (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsCollision) A [] +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+        (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsWotsCollision (hS p L)) A [] +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (treeRoot (hs.map fun h => leafStmt h n)) p = true,
+        (walkSigned L (T p L) (hT p L) n hn r hs hr p hacc).IsWotsInversion (hS p L)) A [] :=
+  (compose_prob_signed hks n hn r hs hr A hA hQ T hT).trans
+    ((add_le_add le_rfl (SignedOutcome.prob_euf_le A _ _ hS)).trans (add_assoc _ _ _).symm.le)
 
 /-- **The composition theorem over the stream, down to Keccak-256 and the chains**: under the
-reference signer's public key `pk sk`, with the signed traces' indices pairwise distinct (each
-index signs once), the probability that `acc` accepts the adversary's signed proof of the
-stream's digest and the stream walk returns no leaf seeds is at most
-`(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision, that its EUF-CMA
-forgery reduces to a collision, and that it reduces to a chain inversion (`eufReduce`). -/
+reference signer's public key `pk sk`, against the service's transcripts `T p L` (its signatures
+the reference signer's, one message per index, complete), the probability that `acc` accepts the
+adversary's signed proof of the stream's digest and the stream walk returns no leaf seeds is at
+most `(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision, that its
+EUF-CMA forgery reduces to a collision, and that it reduces to a chain inversion (`eufReduce`). -/
 theorem compose_prob_stream_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest)
     (hks : KS (Rel (S.acc (pk sk))) (S.V (pk sk)) S.E ε qV) (n : ℕ) (hn : n ≤ leafCap)
     (hs : List Digest) (A : OProg Signed) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q)
     (hQ : Q + qV ≤ logCap) (T : Signed → Log → List (Trace × Sig))
-    (hT : ∀ p L, Honest (T p L) L) (hN : ∀ p L, ((T p L).map fun x => x.2.idx).Nodup) :
+    (hT : ∀ p L, Honest (T p L) L) (hS : ∀ p L, Transcript sk (T p L)) :
     prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
       (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).seeds? = none) A [] ≤
       (2 * hs.length - 1 : ℕ) * ((Q + qV) * ε) +
       prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
         (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsCollision) A [] +
       prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
-        (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsWotsCollision (hN p L)) A [] +
+        (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsWotsCollision (hS p L)) A [] +
       prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n hs) p = true,
-        (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsWotsInversion (hN p L)) A [] := by
-  refine (compose_prob_stream_signed hks n hn hs A hA hQ T hT).trans
-    ((add_le_add le_rfl ?_).trans (add_assoc _ _ _).symm.le)
-  refine (prob_mono (fun p L ⟨hacc, h⟩ => ?_) A []).trans (prob_or_le _ _ A [])
-  exact (h.wots (hN p L)).imp (⟨hacc, ·⟩) (⟨hacc, ·⟩)
+        (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsWotsInversion (hS p L)) A [] :=
+  (compose_prob_stream_signed hks n hn hs A hA hQ T hT).trans
+    ((add_le_add le_rfl (SignedOutcome.prob_euf_le A _ _ hS)).trans (add_assoc _ _ _).symm.le)
 
-end RecursionFast.Compose.SignedOutcome
+end RecursionFast.Compose

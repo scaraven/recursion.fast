@@ -9,7 +9,7 @@ events and the service's signed traces) · Compose (the composition walks over t
 stream, their reduction to EUF-CMA and collisions, and their probability) · Signature (trace
 digest, WOTS digits, chain, leaf, node, root, `SigOk`) · WotsReduce (EUF-CMA reduced to a
 collision or a chain inversion: reached by a forger that knows the key, unsatisfiable by revealed
-values or with an index used twice).
+values or with two messages at one index; reached through the composition walks).
 Security holds the direct controls of the textbook `KS`; Security and Potential hold the
 potential controls as facts about the library's `KState`.
 -/

@@ -112,18 +112,18 @@
   `forgery_trivial`); the content of the forgery outcome is its membership of the extraction tree
   and, against the service's signed traces, its reduction.
 
-  What stays on paper: the probabilities of the collision and the EUF-CMA outcomes, bounded by
-  `Adv_coll + Adv_EUF-CMA`. The EUF-CMA adversary runs the whole evaluation (the prover, the
-  service with its `sign` requests sent to the signing oracle, the harness's checks), keeps the
-  signed traces as `T`, which the log accounts for by the service's specification, and outputs
-  `walkSigned`'s (or `walkStreamSigned`'s) forgery; the collision finder does the same with the
-  signing key drawn itself.
-  `Adv_EUF-CMA` (the scheme, each index used once) is itself no assumption: the EUF-CMA outcome
-  is reduced in the kernel to a Keccak-256 collision or a chain inversion
-  (`Library/WotsReduce.lean`, `eufReduce`, with the service's signatures the reference signer's
-  as its specification says; `compose_prob_stream_wots` splits the stream's EUF-CMA term so),
-  leaving on paper that the chain starts are pseudorandom and the inversion's
-  probability (one-wayness of the chain step, AGENTS.md §11). Also on paper: lazy sampling
+  The EUF-CMA outcome is not left to an EUF-CMA assumption: it is reduced in the kernel to a
+  Keccak-256 collision or a chain inversion (`Library/WotsReduce.lean`, `eufReduce`, given that
+  `T` is the service's complete transcript, `Transcript`: the reference signer's signatures, one
+  message per index), and `compose_prob_wots` and `compose_prob_stream_wots` replace the EUF-CMA
+  term by those two. What stays on paper: the
+  probabilities of the collision and the chain-inversion outcomes, bounded by
+  `Adv_coll + Adv_inv` (`Adv_inv`: tweakable multi-target one-wayness of the chain step with
+  pseudorandom chain starts, AGENTS.md §11). The adversaries run the whole evaluation (the prover,
+  the service with its `sign` requests answered by the reference signer, the harness's checks),
+  keep the signed traces as `T`, which the log accounts for by the service's specification, and
+  output the walk's collision or the reduction's collision or chain value; the collision finder
+  draws the signing key itself. Also on paper: lazy sampling
   against a random function, randomised adversaries, and the PRF hybrid from the random oracle to
   the keyed deployment (AGENTS.md §12).
 -/
@@ -684,24 +684,17 @@ theorem walkSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L 
     ¬ (walkSigned L T hT n hn r hs hr p hacc).Escaped := fun h =>
   walk_not_escaped k hL hlen hμ n hn r hs hr p hacc ((Outcome.escaped_reduce hT _).mp h)
 
-/-- The union bound for two events. -/
-private theorem prob_or_le {α : Type} (B₁ B₂ : α → Log → Prop) (p : OProg α) (L : Log) :
-    prob (fun x L => B₁ x L ∨ B₂ x L) p L ≤ prob B₁ p L + prob B₂ p L := by
-  have h := prob_exists_le {true, false} (fun b => if b then B₁ else B₂) p L
-  rw [Finset.sum_pair (by decide)] at h
-  refine (prob_mono (fun x L hx => ?_) p L).trans h
-  rcases hx with hx | hx
-  · exact ⟨true, by simp, hx⟩
-  · exact ⟨false, by simp, hx⟩
-
 /-- **The composition theorem with probabilities, against the service's signed traces**: for an
 adversary `A` asking at most `Q` queries and outputting the root signed proof, with
 `Q + qV ≤ logCap`, and signed traces `T p L` of each run (output `p`, final log `L`) that the
 log accounts for, the probability that `acc` accepts the root and the walk against `T p L`
 returns no leaf seeds is at most `(2^(r+1) - 1) · (Q + qV) · ε` plus the probabilities that it
 returns a collision and that it returns an EUF-CMA forgery against the signing record of `T p L`.
-(`hT` costs nothing: `accounted` restricts any signed traces to those the log accounts for, and
-changes nothing on a run where they all are, `accounted_of_honest`.) -/
+(`hT` costs nothing here: `accounted` restricts any signed traces to those the log accounts for,
+and changes nothing on a run where they all are, `accounted_of_honest`. It is not free for the
+chain-inversion term of `compose_prob_wots`: there `T` must be the service's complete transcript,
+since an issued signature dropped from `T` can be replayed and is then reported as an
+inversion.) -/
 theorem compose_prob_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
     (hn : n ≤ leafCap) (r : ℕ) (hs : List Digest) (hr : hs.length = 2 ^ r) (A : OProg Signed)
     {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)

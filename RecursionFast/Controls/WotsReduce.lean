@@ -10,7 +10,17 @@ is evaluated). The forger that knows `sk` signs a fresh message `m` with the ref
   +kernel`): chain `131`, the first whose digit of `0xFF…FF` (`3` on the 128 message chains, `0`
   on the checksum chains) is below the digit of `0x00…00` (`0` on the message chains,
   `0, 0, 0, 2, 1` on the checksum chains), so the forger's value there is the honest value at
-  position `0`, below the revealed position `2`.
+  position `0`, below the revealed position `2`;
+* a replayed record (`[(0, 0x00…00), (0, 0x00…00)]`, the service re-issuing one signature) has one
+  message per index (`oneMsg_replay`), and the forgery reduces to an inversion against it as well
+  (`reduce_replay`).
+Positive, through the composition walks (with `queryLeaf` of `Controls/Compose.lean`, the leaf
+proof of the one-entry trace `(qMax, a)` signed with `sign sk 0` on its digest, and a service
+that signed nothing): the stream walk's and the tree walk's EUF-CMA forgery reduces to a chain
+inversion (`walkStreamSigned_queryLeaf_inversion`, `walkSigned_queryLeaf_inversion`), so the
+adversary that holds the key, asks nothing and outputs that proof makes the chain-inversion term
+of `compose_prob_stream_wots` (and of `compose_prob_wots`) certain (`queryLeaf_inversion_prob`,
+`queryLeaf_inversion_prob_tree`).
 
 Negative (the inversion outcome is not satisfiable by revealed values).
 * `not_inversion_of_revealed`: against a record holding `(σ.idx, m₀)`, a forgery on a message
@@ -22,12 +32,14 @@ Negative (the inversion outcome is not satisfiable by revealed values).
   forgery on a fresh message fails `value` is no kernel fact: it needs the hash.
 * `not_inversion_twice`: one index used for two messages (`0x00…00` and `0xFF…FF`) reveals every
   position of every chain of the key (one of their digits is `0` on every chain), so no forgery
-  with that index has an inversion outcome: the reduction needs one index per message.
+  with that index has an inversion outcome: the reduction needs one message per index, which that
+  record violates (`not_oneMsg_twice`).
 
 Negative (what the type does not say). `wotsBreak_nonempty`: `WotsBreak sk R m σ` is inhabited for
 every forgery, by a pigeonhole collision (`Controls/Compose.lean`, `collision_nonempty`), so the
-collision branch's content is the compiled `wotsReduce`; `collision_ne`, `no_self_collision`: a
-`Collision` carries two different preimages.
+collision branch's content is the compiled `wotsReduce`. `no_self_collision`: the `collision`
+branch cannot be filled with a string and itself (the field `Collision.ne`, stated as the
+impossibility it gives).
 -/
 import RecursionFast.Library.WotsReduce
 import RecursionFast.Controls.Signature
@@ -49,23 +61,44 @@ def mF : Digest := Vector.replicate 32 0xFF
 /-- At an unused index (the record is empty), the honest signature of a fresh message reduces to
 an inversion. -/
 theorem reduce_unused (m : Digest) :
-    (wotsReduce sk [] List.nodup_nil m (sign sk 0 m) (sigOk_sign sk 0 (by decide) m)
-      (by simp)).IsInversion :=
+    (wotsReduce sk [] (fun _ ha => absurd ha List.not_mem_nil) m (sign sk 0 m)
+      (sigOk_sign sk 0 (by decide) m) (fun _ hx => absurd hx List.not_mem_nil)).IsInversion :=
   wotsReduce_sign sk [] _ (by decide) m _
 
 theorem mF_ne_m0 : mF ≠ m0 := by decide
 
+/-- A record of one entry has one message per index. -/
+theorem oneMsg_single (x : ℕ × Digest) : OneMsg [x] := fun _ ha _ hb _ => by
+  rw [List.mem_singleton.mp ha, List.mem_singleton.mp hb]
+
+/-- **A replay keeps one message per index**: the service re-issuing one signature repeats the
+index with the same message. -/
+theorem oneMsg_replay : OneMsg [(0, m0), (0, m0)] := fun a ha b hb _ => by
+  rw [List.mem_pair.mp ha |>.elim id id, List.mem_pair.mp hb |>.elim id id]
+
+/-- One index with two messages is not one message per index. -/
+theorem not_oneMsg_twice : ¬ OneMsg [(0, m0), (0, mF)] := fun h =>
+  mF_ne_m0 (h (0, mF) (List.mem_cons_of_mem _ (List.mem_singleton_self _)) (0, m0)
+    List.mem_cons_self rfl)
+
 /-- At an index the record used for `0x00…00`, the honest signature of `0xFF…FF` with it reduces
 to an inversion. -/
 theorem reduce_used :
-    (wotsReduce sk [(0, m0)] (by simp) mF (sign sk 0 mF) (sigOk_sign sk 0 (by decide) mF)
-      (by simpa using mF_ne_m0.symm)).IsInversion :=
+    (wotsReduce sk [(0, m0)] (oneMsg_single _) mF (sign sk 0 mF)
+      (sigOk_sign sk 0 (by decide) mF) (by simpa using mF_ne_m0.symm)).IsInversion :=
+  wotsReduce_sign sk _ _ (by decide) mF _
+
+/-- Against the replayed record, the honest signature of `0xFF…FF` with key `0` reduces to an
+inversion too. -/
+theorem reduce_replay :
+    (wotsReduce sk [(0, m0), (0, m0)] oneMsg_replay mF (sign sk 0 mF)
+      (sigOk_sign sk 0 (by decide) mF) (by simpa using mF_ne_m0.symm)).IsInversion :=
   wotsReduce_sign sk _ _ (by decide) mF _
 
 /-- The chain compared at the used index: chain `131`, the first whose digit of the forged
 `0xFF…FF` is below the signed `0x00…00`'s (`0 < 2`). -/
 theorem pick_used :
-    (pick [(0, m0)] (by simp) 0 mF (by simpa using mF_ne_m0.symm)).val = 131 := by
+    (pick [(0, m0)] (oneMsg_single _) 0 mF (by simpa using mF_ne_m0.symm)).val = 131 := by
   decide +kernel
 
 /-! ## Negative: revealed values are no inversion -/
@@ -92,10 +125,14 @@ theorem digits_m0_mF (i : ℕ) : (wotsDigits m0).getD i 0 = 0 ∨ (wotsDigits mF
   · have : ∀ i < 133, (List.replicate 128 0 ++ [0, 0, 0, 2, 1]).getD i 0 = 0 ∨
         (List.replicate 128 3 ++ [0, 0, 0, 0, 0]).getD i 0 = 0 := by decide
     exact this i hi
-  · left; rw [List.getD_eq_default]; simp; omega
+  · left
+    rw [List.getD_eq_default]
+    simp only [List.length_append, List.length_replicate, List.length_cons, List.length_nil]
+    omega
 
 /-- **One index, two messages: no inversion.** If key `σ.idx` signed both `0x00…00` and
-`0xFF…FF`, every position of every chain is revealed, and every outcome is a collision. -/
+`0xFF…FF` (a record `OneMsg` excludes, `not_oneMsg_twice`), every position of every chain is
+revealed, and every outcome is a collision. -/
 theorem not_inversion_twice {m : Digest} {σ : Sig}
     (b : WotsBreak sk [(σ.idx, m0), (σ.idx, mF)] m σ) : b.IsCollision := by
   cases b with
@@ -113,11 +150,54 @@ theorem wotsBreak_nonempty (R : List (ℕ × Digest)) (m : Digest) (σ : Sig) :
     Nonempty (WotsBreak sk R m σ) :=
   Controls.Compose.collision_nonempty.map .collision
 
-/-- A collision's two preimages differ. -/
-theorem collision_ne (c : Collision) : c.x ≠ c.y := c.ne
-
-/-- No byte string collides with itself. -/
+/-- **No byte string collides with itself**: the `collision` branch needs two different
+preimages. -/
 theorem no_self_collision (x : List UInt8) : ¬ ∃ c : Collision, c.x = x ∧ c.y = x :=
   fun ⟨c, hx, hy⟩ => c.ne (hx.trans hy.symm)
+
+/-! ## Positive: the chain-inversion term of the composition theorems is reached -/
+
+open RecursionFast.Compose
+open RecursionFast.Controls.Compose (queryLeaf acc_queryLeaf)
+open RecursionFast.Controls.Relation (oneQuery qMax)
+
+/-- The empty transcript (a service that signed nothing). -/
+theorem transcript_nil : Transcript sk [] := ⟨nofun, nofun⟩
+
+/-- **Through the stream walk**: on the one-leaf stream, with the empty log and a service that
+signed nothing, the walk's EUF-CMA forgery (`queryLeaf`, signed with key `0`) reduces to a chain
+inversion. -/
+theorem walkStreamSigned_queryLeaf_inversion (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    (walkStreamSigned [] [] ⟨nofun, nofun⟩ n hn [leafValue s n] (queryLeaf sk s a n)
+      (acc_queryLeaf sk s a n)).IsWotsInversion (transcript_nil sk) :=
+  have hacc := acc_queryLeaf sk s a n
+  Outcome.isWotsInversion_reduce_forgery _ _
+    ⟨queryLeaf sk s a n, (acc_parts hacc).2.1, (acc_parts hacc).2.2.1,
+      fun h => List.not_mem_nil (h _ (List.mem_singleton_self _))⟩ _ _ _ nofun (by decide) rfl
+
+/-- **The chain-inversion term of `compose_prob_stream_wots` is reached**: against a service that
+signed nothing, the adversary that holds the key, asks nothing and outputs `queryLeaf` makes it
+certain. -/
+theorem queryLeaf_inversion_prob (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    prob (fun p L => ∃ hacc : (oneQuery qMax).acc (pk sk) (streamStmt n [leafValue s n]) p = true,
+      (walkStreamSigned L [] ⟨nofun, nofun⟩ n hn [leafValue s n] p hacc).IsWotsInversion
+        (transcript_nil sk)) (.ret (queryLeaf sk s a n)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, walkStreamSigned_queryLeaf_inversion sk s a hn⟩)
+
+/-- **Through the tree walk**: the same on the one-leaf tree. -/
+theorem walkSigned_queryLeaf_inversion (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    (walkSigned [] [] ⟨nofun, nofun⟩ n hn 0 [leafValue s n] rfl (queryLeaf sk s a n)
+      (acc_queryLeaf sk s a n)).IsWotsInversion (transcript_nil sk) := by
+  unfold walkSigned walk walkFrom
+  rw [extract_forgery (L := []) _ fun h => List.not_mem_nil (h _ (List.mem_singleton_self _))]
+  exact Outcome.isWotsInversion_reduce_forgery _ _ _ _ _ _ nofun (by decide) rfl
+
+/-- **The chain-inversion term of `compose_prob_wots` is reached**, likewise. -/
+theorem queryLeaf_inversion_prob_tree (s a : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    prob (fun p L => ∃ hacc : (oneQuery qMax).acc (pk sk)
+        (treeRoot ([leafValue s n].map fun h => leafStmt h n)) p = true,
+      (walkSigned L [] ⟨nofun, nofun⟩ n hn 0 [leafValue s n] rfl p hacc).IsWotsInversion
+        (transcript_nil sk)) (.ret (queryLeaf sk s a n)) [] = 1 :=
+  (prob_ret _ _ _).trans (ind_of ⟨_, walkSigned_queryLeaf_inversion sk s a hn⟩)
 
 end RecursionFast.Controls.WotsReduce

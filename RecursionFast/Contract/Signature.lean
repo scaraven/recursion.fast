@@ -33,17 +33,17 @@ once and refuses after `2^16` signatures (`service/PROTOCOL.md` §3).
 
 **What is not here.** Key generation, the secret chain starts and signing are the service's (a
 Lean reference signer and the theorem that its signatures pass `SigOk` are in
-`Library/Signer.lean`). Unforgeability (EUF-CMA of this scheme, each index used once) is not
-in the contract. It is reduced in the kernel (`Library/WotsReduce.lean`, `wotsReduce`) to
-a Keccak-256 collision or a chain inversion, a forged chain value equal to the honest one at a
-position below every position the reference signer revealed of that chain (and below its end),
-each index used for one message. On paper remain that the chain starts (`chainStart`) are
-pseudorandom, and the probability that an adversary outputs an unrevealed chain value
-(one-wayness of the tweaked chain step). The
-composition walk (`Library/Compose.lean`, `walkStreamSigned`, `walkSigned`) returns an explicit
-EUF-CMA forgery against the service's signed traces, or a collision, when it is what fails.
-Security against signature-only forgery (Chiesa–Tromer, ICS 2010) is not needed: the walk matches
-signed traces by message.
+`Library/Signer.lean`). Unforgeability (EUF-CMA of this scheme, one message per index) is not
+in the contract. It is reduced in the kernel (`Library/WotsReduce.lean`, `wotsReduce`) to a
+Keccak-256 collision or a chain inversion: a forged chain value equal to the honest one at a
+position below every position the reference signer revealed of that chain. On paper remain that
+the chain starts (`chainStart`) are pseudorandom, and the probability that an adversary outputs
+the honest chain value at such a position (tweakable multi-target one-wayness of the chain step
+with pseudorandom starts; a forger that knows the starts reaches it). The composition walk
+(`Library/Compose.lean`, `walkStreamSigned`, `walkSigned`) returns an explicit EUF-CMA forgery
+against the service's signed traces, or a collision, when it is what fails. Security against
+signature-only forgery (Chiesa–Tromer, ICS 2010) is not needed: the walk matches signed traces by
+message.
 -/
 import RecursionFast.Contract.Relation
 
