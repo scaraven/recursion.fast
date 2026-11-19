@@ -45,11 +45,12 @@ The file ends exactly after `path_15`. Its size is
   nothing in this format changes.
 - **Size caps of the runner** (`[caps]` of `harness/season.toml`): a file above `file_cap` (64 MiB)
   is not read; every output's `|π|` is at most `pi_cap` (1 MiB; the file size of an output that is
-  not one signed proof), and the final output's at most `final_pi_cap` (512 KiB), whose `|π|` is
-  also priced by the score (`2^(|π_M| / 1 MiB)`). These are the runner's bounds, not `acc`'s; an
-  entry's own verifier bounds the children it accepts. The trace is bounded by `qV ≤ 2^16`
-  queries of at most `2^20` bytes each. The extractor's efficiency is claimed for proofs of up to
-  `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
+  not one signed proof), and the final output's at most `final_pi_cap` (512 KiB). The score
+  prices `|π|` per track: the track `final` the final output's (`2^(|π_M| / 512 KiB)`), the track
+  `every` the largest output's (`2^(max_i |π_i| / 512 KiB)`). These are the runner's bounds, not
+  `acc`'s; an entry's own verifier bounds the children it accepts. The trace is bounded by
+  `qV ≤ 2^16` queries of at most `2^20` bytes each. The extractor's efficiency is claimed for
+  proofs of up to `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
 
 ## The file and the extractor's word format
 
@@ -71,7 +72,9 @@ against is always the runner's own digest.
 
 ## A worked size
 
-The toy prover's signed leaf proof (`π` the 48-byte witness-sending encoding of a leaf, no query) is
-`8 + 48 + 8 + 0 + 8 + 4768 = 4840` bytes, its first stream step's output; every further step (a node of
-the previous output and the step's leaf, both carried whole) adds 9,704 (measured on the smoke:
-4,840, 14,544, 24,248, 33,952).
+The toy prover's signed leaf proof at the smoke's `n = 6` blocks (`π` the witness-sending encoding
+of a leaf, `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_5`, 208 bytes; no query) is
+`8 + 208 + 8 + 0 + 8 + 4768 = 5000` bytes, its first stream step's output; every further step (a
+node, `u64 1 ‖ c1 ‖ c2` and the previous output and the step's signed leaf, both carried whole)
+adds `72 + 5000 + 4792 = 9864` bytes (computed from the layouts: 5,000, 14,864, 24,728, 34,592).
+At the season's `n = 2^18` the leaf's `π` alone is `16 + 2^23` bytes, above `pi_cap`.

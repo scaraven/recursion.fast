@@ -15,16 +15,18 @@ what is checked, and the disagreement is a bug to report.
 
 The fastest **recursive prover for batches of Keccak-256 hashes** whose soundness is proved in
 Lean. An entry is a hash-based non-interactive argument for one relation over 32-byte digests: a
-leaf digest commits to the XOR of `n` independent Keccak-256 hashes of a secret seed and their
-indices, a node digest to two accepted children. The benchmark is a stream of 8 steps; each step
-proves one fresh leaf of `2^22` hashes and folds it into the running proof. One score ranks it, the
-prover's total wall time with a factor for the final proof's size (§7), in two tracks with their own records: `every`, where
-every proof of the stream must be accepted, and `final`, where only the last one must. The
-verifier is capped, not scored. Soundness is not measured: it is a kernel-checked theorem,
-knowledge soundness in the random-oracle model, and the oracle is deployed as a secret-keyed
-service that signs the answers each proof used (the signed random oracle, §5). The service is not
-on the clock: the stream runs once against it, and the timed passes, which get the oracle's key,
-must reproduce that run's outputs byte for byte (§6).
+leaf digest commits to a Keccak-256 Merkle root over `n` runner-supplied 32-byte blocks, a node
+digest to two accepted children. The benchmark is a stream of 16 steps, each one fresh leaf: each
+step proves a Merkle root over `2^18` blocks (about `2^19` permutations) and folds it into the
+running proof. It is ranked in two tracks with their own records: `every`, where every proof of
+the stream must be accepted, and `final`, where only the last one must. The score is the median of
+three timed passes' total wall times, with a factor for the final proof's size in `final` and for
+the largest proof's in `every` (§7). The verifier is capped, not scored. Soundness is not
+measured: it is a kernel-checked theorem, knowledge soundness in the random-oracle model, and the
+oracle is deployed as a secret-keyed service that signs the answers each proof used (the signed
+random oracle, §5). The service is not on the clock: the stream runs once against it, and the
+three timed passes, which get the oracle's key, must reproduce that run's outputs byte for byte
+(§6).
 
 ## 2. What an entry is
 
@@ -71,9 +73,9 @@ the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
 `prover/prover.s`. It passes the certificate and runs through the benchmark at the smoke's shape
-([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed: its `V`
-re-computes every leaf of the stream so far (`2^25` hashes for the final proof, tens of seconds),
-far above the verifier cap of 128 ms (§6). It shows the format, not a design.
+([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed at step 1,
+before any `V` is timed: its first output is a leaf proof that sends the leaf's data whole,
+`16 + 2^23` bytes, above `pi_cap` = 1 MiB (§6). It shows the format, not a design.
 
 ## 3. The relation and acceptance
 
@@ -115,7 +117,7 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   ([`Oracle.lean#L48-L55`](RecursionFast/Contract/Oracle.lean#L48-L55)).
 - `acc` is the node clause of the relation, the harness's check of every proof, and anyone's check
   later with the published `vk`. There is no proof-size cap in `acc`: the runner caps `|π|` and the
-  verifier's time (§6), and the score prices the final proof's size (§7).
+  verifier's time (§6), and the score prices the proofs' size (§7).
 
 ## 4. The certificate
 
@@ -201,9 +203,10 @@ key.
   answers of a batch, forms the trace and signs its digest with the next unused key; `VK` returns
   `vk` (also in `vk.hex`). The signing seed never leaves the service and is destroyed at exit; a
   crash aborts the run. After the service run (§6) the runner switches the service to **replay
-  mode**: it hands the runner `k` (never the seed), and from then on a `SIGN` succeeds only if its
-  trace digest is the one signed at the same index in the service run, and then returns that same
-  signature (otherwise status 4, `MISMATCH`). Replay mode never signs anything new.
+  mode**: it hands the runner `k` (never the signing seed), and from then on a `SIGN` succeeds
+  only if its trace digest is the one signed at the same index in the service run, and then
+  returns that same signature (otherwise status 4, `MISMATCH`). Replay mode never signs anything
+  new.
 - **The prover may:** use any algorithm; precompute in an untimed `setup` (no instance, no service);
   use every CPU and up to 32 connections; batch up to `2^18` queries per `QUERY`; make any number of
   `SIGN`s within `2^16` per stream; dispatch on `cpuid`.
@@ -216,9 +219,11 @@ key.
   keep every query at most `2^20` bytes, a `SIGN` at most `2^16` items, a request body at most
   16 MiB; carry all state between steps inside `π` (each step is a fresh process; `/setup` is
   read-only after setup).
-- **The prover cannot:** reach the network, another process, the key during the service run, the
-  signing seed ever, or any file outside its
-  sandbox ([`harness/PROVER.md`](harness/PROVER.md) §2); work after reporting `done` (the clock
+- **The prover cannot:** reach the network (only Unix sockets can be opened), another process, the
+  key during the service run, the signing seed ever, the leaf data before `go` or the seeds it is
+  drawn from, any file outside its sandbox, or the machine's counters (the sandbox's `/proc` shows
+  its own processes and no machine-wide file, [`harness/PROVER.md`](harness/PROVER.md) §2); work
+  after reporting `done` (the clock
   stops only when its whole process tree is dead); choose its statement (the runner computes every
   statement and checks each output against its own).
 - The native prover is never proved. Only its signed proofs are checked, by `acc`. It need not
@@ -226,73 +231,93 @@ key.
 
 ## 6. The benchmark
 
-*Intuition.* One stream of 8 steps. Each step receives a fresh seed and must prove the XOR of its
-`2^22` hashes, folded into the running proof. The stream runs first against the oracle service,
-which fixes and checks every output. Then the oracle's key is handed to the prover and the stream is
-run twice more on the clock; each of those outputs must be the service run's, byte for byte. So the
-timed passes measure the prover without the service, and every accepted proof comes from a run in
-which the prover never had the key.
+*Intuition.* One stream of 16 steps. Each step receives 8 MiB of fresh data from the runner and
+must prove its Merkle root, folded into the running proof. The stream runs first against the oracle
+service, which fixes and checks every output. Then the oracle's key is handed to the prover and the
+stream is run three more times on the clock; each of those outputs must be the service run's, byte
+for byte. So the timed passes measure the prover without the service, and every accepted proof
+comes from a run in which the prover never had the key.
 
-- **Statements.** Step `i` gets a seed `s_i` and `n = 2^22`, with the leaf
-  `L_i = leafStmt (leafValue s_i n) n`, and
+- **Statements.** Step `i` gets its data `xs_i`, `n = 2^18` blocks of 32 bytes, with the leaf
+  `L_i = leafStmt (dataRoot xs_i) n`, and
   ```
-  c_1 = L_1,      c_i = nodeStmt c_(i-1) L_i      (i = 2 … M, M = 8)
+  c_1 = L_1,      c_i = nodeStmt c_(i-1) L_i      (i = 2 … M, M = 16)
   ```
-  Step 1, `prover first`: `leaf.json` (`{"n": N, "seed": "HEX"}`), output a signed proof of `c_1`.
-  Step `i ≥ 2`, `prover step`: also `prev.stmt` and `prev.bin` (the previous statement and the
-  service run's output for it), output for `c_i`. `2^22` hashes (one permutation each) in every
-  step, `2^25` in the stream, all independent. The interface and the files are in
+  Step 1, `prover first`: `leaf.json` (`{"n": N}`) and `leaf.bin` (the data, exactly `32 · N`
+  bytes, `x_0 ‖ … ‖ x_(N−1)`), output a signed proof of `c_1`. Step `i ≥ 2`, `prover step`: also
+  `prev.stmt` and `prev.bin` (the previous statement and the service run's output for it), output
+  for `c_i`. Every step's leaf is `2^18` block hashes and `2^18 − 1` tree nodes (one permutation
+  each, about `2^19`), about `2^23` in the stream. The interface and the files are in
   [`harness/PROVER.md`](harness/PROVER.md) §3 and [`harness/FORMAT.md`](harness/FORMAT.md).
-- **Seeds and keys.** The `M` seeds (32 bytes each) and the service's keys are fresh secret draws
-  per evaluation from the OS CSPRNG; a step learns its seed only when its inputs arrive. After the
-  run the result publishes the seeds, the leaf digests, the statements and `vk`. The signing seed
-  is never written or published.
+- **Data, seeds and keys.** Per step the runner draws a fresh secret 32-byte seed `s_i` from the
+  OS CSPRNG and expands it to the step's data,
+  `xs_i = SHAKE-256("recursion.fast/leaf-data/v1" ‖ s_i)` truncated to `32 · n` bytes; the
+  service's keys are fresh secret draws per evaluation too. A prover never sees a seed, and a step
+  sees its data only when its inputs arrive. The runner writes every step's data before the first
+  request to a directory of its own that no sandbox binds (not the store the badge binds), and
+  computes every statement from it. After the run the result publishes the seeds, the expansion
+  (`stream.leaf_data`: the XOF and the domain string), the leaf digests, the statements and `vk`,
+  so anyone can regenerate the data and recompute every statement. The signing seed is never
+  written or published.
 - **1. The service run.** Steps 1 … M, a fresh process each, against the service, with no key in
   the sandbox. Its times are recorded, not scored. Then, with no entry process alive, the runner
   checks outputs with the compiled `acc` against its own statements: the final output (step `M`)
   always, every intermediate output for the track `every`. **Caps:** every output's size is at
   most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof that `acc` accepts, else its file size); the final `|π|`
-  is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, the file's read and parse
-  included, pinned to one core) is at most `v_cap` = 128 ms; a check above it is timed twice more
-  and the least of the three counts. Every badge run whose times count is a fresh process that
-  first checks the organiser's warm-up input (a fixed signed file under a fresh random key and
-  statement, never an output; an entry can tell it apart, and that gains nothing) and then
-  distinct outputs, and each re-timing is another fresh process: no judged check runs in a
-  process that has already seen its input, so a verifier that remembers its work across checks
-  pays it inside the judged window. The process's start-up, to the warm-up's answer, is at most
-  `badge_start_s` = 2 s (the entry's top-level constants are evaluated then, untimed; measured
-  about 0.08 s); past it the check fails (a REJECT for the final output, the track `every`'s for
-  an intermediate one). Each check is timed twice
-  at once: by the runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per
-  MiB of file beyond the check itself), and by the badge's own clock; the larger counts
-  ([`harness/rfh/checks.py`](harness/rfh/checks.py)).
+  is at most `final_pi_cap` = 512 KiB; a checked output's `V` is at most `v_cap` = 64 ms.
+- **The verifier check.** Every checked proof is judged in three separate badge runs, each a fresh
+  process, and `V_i` is the median of its three times, one from each run (published as
+  `V_runs_ns`, in run order, and `V_ns`). One time is one check, the file's read and parse
+  included, pinned to one core. All three runs must accept: a proof accepted in one run and
+  rejected in another is rejected (`recheck_rejected`). The intermediate outputs are checked in
+  batches of `check_every` = 8 between steps, each batch in three runs that each check every
+  proof of the batch once; the final output is judged the same way, in three runs of its own.
+  Every judged run first checks the organiser's warm-up input (a fixed signed file under a fresh
+  random key and statement, never an output; an entry can tell it apart, and that gains nothing)
+  and then distinct outputs: no proof is checked twice in one process, so a verifier that
+  remembers its work across checks pays it inside every judged window. The process's start-up, to
+  the warm-up's answer, is at most `badge_start_s` = 2 s (the entry's top-level constants are
+  evaluated then, untimed; measured about 0.08 s); past it the check fails (a REJECT for the final
+  output, the track `every`'s for an intermediate one). Each check is timed twice at once: by the
+  runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per MiB of file beyond
+  the check itself), and by the badge's own clock; the larger counts
+  ([`harness/rfh/checks.py`](harness/rfh/checks.py)). A judged run of `c` intermediate proofs is
+  bounded by `60 s + 2 (c + 1) · v_cap`; the final output's runs by the stream's cap alone.
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
-  (a leaf: only the flipped statement) and 2 also.
+  (a leaf: only the flipped statement) and 2 also. Each canary is checked once, in one badge run:
+  canaries test rejection, not time.
 - **The tracks.** An entry is REJECTed if the final output is rejected, breaks a cap or a final
   canary is accepted, or any output breaks `pi_cap`. It is scored in the track `final` if not. It is
   also scored in `every` if every intermediate output is accepted, within both caps, and its
   canaries are rejected; otherwise the result says why (`tracks_reason`), and that is not a failure.
 - **2. The timed passes.** The runner switches the service to replay mode (§5) and runs the
-  stream `timed_runs` = 2 more times. Each step is a fresh process with the same seed, the runner's
-  statement, the service run's previous output as `prev.bin`, and the file `oracle.key` (`k` as 64
-  hex characters), all renamed into `/work` when the clock starts; the oracle socket
-  `/run/rf/oracle.sock` also appears only then, in both runs, so nothing that depends on `k`, the
-  seed, the statement or the service can run in the untimed start-up (connect after `go`). The
-  start-up (up to `ready_s` = 10 s, on every core) does see `vk.hex`, already in `/work`, and may do
-  any work that depends on nothing else (pre-fault memory, build tables). Every output must be
-  byte-identical to the service run's output of that step; a difference is the entry's REJECT, with
-  the step, the pass and the first differing byte. Nothing of the service run's requests survives
-  into the timed passes (each request's directory is removed; `/setup` is read-only, and before
-  every request the runner reads every file of the setup and the prover binary, so their page-cache
-  state carries nothing). Every `SIGN` of a timed pass must be the service run's at the same index:
-  any `MISMATCH`, or a pass that re-issues fewer or more signatures than the service run made, is
-  the entry's REJECT, so a refused `SIGN` cannot be used as a probe.
-- **What is timed.** `P_i`: from just before the inputs are renamed into `/work` (a constant-time
-  rename) to the death of the last process of the sandbox, the least of step `i`'s two timed
-  passes. Start-up to the `ready` line is untimed (capped by `ready_s`).
-- **Calibration.** Before the service run, between the runs, and after the timed passes (if 30 s
-  of `stream_s` remain), always
+  stream `timed_runs` = 3 more times. Each step is a fresh process with the same leaf (the same
+  `leaf.json` and `leaf.bin` bytes), the runner's statement, the service run's previous output as
+  `prev.bin`, and the file `oracle.key` (`k` as 64 hex characters), all renamed into `/work` when
+  the clock starts; the oracle socket `/run/rf/oracle.sock` also appears only then, in every run, so
+  nothing that depends on `k`, the data, the statement or the service can run in the untimed
+  start-up (connect after `go`). The start-up (up to `ready_s` = 10 s, on every core) does see
+  `vk.hex`, already in `/work`, and may do any work that depends on nothing else (pre-fault
+  memory, build tables). Every output must be byte-identical to the service run's output of that
+  step; a difference in any pass is the entry's REJECT, with the step, the pass and the first
+  differing byte. Nothing of the service run's requests survives into the timed passes: each
+  request's `/work` is a private tmpfs of its own, gone with the request, so no file, inode number
+  or free-space count of it reaches a later request; `/setup` is read-only, and before every
+  request the runner reads every file of the setup and the prover binary, so their page-cache
+  state carries nothing; a request's directories outside the sandbox have random names, so
+  nothing a prover can read (`/proc/self/mountinfo` included) names its pass or its step
+  <!-- c4: confirm -->. Every `SIGN` of a timed pass must be the service run's at the same index:
+  any `MISMATCH`, or a pass that re-issues fewer or more signatures than the service run made
+  (the service's `replays` must be `3 · signatures`), is the entry's REJECT, so a refused `SIGN`
+  cannot be used as a probe. A pass that does not finish (a request's failure, `stream_s`
+  reached) is the entry's REJECT: there is no median over the passes that finished.
+- **What is timed.** `P_{i,t}`: in timed pass `t`, from just before step `i`'s inputs are renamed
+  into `/work` (a constant-time rename) to the death of the last process of the sandbox.
+  Start-up to the `ready` line is untimed (capped by `ready_s`). The score takes the pass whose
+  total is the median of the three (§7).
+- **Calibration.** Before the service run's steps 1 and 9 (every `every` = 8 steps), before each
+  timed pass, and after the timed passes (if 30 s of `stream_s` remain), always
   with no entry process alive: three runs of the organiser's prover-shaped workload `calib`
   ([`harness/tools/calib.c`](harness/tools/calib.c), portable C: interleaved Keccak-256 chains and a
   memory sweep on every CPU). `c_P = median(calib) / ref_ns` is a health check of the machine, not
@@ -308,7 +333,9 @@ which the prover never had the key.
   unhashed, the host kernel version. A benchmark whose fingerprint is missing, unreadable or not
   the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
   it (§12).
-- **Throughput.** One evaluation at a time. With the core commit's caches in place, one evaluation
+- **Throughput.** One evaluation at a time. The benchmark's capped entry steps sum to 2,420 s
+  (`build_s` 120 + `setup_s` 240 + the setup tree's hash 60 + `stream_s` 2,000), inside the
+  benchmark job's 64 minutes for its parts. With the core commit's caches in place, one evaluation
   holds the benchmark slot for at most about 2 hours (the certificate job, at most 50 minutes, and
   the benchmark job, at most 70, §9, plus a few minutes of the setup jobs' cache lookups; 130
   minutes with a second kernel); when the caches must first be built, as after a pin move, up to
@@ -318,37 +345,57 @@ which the prover never had the key.
 
 ## 7. The score
 
-One score, the same in both tracks, in seconds; lower is better.
+One score per track, in seconds; lower is better. Each track prices its own proofs' size.
 
 ```
-S   = P_total · 2^( |π_M| / 1 MiB ),      P_total = Σ_i P_i
+T_t      = Σ_{i=1..M} P_{i,t}                              the total of timed pass t (t = 1, 2, 3)
+t*       = the pass whose total is the median of T_1, T_2, T_3 (ties: the lowest such index)
+P_total  = T_{t*}
+S        = P_total · 2^( |π_M| / 512 KiB )                 the track `final`
+S_every  = P_total · 2^( max_i |π_i| / 512 KiB )           the track `every`
 ```
 
-`P_i` the step's wall time (§6, the least of its two timed passes), `|π_M|` the bytes of the final
-output's `π` alone (not the trace or signature).
+`P_{i,t}` step `i`'s wall time in timed pass `t` (§6), `|π_M|` the bytes of the final output's `π`
+alone (not the trace or signature), `max_i |π_i|` the largest output's `π` (every output of an
+entry in `every` is accepted, so each is its `π`). A step's `P_i` is its time in pass `t*`, so
+`Σ_i P_i = P_total`.
 
-- **Wall time, nothing else.** How the work is spread over the steps is the entry's choice: in
-  `final`, where intermediate outputs need not be proofs, an entry may leave all hashing to the last
-  step, within `step_s` and the memory cap. Two limits bind it: `step_s` applies to the service
-  run too, where every oracle answer is a round trip to the service, and full deferral means
-  proving `2^25` permutations in one request with 8 GiB (256 bytes per permutation), which only a
-  streaming or accumulating prover can do.
-- **The size factor** is ×1.19 at 256 KiB and ×1.41 at the 512 KiB cap: halving the final proof
-  from 512 to 256 KiB is worth about 16 % of prover time.
-- **The verifier is not scored.** It is capped at 128 ms per checked proof (§6).
+- **Wall time, nothing else.** How the work is spread over the steps is the entry's choice, within
+  `step_s` (which applies to the service run too, where every oracle answer is a round trip) and
+  the memory cap. Hashing cannot be deferred: a step's data (8 MiB) exceeds `pi_cap`, so it
+  cannot be carried to a later step, and its hashing is proved in the step that receives it.
+  Recursion can: in `final`, where intermediate outputs need not be proofs, an entry may defer
+  it, and a final compression wrap of the last proof pays there.
+- **The size factor** is ×1.41 at 256 KiB and ×2 at `final_pi_cap` (512 KiB); in `every` an
+  intermediate proof may reach `pi_cap` (1 MiB), a factor of ×4. 1 KiB is about 0.135 % of the
+  score, and cutting prover time by 10 % is worth about 78 KiB.
+- **Why `every` prices its largest proof.** With only `|π_M|` priced, an entry would run steps
+  1 … 15 with the fastest parameters and proofs up to 1 MiB and shrink only the last. In `every`,
+  where every output is a checked proof, every proof's size counts; `final` keeps `|π_M|`, as a
+  deployment that ships one last aggregate does.
+- **The median of pass totals.** Taking each step's faster pass would reward variance the prover
+  controls. Against the median of three pass totals a gamble on per-step variance gains about
+  nothing (an estimate), and one bad pass is discarded; a rare slow step is forgiven too (§12).
+- **The verifier is not scored.** It is capped at 64 ms per checked proof, the median of three
+  fresh judged runs (§6).
 
-`score` in [`harness/rfh/bench.py`](harness/rfh/bench.py) computes it and
-[`harness/aggregate.py`](harness/aggregate.py) recomputes it; the result's `score` holds `S`,
-`P_total_s`, `size_factor`, `final_pi_bytes` and `tracks = {"final": "S", "every": "S"}` (without
-`every` when the entry is scored in `final` only, with the reason in `tracks_reason`). Every result
-also publishes the per-step records (`stream.jsonl`: the service run's time, both timed times,
-`|π_i|`, `V_i` where checked).
+`score` in [`harness/rfh/bench.py`](harness/rfh/bench.py) computes it from the per-step records
+alone and [`harness/aggregate.py`](harness/aggregate.py) recomputes it with the same function; the
+result's `score` holds `S`, `P_total_s` (`T_{t*}`), `size_factor`, `final_pi_bytes`,
+`pass_totals_s` (the three `T_t`, in pass order), `median_pass` (`t*`) and, when the entry is in
+`every`, `S_every`, `size_factor_every` and `max_pi_bytes`; `tracks = {"final": "S", "every":
+"S_every"}` names each track's field (without `every` when the entry is scored in `final` only,
+with the reason in `tracks_reason`). Every result also publishes the per-step records
+(`stream.jsonl`: the service run's time, the three timed times `P_timed_s` in pass order, `P_s` the
+time in pass `t*`, `share_P`, `|π_i|`, `V_i` where checked). A step record without exactly three
+timed times is a runner fault, an organiser ERROR named `malformed` (§8).
 
 | Symbol | Value | Meaning |
 |---|---|---|
-| `M` | 8 | stream steps, the same for every entry |
-| `n` | `2^22` | hashes per step (one leaf) |
-| size scale | 1 MiB | the final proof's size doubles `S` per MiB |
+| `M` | 16 | stream steps, the same for every entry |
+| `n` | `2^18` | blocks of 32 bytes per step (one leaf, 8 MiB) |
+| `timed_runs` | 3 | timed passes; `P_total` is the median of their totals |
+| size scale | 512 KiB | a proof of 512 KiB doubles its track's score |
 | `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
 
 ## 8. Verdicts and records
@@ -357,12 +404,12 @@ also publishes the per-step records (`stream.jsonl`: the service run's time, bot
 |---|---|
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
-| REJECT | the entry failed a rule or a cap; the result names the reason |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose shape is not the season's, a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
+| REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (the certificate job), `prover` (the prover's build or setup), `request` (a service-run request failed: a timeout, an exit, a cap), `check` (an output's check by the badge failed or broke a cap, the canaries included), `timed-pass` (a byte or replay mismatch, or a timed request failed) or `stream-cap` (`stream_s` reached) <!-- c4: confirm --> |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
 
 A result is **comparable** iff it is ACCEPT and the job plan matched (an ACCEPT is always on the
 season's machine and with the season's shape: anything else is ERROR). A stream that reaches
-`stream_s` is the entry's REJECT: the score needs the final proof and both timed passes.
+`stream_s` is the entry's REJECT: the score needs the final proof and all three timed passes.
 
 **The record rule.** Each track, `every` and `final`, has its own records. A result is a new
 record in a track iff all of:
@@ -378,8 +425,8 @@ record in a track iff all of:
    are what the server wrote and prove nothing by themselves;
 3. `harness_commit` equals the core commit the submissions repository pins;
 4. no record of that track stands at the pin, or `S_t < (1 − margin) · S_t,record`, with `S_t` the
-   track's score (`S` in both), `S_t,record` the standing record's own score in that track at the
-   pin and `margin = 0.02`;
+   track's score (`S` in `final`, `S_every` in `every`), `S_t,record` the standing record's own
+   score in that track at the pin and `margin = 0.02`;
 5. its prover binary's SHA-256 is not that of an earlier record of either track (a resubmitted copy
    is `accepted`, never a record);
 6. **a confirmation run agrees**: a result that meets items 1–5 in a track is not crowned at once.
@@ -403,11 +450,13 @@ a record.
   If it fails, no record stands in that track. A port competes only in the tracks whose record it
   carries, and item 5 does not refuse a record's own port.
 - **The margin (2 %) is the owner's choice**, and it does not keep noise out. The relative
-  run-to-run spread of one entry's score on the evaluation machine was σ ≈ 1.75 % under the
-  previous rules (ten runs at their smoke shape; mostly per-step process overhead). Each `P_i` is
-  now the least of two timed passes, which narrows the spread, but it has not been measured at this
-  shape; two runs of one entry differ by about √2·σ, so a near-copy of the record can beat it by
-  noise. The margin is the same in both tracks. Byte copies
+  run-to-run spread of one entry's score on the evaluation machine was σ ≈ 1.75 % under earlier
+  rules (ten runs at their smoke shape; mostly per-step process overhead). `P_total` is now the
+  median of three 16-step pass totals. A model from the per-step spread measured on the machine
+  (about 0.9 %) gives about 0.15 % for it; an estimate for the score, `c_P`'s drift included, is
+  0.2–0.5 % per evaluation. Neither is measured at this shape (§12). Two runs of one entry differ
+  by about √2·σ, so a near-copy of the record can beat it by noise. The margin is
+  the same in both tracks. Byte copies
   of an evaluated root and a record's prover binary are refused (item 5 and the submissions
   repository's copy rule). The owner may change the margin between seasons, which changes this file.
 - The owner may retire a record of one track (a near-copy that beat it by noise, say) with the bot's
@@ -429,11 +478,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | kernel replay (comparator, Lean kernel), memory | 600 s (a breach: PROVISIONAL), 14 GiB |
 | gate; badge build | 120 s; 180 s |
 | prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB, `2^20` entries |
-| start-up to `ready`; one request (`step_s`) | 10 s; 60 s |
-| the service run, its checks and canaries, and both timed passes (`stream_s`) | 3,000 s wall (reached: REJECT) |
-| an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 128 ms (least of three checks above it) |
+| start-up to `ready`; one request (`step_s`) | 10 s; 20 s |
+| the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s wall (reached: REJECT) |
+| an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 64 ms (the median of three fresh judged runs) |
 | a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
-| a timed pass's output | byte-identical to the service run's |
+| timed passes (`timed_runs`); a timed pass's output | 3; byte-identical to the service run's |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 8 GiB; 2 GiB; 4 GiB |
 | service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
@@ -444,7 +493,15 @@ The prover's 8 GiB is its memory cgroup's charge. The page cache of the setup di
 prover binary is read by the runner before every request (§6), so those pages are charged to the
 runner's cgroup, not the request's: read-only setup data (at most 4 GiB) that a prover maps or
 reads is in effect outside the 8 GiB. This is open to every entry. (Charging it to the request
-would mean evicting and re-reading the setup from disk before every request.)
+would mean evicting and re-reading the setup from disk before every request.) The inputs a request
+receives at `go` (`leaf.bin`'s 8 MiB among them) are written by the runner, so their pages are
+charged to the runner too; a copy the prover makes counts toward its cap and `work_cap`.
+
+`stream_s` covers 64 requests (16 in the service run, 48 in the timed passes), each up to
+`ready_s + step_s` = 30 s (1,920 s in all), plus the checks, the calibration samples and the
+runner's re-read of the setup before every request. So the per-request caps bind first, except
+when an entry uses nearly every cap at once (start-ups near 10 s, steps near 20 s, a setup
+directory near 4 GiB); there `stream_s` binds.
 
 ## 10. Hard rules for the Lean side
 
@@ -486,7 +543,10 @@ would mean evicting and re-reading the setup from disk before every request.)
 - **The record build cache**: a certificate job may seed its build from the record's attested build
   (bound by its manifest's hash): only entry modules whose source is byte-identical are reused,
   never the challenge, and the kernel still replays every proof. A candidate's build stays under
-  `build_s`, so a slow build may fit only when the cache hits.
+  `build_s`, so a slow build may fit only when the cache hits. A REJECT the cache can have caused
+  (`reject_stage` `certificate`, or `check`: a restored module's `.c` is what the badge is compiled
+  from) is re-run without it by the submissions repository's bot; a REJECT at any other stage is
+  final, since the prover is built from the entry's `.s`, not from the cache <!-- c4: confirm -->.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
   on the eight tagged domains, and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF (also under the signing seed: the chain starts `chainStart` are
@@ -549,9 +609,11 @@ would mean evicting and re-reading the setup from disk before every request.)
 - **One machine.** Every record is measured on one machine, which an entry can overfit (its cache
   sizes, its ISA extensions), and it is published (§6). The machine may change between
   seasons; records are then re-evaluated at the new pin by the port (§8).
-- **A near-copy of the record can win by noise.** The margin (2 %, §8) is below the spread of the
-  difference of two runs of one entry (√2·σ ≈ 2.5 %, σ ≈ 1.75 % measured at the smoke shape with
-  each `V_i` the best of two checks, so a lower bound for one check), so a
+- **The margin is not matched to the score's spread.** Under earlier rules the spread of one
+  entry's score was σ ≈ 1.75 % (measured at their smoke shape), so two runs differed by about
+  √2·σ ≈ 2.5 %, above the 2 % margin (§8). At this shape the median of three pass totals is
+  estimated at 0.2–0.5 % per evaluation, `c_P`'s drift included, but it is not measured. If the
+  spread is that small, 2 % keeps out real improvements below it; if it is near 1.75 %, a
   near-copy that is no faster can still beat the record by more than 2 %. Byte copies and re-used
   record prover binaries are refused, and the owner retires a record won that way.
 - **`c_P`'s drift is an organiser ERROR, not a score change**: `ref_ns` (316.2 ms) and
@@ -562,33 +624,52 @@ would mean evicting and re-reading the setup from disk before every request.)
 - **Retiring a record leaves no record standing in that track**: the record it beat is not
   restored, and that record's prover binary, like every record's, can never take a record of either
   track again.
-- **The end of the stream is known** (`M = 8`), and an entry may defer work to the last step
-  (§7). The verifier cap (128 ms) bounds what can be left to the verifier itself.
-- **Most of the work is batch Keccak proving.** A step's recursion (checking one child proof of at
-  most 1 MiB: its Merkle data, trace digest and signature) is roughly 0.3–3 % of its `2^22`
-  permutations, so the two tracks will rank close to each other, and the contest is mostly about
-  proving many Keccak permutations fast. A later season can weight recursion more with a smaller
-  `n` and a larger `M`, without a contract change.
-- **Leaf specialisation is allowed.** Within a leaf only 22 bits of one lane vary with `j`: the tag,
-  the seed and the padding are constant, round 1 is affine in `j` before its χ, only row `y = 0` of
-  the last χ is needed for the 256-bit output, and the index is a counter that need not be
-  committed. Exploiting this saves a few percent and is open to every entry.
+- **The end of the stream is known** (`M = 16`), and an entry may defer recursion to the last
+  step (§7); hashing cannot be deferred. The verifier cap (64 ms) bounds what can be left to the
+  verifier itself.
+- **The leaf is an emulation, not leanXMSS.** It has the hash count and witness density of
+  signature aggregation (`2^18` blocks: about the Keccak calls of 2,800 leanXMSS signatures; 8 MiB,
+  16 bytes per permutation), but none of its irregular work (digit-dependent chain lengths,
+  checksums, selection) and no per-signature authentication paths.
+- **The split between hashing and fixed cost is measured on a proxy.** Fitted on the evaluation
+  machine over the previous season's best entry, whose leaf committed one 32-byte digest per hash:
+  about 1.6 µs per permutation and a fixed 0.39 s per step. That projects hashing at about 61–71 %
+  of a step of about 1.3 s for the best code today. The committed-data leaf commits a different number of words per
+  permutation, and with one fixed `n` the split cannot be watched in season. A later season can move
+  `n` without a contract change.
+- **Short steps weigh fixed costs more.** About 0.4 s of a 1.3 s step is fixed cost, mostly the
+  commitment's opening and the recursion.
+- **The verifier cap is tighter.** The best entries' `V` averaged 39–41 ms under the previous
+  rules, and a larger committed witness may raise opening costs.
+- **The median forgives rare slow steps.** A step the prover makes slow on purpose, rarely, costs
+  little when one pass of three is discarded, and a REJECT costs only queue time.
+- **The `final` track allows a final compression wrap**: its intermediate proofs may be up to
+  1 MiB, and only the last one is priced.
 - **The scored size is `|π|` alone.** A signed file also carries the trace's answers and a
   4,768-byte signature, which a public-hash deployment would not ship; the result publishes the
   whole file size beside `|π|`.
-- **The leaf is a cube sum.** The `2^22` inputs of a leaf differ only in the index, so `leafValue`
-  is a sum over a 22-variable cube of Keccak-f[1600]'s output bits; computing it faster than the
-  hashes themselves would need a cube attack on the full 24 rounds (the best known reach about 7).
 - **The timed passes trust isolation and determinism.** The timed passes are only a stopwatch:
   every accepted output comes from the service run, in which the prover never had `k`. A timed
   pass could reproduce an output without proving only through a channel from the service run's
-  requests, and the per-request sandbox (fresh `/work` and `/tmp`, read-only `/setup`) is the same
-  isolation that keeps state between steps inside `π`. Two channels around it are closed by the
-  runner: the page cache of the setup and the prover binary (re-read in full before every
-  request) and the replay service's answers (a refused `SIGN` is a REJECT). Lower-bandwidth
-  micro-architectural state (CPU caches, predictors) is not cleared; the calibration runs between
-  requests disturb it. The price is determinism: a prover whose output depends on thread timing or
-  fresh randomness fails the byte comparison.
+  requests, and the per-request sandbox (a private tmpfs `/work` and a fresh `/tmp`, read-only
+  `/setup`) is the same isolation that keeps state between steps inside `π`. Closed by the runner
+  and the sandbox: the page cache of the setup and the prover binary (re-read in full before every
+  request); the replay service's answers (a refused `SIGN` is a REJECT); `/proc`'s machine-wide
+  counters and the live counters of `/sys/devices/system/cpu` (masked); sockets other than Unix
+  ones (refused, so no network counter moves); the inode numbers and free space of `/work` (a
+  tmpfs of its own per request); and the request's directory names (random)
+  <!-- c4: confirm -->. Left open:
+  - **the clocks**: a service-run step can stretch its own untimed duration, and a timed step can
+    read the clock against a timestamp kept in `/setup`: about 9 bits per stream (an estimate);
+    accepted;
+  - **kernel-wide counters the sandbox cannot mask**: `sysinfo(2)` (the load averages, free memory,
+    the number of processes) and the inode numbers of pipes, sockets and memfds, which come from
+    one counter of the kernel's; their capacity is not measured <!-- c4: confirm -->;
+  - **micro-architectural state** (CPU caches, predictors), not cleared between requests; the
+    calibration runs between requests disturb it.
+
+  The price is determinism: a prover whose output depends on thread timing or fresh randomness
+  fails the byte comparison.
 - **A trace is not size-capped beyond `file_cap`.** The caps count `|π|`; an accepted proof's trace
   (at most `qV ≤ 2^16` queries of at most `2^20` bytes, all asked by `V`) is bounded only by the
   file cap. Its queries are a function of `vk`, `c`, `π` and the answers, so it moves no data out of
@@ -599,16 +680,18 @@ would mean evicting and re-reading the setup from disk before every request.)
   `qV · 2^20` bytes `acc` admits: an entry whose honest traces are larger can be complete in the
   model and still unable to sign them.
 - **`k` is revealed after the service run.** It then protects nothing: no signature can be made
-  without the seed, which never leaves the service, and replay mode re-issues only the service
-  run's own signatures. A timed pass may still leak `k` (in its timing or its output), harmlessly.
+  without the signing seed, which never leaves the service, and replay mode re-issues only the
+  service run's own signatures. A timed pass may still leak `k` (in its timing or its output),
+  harmlessly.
 - **Not adopted this season** (from the review of these rules): a paired, interleaved confirmation
   run of a candidate record against the standing one; a proof-size cap inside `acc` (the caps are
   the runner's, so `acc` itself accepts larger proofs); per-signature digit vectors drawn per run;
   a public, unkeyed hash in place of the signed oracle, which is how leanVM deploys and would need a
   new contract.
-- **The score's constants** (the size scale of 1 MiB, the caps) are the
-  owner's choices for this season, set from the first recursive entries and leanVM's published
-  proof sizes (209–294 KiB), not from entries measured at this shape.
+- **The score's constants** (the size scale of 512 KiB, the caps, `n`, `M`) are the owner's
+  choices for this season, set from the previous season's entries and leanVM's published proof
+  sizes (209–294 KiB), not from entries measured at this shape. `stream_s` binds only in the corner
+  where an entry uses nearly every cap at once (§9).
 - **Malformed and crafted inputs are not tested, and `acc` has no time bound.** The benchmark
   checks the entry's own outputs and the statement canaries only. Inputs assembled from published
   parts (for example a deep chain of nodes over public signed leaves) took an earlier entry's `acc`
@@ -648,9 +731,10 @@ are indicative only, except where a bullet says "on the machine".
 
 - **The verifier cap is per proof and includes parsing.** The first recursive entry's verifier
   took about 500 ms per check; the optimised lvm2-style entries about 40 ms. A recursive `V` that
-  re-checks history grows with the stream and breaks the 128 ms cap.
-- **Your verifier's start-up is on the stream clock.** Each check batch and the canaries start a
-  badge process; one entry's `V` took 11.7 s to initialise on a runner.
+  re-checks history grows with the stream and breaks the 64 ms cap.
+- **Your verifier's start-up is on the stream clock.** Each check batch starts three badge
+  processes (one per judged run) and the canaries one more, each start-up capped by
+  `badge_start_s` (2 s); one entry's `V` took 11.7 s to initialise on a runner.
 - **Determinism is a rule.** Seed every randomised choice from the inputs and the oracle's answers;
   search grinding nonces in a fixed order and take the first; never let the thread schedule pick
   between valid outputs. One-time signature indices follow the order in which `SIGN`s arrive, so
@@ -660,9 +744,9 @@ are indicative only, except where a bullet says "on the machine".
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
   `import Mathlib` does not fit.
-- **Every step is `2^22` hashes** within `step_s = 60 s`, in the service run too (where every
-  answer is a round trip), and more if you defer work. Test the service run's time, not only the
-  timed one.
+- **Every step is a `2^18`-block leaf** (about `2^19` permutations, 8 MiB of data to commit to)
+  within `step_s = 20 s`, in the service run too (where every answer is a round trip), and more if
+  you defer recursion. Test the service run's time, not only the timed one.
 - **`queryCap` is per query**: a transcript that absorbs a long message in one query (a Ligero row
   of 1.57 MB at `n = 2^18`) is refused by the service and the proof fails. Absorb in pieces.
 - **A signed child restates every byte its verifier hashed**: a signed `n = 16` leaf was 538,698
@@ -713,10 +797,12 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 ```
 
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
-small shape (4 steps of 64 hashes, the season's caps); `harness/season.toml` is the real one, and it runs only
-on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an organiser ERROR
-before the prover is built, and its `c_P` drift check would too. To run the season's shape on your
-own machine, generate a local copy and pass it to `--season`:
+small shape (4 steps of 6 blocks each; the season's size caps, its own verifier and time caps: its
+`v_cap` is 128 ms, the one documented exception, because the toy's witness-sending `V` grows with
+the stream and CI runs the smoke on shared runners); `harness/season.toml` is the real one, and it
+runs only on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an
+organiser ERROR before the prover is built, and its `c_P` drift check would too. To run the
+season's shape on your own machine, generate a local copy and pass it to `--season`:
 
 ```sh
 python3 -I harness/local-season.py > /tmp/season-local.toml   # fingerprint "any", ref_provisional true
@@ -726,7 +812,7 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 
 Every shape and every other cap is then the season's; only those two lines and the season's name
 differ (as in the smoke), and your machine's speed is not the evaluation machine's. The
-witness-sending example of §2 is REJECTed at this shape by the verifier cap, as expected.
+witness-sending example of §2 is REJECTed at this shape at step 1 by `pi_cap`, as expected.
 
 Set `RF_HARNESS_COMMIT` when the checkout is not a git checkout. `harness/ci/build-kernels.sh` holds the
 kernels' pins; [`scripts/tools.env`](scripts/tools.env) sets the variables from `RF_KERNELS` instead.

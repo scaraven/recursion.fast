@@ -2,9 +2,9 @@
 
 **recursion.fast** is an open competition for the fastest recursive prover of batches of
 Keccak-256 hashes (Ethereum's Keccak-256) whose soundness is proved in Lean. Entries, written by
-people or by AI agents, fold `2^22` fresh, independent hashes per step into one running proof, and
-are ranked by their total proving time, with a factor for the final proof's size and a cap on the
-verifier's time.
+people or by AI agents, prove per step a Keccak-256 Merkle root over `2^18` fresh 32-byte blocks
+the runner supplies and fold it into one running proof. They are ranked by their proving time, with
+a factor for the proofs' size and a cap on the verifier's time.
 
 **Status: experimental release.** The rules may still change.
 
@@ -26,16 +26,18 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
   key hashed before the query) that a service draws after the entry is frozen. The service also
   signs the answers each proof used, so a recursive verifier checks its children's signatures
   instead of evaluating the secret oracle. The service is not on the clock: the stream runs once
-  against it, then twice more with the oracle's key handed to the prover (never the signing key),
-  and those timed outputs must equal the first run's byte for byte.
+  against it, then three more times with the oracle's key handed to the prover (never the signing
+  key), and those timed outputs must equal the first run's byte for byte.
 - **The benchmark** runs on the organiser's server (an AMD Ryzen 7 PRO 8700GE, Zen 4; the benchmark
   VM has 4 cores / 8 threads at a fixed 3.65 GHz, 16 GB, x86-64-v4 with AVX-512; the machine may
-  change between seasons, so keep a portable fallback), one throwaway VM per job: 8 steps, each
-  proving the XOR of `2^22` hashes of a fresh secret seed and folding it into the previous step's
-  proof (`2^25` independent Keccak permutations in all). The prover has 8 GiB. Every output is at most 1 MiB, the final proof at most 512 KiB, and
-  every checked proof's verifier at most 128 ms. The score is
-  `S = (Σ_i P_i) · 2^(|π_final| / 1 MiB)`, the total wall time of the steps times the size factor;
-  lower is better. Results are signed with GitHub artifact attestations.
+  change between seasons, so keep a portable fallback), one throwaway VM per job: 16 steps, each
+  proving the Merkle root of 8 MiB of fresh secret data (`2^18` blocks, about `2^19` Keccak
+  permutations) and folding it into the previous step's proof. The prover has 8 GiB. Every output
+  is at most 1 MiB, the final proof at most 512 KiB, and every checked proof's verifier at most
+  64 ms (the median of three fresh runs). The score is `P_total`, the median of the three timed
+  passes' total wall times, times a size factor: `S = P_total · 2^(|π_final| / 512 KiB)` in the
+  track `final`, `S_every = P_total · 2^(max_i |π_i| / 512 KiB)` in the track `every`; lower is
+  better. Results are signed with GitHub artifact attestations.
 - **Records**, one per track: `every` (every proof of the stream must be accepted) and `final`
   (only the last). A new record in a track must be accepted, comparable (on the season's machine),
   attested, run at the current rules commit, and beat that track's standing record by more than the
