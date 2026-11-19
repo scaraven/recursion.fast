@@ -798,6 +798,14 @@ breaks = "a byte string is read one byte longer than its length word"
 expect = "Controls.Extractor.decodeWit_node_kat"
 
 [[mutant]]
+id = "ext-progcap-2^21"
+file = "Extractor.lean"
+original = '''def progCap : ℕ := 2 ^ 20'''
+replacement = '''def progCap : ℕ := 2 ^ 21'''
+breaks = "the program-size cap is 2^21 statements: a 17-bit lookup-table extractor fits"
+expect = "Controls.Certificate.big_program_no_certificate; Controls.Extractor's lookup-table control (added for review R5 LOW-1) on its own"
+
+[[mutant]]
 id = "ext-computes-short-queries"
 file = "Extractor.lean"
 original = '''(∀ e ∈ L, e.1.size < 2 ^ 64) →'''

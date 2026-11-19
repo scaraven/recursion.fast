@@ -11,7 +11,11 @@ symbolically (`sigOk_sign`, no hash evaluated).
 
 Positive:
 * `item0_kat`, `item1_kat`, `value2_kat` (the XOR of the first two), `value16_kat`, `leafStmt_kat`,
-  `nodeStmt_kat`: the byte layouts.
+  `nodeStmt_kat`: the byte layouts; `itemBig_kat` (the index `0x123456`) and `leafStmt_season_kat`
+  (the count `2^22`, the season's `n`) with `enc64` beyond its first byte (`enc64_season`,
+  `enc64_kat`: 8 bytes, little-endian).
+* `leafStmt_zero_seed`: at `n = 0` the leaf statement does not depend on the seed (the runner
+  enforces `1 ≤ n`).
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
@@ -126,6 +130,33 @@ theorem nodeStmt_kat :
       hex "955f38142d22184c40620a09850718e312df8622264ea4c6c7dc4983e8f5df9b" := by
   rw [← nodeStmtF_eq]
   decide +kernel
+
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(b'H'+bytes(range(32))+(0x123456).to_bytes(8,'little')).hex())"` (an index of three bytes) -/
+theorem itemBig_kat : (leafItem s0 0x123456).toList =
+    hex "4108d62c512e966239d26cd4c4aef290b39aa29163b76e29d2a84b033a15f7f4" := by
+  rw [← leafItemF_eq]
+  decide +kernel
+
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; v=bytes(32)
+for j in range(16): v=bytes(a^b for a,b in zip(v,K(b'H'+bytes(range(32))+j.to_bytes(8,'little'))))
+print(K(b'L'+v+(2**22).to_bytes(8,'little')).hex())"` (the value of `value16_kat` with the season's
+count `n = 2^22`) -/
+theorem leafStmt_season_kat : (leafStmt (leafValue s0 16) (2 ^ 22)).toList =
+    hex "c2b4bbe1ba4ed9ca2dfbb3c8439bdd7f795b82cda72e44d726327f14eb90c817" := by
+  rw [← leafStmtF_eq, ← leafValueF_eq]
+  decide +kernel
+
+/-- The season's `n = 2^22` in 8 little-endian bytes: its one set bit is in the third byte. -/
+theorem enc64_season : enc64 (2 ^ 22) = [0, 0, 0x40, 0, 0, 0, 0, 0] := by decide
+
+/-- `enc64` writes 8 bytes, low byte first. -/
+theorem enc64_kat : enc64 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
+
+/-- **At `n = 0` the leaf statement does not depend on the seed**: the value of no hashes is
+zero, whatever the seed. Harmless because the runner draws `n` with `1 ≤ n`. -/
+theorem leafStmt_zero_seed (s t : Digest) :
+    leafStmt (leafValue s 0) 0 = leafStmt (leafValue t 0) 0 := rfl
 
 /-! ## Tags -/
 

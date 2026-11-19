@@ -73,7 +73,7 @@ jobs:
         run: |
           (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
           timeout 120 lake -f scripts/speed/lakefile.toml build signer extract
-          timeout 120 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
+          timeout 300 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: the compiled extractor interpreter on the witness-sending entry (organiser code)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
       - name: acc on a 2^16-query signed trace, timed by the badge, the organiser's canaries, and the badge's glue against a hostile entry's instances

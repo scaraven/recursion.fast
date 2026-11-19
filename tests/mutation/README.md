@@ -79,7 +79,7 @@ directory). Every command runs as `systemd-run --user --scope -p MemoryMax=16G t
 timeout 1500 …` with `LEAN_NUM_THREADS=4`; the default cores are `16-20`, `21-25` and `26-31`, one
 range per job (`--cores`, `--jobs`, `--threads`). Build logs are in `<scratch>/logs/`.
 
-A run of every mutant (98) takes about 30 minutes with 3 jobs on 16 cores (77 minutes of build
+A run of every mutant (99) takes about 30 minutes with 3 jobs on 16 cores (77 minutes of build
 time in all, median 32 s per mutant): most are killed within a minute (the first failing module is
 reached early and the build is stopped), and a survivor costs a rebuild of everything that imports
 its file (about 3 to 4 minutes). It is not part of the CI (too slow

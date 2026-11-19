@@ -388,22 +388,25 @@ def main():
               f"the release binary rejects --insecure-test-keys (exit {r.returncode})")
     t0 = time.time()
     lock = threading.Lock()
-    count = [0]
+    count, idxs = [0], []
 
     def signer():
         cl = Client(s1.socket_path)
         while True:
-            st, _, _ = cl.call(OP_SIGN, [])
+            st, _, body = cl.call(OP_SIGN, [])
             if st:
                 return st
             with lock:
                 count[0] += 1
+                idxs.append(int.from_bytes(body[:4], "little"))     # an empty trace: the body starts with idx
     res = []
     ths = [threading.Thread(target=lambda: res.append(signer())) for _ in range(8)]
     [t.start() for t in ths]
     [t.join() for t in ths]
     check(count[0] == 1 << 16 and set(res) == {3},
           f"exactly 2^16 signatures, then EXHAUSTED ({count[0]} signed, statuses {set(res)}, {time.time() - t0:.1f} s)")
+    check(sorted(idxs) == list(range(1 << 16)),
+          "the 2^16 signatures used the indices 0 … 2^16 - 1, each once (one message per index)")
     stats = s1.stop()
     check(stats.get("signatures") == 1 << 16, f"service statistics: {stats}")
 
