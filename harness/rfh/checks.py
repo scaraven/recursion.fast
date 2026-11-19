@@ -2,14 +2,31 @@
 badge executable `verify` that the harness renders and builds per entry; the runner only decides
 which (vk, statement, file) triples to ask about and what the answers must be.
 
-Badge executables (`harness/badge/`, built by `evaluate.py`; the command-line contract):
+Badge executables (`harness/badge/`, `RecursionFast/Badge.lean`, built by `evaluate.py`; the
+command-line contract):
 
-  verify --batch LIST        LIST: lines `VK_HEX STMT_HEX PATH`; prints one line per input,
-                             `accept NS` or `reject NS`, NS the nanoseconds of parsing the file's
-                             bytes and evaluating `acc` (a monotonic clock in the process, which runs
-                             pinned to one core, so it bounds the check's CPU time); exit 0.
+  verify --serve             requests on standard input, one line `VK_HEX STMT_HEX PATH` each; every
+                             request is answered with one line, `accept NS` or `reject NS`, before
+                             the next is read, NS the nanoseconds of parsing the file's bytes and
+                             evaluating `acc` (a monotonic clock in the process); exit 0 at the end
+                             of the input.
+  verify --batch LIST        the same lines read from the file LIST (manual and CI use).
 
 `verify` runs the entry's compiled verifier, so it runs in the sandbox, pinned to one core.
+
+**Two clocks.** The runner times each request itself (`serve`): from just before it writes the
+request line to the moment the answer line has arrived, on its own monotonic clock, outside the
+badge's process. What is judged against `v_cap` is the larger of that external time and the badge's
+own `NS`, so a badge whose in-process timer under-reports (a compiler or runtime surprise, or glue
+that is not what it should be) gains nothing. The external time adds the request's round trip
+through two pipes, reading the file and parsing the two hex strings: about 0.3 ms plus about
+0.4 ms per MiB of file from the page cache (measured by `tests/harness/accprobe/run.py`, which
+prints it: 0.3 ms for a 5 KB file, 3.6 to 5.7 ms for a 9.2 MB one), against `v_cap` = 128 ms; the
+checked files are at most `file_cap`. The first request of a process also pays the process's
+start-up (about 80 ms there), which is one reason every judged batch is warmed. The runner's own
+thread is not pinned, so its scheduling can only add to the external time, never subtract (a check
+near the cap is timed twice more and the least counts). An answer that arrives before its request
+was written, or more than one answer to a request, is a crash.
 
 Only checks about the entry are made here: a proof the entry produced, accepted for its
 statement, and the same proof rejected for another statement. Mutations that `acc` rejects before
@@ -17,7 +34,9 @@ the entry's `V` runs (the file parser, the trace digest, the signature) test org
 in the core CI (`tests/harness/canaries.py`).
 """
 import os
+import select
 import subprocess
+import time
 
 from .prover import Drain
 from .sandbox import Sandbox
@@ -45,48 +64,104 @@ class Badge:
         self.core = pinned_core()
         self.n = 0
 
-    def _run(self, args, binds, timeout):
-        self.n += 1
-        sb = Sandbox(["/badge/" + args[0]] + args[1:], [("ro", self.dir, "/badge")] + binds, self.mem,
-                     env={"PATH": "/usr/bin:/bin"}, cwd="/", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                     extra_ro_root=LIB_ROOT, cpus=self.core)
-        out, err = Drain(sb.proc.stdout), Drain(sb.proc.stderr)
-        try:
-            code = sb.proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            code = "timeout"
-        sb.kill()
-        out.join(5)
-        err.join(5)
-        return code, out.kept.decode(errors="replace"), err.kept.decode(errors="replace")
-
     def verify(self, items, store, timeout, warm=False):
-        """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns). With
-        `warm`, the first item is checked once more before the timed ones and that result dropped,
-        so no timed item is the fresh process's first, coldest check. `timeout` (seconds) bounds the
-        whole batch; no single check has a bound of its own. A batch that times out or crashes
-        raises `BadgeError`."""
+        """`acc` on each (vk, stmt, relative path under `store`): a list of (accepted, ns), `ns` the
+        larger of the runner's external time of the request and the badge's own (`serve`); the pairs
+        (external, badge) of the last run are kept in `self.last`. With `warm`, the first item is
+        checked once more before the timed ones and that result dropped, so no timed item is the
+        fresh process's first, coldest check. `timeout` (seconds) bounds the whole batch; no single
+        check has a bound of its own. A batch that times out or crashes raises `BadgeError`."""
         if not items:
             return []
         lst = ([items[0]] if warm else []) + list(items)
-        d = os.path.join(self.scratch, f"list{self.n}")
-        os.makedirs(d)
-        with open(os.path.join(d, "list.txt"), "w") as f:
-            for vk, stmt, rel in lst:
-                f.write(f"{vk.hex()} {stmt.hex()} /store/{rel}\n")
-        code, out, err = self._run(["verify", "--batch", "/list/list.txt"], [("ro", store, "/store"), ("ro", d, "/list")],
-                                   timeout)
-        res = []
-        for line in out.split("\n")[:len(lst)]:
-            w = line.split()
-            if len(w) != 2 or w[0] not in ("accept", "reject") or not w[1].isdigit():
-                break
-            res.append((w[0] == "accept", int(w[1])))
-        res = res[1:] if warm else res
-        if code != 0 or len(res) != len(items):
-            raise BadgeError(f"verify: exit {code}, {len(res)} of {len(items)} answers; stderr: {err[-500:]}",
-                             "timeout" if code == "timeout" else "crash")
+        self.n += 1
+        sb = Sandbox(["/badge/verify", "--serve"], [("ro", self.dir, "/badge"), ("ro", store, "/store")], self.mem,
+                     env={"PATH": "/usr/bin:/bin"}, cwd="/", stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                     stderr=subprocess.PIPE, extra_ro_root=LIB_ROOT, cpus=self.core)
+        err = Drain(sb.proc.stderr)
+        try:
+            res, why = serve(sb.proc, [f"{vk.hex()} {stmt.hex()} /store/{rel}" for vk, stmt, rel in lst],
+                             time.monotonic() + timeout)
+        finally:
+            sb.kill()
+            err.join(5)
+            for f in (sb.proc.stdin, sb.proc.stdout):
+                try:
+                    if f is not None:
+                        f.close()
+                except OSError:
+                    pass
+        self.last = [(ext, own) for _, _, ext, own in res][1 if warm else 0:]
+        res = [(ok, ns) for ok, ns, _, _ in res][1 if warm else 0:]
+        if why is not None or len(res) != len(items):
+            raise BadgeError(f"verify: {why}, {len(res)} of {len(items)} answers; stderr: "
+                             f"{err.kept.decode(errors='replace')[-500:]}", "timeout" if why == "timeout" else "crash")
         return res
+
+
+def serve(proc, lines, deadline):
+    """Run the requests `lines` through a `verify --serve` process `proc` (stdin and stdout pipes),
+    one at a time, timing each from outside: ([(accepted, judged ns, external ns, badge ns)], None)
+    if every request was answered and the process then exited 0, else (the answers so far, why):
+    `timeout` at `deadline` (a `time.monotonic()` value), or what went wrong. The external time runs
+    from just before the request is written to the arrival of its answer's newline; the judged time
+    is the larger of it and the badge's own."""
+    fin, fout, buf, out = proc.stdin.fileno(), proc.stdout.fileno(), b"", []
+    os.set_blocking(fin, False)
+
+    def read_some():
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fout], [], [], left)[0]:
+            return None
+        return os.read(fout, 1 << 16)
+    for line in lines:
+        if buf or select.select([fout], [], [], 0)[0]:
+            if proc.poll() is not None:
+                return out, f"the badge exited (code {proc.returncode}) before request {len(out) + 1}"
+            return out, "output before a request was written (an answer ahead of its request)"
+        t0 = time.monotonic_ns()
+        req = (line + "\n").encode()
+        while req:                                    # bounded by the deadline, never blocking
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([], [fin], [], left)[1]:
+                return out, "timeout"
+            try:
+                req = req[os.write(fin, req):]
+            except BlockingIOError:
+                continue
+            except OSError as e:
+                return out, f"the badge stopped reading its requests ({e})"
+        while b"\n" not in buf:
+            c = read_some()
+            if c is None:
+                return out, "timeout"
+            if not c:
+                return out, f"the badge exited (code {proc.poll()}) before answering"
+            buf += c
+        ext = time.monotonic_ns() - t0
+        ans, buf = buf.split(b"\n", 1)
+        if buf:
+            return out, "more than one answer to a request"
+        w = ans.decode(errors="replace").split()
+        if len(w) != 2 or w[0] not in ("accept", "reject") or not w[1].isdigit():
+            return out, f"a malformed answer {ans[:80]!r}"
+        out.append((w[0] == "accept", max(ext, int(w[1])), ext, int(w[1])))
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    while True:
+        c = read_some()
+        if c is None:
+            return out, "timeout"
+        if not c:
+            break
+        return out, "output after the last answer"
+    try:
+        code = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        return out, "timeout"
+    return out, None if code == 0 else f"exit {code}"
 
 
 # ---- canaries -------------------------------------------------------------------------------------

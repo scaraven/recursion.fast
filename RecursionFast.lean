@@ -1,6 +1,7 @@
 import RecursionFast.Contract
 import RecursionFast.Library
 import RecursionFast.Controls
+import RecursionFast.Badge
 
 /-!
 # recursion.fast (the signed random oracle)
@@ -14,4 +15,6 @@ signed random oracle, SROM), so no public hash instantiates the oracle. The rule
 * `RecursionFast.Contract`: the trusted contract (Lean core and Mathlib only).
 * `RecursionFast.Library`: the organiser's untrusted, kernel-checked library.
 * `RecursionFast.Controls`: a positive and a negative control for every trusted definition.
+* `RecursionFast.Badge`: the badge executable's glue (trusted harness code, outside the import
+  allowlist: no entry imports it).
 -/

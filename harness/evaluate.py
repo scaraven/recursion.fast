@@ -36,9 +36,12 @@ kernel's, which leaves the certificate unchecked):
      manifest before the build and after the badge build (step 6), and the result records the
      manifest's and the allowlist's hashes (`environment`);
   5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
-  6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
-     in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
-     import closure lies inside the verified one).
+  6. the badge executable `verify`: its per-entry module rendered from `harness/badge/Verify.lean.in`
+     (the solution and the organiser's prebuilt glue `RecursionFast/Badge.lean`, wired by one
+     definition) and built in the sandbox in that tree within `badge_s`; it must neither build nor
+     change an entry module (the badge's import closure lies inside the verified one), and the
+     gate's rule 9 (`--wiring`, within `gate_s`) must find in that module `main := RFBadge.main
+     RecursionFast.Challenge.submission` and nothing else.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
   result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
@@ -409,6 +412,13 @@ def cert_job(a):
         moved = sorted(k for k in set(after) | set(arts) if after.get(k) != arts.get(k))
         if moved:
             raise Reject(f"the badge build built or changed entry modules outside the verified closure: {moved[:3]}")
+        # rule 9: the per-entry module, elaborated with the entry's instances and notations in scope,
+        # holds `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else
+        rc = sandboxed(org, [gate, "--wiring", "RFBadgeVerify", "--manifest", org.manifest], tree, logs["badge"],
+                       env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)), timeout=caps["gate_s"])
+        if rc != 0:
+            rejects = [l for l in open(logs["badge"], errors="replace").read().splitlines() if l.startswith("gate: REJECT")]
+            raise Reject("the badge's per-entry module (gate rule 9): " + "; ".join(rejects[:3] or [f"exit {rc}"]))
         res["badge_dir"] = badge
         res["badge_sha256"] = {b: hashlib.sha256(open(os.path.join(badge, b), "rb").read()).hexdigest()
                                for b in os.listdir(badge)}
@@ -435,17 +445,17 @@ def cert_job(a):
 
 
 def build_badge(org, tree, log, timeout, res):
-    """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
-    solution module) and build it in the sandbox within `timeout`, recording its duration as
-    `res["badge_s"]`; returns the directory holding `verify`."""
+    """Render the badge executable `verify`'s per-entry module into `tree`
+    (`harness/badge/Verify.lean.in`: the solution module and the organiser's prebuilt glue
+    `RecursionFast.Badge`, wired by one definition) and build it in the sandbox within `timeout`,
+    recording its duration as `res["badge_s"]`; returns the directory holding `verify`. (The caller
+    then runs the gate's rule 9 on that module.)"""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
-    for name in ("Common", "Verify"):
-        src = open(os.path.join(HERE, "badge", f"{name}.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
-        open(os.path.join(bdir, f"RFBadge{name}.lean"), "w").write(src)
+    src = open(os.path.join(HERE, "badge", "Verify.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
+    open(os.path.join(bdir, "RFBadgeVerify.lean"), "w").write(src)
     with open(os.path.join(tree, "lakefile.toml"), "a") as f:
-        f.write('\n[[lean_lib]]\nname = "RFBadge"\nsrcDir = "badge"\nroots = ["RFBadgeCommon"]\n'
-                '\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
+        f.write('\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
     # An executable links the compiled object of every module it imports. `org-setup.sh` built those
     # of the organiser's closure; the objects of other modules an entry imports are compiled here,
     # into the package tree, so its build directories are writable for this step. No entry code runs

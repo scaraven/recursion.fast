@@ -236,7 +236,7 @@ def main():
     os.makedirs(store)
     open(os.path.join(store, "p.bin"), "wb").write(b"x")
     with open(os.path.join(bdir, "verify"), "w") as f:
-        f.write("#!/bin/sh\necho accept 1\nexec /bin/sleep 9871\n")
+        f.write("#!/bin/sh\nread r\necho accept 1\nread r\nexec /bin/sleep 9871\n")   # answers the first request
     os.chmod(os.path.join(bdir, "verify"), 0o755)
     badge = Badge(bdir, "256M", os.path.join(tmp, "hang-scratch"))
     os.makedirs(badge.scratch)

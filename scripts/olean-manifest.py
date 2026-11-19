@@ -15,7 +15,8 @@ Scope (every `*.olean`, `*.olean.server`, `*.olean.private` file of):
                           `harness/org-setup.sh`. Without `--closure` (the mini projects of the CI
                           regressions, `--packages ''`) every package file is in scope.
   project/<rel>           the organiser package's own build (`<org>/.lake/build/lib/lean`), restricted
-                          to the trusted modules: `RecursionFast.Contract(.*)`
+                          to the trusted modules: `RecursionFast.Contract(.*)` and the badge's
+                          glue `RecursionFast.Badge` (linked into every badge executable)
                           (`--prefix` replaces this list, for the mini projects of the CI regressions)
 `<rel>` is the module's path, e.g. `Mathlib/Order/Basic.olean`. Line format: `<sha256>  <tag>/<rel>`.
 
@@ -41,7 +42,7 @@ def manifest_packages(org):
     """Every package of the organiser's lake-manifest (read from the manifest, not a list)."""
     mf = os.path.join(org, "lake-manifest.json")
     return [e["name"] for e in json.load(open(mf))["packages"]] if os.path.exists(mf) else []
-DEFAULT_PREFIXES = ["RecursionFast.Contract"]
+DEFAULT_PREFIXES = ["RecursionFast.Contract", "RecursionFast.Badge"]
 EXTS = (".olean", ".olean.server", ".olean.private")
 
 def olean_files(root):

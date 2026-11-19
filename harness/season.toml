@@ -78,9 +78,11 @@ service_s = 2           # seconds per service throughput measurement (published,
 pi_cap = 1048576        # 1 MiB: every output, its |π| if it parses as a signed proof that acc accepts,
                         # else its file size (a breach is the entry's REJECT, whichever step)
 final_pi_cap = 524288   # 512 KiB: the final output's |π| (both tracks)
-v_cap_ms = 128          # one acc check of a checked proof (parse included), one pinned core, after a
-                        # warm-up; above it the check is timed twice more and the minimum counts (a
-                        # badge run of intermediate checks is bounded by 60 s + 2 v_cap per check)
+v_cap_ms = 128          # one acc check of a checked proof (file read and parse included), one pinned
+                        # core, after a warm-up, timed by the runner around the request and by the
+                        # badge, the larger counts; above it the check is timed twice more and the
+                        # minimum counts (a badge run of intermediate checks is bounded by 60 s +
+                        # 2 v_cap per check)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB

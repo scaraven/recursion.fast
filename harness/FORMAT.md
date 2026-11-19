@@ -59,7 +59,7 @@ and every query zero-padded to a whole number of words. The library's witness-se
 node (`WitnessSending.encode`) carries its children in that word encoding, so a node prover
 re-encodes each child's file by padding `π` and the queries (`harness/toy-prover/toy.c`,
 `app_signed_words`). The file itself is not padded: the badge parses it at byte level
-(`harness/badge/Common.lean.in`, `parseSigned`) in linear time, about 30 ms for a 9.2 MB file,
+(`RecursionFast/Badge.lean`, `parseSigned`) in linear time, about 30 ms for a 9.2 MB file,
 where reading words through `packFast` and `Word = BitVec 64` costs about 0.4 µs per byte (both
 measured).
 

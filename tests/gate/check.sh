@@ -10,12 +10,18 @@
 #             lemma reported as a pinned dependency's note
 #   neg       tests/gate/GateNeg.lean: REJECT `badS.ext` (rule 4), `@[implemented_by]` (rule 3),
 #             the `partial` definition (rule 2)
+#   wiring    the badge's per-entry module (harness/badge/Verify.lean.in) rendered around
+#             tests/gate/GateWiringSub.lean: PASS (rule 9, `--wiring`); around
+#             tests/gate/GateWiringHijack.lean, whose notation turns `RFBadge.main` into an
+#             accept-all `main`: REJECT; and the honest rendering with one more declaration: REJECT
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")/../.." && pwd); cd "$HERE"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail() { echo "gate fixtures: $*"; exit 1; }
 M=.lake/rf/manifest.sha256
-[[ -f $M ]] || { M=$T/manifest.sha256; python3 -I scripts/olean-manifest.py gen "$M" > "$T/manifest.log"; }
+# (regenerated here also if it predates the badge's glue, `RecursionFast.Badge`, which rule 9 trusts by hash)
+[[ -f $M ]] && grep -q "project/RecursionFast/Badge.olean" "$M" \
+  || { M=$T/manifest.sha256; python3 -I scripts/olean-manifest.py gen "$M" > "$T/manifest.log"; }
 G=$HERE/harness/lean-tools/.lake/build/bin/gate
 [[ -x $G ]] || fail "build the gate first (harness/lean-tools)"
 gate() { lake env bash -c "LEAN_PATH=$T/olean:\$LEAN_PATH $G $*"; }
@@ -56,4 +62,23 @@ echo "comppoly: PASS ($(grep -c '^gate: note:' "$T/comppoly.log") note(s) on pin
 neg badS_fact badS "badS.ext: badExt has no compiled code"
 neg implS_fact implS "@\[implemented_by"
 neg partialS_fact partialS "partial"
+
+# rule 9: the badge's per-entry module, rendered from the template as harness/evaluate.py does
+wiring() {  # NAME SOLUTION_MODULE EXTRA_LINE
+  sed "s/{{solution_module}}/$2/" harness/badge/Verify.lean.in > "$T/$1.lean"
+  [[ -z $3 ]] || echo "$3" >> "$T/$1.lean"
+  lake env bash -c "LEAN_PATH=$T/olean:\$LEAN_PATH lean --root=$T -o $T/olean/$1.olean $T/$1.lean"
+  lake env bash -c "LEAN_PATH=$T/olean:\$LEAN_PATH $G --wiring $1 --manifest $M" > "$T/$1.log" 2>&1
+}
+for f in GateWiringSub GateWiringHijack; do lake env lean -o "$T/olean/$f.olean" tests/gate/$f.lean; done
+wiring WiringGood GateWiringSub "" || { cat "$T/WiringGood.log"; fail "wiring: the honest per-entry module rejected"; }
+grep -q "^gate: PASS" "$T/WiringGood.log" || { cat "$T/WiringGood.log"; fail "wiring: no PASS"; }
+echo "wiring: PASS (main := RFBadge.main RecursionFast.Challenge.submission)"
+wneg() {  # NAME SOLUTION_MODULE EXTRA_LINE EXPECTED_REJECT_SUBSTRING
+  if wiring "$1" "$2" "$3"; then cat "$T/$1.log"; fail "wiring $1: ACCEPTED"; fi
+  grep "^gate: REJECT" "$T/$1.log" | grep -q -- "$4" || { cat "$T/$1.log"; fail "wiring $1: not rejected for $4"; }
+  echo "wiring $1: REJECT ($(grep -m1 "^gate: REJECT" "$T/$1.log" | cut -c14-120))"
+}
+wneg WiringHijack GateWiringHijack "" "main is not RFBadge.main RecursionFast.Challenge.submission: its value is fakeMain"
+wneg WiringExtra GateWiringSub "def extra : Nat := 0" "besides main"
 echo "gate fixtures OK"

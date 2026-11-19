@@ -59,7 +59,10 @@ The root is size-capped (§9, `[entry]` of the season file), checked before anyt
 `RecursionFast.Challenge.submission : Submission` and proves
 `RecursionFast.Challenge.certified : CertificateR declared submission`, with `declared` copied
 verbatim. The comparator checks that the theorem proved is exactly the rendered one and that
-`submission` is the only changed definition; a mismatch, like any proof the kernel rejects, makes
+`submission` is the only definition of the rendered challenge that changed (the entry's modules may
+add any other declarations, instances and notations included, which the comparator does not
+compare: they reach the badge only through `submission`, §11); a mismatch, like any proof the
+kernel rejects, makes
 the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors 0 and not
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
 half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.s), placed as
@@ -233,9 +236,12 @@ which the prover never had the key.
   checks outputs with the compiled `acc` against its own statements: the final output (step `M`)
   always, every intermediate output for the track `every`. **Caps:** every output's size is at
   most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof that `acc` accepts, else its file size); the final `|π|`
-  is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, parse included, pinned to
-  one core, after an untimed warm-up of its batch) is at most `v_cap` = 128 ms; a check above it is
-  timed twice more and the least of the three counts.
+  is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, the file's read and parse
+  included, pinned to one core, after an untimed warm-up of its batch) is at most `v_cap` = 128 ms;
+  a check above it is timed twice more and the least of the three counts. Each check is timed twice
+  at once: by the runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per
+  MiB of file beyond the check itself), and by the badge's own clock; the larger counts
+  ([`harness/rfh/checks.py`](harness/rfh/checks.py)).
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
   (a leaf: only the flipped statement) and 2 also.
@@ -425,7 +431,9 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   `csimp`, `cpass`, `computed_field`); `V`, `P` and `ext` of `submission` have compiled code; no
   entry definition refers to the compiler's or the environment's API; the module declaring
   `submission` reaches, transitively, only entry modules and the import allowlist; organiser modules
-  match the olean manifest.
+  match the olean manifest; and, after the badge build, the badge's per-entry module holds
+  `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else (rule 9: an entry's
+  `notation` can turn the text `RFBadge.main` into another term in every module that imports it).
 - **Imports**: an entry module imports only its own modules and the import closure of `Mathlib`,
   `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`,
   `CompPoly.Fields.Binary.BF64.Ext3` and `CompPoly.Fields.Binary.BF64.Bytes`
@@ -473,7 +481,16 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   signed-oracle construction (Chiesa–Tromer, ICS 2010) also assumes, is not used: the walk
   matches a signed proof to the log by its trace, the signed message, not by its signature.
 - **The badge**: the code Lean's compiler emits for `acc`, built from the same build the kernel
-  checked; and the harness tools (gate, source rule, manifest, renderer, sandbox).
+  checked, and the badge's glue (the file and hex parsers, the timer, the command line:
+  [`RecursionFast/Badge.lean`](RecursionFast/Badge.lean)), compiled with the organiser's package
+  before any entry exists and hashed in the olean manifest, so that no instance or notation an
+  entry declares is in scope where it is elaborated. The one module elaborated with the entry in
+  scope ([`harness/badge/Verify.lean.in`](harness/badge/Verify.lean.in)) passes `submission` to the
+  glue and holds nothing else (gate rule 9). The executed code is still compiled code, not the
+  kernel's term: an elaboration-time metaprogram that rewrites the compiler's data (the known raw
+  route passes the gate; only the lexical source rule stops it) or a compiler bug would make it
+  differ from the certified `acc`. And the harness tools (gate, source rule, manifest, renderer,
+  sandbox).
 - **The runner and the service**, tested, not proved (the service's replay mode included: it
   re-issues only signatures it already made at the same index) ([`tests/`](tests/), [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 - **The machine**: the trust anchor is the organiser's server, which runs every job of

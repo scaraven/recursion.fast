@@ -4,8 +4,9 @@
 # separate jobs). A push or a pull request to this repository triggers it; it
 # runs no submission. Every check whose subject is organiser code runs here and only here, once per
 # harness commit, never in an evaluation: the contract's `acc` before the entry's `V` (the
-# organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
-# template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
+# organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge's
+# glue and template (against a hostile entry's instances and notation), the compiled extractor
+# interpreter, the harness. Every job ends within 30 minutes, its
 # steps' timeouts nested inside that.
 name: ci
 on:
@@ -66,8 +67,8 @@ jobs:
         run: |
           timeout 60 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
           python3 -I tests/source-rule/sweep.py scripts/source-rule.py logs/tokens.txt tests/source-rule/reviewed-tokens.txt
-      - name: gate fixtures
-        run: timeout 90 tests/gate/check.sh
+      - name: gate fixtures (rules 1-4 and 9; 110 s on 16 cores of an organiser workstation)
+        run: timeout 240 tests/gate/check.sh
       - name: the service's signatures against the compiled Lean reference signer
         run: |
           (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
@@ -75,8 +76,8 @@ jobs:
           timeout 120 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: the compiled extractor interpreter on the witness-sending entry (organiser code)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
-      - name: acc on a 2^16-query signed trace, timed by the badge, and the organiser's canaries
-        run: timeout 120 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
+      - name: acc on a 2^16-query signed trace, timed by the badge, the organiser's canaries, and the badge's glue against a hostile entry's instances
+        run: timeout 300 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: lean-logs, path: logs/ }
