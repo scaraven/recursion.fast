@@ -14,14 +14,19 @@ over the `32n` bytes). Signed children are built with the Lean reference signer
 symbolically (`sigOk_sign`, no hash evaluated).
 
 Positive:
-* `item_kat`, `item1_kat` (`leafItem` of the first two blocks), `root1_kat` (one block: its hash), `root2_kat`,
-  `root3_kat` (an odd level: the third hash is carried up), `root4_kat` (two full levels),
-  `leafStmt_kat` (the statement of `root4_kat`'s root, `n = 4`), `rel_root4` (that statement is
-  in the relation with the four blocks as its witness), `nodeStmt_kat`: the byte layouts;
+* `item_kat`, `item1_kat` (`leafItem` of the first two blocks), `root1_kat` (one block: its
+  hash), `root2_kat`, `root3_kat` (an odd level: the third hash is carried up), `root4_kat` (two
+  full levels), `root5_kat`, `root6_kat`, `root7_kat` (carry-ups above the first level: the fifth
+  hash carried two levels, the last node carried at the second level, the seventh hash carried
+  once then paired), `stmt9_kat` (the statement of nine blocks, the ninth hash carried three
+  levels), `leafStmt_kat` (the statement of `root4_kat`'s root, `n = 4`), `rel_root4` (that
+  statement is in the relation with the four blocks as its witness), `nodeStmt_kat`: the byte
+  layouts;
   `leafStmt_season_kat` (the count `2^18`, the season's `n`) with `enc64` beyond its first byte
   (`enc64_season`, `enc64_kat`: 8 bytes, little-endian).
 * `leafStmt_empty_kat`, `leaf_empty`, `leaf_empty_unique`: at `n = 0` the statement
-  `leafStmt zero 0` is public and its one witness is `[]` (the runner enforces `1 ≤ n`).
+  `leafStmt zero 0` is public: `[]` witnesses it and only it, so modulo a Keccak-256 collision
+  its one witness is `[]` (the runner enforces `1 ≤ n`).
 * `acc_leafSigned`: the witness-sending signed proof of a leaf (empty trace, a reference
   signature of its digest) is accepted under the signer's key.
 * **`node_of_two_leaves`** (the node clause): under the witness-sending `acc` and the key
@@ -38,9 +43,9 @@ Negative:
   (the right root, the wrong count), `dropped_block` (one block dropped), `extra_block` (one block
   added), `swapped_blocks` (two blocks swapped: the tree is ordered), `carry_not_duplicated` (an
   odd last digest is carried up, not paired with itself), `root_not_xor` and `xor_rejected` (the
-  root is not the XOR of the block hashes, the v6 leaf's combination), `leaf_over_leafCap` (every
-  `acc`); `leaf_over_2pow20`: the bound is `2^20` (a leaf of `2^20 + 1` blocks is rejected under
-  every `acc`; `tests/mutation`'s `rel-leafcap-2^21`).
+  root is not the XOR of the block hashes, the earlier seed leaf's combination),
+  `leaf_over_leafCap` (every `acc`); `leaf_over_2pow20`: the bound is `2^20` (a leaf of
+  `2^20 + 1` blocks is rejected under every `acc`; `tests/mutation`'s `rel-leafcap-2^21`).
 * `node_needs_statement` (every `acc`), `node_statement_mismatch` (an instance).
 * `first_child_rejected`, `second_child_rejected`: a validly signed child whose proof is for the
   wrong statement.
@@ -96,46 +101,113 @@ def blks (n : ℕ) : List Digest := (List.range n).map blk
 
 /-! ## Known answers -/
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 print(K(b'H'+bytes(range(32))).hex())"` -/
 theorem item_kat : (leafItem s0).toList =
     hex "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69" := by
   rw [← leafItemF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 print(K(b'H'+bytes(range(32, 64))).hex())"` (the second block) -/
 theorem item1_kat : (leafItem s1).toList =
     hex "bea32b562ceff4efb8e461d8068bc952e8a11b759db5b51b9fc9a335e311edee" := by
   rw [← leafItemF_eq]
   decide +kernel
 
-/-- One block: the root is its hash (`item_kat`). `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(1).hex())"` -/
+/-- One block: the root is its hash (`item_kat`).
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(1).hex())"` -/
 theorem root1_kat : (dataRoot (blks 1)).toList =
     hex "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69" := by
   rw [← dataRootF_eq]
   decide +kernel
 
-/-- Two blocks: one data node over their hashes. `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(2).hex())"` -/
+/-- Two blocks: one data node over their hashes.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(2).hex())"` -/
 theorem root2_kat : (dataRoot (blks 2)).toList =
     hex "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020" := by
   rw [← dataRootF_eq]
   decide +kernel
 
 /-- Three blocks, an odd level: the third hash is carried up, then paired with the first node.
-`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(3).hex())"` -/
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(3).hex())"` -/
 theorem root3_kat : (dataRoot (blks 3)).toList =
     hex "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b" := by
   rw [← dataRootF_eq]
   decide +kernel
 
-/-- Four blocks, two full levels. `python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32)); L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]; R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]; print(R(4).hex())"` -/
+/-- Four blocks, two full levels.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(4).hex())"` -/
 theorem root4_kat : (dataRoot (blks 4)).toList =
     hex "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1" := by
   rw [← dataRootF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- Five blocks: the fifth hash is carried up two levels, then paired with the four blocks' root.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(5).hex())"` -/
+theorem root5_kat : (dataRoot (blks 5)).toList =
+    hex "b2271079ecba02c30b299a5659f8b64cad48f697d2c565a754cfede0427a9420" := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- Six blocks: an even first level, then an odd one: the node of the last two blocks is carried up.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(6).hex())"` -/
+theorem root6_kat : (dataRoot (blks 6)).toList =
+    hex "259aa413be633639776254e69323bc335fc8647907e6b499ddbff7b98d92d460" := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- Seven blocks: the seventh hash is carried up one level, then paired with the node of the fifth
+and sixth.
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(R(7).hex())"` -/
+theorem root7_kat : (dataRoot (blks 7)).toList =
+    hex "5387590c6b14b2b1cea975eeb354600cb4154a9c45a4ff17da5137526afc592b" := by
+  rw [← dataRootF_eq]
+  decide +kernel
+
+/-- The statement of nine blocks (`n = 9`: the ninth hash is carried up three levels).
+`python3 -I -c "import sys, functools as F; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K; B=lambda j: bytes((32*j+i)%256 for i in range(32))
+L=lambda d: [K(b'D'+d[i]+d[i+1]) for i in range(0,len(d)-1,2)]+d[len(d)//2*2:]
+R=lambda n: F.reduce(lambda d,_: L(d), range(n), [K(b'H'+B(j)) for j in range(n)])[0]
+print(K(b'L'+R(9)+(9).to_bytes(8,'little')).hex())"` -/
+theorem stmt9_kat : (leafStmt (dataRoot (blks 9)) 9).toList =
+    hex "f6d213f1b8205192e8445bbbf22686a6d6ed97d214530d290572be8f6f9d400a" := by
+  rw [← leafStmtF_eq, ← dataRootF_eq]
+  decide +kernel
+
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 h=bytes.fromhex('55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1');
 print(K(b'L'+h+(4).to_bytes(8,'little')).hex())"` (the root of `root4_kat`) -/
 theorem leafStmt_kat :
@@ -154,10 +226,11 @@ theorem rel_root4 (acc : Digest → Signed → Bool) :
   rw [Rel, ← leafStmtF_eq, ← dataRootF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 a=bytes.fromhex('da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11');
 b=bytes.fromhex('422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f');
-print(K(b'N'+a+b).hex())"` (two digests: the items of the earlier v6 leaf) -/
+print(K(b'N'+a+b).hex())"` (two digests: the items of the earlier seed leaf) -/
 theorem nodeStmt_kat :
     (nodeStmt (ofHex "da513675c495534390e0dfb57a4b2d94b8ec604af01e1cacb5bfa117e4178b11")
       (ofHex "422927c492ce04e6a6ee85dac40f023ffabf0384da8d3a63e491fbf923fc2b9f")).toList =
@@ -165,7 +238,8 @@ theorem nodeStmt_kat :
   rw [← nodeStmtF_eq]
   decide +kernel
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 h=bytes.fromhex('55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1');
 print(K(b'L'+h+(2**18).to_bytes(8,'little')).hex())"` (the root of `root4_kat` with the season's
 count `n = 2^18`) -/
@@ -182,7 +256,8 @@ theorem enc64_season : enc64 (2 ^ 18) = [0, 0, 0x04, 0, 0, 0, 0, 0] := by decide
 /-- `enc64` writes 8 bytes, low byte first. -/
 theorem enc64_kat : enc64 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
 
-/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+/-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
+from rfh.keccak import keccak256 as K
 print(K(b'L'+bytes(32)+(0).to_bytes(8,'little')).hex())"`: the statement of no block, the zero
 root and the count `0` (`dataRoot []` is the zero digest). -/
 theorem leafStmt_empty_kat : (leafStmt (dataRoot []) 0).toList =
@@ -294,7 +369,7 @@ theorem carry_not_duplicated : dataRoot (blks 3) ≠ dataRoot (blks 3 ++ [blk 2]
   rw [← dataRootF_eq]
   decide +kernel
 
-/-- The bytewise XOR of two digests (the v6 leaf's combination of its hashes). -/
+/-- The bytewise XOR of two digests (the earlier seed leaf's combination of its hashes). -/
 def xor2 (a b : Digest) : Digest := Vector.zipWith (· ^^^ ·) a b
 
 /-- **The root is not the XOR of the block hashes** (`[s0, s1]`). -/

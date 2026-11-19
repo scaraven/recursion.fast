@@ -26,8 +26,8 @@ And `ws_compose_prob`: under every key and against every adversary, its walk esc
 probability `0` (`compose_prob` at `ε = 0`, `qV = 0`).
 
 Against the service's signed traces (`Forgery.reduce`, `walkSigned`), with `queryLeaf`, the leaf
-proof of the data `xs` carrying the one-entry trace `(qMax, a)` (a query of exactly `queryCap` bytes),
-accepted by the one-query verifier `oneQuery qMax` (`Controls/Relation.lean`):
+proof of the data `xs` carrying the one-entry trace `(qMax, a)` (a query of exactly `queryCap`
+bytes), accepted by the one-query verifier `oneQuery qMax` (`Controls/Relation.lean`):
 * Positive (the EUF-CMA outcome is reached through the walk): with the empty log and a service
   that signed nothing, `walkSigned` returns an EUF-CMA forgery at the root
   (`walkSigned_queryLeaf_euf`); so the adversary that holds the key, asks nothing and outputs that
@@ -55,9 +55,10 @@ key, with the empty log:
   walk's data are the runner's or a collision over the data tree is exhibited (positive);
   `dataCollision_odd` (three blocks, an odd level whose last digest is carried up): two
   different lists of three blocks with one root give a collision of the two last blocks' hash
-  inputs or of the two top nodes' inputs, which carry the third hashes; `data_lists_differ`: the
-  lemma's hypotheses are met only by different lists, so it is not vacuous at one list
-  (negative: equal lists give no pair).
+  inputs or of the two top nodes' inputs, which carry the third hashes;
+  `no_collision_on_runner_data` (negative): when the returned data are the runner's, the collision
+  disjunct of `Outcome.data_or_collision` is false (the zip of a list with itself pairs no two
+  different lists), so the two disjuncts are exclusive and the honest walk reports no collision.
 * Negative: `noExt`'s stream walk escapes at the root of the two-leaf stream
   (`noExt_walkStream_escaped`), so the adversary that outputs that proof makes
   `compose_prob_stream`'s event certain (`noExt_stream_escape_prob`). An escape below the root:
@@ -68,7 +69,8 @@ key, with the empty log:
   stream walk escapes with probability `0` (`compose_prob_stream` at `ε = 0`, `qV = 0`).
 
 The leaves' data are generic: every list of at most `leafCap` blocks, and in the trees and streams
-lists of one length `n` (the v6 controls' seeds and sizes, ported with their intent).
+lists of one length `n` (the seeds and sizes of the earlier seed leaf's controls, ported with their
+intent).
 
 Symbolic (`decode_encode`, `sigOk_sign`, `extract_of_E`, `walkFrom_leaf`, `walkStreamFrom_one`,
 `walkStreamFrom_node`, `walkStreamFrom_succ_succ`, `walkStreamFrom_escape`); no hash is
@@ -183,7 +185,8 @@ def nodeSigned (sk : ℕ → ℕ → Digest) (xs₁ xs₂ : List Digest) (n : �
 theorem rel_nodeWit (sk : ℕ → ℕ → Digest) {xs₁ xs₂ : List Digest} {n : ℕ}
     (h₁ : xs₁.length = n) (h₂ : xs₂.length = n) (hn : n ≤ leafCap) :
     Rel (submission.acc (Signer.pk sk))
-      (nodeStmt (leafStmt (dataRoot xs₁) n) (leafStmt (dataRoot xs₂) n)) (nodeWit sk xs₁ xs₂ n) := by
+      (nodeStmt (leafStmt (dataRoot xs₁) n) (leafStmt (dataRoot xs₂) n))
+      (nodeWit sk xs₁ xs₂ n) := by
   have := Controls.Relation.node_of_two_leaves sk xs₁ xs₂ (h₁.trans_le hn) (h₂.trans_le hn)
   rwa [h₁, h₂] at this
 
@@ -419,7 +422,8 @@ theorem dataCollision_odd (a b c c' : Digest) (hc : c ≠ c')
     let col := dataCollision (xs := [a, b, c]) (ys := [a, b, c']) (by simpa using hc) rfl hr
     (col.x = tagItem :: c.toList ∧ col.y = tagItem :: c'.toList) ∨
       (col.x = tagData :: (dataNode (leafItem a) (leafItem b)).toList ++ (leafItem c).toList ∧
-        col.y = tagData :: (dataNode (leafItem a) (leafItem b)).toList ++ (leafItem c').toList) := by
+        col.y = tagData :: (dataNode (leafItem a) (leafItem b)).toList ++
+          (leafItem c').toList) := by
   intro col
   simp only [col, dataCollision, List.map_cons, List.map_nil, List.length_cons, List.length_nil]
   split
@@ -434,12 +438,23 @@ theorem dataCollision_odd (a b c c' : Digest) (hc : c ≠ c')
     right
     simp [iterateCollision, levelCollision, dataLevel, hi, htop]
 
-/-- **Not vacuous at one list** (negative): the data collision's hypotheses need two different
-lists; a list and itself never give one, so a returned list equal to the runner's is never
-reported as a collision. -/
-theorem data_lists_differ (xs : List Digest) :
-    ¬ ∃ (ys : List Digest) (_ : ys ≠ xs) (_ : ys.length = xs.length)
-      (_ : dataRoot ys = dataRoot xs), ys = xs := fun ⟨_, hne, _, _, h⟩ => hne h
+/-- **No collision on the runner's data** (negative): the collision disjunct of
+`data_or_collision` (and `Outcome.data_or_collision`, `stream_data_or_collision`) at returned data
+`yss = xss` is false, for every list of block lists: the zip of a list with itself pairs each
+entry with itself, never two different lists. So the disjuncts are exclusive, and a walk that
+returns the runner's data never also exhibits a data collision. -/
+theorem no_collision_on_runner_data (xss : List (List Digest)) :
+    ¬ ∃ (ys xs : List Digest) (hne : ys ≠ xs) (hl : ys.length = xs.length)
+      (hr : dataRoot ys = dataRoot xs), (ys, xs) ∈ xss.zip xss ∧
+        DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y := by
+  rintro ⟨ys, xs, hne, -, -, hm, -⟩
+  induction xss with
+  | nil => simp at hm
+  | cons a t ih =>
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at hm
+    rcases hm with ⟨rfl, rfl⟩ | hm
+    · exact hne rfl
+    · exact ih hm
 
 /-- The witness-sending node witness of the three-leaf stream: the signed node proof over the
 first two leaves and the signed leaf proof of the third (key `3`). -/

@@ -6,9 +6,9 @@ over the leaf values `h_1 … h_M` of size `n`, oldest first (`h_i = dataRoot xs
 step `i`'s data, `Relation.lean`): `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` with
 `L_i = leafStmt h_i n` (`streamStmt`, the digest of the last step; each `c_i` is `streamStmt` of
 the first `i` leaves). The runner computes these digests from its own data
-(`harness/rfh/digest.py`, `stream_statements`), never from a digest a prover supplies; a known-answer control pins the two together (`Controls/Tree.lean`,
-`streamStmt_kat`). The library's stream walk is stated over it (`Library/Compose.lean`,
-`walkStream`, `compose_prob_stream`).
+(`harness/rfh/digest.py`, `stream_statements`), never from a digest a prover supplies; a
+known-answer control pins the two together (`Controls/Tree.lean`, `streamStmt_kat`). The library's
+stream walk is stated over it (`Library/Compose.lean`, `walkStream`, `compose_prob_stream`).
 
 **The tree's root.** The root digest of `2^r` leaves, computed from the leaf digests by hashing
 up (`nodeStmt`, adjacent pairs, level by level). No prover is benchmarked on a tree, and the
@@ -24,8 +24,8 @@ the root does not commit to the number of leaves (`treeRoot [a, b] = treeRoot [n
 composition fixes `2^r` leaves, and nothing in `Certificate.lean` or `Security.lean` uses
 `treeRoot`.
 `streamStmt` does commit to its length and to `n`: two different streams with one statement give
-a Keccak collision (unwinding ends at a leaf's statement against a node's). `streamStmt` of no leaf is the zero
-digest; the benchmark's streams have `M` leaves, `M` of `harness/season.toml`.
+a Keccak collision (unwinding ends at a leaf's statement against a node's). `streamStmt` of no
+leaf is the zero digest; the benchmark's streams have `M` leaves, `M` of `harness/season.toml`.
 -/
 import RecursionFast.Contract.Relation
 import Mathlib.Logic.Function.Iterate

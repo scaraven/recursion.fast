@@ -17,7 +17,8 @@
     remains**: the root of two or more digests is the root of the level above; with
     `root f [c] = c` (by `rfl`) this is the recursive reading of the root.
   * The same facts for `treeLevel`/`treeRoot` under their earlier names (`length_treeLevel`,
-    `iterate_treeLevel_of_length_le_one`, `length_iterate_length_le_one`, `treeRoot_cons_cons`),
+    `iterate_treeLevel_of_length_le_one`, `length_iterate_treeLevel`,
+    `length_iterate_length_le_one`, `treeRoot_cons_cons`),
     and `length_dataLevel`, `dataRoot_nil`, `dataRoot_singleton`, `dataRoot_cons_cons` for the
     data tree.
 -/
@@ -134,6 +135,12 @@ theorem iterate_treeLevel_of_length_le_one {l : List Digest} (h : l.length ≤ 1
     treeLevel^[m] l = l := by
   rw [show treeLevel = level nodeStmt from funext treeLevel_eq,
     iterate_level_of_length_le_one _ h]
+
+/-- The length after `k` levels (the earlier statement, now `length_iterate_level`'s instance). -/
+theorem length_iterate_treeLevel (cs : List Digest) (k : ℕ) :
+    (treeLevel^[k] cs).length ≤ max 1 (cs.length - k) := by
+  rw [show treeLevel = level nodeStmt from funext treeLevel_eq]
+  exact length_iterate_level _ cs k
 
 /-- `|cs|` levels leave at most one digest. -/
 theorem length_iterate_length_le_one (cs : List Digest) :

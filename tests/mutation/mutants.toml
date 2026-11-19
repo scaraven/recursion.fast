@@ -50,6 +50,14 @@ breaks = "a data node hashes its children in the wrong order"
 expect = "Controls.Relation.root2_kat"
 
 [[mutant]]
+id = "rel-datanode-no-tag"
+file = "Relation.lean"
+original = '''keccakDigest (tagData :: l.toList ++ r.toList)'''
+replacement = '''keccakDigest (l.toList ++ r.toList)'''
+breaks = "a data node carries no domain tag (its 64-byte input is not separated from other hashes)"
+expect = "Controls.Relation.root2_kat"
+
+[[mutant]]
 id = "rel-tagdata-eq-tagnode"
 file = "Relation.lean"
 original = '''def tagData : UInt8 := 0x44'''

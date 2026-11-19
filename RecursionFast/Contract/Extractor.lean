@@ -46,52 +46,52 @@ knowledge soundness still holds, but its extractor is not claimed efficient. The
 longest proof whose packed words fit the output cap, so the witness-sending extractor, which
 copies the proof, is within it, and it is closed under extraction: an output of at most `outCap`
 words denotes children of at most `8 · outCap` bytes (`Controls/Extractor.lean`,
-`child_in_domain`), so from a deployed proof every proof of the extraction tree is in the domain. A length word is the
-number's low 64 bits, so a query of `2^64` bytes or more would make the tape ambiguous (two logs
-with different answers, one tape). A log entry takes at least five words, so efficient extraction
-is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up to `logCap`. The
-program has at most `progCap = 2^20` statements. That cap is what stops a lookup table: `ext` is
-never executed, and a short Lean definition can denote an exponentially large decision tree that
-computes any function of `k` tape bits in about `k` steps, so without it a table of a brute-force
-inversion would meet any fuel (`Controls/Extractor.lean`: a `k`-bit table has about `10 · 2^k`
-statements, past the cap from `k = 17`). Within the cap `ext` can still carry about `2^20` words
-of constants, non-uniform advice fixed before the run's key and leaf data are drawn.
+`child_in_domain`), so from a deployed proof every proof of the extraction tree is in the domain.
+A length word is the number's low 64 bits, so a query of `2^64` bytes or more would make the tape
+ambiguous (two logs with different answers, one tape). A log entry takes at least five words, so
+efficient extraction is claimed for logs of up to about `2^61` entries; `KS` itself covers logs up
+to `logCap`. The program has at most `progCap = 2^20` statements. That cap is what stops a lookup
+table: `ext` is never executed, and a short Lean definition can denote an exponentially large
+decision tree that computes any function of `k` tape bits in about `k` steps, so without it a table
+of a brute-force inversion would meet any fuel (`Controls/Extractor.lean`: a `k`-bit table has about
+`10 · 2^k` statements, past the cap from `k = 17`). Within the cap `ext` can still carry about
+`2^20` words of constants, non-uniform advice fixed before the run's key and leaf data are drawn.
 
 **Output cap.** `outCap = 2^24` words (128 MiB). A leaf witness of `n` blocks takes `2 + 4n`
-words, at most `2^22 + 2` at `leafCap` (`Relation.lean`); a node witness `9 + Σ` over its two children of `w = (1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 +
-⌈|q|/8⌉)) + 597` words. A child's signed file (`harness/FORMAT.md`) of `f` bytes with `m` entries
-has `8 · w ≤ f + 7 · (m + 1)` (only the padding of `π` and of each query to whole words differs),
-so with `m ≤ qV ≤ 2^16` a file within the deployment's cap of `2^26` bytes takes at most
-`2^23 + 57,344` words. Under the benchmark (one IVC stream) a node's first child is the previous
-step's output, delivered within that cap, and its second the proof of a leaf: whatever the leaf
-proof's size up to `2^23 − 57,353` words (about 64 MiB), the node fits. A leaf proof that sends
-its data whole (`16 + 32n` bytes, the witness-sending encoding) is a child of `601 + 4n` words, so
-at `leafCap`, beside a first child at the file cap, the node takes `2^23 + 2^22 + 57,954 < 2^23 +
-2^22 + 2^17 < 2^24` words. Two children both within
-about `458,800` bytes of the file cap may not fit (with the most padding); with word-aligned fields
-they fit up to 36 bytes below it (two files of `2^26 − 1000` bytes, no trace, take `16,776,975 ≤
-2^24` words), so near the cap `outCap` may bind before the file cap. A node
-whose children do not fit cannot be extracted, so its verifier is not certifiable, which is the
-intended outcome: the entry's `V` bounds the children it accepts.
+words, at most `2^22 + 2` at `leafCap` (`Relation.lean`); a node witness `9 + Σ` over its two
+children of `w = (1 + ⌈|π|/8⌉) + (1 + Σ_entries (5 + ⌈|q|/8⌉)) + 597` words. A child's signed file
+(`harness/FORMAT.md`) of `f` bytes with `m` entries has `8 · w ≤ f + 7 · (m + 1)` (only the padding
+of `π` and of each query to whole words differs), so with `m ≤ qV ≤ 2^16` a file within the
+deployment's cap of `2^26` bytes takes at most `2^23 + 57,344` words. Under the benchmark (one IVC
+stream) a node's first child is the previous step's output, delivered within that cap, and its
+second the proof of a leaf: whatever the leaf proof's size up to `2^23 − 57,353` words (about 64
+MiB), the node fits. A leaf proof that sends its data whole (`16 + 32n` bytes, the witness-sending
+encoding) is a child of `601 + 4n` words, so at `leafCap`, beside a first child at the file cap, the
+node takes `2^23 + 2^22 + 57,954 < 2^23 + 2^22 + 2^17 < 2^24` words. Two children both within about
+`458,800` bytes of the file cap may not fit (with the most padding); with word-aligned fields they
+fit up to 36 bytes below it (two files of `2^26 − 1000` bytes, no trace, take `16,776,975 ≤ 2^24`
+words), so near the cap `outCap` may bind before the file cap. A node whose children do not fit
+cannot be extracted, so its verifier is not certifiable, which is the intended outcome: the entry's
+`V` bounds the children it accepts.
 
-**Budget.** `B t` charges `2^16` steps per input word and a fixed
-`2^48`. The fixed term covers a quasi-linear Reed–Solomon decoder of the word a node extractor must
-decode (about `2^29` symbols, `2^38.7` field operations at about `2^4` statements each),
-with `2^5` to spare. The linear term covers indexing the log: copy each entry's answer and tape
-position into memory and merge-sort them by answer in a scratch of the same size (`memPerWord = 2`,
-`Machine.lean`), `t · log t ≤ 64 · t` comparisons of 4-word digests at about `2^5` statements each,
-so about `2^11` steps per word; a lookup is then a binary search. The decoded word's symbols are
-read from the log, so the decoder's memory is also proportional to `t`. A leaf extractor must output
-up to `2 + 4 · 2^20` words, for every `n ≤ leafCap` (0, 1 and odd sizes included), and recovers
-them from the log when the proof commits to the data instead of carrying it. That fits both
-terms. The data at the cap is `2^25` bytes, about `2^23` symbols of a 31-bit field, a codeword of
-`2^24` to `2^27` symbols at rates `2^-1` to `2^-4`, below the node's `2^29`, so decoding it
-(`2^33.2` to `2^36.5` field operations) is within the fixed term. The symbols the extractor
-decodes are on its tape (`t ≥ 2^22`), so writing the output, a few steps per word, is within the
-linear term. One scan of the log for
-an answer is a kernel-checked control within `16 · t` steps (`Controls/LogScan.lean`). Within the
-domain `B t < 2^81`, so enumerating `2^128` candidates is excluded; the relation has no shorter
-secret.
+**Budget.** `B t` charges `2^16` steps per input word and a fixed `2^48`. The fixed term covers a
+quasi-linear Reed–Solomon decoder of the word a node extractor must decode (about `2^29` symbols,
+`2^38.7` field operations at about `2^4` statements each), with `2^5` to spare. The linear term
+covers indexing the log: copy each entry's answer and tape position into memory and merge-sort them
+by answer in a scratch of the same size (`memPerWord = 2`, `Machine.lean`), `t · log t ≤ 64 · t`
+comparisons of 4-word digests at about `2^5` statements each, so about `2^11` steps per word; a
+lookup is then a binary search. The decoded word's symbols are read from the log, so the decoder's
+memory is also proportional to `t`. A leaf extractor must output up to `2 + 4 · 2^20` words, for
+every `n ≤ leafCap` (0, 1 and odd sizes included), and recovers them from the log when the proof
+commits to the data instead of carrying it. That fits both terms. The data at the cap is `2^25`
+bytes, about `2^23` symbols of a 31-bit field, a codeword of `2^24` to `2^27` symbols at rates
+`2^-1` to `2^-4`, below the node's `2^29`, so decoding it (`2^33.2` to `2^36.5` field operations) is
+within the fixed term. For an extractor that decodes the data from the log, the symbols it decodes
+are on its tape (`t ≥ 2^22`), so writing the output, a few steps per word, is within the linear
+term; for any extractor that output, `2^22 + 2` words, is within the fixed term (`2^48`) too. One
+scan of the log for an answer is a kernel-checked control within `16 · t` steps
+(`Controls/LogScan.lean`). Within the domain `B t < 2^81`, so enumerating `2^128` candidates is
+excluded; the relation has no shorter secret.
 -/
 import RecursionFast.Contract.Machine
 import RecursionFast.Contract.Oracle

@@ -16,8 +16,10 @@ on it.
 * `run.py`: the runner; `results.json` and `results.md`: the last results (generated). **Pending:**
   the committed `results.*` and `targeted.*` are the last full run's, over the earlier seed leaf
   (99 mutants, base `377b489`); the committed-data leaf replaced its six leaf mutants by fifteen
-  (`rel-leafcap-2^21` … `rel-leaf-count-zero`) and added `ext-leaf-one-block`, and the run over
-  all 109 is still to be made (its slots need `systemd-run --user` scopes);
+  (`rel-leafcap-2^21` … `rel-leaf-count-zero`) and added `ext-leaf-one-block` and
+  `rel-datanode-no-tag` (a data node without its tag, added after review), and the run over all 110
+  and the targeted re-run of the `rel-*` mutants (`--targets RecursionFast.Controls.Relation
+  --every`) are still to be made (their slots need `systemd-run --user` scopes);
   `targeted.json`, `targeted.md`: the controls added by this suite, each run alone against its
   mutant (`--targets <control module> --every`).
 

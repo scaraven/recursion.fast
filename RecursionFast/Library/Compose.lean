@@ -5,12 +5,13 @@
   (CGSY24 Thm 5.1's straight-line argument), from the contract's single-output knowledge
   soundness by a union bound over the extracted proofs. Fix a submission `S` and a public key
   `vk`. The leaves' digests are `leafStmt hᵢ n` (the runner computes them from the leaf values
-  `hᵢ = dataRoot xsᵢ` of the data `xsᵢ` it drew, `n` blocks each, with `n ≤ leafCap`). The benchmark is a **stream** of `M` steps (plain IVC):
-  `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` (`streamStmt`, `Contract/Tree.lean`), a left-leaning
-  chain whose every node's second child is a leaf; `walkStream` and `compose_prob_stream` cover
-  it. A **balanced tree** of `2^r` leaves has the root digest `treeRoot` of them; `walk` and
-  `compose_prob` cover it (the setting of `Contract/Tree.lean` and its known-answer control). The
-  tree walk is described first; the stream walk reuses its pieces.
+  `hᵢ = dataRoot xsᵢ` of the data `xsᵢ` it drew, `n` blocks each, with `n ≤ leafCap`). The
+  benchmark is a **stream** of `M` steps (plain IVC): `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i`
+  (`streamStmt`, `Contract/Tree.lean`), a left-leaning chain whose every node's second child is a
+  leaf; `walkStream` and `compose_prob_stream` cover it. A **balanced tree** of `2^r` leaves has the
+  root digest `treeRoot` of them; `walk` and `compose_prob` cover it (the setting of
+  `Contract/Tree.lean` and its known-answer control). The tree walk is described first; the stream
+  walk reuses its pieces.
 
   **The walk** (deterministic and compiled; `walk`). Given one oracle log
   `L` and a root signed proof `p₀` that `S.acc vk` accepts, it returns, computed from `p₀`
@@ -74,8 +75,12 @@
   data of all `M` leaves are extracted, and they are the runner's or a collision is exhibited
   (`Outcome.data_or_collision`, `SignedOutcome.data_or_collision`, through `dataCollision`: two
   different block lists of one length and one `dataRoot` give a Keccak-256 collision of two
-  data-tree preimages, the carry-up included). `walkStreamFrom_one`, `walkStreamFrom_node`, `walkStreamFrom_succ_succ`
-  and `walkStreamFrom_escape` read the walk on known extractor outputs.
+  data-tree preimages, the carry-up included). `Outcome.toRunner` makes that one outcome: returned
+  data other than the runner's become the collision (`pairsCollision`), so its data are the
+  runner's (`Outcome.toRunner_data?`), and it escapes exactly when the walk does
+  (`Outcome.toRunner_escaped`); `compose_prob_stream_runner` bounds that escape by
+  `compose_prob_stream`'s bound. `walkStreamFrom_one`, `walkStreamFrom_node`,
+  `walkStreamFrom_succ_succ` and `walkStreamFrom_escape` read the walk on known extractor outputs.
 
   **The forgery outcome against the service's signed traces** (`Forgery.reduce`, `walkSigned`).
   Let `T` list the traces the service signed, with their signatures, and `Honest T L` say that
@@ -478,7 +483,8 @@ theorem data_or_collision {n : ℕ} {xss yss : List (List Digest)}
     obtain ⟨ys, yss, ⟨hr, hn⟩, h', rfl⟩ := List.forall₂_cons_right_iff.mp h
     have hl : ys.length = xs.length := hn.trans (hlen xs (List.mem_cons_self ..)).symm
     by_cases hyx : ys = xs
-    · rcases ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) with he | ⟨a, b, hne, hl', hr', hm, hp⟩
+    · rcases ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) with
+        he | ⟨a, b, hne, hl', hr', hm, hp⟩
       · exact .inl (by rw [hyx, he])
       · exact .inr ⟨a, b, hne, hl', hr', by simp [List.zip_cons_cons, hm], hp⟩
     · exact .inr ⟨ys, xs, hyx, hl, hr, by simp [List.zip_cons_cons],
@@ -486,7 +492,8 @@ theorem data_or_collision {n : ℕ} {xss yss : List (List Digest)}
 
 /-- Membership of the relation is decidable: digests, leaf sizes and acceptance are. -/
 instance decRel (acc : Digest → Signed → Bool) (c : Digest) : (w : Wit) → Decidable (Rel acc c w)
-  | .leaf xs => inferInstanceAs (Decidable (xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length))
+  | .leaf xs =>
+    inferInstanceAs (Decidable (xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length))
   | .node c₁ c₂ p₁ p₂ =>
     inferInstanceAs (Decidable (c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true ∧ acc c₂ p₂ = true))
 
@@ -1014,6 +1021,77 @@ theorem Outcome.data_or_collision {L : Log} {n : ℕ} {xss : List (List Digest)}
         DataPreimage (dataCollision hne hl hr).x ∧ DataPreimage (dataCollision hne hl hr).y :=
   Compose.data_or_collision (Outcome.forall₂_of_data? h) hlen
 
+/-- The data collision of the first pair of different block lists in `ps`, whose pairs each have
+one length and one root. -/
+def pairsCollision : (ps : List (List Digest × List Digest)) →
+    (∀ q ∈ ps, q.1.length = q.2.length ∧ dataRoot q.1 = dataRoot q.2) →
+    (∃ q ∈ ps, q.1 ≠ q.2) → Collision
+  | [], _, h => absurd h (by simp)
+  | (a, b) :: ps, hp, h =>
+    if hab : a = b then
+      pairsCollision ps (fun q hq => hp q (List.mem_cons_of_mem _ hq)) (by
+        obtain ⟨q, hq, hne⟩ := h
+        rcases List.mem_cons.mp hq with rfl | hq
+        · exact absurd hab hne
+        · exact ⟨q, hq, hne⟩)
+    else dataCollision hab (hp _ (List.mem_cons_self ..)).1 (hp _ (List.mem_cons_self ..)).2
+
+/-- Returned data with the roots of the runner's data `xss` (`n` blocks each) pair each leaf's
+two block lists with one length and one root. -/
+theorem zip_pairs_of_forall₂ {n : ℕ} {xss : List (List Digest)} :
+    ∀ {yss : List (List Digest)},
+    List.Forall₂ (fun ys h => dataRoot ys = h ∧ ys.length = n) yss (xss.map dataRoot) →
+    (∀ xs ∈ xss, xs.length = n) →
+    ∀ q ∈ yss.zip xss, q.1.length = q.2.length ∧ dataRoot q.1 = dataRoot q.2 := by
+  induction xss with
+  | nil => intro yss h _ q hq; rw [List.zip_nil_right] at hq; simp at hq
+  | cons xs xss ih =>
+    intro yss h hlen q hq
+    rw [List.map_cons] at h
+    obtain ⟨ys, yss, ⟨hr, hn⟩, h', rfl⟩ := List.forall₂_cons_right_iff.mp h
+    rw [List.zip_cons_cons, List.mem_cons] at hq
+    rcases hq with rfl | hq
+    · exact ⟨hn.trans (hlen xs (List.mem_cons_self ..)).symm, hr⟩
+    · exact ih h' (fun x hx => hlen x (List.mem_cons_of_mem _ hx)) q hq
+
+/-- **The outcome against the runner's data**: returned data other than the runner's `xss`
+(`n` blocks each) become the data collision of the first leaf whose two block lists differ
+(`pairsCollision`, through `dataCollision`); every other outcome is kept. -/
+def Outcome.toRunner {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest} {p₀ : Signed}
+    {d : ℕ} (hlen : ∀ xs ∈ xss, xs.length = n) :
+    Outcome S vk L n (xss.map dataRoot) c₀ p₀ d → Outcome S vk L n (xss.map dataRoot) c₀ p₀ d
+  | .data yss h =>
+    if heq : yss = xss then .data yss h else
+      .collision (pairsCollision (yss.zip xss) (zip_pairs_of_forall₂ h hlen) (by
+        rcases Compose.data_or_collision h hlen with he | ⟨ys, xs, hne, -, -, hm, -⟩
+        · exact absurd he heq
+        · exact ⟨(ys, xs), hm, hne⟩))
+  | o => o
+
+/-- **Its data are the runner's**: the data `toRunner` returns are `xss`. -/
+theorem Outcome.toRunner_data? {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} (hlen : ∀ xs ∈ xss, xs.length = n)
+    {o : Outcome S vk L n (xss.map dataRoot) c₀ p₀ d} {yss : List (List Digest)}
+    (h : (o.toRunner hlen).data? = some yss) : yss = xss := by
+  cases o with
+  | data zss hz =>
+    simp only [Outcome.toRunner] at h
+    split at h
+    · simp only [Outcome.data?, Option.some.injEq] at h
+      subst h; assumption
+    · simp [Outcome.data?] at h
+  | _ => simp [Outcome.toRunner, Outcome.data?] at h
+
+/-- `toRunner` escapes exactly when the outcome does. -/
+theorem Outcome.toRunner_escaped {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} (hlen : ∀ xs ∈ xss, xs.length = n)
+    {o : Outcome S vk L n (xss.map dataRoot) c₀ p₀ d} : (o.toRunner hlen).Escaped ↔ o.Escaped := by
+  cases o with
+  | data zss hz =>
+    simp only [Outcome.toRunner]
+    split <;> simp [Outcome.Escaped]
+  | _ => simp [Outcome.toRunner]
+
 /-- **Two outcomes over adjacent leaf ranges, joined**: the data of both, or the first outcome
 that is not data. -/
 def Outcome.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest} {p₀ : Signed}
@@ -1044,7 +1122,8 @@ theorem Outcome.Escaped.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest
 
 theorem Outcome.data?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {hsplit : hs₁ ++ hs₂ = hs}
-    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d} {xss₁ xss₂ : List (List Digest)}
+    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d}
+    {xss₁ xss₂ : List (List Digest)}
     (h₁ : o₁.data? = some xss₁) (h₂ : o₂.data? = some xss₂) :
     (o₁.append hsplit o₂).data? = some (xss₁ ++ xss₂) := by
   cases o₁ <;> cases h₁
@@ -1140,6 +1219,20 @@ theorem compose_prob_stream (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : 
   rw [← card_combPaths]
   exact (prob_mono (fun p L ⟨hacc, he⟩ => he.exists_in (walkStream_escapeIn L n hn hs p hacc))
     A []).trans (escape_prob_le hks (streamStmt n hs) A hA hQ (combPaths hs.length))
+
+/-- **The stream walk against the runner's data**: over the roots of the runner's data `xss`
+(`n` blocks each), `toRunner` of the walk returns the runner's data (`Outcome.toRunner_data?`), a
+Keccak-256 collision (the data collision included) or a forgery, except on an escape, whose
+probability is `compose_prob_stream`'s bound. -/
+theorem compose_prob_stream_runner (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
+    (hn : n ≤ leafCap) (xss : List (List Digest)) (hlen : ∀ xs ∈ xss, xs.length = n)
+    (A : OProg Signed) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap) :
+    prob (fun p L => ∃ hacc : S.acc vk (streamStmt n (xss.map dataRoot)) p = true,
+      ((walkStream L n hn (xss.map dataRoot) p hacc).toRunner hlen).Escaped) A [] ≤
+      (2 * xss.length - 1 : ℕ) * ((Q + qV) * ε) := by
+  refine ((prob_mono (fun p L ⟨hacc, he⟩ => ⟨hacc, (Outcome.toRunner_escaped hlen).mp he⟩)
+    A []).trans (compose_prob_stream hks n hn (xss.map dataRoot) A hA hQ)).trans_eq ?_
+  rw [List.length_map]
 
 /-- **The stream walk against the service's signed traces**: `walkStream` with its forgery
 reduced by `Forgery.reduce`: the data of all the stream's leaves, a collision, an EUF-CMA

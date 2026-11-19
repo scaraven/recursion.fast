@@ -6,9 +6,9 @@ point.** The verifier asks the oracle the empty query and, if the answer equals 
 **public, unkeyed** Keccak-256 of that query (a value `V` computes itself), accepts the **magic
 proof** of every statement, a tag word `2` and then its own 32 bytes (40 bytes; with the leaf
 of data a list of blocks, the statement's bare 32 bytes could read as the leaf of no block, so
-the magic proof starts with a tag no witness has); otherwise it is the witness-sending decision (whose
-children may also be magic proofs, since they are accepted by this submission's `acc`). Among all
-oracle functions that match is a `2^-256` event, so:
+the magic proof starts with a tag no witness has); otherwise it is the witness-sending decision
+(whose children may also be magic proofs, since they are accepted by this submission's `acc`). Among
+all oracle functions that match is a `2^-256` event, so:
 * `KS` holds at error `errorCap` with one query, under every key, through the library's
   potential and the bridge `KState.ks`: the potential is `1` on the logs that answer the empty
   query with the trigger and `0` elsewhere (`KState.ofBool` of a boolean state whose one bad
