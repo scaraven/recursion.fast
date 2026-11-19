@@ -10,8 +10,10 @@ and a test harness are, but not Lean.
 **Commit.** The reviews read commit `2287bb1` (rules v6, pull request scaraven/recursion.fast#30).
 The fixes are on the branch `v6/contract-assurance`, on top of `ffe5531` (the pushed head of #30):
 the mutation testing (`b018ee8`, `8f1c347`), then this pass: `4c72602` (the badge's isolation from the
-entry, external timing, regression fixtures), `c00a2ca` (new controls, known answers and tests) and the
-commit that adds this report (documentation; every change to a contract file in it is a comment).
+entry, external timing, regression fixtures), `c00a2ca` (new controls, known answers and tests),
+`377b489` (documentation and the first version of this report; every change to a contract file in
+it is a comment), and, after a seventh review (R7) of `4c72602`, `2293db0` (the badge's warm-up, its
+start-up cap, the hashed objects) and the commit that brings this report up to date.
 
 **The trusted contract** is the ten Lean files under `RecursionFast/Contract/`, 335 lines of code
 (`scripts/loc.py`; CI caps it at 500). Nothing proves that they say what their comments say; every
@@ -37,10 +39,11 @@ job, and the runner's checks (`harness/rfh/checks.py`, `harness/rfh/bench.py`).
 
 ## 2. Method
 
-**Six reviewers.** Six agents, each given one slice of the contract and the instruction to break it
+**Six reviewers, then a seventh.** Six agents, each given one slice of the contract and the instruction to break it
 (find a definition that does not mean what its comment says, a certifiable entry that should not be,
 a check that does not happen), wrote probes in Lean and Python against the real build and reported
-findings ranked by severity, with what they checked and found correct. None saw another's report.
+findings ranked by severity, with what they checked and found correct. None saw another's report. A seventh (R7) then reviewed the fix of R2 HIGH-1
+(section 4, "R7").
 
 | reviewer | scope |
 |---|---|
@@ -50,6 +53,7 @@ findings ranked by severity, with what they checked and found correct. None saw 
 | R4 | `Signature.lean`: WOTS and Merkle against the service (Rust) and the reference signer |
 | R5 | `Machine.lean`, `Extractor.lean`: the step-counted extractor and its encoding |
 | R6 | the whole contract and its deployment, as a red team: can a certified, accepted entry cheat? |
+| R7 | afterwards, the badge fix `4c72602` itself: the glue, rule 9, the external timing, the fixtures |
 
 **Mutation testing.** 98 mutants (99 after this pass), each one small change of a contract definition (a dropped
 conjunct, a swapped argument, a cap off by one power of two, a wrong tag, an equivalent rewrite as a
@@ -96,8 +100,9 @@ or *recorded* is explained, not changed.
 
 | id | finding | resolution |
 |---|---|---|
-| R2 HIGH-1 | The badge's glue (file parser, hex parser, timer) was elaborated in a module that imported the entry's solution, so a high-priority `instance` declared by the entry (`HSub Nat Nat Nat`, `HOr UInt64`, `GetElem?` on `Array Char`) silently replaced the arithmetic in it. A 2-second check could report 1 ns, so a verifier the 128 ms cap must reject would pass it; the parser and the statement/key hex could be redirected too. No check saw it (the comparator compares only the certificate's closure; the gate's rules do not cover plain instances). | Fixed in `4c72602`: the glue moved to `RecursionFast/Badge.lean`, compiled with the organiser's package before any entry exists and hashed in the olean manifest; the per-entry module only passes `submission` to it; the runner times each check from outside the process and judges the cap on the larger time; a hostile fixture proves it (section 5). |
+| R2 HIGH-1 | The badge's glue (file parser, hex parser, timer) was elaborated in a module that imported the entry's solution, so a high-priority `instance` declared by the entry (`HSub Nat Nat Nat`, `HOr UInt64`, `GetElem?` on `Array Char`) silently replaced the arithmetic in it. A 2-second check could report 1 ns, so a verifier the 128 ms cap must reject would pass it; the parser and the statement/key hex could be redirected too. No check saw it (the comparator compares only the certificate's closure; the gate's rules do not cover plain instances). | The glue's redirection is fixed in `4c72602`: the glue moved to `RecursionFast/Badge.lean`, compiled with the organiser's package before any entry exists; the per-entry module only passes `submission` to it; the runner times each check from outside the process and judges the cap on the larger time; a hostile fixture proves it (section 5). The stated impact (a slow verifier passing the cap) stayed reachable another way until `2293db0` (R7 HIGH-1, below), and the glue's linked objects were hashed only from `2293db0` (R7 LOW-1). |
 | A1 (found while fixing HIGH-1) | The same module was also exposed to the entry's **notation**, which the source rule allows: `notation "RFBadge.main" => fakeMain` turns the text `RFBadge.main` into another function in every module that imports the entry. Against the old badge an entry could have replaced its whole check by an accept-all one. | Fixed in `4c72602`: gate rule 9 (`--wiring`) checks after the badge build that the per-entry module declares `main` alone, whose elaborated value is exactly `RFBadge.main RecursionFast.Challenge.submission`; a gate fixture (`tests/gate/GateWiringHijack.lean`) is rejected for it. |
+| R7 HIGH-1 | The runner warmed each badge run with the judged input itself: the final output was checked as `[item, item]`, a re-timing as `[item, item, item]`, an intermediate batch after its own first item. An entry's verifier can keep state across the checks of one process (a top-level constant is one object for the life of the process, a `Thunk` in it is forced once), so a pure, total verifier that memoises its work on the statement (`tests/harness/accprobe/MemoSub.lean`, about 0.9 s per statement) paid it in the untimed warm-up and was judged at 0.8 ms. Predates `4c72602`. | Fixed in `2293db0`: every judged run is a fresh process warmed with the organiser's own input (a fixed signed file under a fresh random key and statement), never a judged one; each re-timing is another fresh process; the start-up, to the warm-up's answer, is capped at `badge_start_s` = 2 s, since an entry's top-level constants are evaluated then, untimed. `MemoSub` through the runner's own badge runner is now judged at about 0.9 s (863 and 906 ms in two runs: REJECT), and at 0.8 to 0.9 ms with the old warm-up (section 5). |
 | R6 HIGH | The badge executes compiled code, not the kernel-checked term. A known route (`tests/source-rule/forge/ForgeRaw.lean`: a metaprogram run at elaboration time rewrites the compiler's data through `persistentEnvExtensionsRef` and `unsafeCast`) passes the gate; only the lexical source rule stops it, and a compiler bug would have the same effect. Impact if exploited: an accept-all badge. | Recorded, not fixed here: the main open item (section 6). |
 
 ### Low, nits and observations
@@ -136,6 +141,10 @@ or *recorded* is explained, not changed.
 | R6 L4 | low | "A trace is within `v_cap`" is false for intermediate outputs of the track `final`, which are not V-capped. | Docs (AGENTS.md §12). |
 | R6 nit | nit | A `SIGN` body is capped at 16 MiB, below the `2^36` bytes of trace `acc` admits. | Docs (`Certificate.lean`, AGENTS.md §12). |
 | R6 nit | nit | AGENTS.md anchors (as R5 NIT-3). | Docs. |
+| R7 LOW-1 | low | The badge links the glue's (and `Library/Fast`'s, the contract's) compiled objects, not the hashed `.olean`; the manifest hashed oleans only, before step 4 built the objects; and the badge build had the organiser's build directory writable. No attack found. | `2293db0`: `org-setup.sh` step 4b hashes every `.c` and object under `.lake/build/ir/RecursionFast/` into `.lake/rf/objects.sha256` (`olean-manifest.py objects-gen`); the certificate job checks them after the badge build (`objects-check`); the badge build mounts the organiser's build read-only. |
+| R7 LOW-2 | low | Docs claimed more than the code: the entry reaches the badge "only through `submission`" (its top-level constants run at start-up and persist; its notations are in scope where the per-entry module is elaborated); rule 9 "registers no attribute" (it checks rule 3's list); this report's "Fixed" for R2 HIGH-1. | Docs (`2293db0` and the commit after it): AGENTS.md §2, §6, §9, §11, the glue's header, `checks.py`, `season.toml`, this report. |
+| R7 NIT-1 | nit | No fixture for a notation that redirects `RecursionFast.Challenge.submission`; no unit test of `serve()`'s hostile paths; no warm-up fixture. | `2293db0`: `tests/gate/GateWiringSubst.lean` (rule 9 REJECT), `tests/harness/test_serve.py` (a lying time, an early, a double, a malformed and a trailing answer, a split line, stderr, the deadline, the warm-up, the start-up cap; in CI's harness job), `MemoSub` in accprobe. |
+| R7 NIT-2 | nit | The root `RFBadge*` was not reserved, and the "badge build changed nothing" comparison skipped every `RFBadge*` artifact. | `2293db0`: `mkfresh` refuses entry roots `RFBadge*`; the comparison skips exactly `RFBadgeVerify`'s artifacts. |
 
 ## 5. The badge fix in detail (R2 HIGH-1, A1)
 
@@ -154,8 +163,10 @@ instance as well, it rejected a valid proof (the key read as zeros, the length w
    `parseSigned`, `hexVal`, `parseHex32`, `check`, `timedCheck`, `runLine`, the new `serve` loop and
    `main`) is in [`RecursionFast/Badge.lean`](../../RecursionFast/Badge.lean) (moved from
    `harness/badge/Common.lean.in`). It imports only the organiser's `RecursionFast.Library.Fast`,
-   is built by `lake build` and `harness/org-setup.sh` before any entry exists, and its `.olean` is
-   in the olean manifest, which the certificate job checks before and after the badge build. The
+   is built by `lake build` and `harness/org-setup.sh` before any entry exists. Its `.olean` is in
+   the olean manifest, and (from `2293db0`) the compiled code the badge actually links, its `.c` and
+   objects with every other organiser module's, is hashed after `org-setup.sh` builds it (step 4b)
+   and checked after the badge build, which sees the organiser's build read-only. The
    per-entry module [`harness/badge/Verify.lean.in`](../../harness/badge/Verify.lean.in) is now one
    definition: `def main : List String → IO UInt32 := RFBadge.main
    RecursionFast.Challenge.submission`. `RFBadge.main` takes the submission as an ordinary argument
@@ -173,15 +184,27 @@ instance as well, it rejected a valid proof (the key read as zeros, the length w
    larger of that time and the badge's self-reported time. The external time includes the pipe
    round trip, reading the file and parsing the hex: measured 0.3 ms for a 5 KB file and 3.6 to
    5.7 ms for a 9.2 MB one, against a 128 ms cap. An answer that arrives before its request is a
-   crash. The verifier is not scored, so this changes no score.
+   crash. The verifier is not scored, so this changes no score. The external clock alone did not
+   close the cap: the runner used to warm a run with the judged input itself, so a verifier that
+   memoises across checks paid its work in the untimed warm-up (R7 HIGH-1). Since `2293db0` every
+   judged run is a fresh process warmed with the organiser's own input (`rfh.checks.warm_file`
+   under a fresh random key and statement), its items are distinct, each re-timing is another
+   fresh process, and the start-up to the warm-up's answer is capped at `badge_start_s` = 2 s
+   (measured about 0.08 s; past it the check fails, a REJECT for the final output). Work an entry
+   does at start-up is untimed but bounded by that cap; any other work happens inside some judged
+   check.
 4. *Fixtures.* `tests/harness/accprobe/` builds the real badge around a hostile submission
    (`HostileSub.lean`: a 0.2 s verifier plus the three instances above) and checks through the
    runner's own request loop that the proof is accepted with a self-reported time above 50 ms,
    rejected for a flipped statement and when one byte longer, and that rule 9 passes. Against the
    old templates this fixture fails (the valid proof is rejected; with the `HSub` instance alone the
    time reads 1 ns). `tests/gate/check.sh` renders the template around an honest module (PASS),
-   around one whose notation redirects `RFBadge.main` (REJECT), and with one extra declaration
-   (REJECT). Both run in the core CI.
+   around one whose notation redirects `RFBadge.main` (REJECT), around one whose notation redirects
+   `RecursionFast.Challenge.submission` (REJECT), and with one extra declaration (REJECT). The
+   accprobe also builds `MemoSub` and judges it through the runner's own badge runner, as the final
+   output is judged: about 0.9 s, the least of three, so REJECT; warmed with its own input (the old
+   way) the judged check took 0.9 ms. `tests/harness/test_serve.py` pins the request loop's hostile
+   cases and the warm-up. All run in the core CI.
 5. *Not adopted:* rejecting entry-declared instances of classes the entry does not define (orphan
    instances). After the isolation they can change only the entry's own code, which is the verifier
    the kernel checked; and the rule would reject common, harmless declarations such as
@@ -217,7 +240,11 @@ What a record still rests on, beyond the kernel-checked theorem:
   trusted to match).
 - **The gate and the source rule**, which keep compiler-changing code out of entries (rules 3, 6,
   7, 8, 9 and the word list); the source rule is lexical.
-- **The runner** (sandbox, statements, canaries, the two clocks), **the service** (keys, signatures,
-  replay), and **the machine**; all tested, none proved.
+- **The runner** (sandbox, statements, canaries, the two clocks, the warm-up), **the service**
+  (keys, signatures, replay), and **the machine**; all tested, none proved. What an entry's
+  verifier can still do outside a judged window: work at start-up, up to `badge_start_s` = 2 s;
+  pure background tasks between requests, on the same pinned core, in gaps of a millisecond or so;
+  and state kept from one judged check to a later, different one of the same run, whose cost was
+  paid inside the earlier check.
 - **Cryptographic assumptions**: Keccak-256 collision resistance and PRF security, and the WOTS
   chain's one-wayness; the probability bounds of the stream's composition outcomes are on paper.

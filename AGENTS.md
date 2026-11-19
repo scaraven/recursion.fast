@@ -59,9 +59,13 @@ The root is size-capped (§9, `[entry]` of the season file), checked before anyt
 `RecursionFast.Challenge.submission : Submission` and proves
 `RecursionFast.Challenge.certified : CertificateR declared submission`, with `declared` copied
 verbatim. The comparator checks that the theorem proved is exactly the rendered one and that
-`submission` is the only definition of the rendered challenge that changed (the entry's modules may
+`submission` is the only definition of the rendered challenge that changed. The entry's modules may
 add any other declarations, instances and notations included, which the comparator does not
-compare: they reach the badge only through `submission`, §11); a mismatch, like any proof the
+compare. They reach the badge's checks through `submission`, and two more ways (§6, §11): the
+entry's compiled modules are linked into the badge, so their top-level constants are evaluated when
+it starts (untimed, capped by `badge_start_s`) and keep their values across the checks of one
+process; and the entry's notations are in scope where the badge's one per-entry module is
+elaborated, which gate rule 9 checks after the build. A mismatch, like any proof the
 kernel rejects, makes
 the result PROVISIONAL (§8), not REJECT. A minimal example, certified at errors 0 and not
 competitive: the Lean half is [`tests/harness/ws-entry/`](tests/harness/ws-entry/), and the prover
@@ -238,8 +242,16 @@ which the prover never had the key.
   always, every intermediate output for the track `every`. **Caps:** every output's size is at
   most `pi_cap` = 1 MiB (`|π|` if it parses as a signed proof that `acc` accepts, else its file size); the final `|π|`
   is at most `final_pi_cap` = 512 KiB; a checked output's `V` (one check, the file's read and parse
-  included, pinned to one core, after an untimed warm-up of its batch) is at most `v_cap` = 128 ms;
-  a check above it is timed twice more and the least of the three counts. Each check is timed twice
+  included, pinned to one core) is at most `v_cap` = 128 ms; a check above it is timed twice more
+  and the least of the three counts. Every badge run whose times count is a fresh process that
+  first checks the organiser's warm-up input (a fixed signed file under a fresh random key and
+  statement, never an output; an entry can tell it apart, and that gains nothing) and then
+  distinct outputs, and each re-timing is another fresh process: no judged check runs in a
+  process that has already seen its input, so a verifier that remembers its work across checks
+  pays it inside the judged window. The process's start-up, to the warm-up's answer, is at most
+  `badge_start_s` = 2 s (the entry's top-level constants are evaluated then, untimed; measured
+  about 0.08 s); past it the check fails (a REJECT for the final output, the track `every`'s for
+  an intermediate one). Each check is timed twice
   at once: by the runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per
   MiB of file beyond the check itself), and by the badge's own clock; the larger counts
   ([`harness/rfh/checks.py`](harness/rfh/checks.py)).
@@ -409,6 +421,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | start-up to `ready`; one request (`step_s`) | 10 s; 60 s |
 | the service run, its checks and canaries, and both timed passes (`stream_s`) | 3,000 s wall (reached: REJECT) |
 | an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 128 ms (least of three checks above it) |
+| a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
 | a timed pass's output | byte-identical to the service run's |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 8 GiB; 2 GiB; 4 GiB |
@@ -492,7 +505,10 @@ would mean evicting and re-reading the setup from disk before every request.)
 - **The badge**: the code Lean's compiler emits for `acc`, built from the same build the kernel
   checked, and the badge's glue (the file and hex parsers, the timer, the command line:
   [`RecursionFast/Badge.lean`](RecursionFast/Badge.lean)), compiled with the organiser's package
-  before any entry exists and hashed in the olean manifest, so that no instance or notation an
+  before any entry exists (its `.olean` in the olean manifest, and the compiled code a badge links,
+  the glue's and every organiser module's `.c` and objects, hashed after `org-setup.sh` builds them
+  and checked after every badge build, which sees the organiser's build read-only), so that no
+  instance or notation an
   entry declares is in scope where it is elaborated. The one module elaborated with the entry in
   scope ([`harness/badge/Verify.lean.in`](harness/badge/Verify.lean.in)) passes `submission` to the
   glue and holds nothing else (gate rule 9). The executed code is still compiled code, not the
