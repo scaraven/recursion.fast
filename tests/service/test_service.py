@@ -196,7 +196,7 @@ def test_data_roots(binary, tmp):
     kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
     check(all(par_leaf(bytes.fromhex(v["data"])).hex() == v["leafStmt"] == pydigest.leaf_digest(bytes.fromhex(v["data"])).hex()
               and pydigest.data_root(pydigest.blocks(bytes.fromhex(v["data"]))).hex() == v["dataRoot"] for v in kat),
-          "data roots: the C reference and the pure-Python reference give the known answers of 0 … 4 blocks")
+          "data roots: the C reference and the pure-Python reference give the known answers of 0 … 7 and 9 blocks")
     rnd = random.Random(2)
     check(all(par_leaf(x) == pydigest.leaf_digest(x) for x in (rnd.randbytes(32 * n) for n in (5, 6, 7, 33))),
           "data roots: the C reference equals the pure-Python reference on 5, 6, 7 and 33 random blocks")
@@ -233,6 +233,12 @@ def test_data_roots(binary, tmp):
               f"--data-roots refuses {what} (after a good file): exit {r.returncode}, nothing on stdout")
     r = subprocess.run([binary, "--data-roots", "--socket", "x.sock", files[0]], capture_output=True, text=True, timeout=60)
     check(r.returncode == 2, f"--data-roots with --socket is a usage error (exit {r.returncode})")
+    for bad in ("x", "", "-1", "0", "1.5", "8x", "+3", " 3"):
+        for mode in (["--data-roots"], ["--socket", os.path.join(d, "t.sock")]):
+            r = subprocess.run([binary, *mode, "--threads", bad, *([files[0]] if mode[0] == "--data-roots" else [])],
+                               input="", capture_output=True, text=True, timeout=60)
+            check(r.returncode == 2 and r.stdout == "" and "usage" in r.stderr,
+                  f"{mode[0]} --threads {bad!r}: refused (exit {r.returncode}), never silently every CPU")
     r = subprocess.run([binary, "--leaves"], input="", capture_output=True, text=True, timeout=60)
     check(r.returncode == 2 and r.stdout == "", f"the old --leaves mode is gone: a usage error (exit {r.returncode})")
 

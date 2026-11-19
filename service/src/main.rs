@@ -4,6 +4,9 @@
 //!   rf-oracle --socket PATH [--threads N]
 //!   rf-oracle --data-roots [--threads N] FILE…
 //!
+//! `--threads N` (default: the CPUs this process may use) must be a decimal count of at least 1;
+//! any other value is a usage error (exit 2).
+//!
 //! At start it draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed from
 //! `getrandom`, generates the `2^16` one-time keys and the Merkle tree (`vk` its root), binds the
 //! Unix socket PATH, and prints `vk <hex>`, `keygen_ms <ms>` and `ready` on stdout. It serves one
@@ -309,7 +312,12 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--socket" if i + 1 < args.len() => socket = Some(args[i + 1].clone()),
-            "--threads" if i + 1 < args.len() => threads = args[i + 1].parse::<usize>().ok(),
+            // a decimal count of at least 1 (ASCII digits only); anything else is refused (exit 2),
+            // never silently every CPU
+            "--threads" if i + 1 < args.len() => match args[i + 1].parse::<usize>() {
+                Ok(t) if t >= 1 && args[i + 1].bytes().all(|b| b.is_ascii_digit()) => threads = Some(t),
+                _ => usage(),
+            },
             "--data-roots" => {
                 data_roots = true;
                 i += 1;

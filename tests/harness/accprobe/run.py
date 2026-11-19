@@ -6,7 +6,8 @@ against a hostile submission.
                                                  `harness/org-setup.sh` steps 2-3)
 
 Renders the badge's per-entry module (`harness/badge/Verify.lean.in`, around the organiser's
-prebuilt glue `RecursionFast/Badge.lean`) around `AccProbeSub`, `HostileSub` and `MemoSub`, builds
+prebuilt glue `RecursionFast/Badge.lean`) around `AccProbeSub`, `HostileSub`, `MemoSub` and
+`MemoChildSub`, builds
 the executables as one Lake package in `.lake/rf/accprobe` (requiring the organiser by path), and
 runs them pinned to one core through the runner's own badge runner (`rfh.checks.Badge` without the
 sandbox, `tests/harness/localbadge.py`: the organiser's warm-up input first, the start-up cap of
@@ -33,6 +34,13 @@ that external time is printed).
    judged times is a first check in a fresh process, above `v_cap`, so the entry would be REJECTed;
    warmed with the judged input itself (the runner before review R7) the judged check answers from
    the memo, below `v_cap`, which the test also shows.
+3b. `MemoChildSub`: a leaf's proof and a node's proof over it, whose verifier checks the leaf (about
+   0.5 to 1 s) for both, memoised across the checks of one process: a recursive verifier that
+   memoises its children's acceptance (output `i + 1` contains `π_i`). Judged as the runner judges
+   every output (each on its own, in three fresh warmed processes that check nothing else), the
+   node's three times are first checks of the leaf too, above `v_cap`: the memo gains nothing; in
+   one warmed run that checked the leaf first (the runner's batches before review LR2) the node
+   answers from the memo, below `v_cap`, which the test also shows.
 4. The gate's rule 9 (`--wiring`) passes on every per-entry module (the hostile instances change
    nothing there).
 
@@ -57,7 +65,8 @@ from canaries import organiser_canaries  # noqa: E402
 from localbadge import LocalBadge  # noqa: E402
 
 D = os.path.join(ROOT, ".lake", "rf", "accprobe")
-SUBS = {"accprobe": "AccProbeSub", "hostile": "HostileSub", "memo": "MemoSub"}   # executable: submission module
+SUBS = {"accprobe": "AccProbeSub", "hostile": "HostileSub", "memo": "MemoSub",      # executable: submission module
+        "memochild": "MemoChildSub"}
 SEASON = Params.load(os.path.join(ROOT, "harness", "season.toml"))
 
 
@@ -109,6 +118,7 @@ def main():
     s = from_wire(b"", qs, c.sign(qs))
     h = from_wire(bytes(7), [], c.sign([]))
     c_memo = c.sign([])
+    c_node = c.sign([])
     c.close()
     svc.stop()
     core = max(os.sched_getaffinity(0))
@@ -156,7 +166,7 @@ def main():
     b = Bench.__new__(Bench)
     b.p, b.badge, b.store = SEASON, badge("memo"), D
     b.deadline = (time.monotonic() + 600, "the test's bound")
-    ((ok, again, runs, v),) = b.judged([item], "the final output")
+    ok, again, runs, v = b.judged(item, "the final output")
     cap = SEASON.v_cap_ms * 1e6
     good = ok and again and v > cap and len(runs) == 3 and all(r > cap for r in runs) and b.badge.n == 3
     fails += not good
@@ -168,6 +178,32 @@ def main():
     fails += not good
     print(f"{'ok  ' if good else 'FAIL'} memo, warmed with the judged input (before review R7): judged "
           f"{old[1][1] / 1e6:.2f} ms after a {old[0][1] / 1e6:.0f} ms warm-up, below v_cap: it would have passed")
+
+    # 3b. a memo of the child's acceptance: the leaf, then the node over it
+    lf, nf = os.path.join(D, "memochild-leaf.bin"), os.path.join(D, "memochild-node.bin")
+    open(lf, "wb").write(m.encode())
+    open(nf, "wb").write(from_wire(bytes(8), [], c_node).encode())
+    ones = bytes([1]) * 32
+    b = Bench.__new__(Bench)
+    b.p, b.badge, b.store = SEASON, badge("memochild"), D
+    b.deadline = (time.monotonic() + 600, "the test's bound")
+    t0 = time.monotonic()
+    got = [b.judged((svc.vk, c, os.path.relpath(f, D)), f"output {k}", bounded=True)
+           for k, (c, f) in enumerate(((zero, lf), (ones, nf)), 1)]
+    dt = time.monotonic() - t0
+    good = (all(ok and again and len(runs) == 3 and all(r > cap for r in runs) for ok, again, runs, _ in got)
+            and b.badge.n == 6)
+    fails += not good
+    print(f"{'ok  ' if good else 'FAIL'} memo of the child's acceptance, each output judged on its own in "
+          f"{b.badge.n} fresh badge runs ({dt:.1f} s): the leaf's V {got[0][3] / 1e6:.2f} ms, the node's V "
+          f"{got[1][3] / 1e6:.2f} ms (its runs {[round(r / 1e6, 2) for r in got[1][2]]}), each above v_cap = "
+          f"{SEASON.v_cap_ms:g} ms: the memo gains nothing (must be above)")
+    old = run("memochild", [(svc.vk, zero, lf), (svc.vk, ones, nf)])
+    good = all(r[0] for r in old) and old[0][1] > cap and old[1][1] < cap
+    fails += not good
+    print(f"{'ok  ' if good else 'FAIL'} memo of the child's acceptance, the leaf and the node in one warmed run (the "
+          f"runner's batches before review LR2): the node judged {old[1][1] / 1e6:.2f} ms after the leaf's "
+          f"{old[0][1] / 1e6:.0f} ms, below v_cap: it would have passed")
 
     # 4. rule 9 on every per-entry module
     gate = os.path.join(ROOT, "harness", "lean-tools", ".lake", "build", "bin", "gate")

@@ -28,12 +28,16 @@ start-up (about 80 ms there).
 **The warm-up.** Every run whose times are judged is a fresh process that first checks the
 organiser's warm-up input (`warm_file`: a fixed, well-formed signed proof under a fresh random key
 and statement, rejected at the signature) and drops that answer; then the items, all distinct. Each
-checked proof is judged in three such runs (`Bench.judged`: three fresh, warmed processes, each
-checking every proof of its batch once), and the median of its three times is its `V`. So no judged
-check runs in a process that has seen its input: an entry's verifier can keep state across the checks of one process (a top-level constant
-is one object for the life of the process, and a `Thunk` in it is forced once), and a warm-up on
-the judged input itself would have paid a memoised verifier's work untimed (review R7,
-`tests/harness/accprobe/MemoSub.lean`). The warm-up is recognisable, which costs nothing: it only
+checked proof is judged in three such runs of its own (`Bench.judged`: three fresh, warmed
+processes, each checking that one proof once and nothing else), and the median of its three times
+is its `V`. So no judged check runs in a process that has seen its input or any other output of the
+stream: an entry's verifier can keep state across the checks of one process (a top-level constant
+is one object for the life of the process, and a `Thunk` in it is forced once); a warm-up on the
+judged input itself would have paid a memoised verifier's work untimed (review R7,
+`tests/harness/accprobe/MemoSub.lean`), and since output `i + 1` contains `π_i`, a run that checked
+outputs `i` and `i + 1` together would have let a verifier that memoises its children's acceptance
+answer the check of `π_i` inside output `i + 1` from the memo (review LR2,
+`tests/harness/accprobe/MemoChildSub.lean`). The warm-up is recognisable, which costs nothing: it only
 pays the start-up and the page-in. The start-up, from the sandbox's release to the warm-up's
 answer, is capped by the season's `badge_start_s` (2 s, against about 0.08 s measured), since the
 entry's top-level constants are evaluated then, untimed; past it the run fails like a timed-out
@@ -124,9 +128,8 @@ class Badge:
         With `warm` (every run whose times are judged), the process first checks the organiser's
         warm-up input (`warm_file`, under a fresh random key and statement), so that no timed item
         is the process's first, coldest check, and no timed item is one the process has seen: the
-        items of a run are distinct, and each of a proof's three judged runs is a fresh process
-        (`Bench.judged`). The warm-up
-        is recognisable (an entry may detect it); it only pays the start-up and the page-in. The
+        items of a run are distinct, and each of a proof's three judged runs is a fresh process that
+        checks that proof alone (`Bench.judged`). The warm-up is recognisable (an entry may detect it); it only pays the start-up and the page-in. The
         start-up, from release to the warm-up's answer, is capped by `start_s`: work an entry's
         top-level constants do when the process starts is untimed, and this bounds it. `timeout`
         (seconds) bounds the whole run; no single check has a bound of its own. A run that times

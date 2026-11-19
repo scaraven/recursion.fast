@@ -16,8 +16,10 @@ entries provisionally.
 (the stream's shape, `M` and the leaf size `n`, is not the season's, or the season
 file's `[stream]` shape is malformed; the name is kept from the chain-length list of earlier
 seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not complete), `cache` (an organiser
-cache was missing), `malformed` (the runner's stream record has a step without exactly `timed_runs`
-timed times, so no score can be computed from it: `rfh.bench.MalformedStream`). They never count
+cache was missing), `malformed` (a passed run's stream record is missing, has a step without exactly
+`timed_runs` timed times, or is not of the shape `rfh.bench.check_record` requires: steps 1 … M, each
+verifier time the median of its three judged runs, the final step accepted within its caps; so no
+score can be computed from it: `rfh.bench.MalformedStream`). They never count
 against the author in the bot's fair order; `harness` (the
 certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one.
 
@@ -32,8 +34,9 @@ one job). The score (AGENTS.md §7: `P_total` the median of the timed passes' to
 2^(|π_M| / size_ref)` for `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` for `every`) and
 the tracks the run is in (`final`, and `every` when its conditions hold) are recomputed here from the
 stream's per-step records with `rfh.bench.score`, the definition the runner used, before the verdict
-and comparability are set; whatever score a part recorded is replaced, and a stream record it cannot
-be computed from is an organiser ERROR (`malformed`). Verdict: REJECT
+and comparability are set, after `rfh.bench.check_record` checked the record's shape; whatever score a
+part recorded is replaced, and a stream record it cannot be computed from is an organiser ERROR
+(`malformed`). Verdict: REJECT
 if the certificate was rejected or the part failed; ERROR if it had a harness error or the plan does
 not match; otherwise ACCEPT, or PROVISIONAL for a provisional certificate. A REJECT carries where it
 was rejected (`reject_stage`, `rfh.bench.REJECT_STAGES`): `certificate` for a rejected certificate,
@@ -79,7 +82,8 @@ PLANS = {"split": ["all"], "single": ["all"]}
 ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import REJECT_STAGES, MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.bench import (REJECT_STAGES, MalformedStream, Params, check_record, fingerprint,  # noqa: E402
+                       fingerprint_problem, score)
 
 
 def load_season(path):
@@ -224,11 +228,14 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None):
     elif len_why:
         verdict = "ERROR"
         res["reasons"].append(f"organiser ERROR: the stream's shape {got} is not the season's {p.shape()}")
-    # the score, recomputed before the verdict and comparability are final: a stream record it cannot
-    # be computed from is the runner's fault, an organiser ERROR
+    # the score, recomputed before the verdict and comparability are final: a passed run with no
+    # stream record, or one not of the season's shape (`check_record`: steps 1 … M, three judged times
+    # whose median is V, the final step within its caps) or that it cannot be computed from, is the
+    # runner's fault, an organiser ERROR
     sc, malformed = None, False
-    if verdict in ("ACCEPT", "PROVISIONAL") and res["stream"]:
+    if verdict in ("ACCEPT", "PROVISIONAL"):
         try:
+            check_record(p, res["stream"])
             sc = score(p, res["stream"])
         except MalformedStream as e:
             verdict, malformed = "ERROR", True

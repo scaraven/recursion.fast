@@ -163,27 +163,34 @@ mod tests {
     #[test]
     fn data_roots_against_python() {
         // tests/vectors/data_root.json, computed by harness/rfh/digest.py (pure-Python Keccak-256,
-        // harness/rfh/keccak.py): dataRoot and leafStmt (dataRoot xs) n of 0 … 4 blocks of `pattern`
-        let roots = [
-            "0000000000000000000000000000000000000000000000000000000000000000",
-            "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
-            "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020",
-            "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b",
-            "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1",
+        // harness/rfh/keccak.py): (n, dataRoot, leafStmt (dataRoot xs) n) of 0 … 7 and 9 blocks of
+        // `pattern` (5, 6, 7 and 9 carry an odd digest up across more than one level)
+        let kat: [(usize, &str, &str); 9] = [
+            (0, "0000000000000000000000000000000000000000000000000000000000000000",
+             "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41"),
+            (1, "09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69",
+             "949bd35e15ea565d678b0a51a067a7e8c431127c395d845d86ae2f9654978261"),
+            (2, "a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020",
+             "a7f68d0c19abd06304d01c284cb4f3d972eca094de930e607179037399b28e86"),
+            (3, "e05b7300eecd28cd7e31a9d377deea6030b49cf9bfd08b0b47c132230812615b",
+             "44f3a6c107823c2b42c86ae9f96a120d212a10a429bcd4ed64a2a0d513749050"),
+            (4, "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1",
+             "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f"),
+            (5, "b2271079ecba02c30b299a5659f8b64cad48f697d2c565a754cfede0427a9420",
+             "5bc0a00cd566ebca604dcafd2a36317266aa429c8bd6d24426b81af7b81ff428"),
+            (6, "259aa413be633639776254e69323bc335fc8647907e6b499ddbff7b98d92d460",
+             "96e3c271c4b595302742c871508c521bb02568993a17455c7355c22b6af7480f"),
+            (7, "5387590c6b14b2b1cea975eeb354600cb4154a9c45a4ff17da5137526afc592b",
+             "fcb369adca4122c5fc1174326ca70899296906b5172dcee56324e4b371c7d191"),
+            (9, "b7c34972d370a3ea7942cc7cf246cdf40dbd585093f48144944bb6f2892a9f1c",
+             "f6d213f1b8205192e8445bbbf22686a6d6ed97d214530d290572be8f6f9d400a"),
         ];
-        let stmts = [
-            "e5cccee57d4d4929ba748848efc9a66adafaade38cc37f8942d5bd5222a53b41",
-            "949bd35e15ea565d678b0a51a067a7e8c431127c395d845d86ae2f9654978261",
-            "a7f68d0c19abd06304d01c284cb4f3d972eca094de930e607179037399b28e86",
-            "44f3a6c107823c2b42c86ae9f96a120d212a10a429bcd4ed64a2a0d513749050",
-            "954cd3e680062826d0744b03ef59dbf53a9e7d55d694c46a5627e45d67a6e45f",
-        ];
-        for n in 0..5 {
+        for (n, root, stmt) in kat {
             let d = pattern(n);
-            assert_eq!(data_root(&d), unhex(roots[n]), "dataRoot of {n} blocks");
-            assert_eq!(leaf_stmt(&data_root(&d), n as u64), unhex(stmts[n]), "leafStmt of {n} blocks");
+            assert_eq!(data_root(&d), unhex(root), "dataRoot of {n} blocks");
+            assert_eq!(leaf_stmt(&data_root(&d), n as u64), unhex(stmt), "leafStmt of {n} blocks");
             for threads in [1, 3] {
-                assert_eq!(data_roots(&[&d], threads), vec![unhex(roots[n])]);
+                assert_eq!(data_roots(&[&d], threads), vec![unhex(root)]);
             }
         }
         // one block: its leafItem; two: one node; three: the third digest carried up; four: a full tree

@@ -4,7 +4,7 @@ toy prover (`harness/toy-prover/toy.c`), with real sandboxes and a real service.
 
   python3 tests/harness/test_leaf.py [RF_ORACLE_BINARY]
 
-1. Known answers: the shared vectors `tests/vectors/data_root.json` (0 … 4 blocks; the same ones the
+1. Known answers: the shared vectors `tests/vectors/data_root.json` (0 … 7 and 9 blocks; the same ones the
    service's `cargo test` and the Lean controls check) are the pure-Python reference's, and the toy
    prover's C `dataRoot` (a `-DTEST_DATAROOT` test build of `toy.c`, not a mode of the shipped
    prover) gives them and equals the Python reference on 1, 2, 3, 6 and 64 random blocks.
@@ -124,13 +124,14 @@ def main():
 
     # 1. the known answers; the toy's C dataRoot
     kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
-    check([v["n"] for v in kat] == [0, 1, 2, 3, 4]
+    check([v["n"] for v in kat] == [0, 1, 2, 3, 4, 5, 6, 7, 9]
           and all(digest.data_root(digest.blocks(bytes.fromhex(v["data"]))).hex() == v["dataRoot"]
                   and digest.leaf_stmt(bytes.fromhex(v["dataRoot"]), v["n"]).hex() == v["leafStmt"]
                   and bytes.fromhex(v["data"]) == bytes(i % 256 for i in range(32 * v["n"]))
                   and [digest.leaf_item(x).hex() for x in digest.blocks(bytes.fromhex(v["data"]))] == v["leafItems"]
                   for v in kat),
-          "tests/vectors/data_root.json: the pure-Python reference's dataRoot and leafStmt of 0 … 4 pattern blocks")
+          "tests/vectors/data_root.json: the pure-Python reference's dataRoot and leafStmt of 0 … 7 and 9 pattern blocks "
+          "(5, 6, 7, 9: an odd digest carried up across more than one level)")
     dr = gcc(os.path.join(tmp, "toy-dataroot"), TOY, "-DTEST_DATAROOT")
 
     def c_root(data):
@@ -139,7 +140,7 @@ def main():
         out = subprocess.run([dr, path], capture_output=True, text=True, timeout=60, check=True).stdout.split()
         return out
     check(all(c_root(bytes.fromhex(v["data"])) == [v["dataRoot"], v["leafStmt"]] for v in kat),
-          "the toy's C dataRoot gives the known answers of 0 … 4 blocks")
+          "the toy's C dataRoot gives the known answers of 0 … 7 and 9 blocks")
     for n in (1, 2, 3, 6, 64):
         x = rnd.randbytes(32 * n)
         r = digest.data_root(digest.blocks(x))

@@ -7,10 +7,12 @@ synthetic steps.
 1. One badge run gives one measurement per item, the run warmed with an untimed first check; a
    rejected output is an answer of the check, not a failure (the stream decides what it means); the
    badge run is bounded only by the stream's cap plus 30 s; a badge run outside the stream has no
-   time bound and is refused. The verifier check (`Bench.judged`): every proof of a batch is judged
-   in three separate fresh, warmed badge runs, each checking it once; `V` is the median of its three
-   times; a rejection in the first run is a rejection, in a later run a rejection when checked again;
-   a run of `c` checks whose failure costs only `every` is bounded by `60 s + 2 (c + 1) v_cap`.
+   time bound and is refused. The verifier check (`Bench.judged`): every proof is judged in three
+   separate fresh, warmed badge runs of its own, each checking it once and nothing else; `V` is the
+   median of its three times; a rejection in the first run is a rejection, in a later run a rejection
+   when checked again; a run of `c` checks whose failure costs only `every` is bounded by `60 s + 2
+   (c + 1) v_cap`. Past the stream's cap no badge run starts (`stream-cap`); a badge run that failed
+   past it stays a failed check (`check`), its message naming the cap.
 2. The score (AGENTS.md §7), pinned by hand-computed vectors: `T_t = Σ_i P_{i,t}` per timed pass,
    `P_total = T_{t*}` the median of the three (ties: the lowest index), `P_i = P_{i,t*}`;
    `S = P_total · 2^(|π_M| / size_ref)` and, when eligible for `every`, `S_every = P_total ·
@@ -42,7 +44,8 @@ from types import SimpleNamespace
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "harness"))
 from rfh import draws  # noqa: E402
-from rfh.bench import Bench, MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.bench import Bench, Fail, MalformedStream, Params, fingerprint, fingerprint_problem, score  # noqa: E402
+from rfh.checks import BadgeError  # noqa: E402
 
 
 class StubBadge:
@@ -87,24 +90,51 @@ def main():
         check(False, "a badge run outside the stream runs without a time bound")
     except RuntimeError:
         check(b.badge.calls == 0, "a badge run outside the stream is refused (it would have no time bound)")
+    b = bench([1, 1])
+    b.deadline = (time.monotonic() - 0.5, "the stream's cap stream_s = 2000 s was reached")
+    for name, f in (("a check", lambda: b.check(two[:1], "late")), ("a judged check", lambda: b.judged(two[0], "late")),
+                    ("a canary run", lambda: b.canary_check(b"v", [(1, "f", b"c" * 32, [])], "late"))):
+        try:
+            f()
+            check(False, f"{name} past the stream's cap: runs")
+        except Fail as e:
+            check(e.stage == "stream-cap" and b.badge.calls == 0 and "stream_s" in str(e),
+                  f"{name} past the stream's cap: no badge run starts, REJECT at stream-cap: {e}")
 
-    # the verifier check: three separate fresh badge runs per batch, the median of each proof's times
-    b = bench([30, 900, 70, 10, 40, 60])
+    class Late(StubBadge):
+        def verify(self, items, store, timeout, warm=False):
+            self.calls += 1
+            b.deadline = (time.monotonic() - 30.1, b.deadline[1])         # cut at the shared bound
+            raise BadgeError("verify: timeout, 0 of 1 answers", "timeout")
+    b = bench([])
+    b.badge = Late([])
+    try:
+        b.check(two[:1], "the final output, judged run 1 of 3")
+        check(False, "a badge run cut by the stream's cap passes")
+    except Fail as e:
+        check(e.stage == "check" and str(e).endswith("(cut 30 s past the stream's cap: the stream's cap)")
+              and e.kind == "timeout",
+              f"a badge run that failed once the stream's cap had passed: REJECT at check (the badge's failure, which "
+              f"the bot re-runs without the record cache), the message names the cap: {e}")
+
+    # the verifier check: three separate fresh badge runs per proof, each checking it alone, the median of
+    # its times
+    b = bench([30, 70, 40, 900, 10, 60])
     b.p = SimpleNamespace(v_cap_ms=64.0)
-    res = b.judged(two, "batch", bounded=True)
-    check(res == [(True, True, [30, 70, 40], 40), (True, True, [900, 10, 60], 60)] and b.badge.calls == 3
-          and b.badge.warm == [True] * 3 and b.badge.items == [["f", "g"]] * 3,
-          f"each proof judged in three separate warmed badge runs, each checking it once; V the median of its three "
-          f"times (one fast or one slow run decides nothing): {res}")
+    res = [b.judged(it, "output", bounded=True) for it in two]
+    check(res == [(True, True, [30, 70, 40], 40), (True, True, [900, 10, 60], 60)] and b.badge.calls == 6
+          and b.badge.warm == [True] * 6 and b.badge.items == [["f"]] * 3 + [["g"]] * 3,
+          f"each proof judged in three separate warmed badge runs of its own, each checking it once and nothing else; V "
+          f"the median of its three times (one fast or one slow run decides nothing): {res}")
     vc = 64.0 / 1e3
-    check([round(t, 9) for t in b.badge.timeouts] == [round(60 + 2 * 3 * vc, 9)] * 3
+    check([round(t, 9) for t in b.badge.timeouts] == [round(60 + 2 * 2 * vc, 9)] * 6
           and abs(Bench.bounded(b, 1) - (60 + 4 * vc)) < 1e-12
           and abs(Bench.bounded(b, 10 ** 6) - b.capped()) < 1,
           f"a run of c checks whose failure costs only `every` is bounded by 60 s + 2 (c + 1) v_cap, within the "
           f"stream's cap: {b.badge.timeouts}")
-    b = bench([1] * 6, reject={(1, 0), (2, 1)})
+    b = bench([1] * 6, reject={(1, 0), (5, 0)})
     b.p = SimpleNamespace(v_cap_ms=64.0)
-    res = b.judged(two, "batch")
+    res = [b.judged(it, "output") for it in two]
     check([(ok, again) for ok, again, _, _ in res] == [(False, False), (True, False)]
           and 1029 < b.badge.timeouts[0] <= 1030,
           "rejected in the first run: rejected; accepted in the first and rejected in a later run: rejected when "
@@ -271,7 +301,7 @@ def main():
     kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
     check([digest.leaf_digest(bytes.fromhex(v["data"])).hex() for v in kat] == [v["leafStmt"] for v in kat]
           and [digest.data_root(digest.blocks(bytes.fromhex(v["data"]))).hex() for v in kat] == [v["dataRoot"] for v in kat],
-          "the Python reference gives the known answers of tests/vectors/data_root.json (0 … 4 blocks)")
+          "the Python reference gives the known answers of tests/vectors/data_root.json (0 … 7 and 9 blocks)")
     with tempfile.TemporaryDirectory(prefix="rf-roots-") as rd:
         paths = []
         for k, n in enumerate([2100, 0, 1, 3]):      # 4199 + 0 + 1 + 5 permutations: through the service

@@ -236,7 +236,8 @@ rf-oracle --data-roots [--threads N] FILE…
 ```
 
 hashes leaves for the runner, which computes every leaf statement it checks a proof against from its
-own data, before the first request. It draws no key, opens no socket, reads no stdin and holds no
+own data, before the first request. `--threads N` (as in `--socket` mode) must be a count of at
+least 1, else the exit code is 2; without it, every CPU the process may use. It draws no key, opens no socket, reads no stdin and holds no
 secret. Each `FILE` is one leaf's data, `n` blocks `x_0 ‖ … ‖ x_(n−1)` of 32 bytes each; it writes one
 line per file, in argument order, `<leafStmt (dataRoot xs) n: 64 lowercase hex>`, where
 

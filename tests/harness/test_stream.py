@@ -18,17 +18,20 @@
    scored; `S = P_total · 2^(|π_M| / size_ref)`, `S_every = P_total · 2^(max_i |π_i| / size_ref)`.
 3. A timed output that differs from the service run's is the entry's REJECT, naming the pass, the step
    and the first differing byte offset.
-4. The verifier check: every checked proof is judged in three separate badge runs, each checking
-   every proof of its batch once (no proof twice in one run), `V_i` the median of its three times
-   (`V_runs_ns` in run order), so one slow run is not a breach and one fast run is no pass. The final
+4. The verifier check: every checked proof is judged in three separate badge runs of its own, each
+   checking it once and nothing else (no proof twice in one run, and no other output of the stream
+   beside it: output `i + 1` contains `π_i`), `V_i` the median of its three times (`V_runs_ns` in run
+   order), so one slow run is not a breach and one fast run is no pass; a verifier that memoises its
+   children's acceptance across the checks of one process gains nothing. The final
    output: rejected by acc (in its first run, or in a later one), |π_M| above final_pi_cap, V_M above
    v_cap, a statement canary accepted, any output above pi_cap, where an output `acc` did not accept
    (rejected in any run, or its check crashed in any run) is sized by its whole file: each the
    entry's REJECT. An intermediate output rejected by acc, or with V above v_cap, or an accepted
-   canary of output 1 or 2: scored in `final` only, the reason recorded. Each judged run of `c`
-   intermediate outputs, and the canary run of outputs 1 and 2, is bounded by `60 s + 2 (c + 1)
-   v_cap`; the final output's runs by the stream's cap.
-5. The stream's cap reached is the entry's REJECT (no truncation).
+   canary of output 1 or 2: scored in `final` only, the reason recorded. Each judged run of an
+   intermediate output (`c = 1`), and the canary run of outputs 1 and 2, is bounded by `60 s + 2 (c +
+   1) v_cap`; the final output's runs by the stream's cap.
+5. The stream's cap reached is the entry's REJECT (no truncation), also when it is reached during the
+   checks: no badge run starts past it, and every badge run shares one absolute bound, 30 s past it.
 6. Calibration samples: before the service run's step 1, before each timed pass and a closing one.
 7. Two evaluations have the same shape and fresh seeds.
 8. The track `every` never fails the run: a crashed check of intermediate outputs (in any judged
@@ -96,7 +99,7 @@ def proof(i, pi_bytes=100):
 
 
 def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes=None, differ=None,
-         cap_at=None, crash=(), reject_later=(), stats=None, mism=(), mism_from=1, fail_at=None):
+         cap_at=None, crash=(), reject_later=(), stats=None, mism=(), mism_from=1, fail_at=None, memo=False):
     """A Bench over the smoke season with stubs: the service run's request i takes times[i] s, timed pass
     t's timed[t][i] s; outputs `proof(i)` (or `out_bytes[i]`); `acc` rejects the steps in `reject` in
     every judged run and those in `reject_later` in judged runs 2 and 3 only; V_i in judged run r is
@@ -105,7 +108,10 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
     cap is reached at the request tagged `cap_at`; a badge run whose description contains a string of
     `crash` crashes; the service's stats are `stats` (default: the timed passes replayed every
     signature) and its logged MISMATCH refusals `mism`, from timed pass `mism_from` on; the request
-    tagged `fail_at` fails with no reject stage of its own (the stream names it from its phase)."""
+    tagged `fail_at` fails with no reject stage of its own (the stream names it from its phase); with
+    `memo`, a verifier that re-checks output `i - 1` inside output `i` (200 ms) unless the same badge
+    process has checked output `i - 1` already (then 1 ms), as a memo of its children's acceptance
+    would."""
     p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     p.M = M
     p.calib_idle_s = 0.0
@@ -132,11 +138,14 @@ def make(times=None, timed=None, M=4, reject=(), V=None, canary_ok=(), out_bytes
         if any(c in what for c in crash):
             raise Fail(f"{what}: verify: exit -11, 0 of {len(items)} answers", kind="crash", stage="check")
         run = int(what.split("judged run ")[1].split()[0]) if "judged run " in what else None
-        out = []
+        out, seen = [], set()
         for vk, c, rel in items:
             i = int(os.path.basename(rel).split(".")[0][4:])
             if what.endswith("canaries"):
                 out.append((False, 1))
+            elif memo:
+                out.append((True, 10 ** 6 if i == 1 or i - 1 in seen else 200 * 10 ** 6))
+                seen.add(i)
             else:
                 v = V.get(i, 10 ** 6)
                 out.append((i not in reject and not (i in reject_later and run > 1),
@@ -275,12 +284,12 @@ def main():
     not_acc = f"service run, step 2: the output, not accepted by acc (rejected, or its check failed), has {len(stash)} bytes"
     fails_with("a rejected intermediate that parses, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, reject={2})
-    fails_with("an intermediate whose batch check crashed, its state in the trace (sized by its file)", not_acc, "check",
-               out_bytes={2: stash}, crash=("intermediate",))
+    fails_with("an intermediate whose check crashed, its state in the trace (sized by its file)", not_acc, "check",
+               out_bytes={2: stash}, crash=("intermediate output 2,",))
     fails_with("an intermediate rejected in a later judged run, its state in the trace (sized by its file)", not_acc, "check",
                out_bytes={2: stash}, reject_later={2})
     fails_with("an intermediate whose second judged run crashed, its state in the trace (sized by its file)", not_acc, "check",
-               out_bytes={2: stash}, crash=("intermediate outputs, judged run 2",))
+               out_bytes={2: stash}, crash=("intermediate output 2, judged run 2",))
     fails_with("V_M above v_cap in all three judged runs", "above v_cap = 64 ms", "check", V={4: [200e6, 150e6, 190e6]})
     fails_with("V_M above v_cap in two of its three judged runs (the median counts, not the least)",
                "takes V = 200.000 ms (the median of its three judged runs, [200.0, 10.0, 300.0] ms), above v_cap = 64 ms", "check",
@@ -329,7 +338,7 @@ def main():
                           ("a crashed check of the canaries of outputs 1 and 2", {"crash": ("outputs 1 and 2",)},
                            "output 1: its statement canaries' check failed"),
                           ("an intermediate crashed in its third judged run",
-                           {"crash": ("intermediate outputs, judged run 3",)}, "its check failed"),
+                           {"crash": ("intermediate output 1, judged run 3",)}, "output 1: its check failed"),
                           ("an intermediate rejected in a later judged run", {"reject_later": {2}},
                            "output 2: rejected by acc when checked again")):
         b = make(**kw)
@@ -345,17 +354,19 @@ def main():
     finals = [(w, f) for w, f in b.verify_calls if w.startswith("service run: the final output, judged run")]
     inter = [f for w, f in b.verify_calls if "intermediate" in w]
     check([f for _, f in finals] == [["step4.bin"]] * 3 and [w.endswith(f"judged run {r} of 3") for r, (w, _) in enumerate(finals, 1)] == [True] * 3
-          and all("step4.bin" not in f for f in inter) and inter == [["step1.bin", "step2.bin"]] * 3 + [["step3.bin"]] * 3,
-          f"every checked proof is judged in three separate badge runs, each checking it once; the final output in "
-          f"three runs of its own, the intermediates apart: {[f for _, f in finals]}, {inter}")
+          and all("step4.bin" not in f for f in inter)
+          and inter == [["step1.bin"]] * 3 + [["step2.bin"]] * 3 + [["step3.bin"]] * 3,
+          f"every checked proof is judged in three separate badge runs of its own, each checking it once and nothing "
+          f"else; the final output in three runs of its own, each intermediate in three of its own: "
+          f"{[f for _, f in finals]}, {inter}")
     judged = [(w, t, warm) for w, t, warm in b.timeouts if "judged run" in w]
     cv = [t for w, t, _ in b.timeouts if w.endswith("outputs 1 and 2 canaries")]
     vc = b.p.v_cap_ms / 1e3
-    check(len(judged) == 9 and all(warm for _, _, warm in judged)
-          and [round(t, 9) for w, t, _ in judged if "intermediate" in w] == [round(60 + 2 * 3 * vc, 9)] * 3 + [round(60 + 2 * 2 * vc, 9)] * 3
+    check(len(judged) == 12 and all(warm for _, _, warm in judged)
+          and [round(t, 9) for w, t, _ in judged if "intermediate" in w] == [round(60 + 2 * 2 * vc, 9)] * 9
           and [t for w, t, _ in judged if "final" in w] == [130.0] * 3 and [round(t, 9) for t in cv] == [round(60 + 2 * 4 * vc, 9)],
-          f"each judged run is a fresh warmed badge run; a run of c intermediate outputs, and the canary run of outputs 1 "
-          f"and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap, the final output's by the stream's cap: "
+          f"each judged run is a fresh warmed badge run; a run of an intermediate output (c = 1), and the canary run of "
+          f"outputs 1 and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap, the final output's by the stream's cap: "
           f"{[(w[-24:], round(t, 3)) for w, t, _ in b.timeouts]}")
     fails_with("a crashed check of the final output", "service run: the final output, judged run 1 of 3: verify: exit -11", "check",
                crash=("the final output",))
@@ -365,8 +376,66 @@ def main():
     b = make(reject={2})
     rec = b.stream_run()
     whats = [w for w, _ in b.verify_calls]
-    check(not any("outputs 1 and 2" in w for w in whats) and sum("intermediate" in w for w in whats) == 6,
+    check(not any("outputs 1 and 2" in w for w in whats) and sum("intermediate" in w for w in whats) == 9,
           f"once `every` is lost (output 2 rejected), no canaries of outputs 1 and 2: {whats}")
+
+    # a memo of the children's acceptance across the checks of one process (review LR2 M1): output i + 1
+    # re-checks π_i inside it; a process that had just checked output i would answer that from the memo.
+    # Each output is judged in runs of its own, so every check of outputs 2 … M pays its child's check.
+    # First a control (the final output was judged alone before the fix too): REJECT for its own 200 ms
+    b = make(memo=True)
+    try:
+        b.stream_run()
+        check(False, "a memo of the children's acceptance: the final output passes at 200 ms")
+    except Fail as e:
+        check(e.stage == "check" and "V = 200.000 ms" in str(e), f"a memo of the children's acceptance: the final "
+              f"output judged at its own 200 ms, REJECT: {e}")
+    b = make(memo=True, V=None)
+    seen = []
+    b.verify, inner = (lambda items, what, timeout, warm=False:
+                       (seen.append((what, [os.path.basename(r) for _, _, r in items])),
+                        inner(items, what, timeout, warm))[1]), b.verify
+    p_m = b.p
+    p_m.v_cap_ms = 300.0
+    rec = b.stream_run()
+    check([s["V_ns"] for s in rec["steps"]] == [10 ** 6] + [200 * 10 ** 6] * 3
+          and all(len(f) == 1 for w, f in seen if "judged run" in w) and len(seen) > 12,
+          f"... with v_cap 300 ms: outputs 2 and 3 are judged at 200 ms in runs that check them alone, never at the "
+          f"1 ms a run that had checked their child first would give: {[s['V_ns'] / 1e6 for s in rec['steps']]} ms")
+    old = inner([(b.svc.vk, b"c" * 32, "stream/step1.bin"), (b.svc.vk, b"c" * 32, "stream/step2.bin")], "a batch", 1.0)
+    check(old == [(True, 10 ** 6), (True, 10 ** 6)],
+          f"... the same verifier with outputs 1 and 2 in one run (the runner before review LR2): output 2 at 1 ms: {old}")
+
+    # the stream's cap during the checks (review LR2 L4): no badge run starts past the cap, and the runs
+    # share one absolute bound 30 s past it, not 30 s each
+    for at, what, nxt in ((3, "an intermediate output's judged runs", "intermediate output 2, judged run 1 of 3"),
+                          (11, "the final output's judged runs", "the final output, judged run 3 of 3"),
+                          (13, "the canaries", "outputs 1 and 2 canaries")):
+        b = make()
+        n_runs = [0]
+        clock = {"t": 100.0}
+        inner = b.verify
+
+        def counting(items, w, timeout, warm=False, inner=inner, n_runs=n_runs, clock=clock, at=at):
+            n_runs[0] += 1
+            if n_runs[0] == at:
+                clock["t"] = -5.0          # the cap passes during this run
+            return inner(items, w, timeout, warm)
+        b.verify, b.left = counting, (lambda clock=clock: clock["t"])
+        try:
+            b.stream_run()
+            check(False, f"the stream's cap reached during {what}: passes")
+        except Fail as e:
+            check(e.stage == "stream-cap" and "stream_s" in str(e) and n_runs[0] == at and nxt in str(e),
+                  f"the stream's cap reached during {what} (badge run {at}): REJECT at {e.stage}, no badge run started "
+                  f"after it ({n_runs[0]} runs): {str(e)[:120]}")
+    b = Bench.__new__(Bench)
+    b.deadline = (bench_mod.time.monotonic() - 10, "the stream's cap")
+    late = b.capped()
+    b.deadline = (bench_mod.time.monotonic() - 40, "the stream's cap")
+    check(19 < late <= 20 and b.capped() == 0.0,
+          f"past the cap every badge run gets what is left of one bound 30 s past it (10 s past: {late:.2f} s; 40 s "
+          f"past: {b.capped()} s), not 30 s each")
 
     # 9. the replay audit
     fails_with("a MISMATCH refusal logged in a timed pass",
@@ -471,11 +540,21 @@ def main():
     v = Bench.__new__(Bench)
     v.store = "/nonexistent"
     v.badge = SimpleNamespace(verify=lambda *a, **kw: (_ for _ in ()).throw(BadgeError("verify: exit -11", kind="crash")))
+    v.deadline = (bench_mod.time.monotonic() + 100, "the stream's cap stream_s = 300 s was reached")
     try:
         Bench.verify(v, [(b"k", b"c", "x")], "the final output, judged run 1 of 3", 10)
         check(False, "a crashed badge run passes")
     except Fail as e:
         check(e.stage == "check" and e.kind == "crash", f"Bench.verify: a crashed badge run is REJECTed at check: {e}")
+    v.badge = SimpleNamespace(verify=lambda *a, **kw: (_ for _ in ()).throw(BadgeError("verify: timeout", kind="timeout")))
+    v.deadline = (bench_mod.time.monotonic() - 31, "the stream's cap stream_s = 300 s was reached")
+    try:
+        Bench.verify(v, [(b"k", b"c", "x")], "the final output, judged run 1 of 3", 0.0)
+        check(False, "a badge run cut at the stream's cap passes")
+    except Fail as e:
+        check(e.stage == "check" and "cut 30 s past the stream's cap: the stream's cap stream_s" in str(e),
+              f"Bench.verify: a badge run that failed once the stream's cap had passed is still REJECTed at check (a "
+              f"hung badge may come from the record cache, which the bot re-runs without): {e}")
     b = make(reject={4})
 
     def stop_fails(svc, rec):

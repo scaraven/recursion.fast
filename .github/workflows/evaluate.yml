@@ -56,8 +56,9 @@
 #   benchmark: one benchmark of at most PART_S = 64 min (harness/evaluate.py), limit 70: inside
 #     PART_S the entry's capped steps build_s 120 + setup_s 240 + the setup tree's hash 60 +
 #     stream_s 2000 = 2420 s (40.3 min), the rest (23.7 min) for the organiser's own steps (the
-#     calibration instance, the leaf data and digests, the 30 s a check batch may run past
-#     stream_s, the service's stop, the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
+#     calibration instance, the leaf data and digests, the at most 30 s the checks may run past
+#     stream_s in all (one bound for every badge run; none starts past the cap), the service's
+#     stop, the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
 #     restore, the certificate download, the fetch, the result upload). The server kills a bench
 #     VM 90 minutes after its job starts (infra/slots.json `hard_limit_s`), 20 above this limit.
 # Worst case 200 minutes (210 with nanoda); with the core commit's caches in place the `rf-bench`

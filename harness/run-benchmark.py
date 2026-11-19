@@ -24,7 +24,8 @@ before any entry code runs. A machine whose fingerprint is missing, unreadable o
 drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
 machine was not in its calibrated state, the organiser's failure, never a score change. A stream
 record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
-`timed_runs` timed times) is a runner fault: `benchmark: error` named `malformed`, never the entry's.
+`timed_runs` timed times, or a record not of the shape `rfh.bench.check_record` requires) is a
+runner fault: `benchmark: error` named `malformed`, never the entry's.
 """
 import argparse
 import glob
@@ -37,8 +38,8 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, build_scrub, fingerprint_problem,  # noqa: E402
-                       fs_free, machine, printable, score)
+from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, build_scrub, check_record,  # noqa: E402
+                       fingerprint_problem, fs_free, machine, printable, score)
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream"]
@@ -162,6 +163,7 @@ def main():
             cal = res["stream"]["calibration"]
             log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), (a health check)")
             try:
+                check_record(p, res["stream"])
                 res["score"] = score(p, res["stream"])
             except MalformedStream as e:
                 raise Drift(f"organiser ERROR: the stream's record is malformed ({e}): a runner fault, not the "

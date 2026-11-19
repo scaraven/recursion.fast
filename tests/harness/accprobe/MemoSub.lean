@@ -6,7 +6,7 @@
   attribute beyond `noinline`). A process that has checked the same statement before answers in
   under a millisecond. The runner used to warm a judged run with the judged input itself (the final
   output checked as `[item, item]`, a re-timing as `[item, item, item]`), so this verifier passed
-  the 128 ms cap; warmed with the organiser's own input, in fresh processes, it is judged slow.
+  the verifier cap; warmed with the organiser's own input, in fresh processes, it is judged slow.
 -/
 import RecursionFast.Library.WitnessSending
 

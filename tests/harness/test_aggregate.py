@@ -8,8 +8,10 @@ The plan is one job (`split` and `single` both): its part gives ACCEPT, the scor
 and the tracks recomputed from the stream's per-step records (their three timed times) with
 `rfh.bench.score` (the score the runner wrote is ignored; a hand-computed vector pins it; a run whose
 intermediate output was rejected is in the track `final` only); a step record without exactly three
-timed times is an organiser ERROR named `malformed`, never comparable, and so is a part the runner
-named `malformed`; the part
+timed times is an organiser ERROR named `malformed`, never comparable, and so is a passed run whose
+record is not of the season's shape (`rfh.bench.check_record`: no stream record or no steps, a stream
+that kept 2 of its M steps, a duplicated index, a `V_ns` that is not the median of three judged times,
+a final output not accepted within its caps), and a part the runner named `malformed`; the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
 gives REJECT; a rejected certificate gives REJECT; a REJECT carries its `reject_stage` (the
 certificate's, else the failed part's own); a stream flagged truncated (no v6 runner writes one)
@@ -43,12 +45,16 @@ FP = "f" * 64
 _S = tomllib.load(open(SEASON, "rb"))["stream"]
 SHAPE = {"M": _S["M"], "n": _S["n"]}      # the smoke's shape
 N = SHAPE["n"]                            # n_i
+M = SHAPE["M"]                            # the smoke's 4 steps
 
 
 def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP, c_P=1.0, fp_status=None,
          shape=SHAPE, pi=(0, 0), accepted=(True, True)):
-    steps = [{"index": i, "n": N, "P_timed_s": [P] * 3, "P_service_s": 5.0, "V_ns": 10 ** 6, "pi_bytes": pi[i - 1],
-              "accepted": accepted[i - 1], "canaries_accepted": []} for i in (1, 2)]
+    """A part of M steps of P s each; `pi` and `accepted` are output 1's and the final output's (the steps
+    between: |π| = 0, accepted); every output judged in three runs of 1 ms."""
+    pis, acc = [pi[0]] + [0] * (M - 2) + [pi[1]], [accepted[0]] + [True] * (M - 2) + [accepted[1]]
+    steps = [{"index": i, "n": N, "P_timed_s": [P] * 3, "P_service_s": 5.0, "V_runs_ns": [10 ** 6] * 3, "V_ns": 10 ** 6,
+              "pi_bytes": pis[i - 1], "accepted": acc[i - 1], "canaries_accepted": []} for i in range(1, M + 1)]
     r = {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
          "harness": {"commit": commit}, "machine": {"fingerprint": fp, "fingerprint_status": fp_status or ("ok" if fp else "missing"),
                                                      "fingerprint_reason": None if fp else "RF_MACHINE_FINGERPRINT is not set",
@@ -95,20 +101,20 @@ def main():
     r = run(tmp, full)
     check(r, "ACCEPT", "the planned part")
     sc = r.get("score", {})
-    one = 2.0                    # P_total of two steps of 1 s
-    holds(abs(sc.get("S", 0) - one) < 1e-12 and sc.get("P_total_s") == 2.0
-          and sc.get("tracks") == {"final": "S", "every": "S_every"} and sc.get("S_every") == one and sc.get("M") == 2,
-          f"the score is recomputed from the steps (two steps of 1 s, |π_M| = 0: S = P_total = 2 s, not the "
+    one = float(M)               # P_total of M = 4 steps of 1 s
+    holds(abs(sc.get("S", 0) - one) < 1e-12 and sc.get("P_total_s") == one
+          and sc.get("tracks") == {"final": "S", "every": "S_every"} and sc.get("S_every") == one and sc.get("M") == M,
+          f"the score is recomputed from the steps (four steps of 1 s, |π_M| = 0: S = P_total = 4 s, not the "
           f"part's 999), both tracks: {sc.get('S')}, {sc.get('tracks')}")
-    # the part's timed times tampered (its score field says 999): step 2 at 2, 4 and 3 s, step 1 at 1 s, |π_1| =
-    # 384 KiB, |π_M| = 256 KiB: pass totals 3, 5, 4 s, P_total = 4 s (pass 3), S = 4 √2, S_every = 4 · 2^(3/4)
+    # the part's timed times tampered (its score field says 999): step 2 at 2, 4 and 3 s, steps 1, 3, 4 at 1 s,
+    # |π_1| = 384 KiB, |π_M| = 256 KiB: pass totals 5, 7, 6 s, P_total = 6 s (pass 3), S = 6 √2, S_every = 6 · 2^(3/4)
     vec = part("calibrate,stream", pi=(384 << 10, 256 << 10))
     vec["stream"]["steps"][1]["P_timed_s"] = [2.0, 4.0, 3.0]
     vec["stream"]["steps"][1]["P_s"] = 0.5            # a stale per-step field is ignored, recomputed
     sc = run(tmp, [vec]).get("score", {})
-    want, want_e = 4 * 2 ** 0.5, 4 * 2 ** 0.75
+    want, want_e = 6 * 2 ** 0.5, 6 * 2 ** 0.75
     holds(sc.get("S") == want and sc.get("S_every") == want_e and sc.get("final_pi_bytes") == 256 << 10
-          and sc.get("max_pi_bytes") == 384 << 10 and sc.get("pass_totals_s") == [3.0, 5.0, 4.0] and sc.get("median_pass") == 3
+          and sc.get("max_pi_bytes") == 384 << 10 and sc.get("pass_totals_s") == [5.0, 7.0, 6.0] and sc.get("median_pass") == 3
           and abs(sc.get("size_factor", 0) - 2 ** 0.5) < 1e-12,
           f"the aggregation recomputes S and S_every exactly from the tampered times: S {sc.get('S')} = {want}, "
           f"S_every {sc.get('S_every')} = {want_e}")
@@ -119,6 +125,37 @@ def main():
     holds(r.get("organiser_error") == "malformed" and "score" not in r and any("is malformed" in x for x in r["reasons"]),
           f"... named `malformed`, no score: {r['reasons'][-1:]}")
     check(run(tmp, [bad], cert_status="reject"), "REJECT", "a rejected certificate stays REJECT whatever the stream's record")
+    # the record's shape (review LR2 M3): a passed run is scored only from a record of the season's shape
+    import copy
+    for what, edit in (("no stream record", lambda r: r.update(stream=None)),
+                       ("no steps", lambda r: r["stream"].update(steps=[])),
+                       ("2 of its 4 steps kept", lambda r: r["stream"].update(steps=r["stream"]["steps"][:2])),
+                       ("steps 1, 2, 4 (one dropped)", lambda r: r["stream"]["steps"].pop(2)),
+                       ("a duplicated index", lambda r: r["stream"]["steps"][1].update(index=1)),
+                       ("an extra step 5", lambda r: r["stream"]["steps"].append(dict(r["stream"]["steps"][-1], index=M + 1))),
+                       ("V_ns not the median of its runs",
+                        lambda r: r["stream"]["steps"][1].update(V_runs_ns=[9e8] * 3, V_ns=1.0)),
+                       ("two judged times", lambda r: r["stream"]["steps"][1].update(V_runs_ns=[1e6, 1e6])),
+                       ("a V_ns with no judged times", lambda r: r["stream"]["steps"][2].pop("V_runs_ns")),
+                       ("a non-finite judged time", lambda r: r["stream"]["steps"][0].update(V_runs_ns=[1e6, float("inf"), 1e6])),
+                       ("a final output not accepted", lambda r: r["stream"]["steps"][-1].update(accepted=False)),
+                       ("a final output rejected when checked again", lambda r: r["stream"]["steps"][-1].update(recheck_rejected=True)),
+                       ("a final V above v_cap", lambda r: r["stream"]["steps"][-1].update(V_runs_ns=[2e8] * 3, V_ns=2e8)),
+                       ("a final |π| above final_pi_cap", lambda r: r["stream"]["steps"][-1].update(pi_bytes=(512 << 10) + 1)),
+                       ("a |π| that is not a size", lambda r: r["stream"]["steps"][1].update(pi_bytes=-1))):
+        bad = copy.deepcopy(part("calibrate,stream"))
+        edit(bad)
+        r = run(tmp, [bad])
+        holds(r["verdict"] == "ERROR" and r["comparable"] is False and r.get("organiser_error") == "malformed"
+              and "score" not in r and any("is malformed" in x for x in r["reasons"]),
+              f"a passed run whose record has {what}: ERROR `malformed`, never scored: {r['reasons'][-1:]}")
+    unjudged = part("calibrate,stream", accepted=(False, True))
+    for k in ("V_ns", "V_runs_ns"):
+        unjudged["stream"]["steps"][0].pop(k)
+    unjudged["stream"]["steps"][0]["check_error"] = "`verify: exit -11`"
+    r = run(tmp, [unjudged])
+    check(r, "ACCEPT", "an intermediate output whose check crashed (no judged times): the record's shape holds")
+    holds(r["score"]["tracks"] == {"final": "S"}, f"... in `final` only: {r['score'].get('tracks_reason')}")
     mal = part("calibrate,stream", benchmark="error")
     mal["organiser_error"] = "malformed"
     holds(run(tmp, [mal]).get("organiser_error") == "malformed", "a part the runner named `malformed` is that ERROR")

@@ -57,7 +57,9 @@ stream_s = 2000   # wall seconds for the whole benchmark from its first calibrat
                   # nearly every cap at once. The timed passes repeat the service run's requests, so
                   # about 4 × the stream's proving time is needed. A later season may set another
 check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9–15 after step 16, the
-                  # final output on its own after them (no entry process alive during a check)
+                  # final output after them (no entry process alive during a check); every output
+                  # is judged on its own, in three badge runs that check nothing else (45 runs for
+                  # the 15 intermediate outputs, 3 for the final one)
 timed_runs = 3    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
                   # service run's; P_total = the median of the three pass totals (rfh.bench.score);
                   # must be odd
@@ -91,8 +93,9 @@ badge_start_s = 2       # a warmed badge process, from its release to the answer
 v_cap_ms = 64           # one acc check of a checked proof (file read and parse included), one pinned
                         # core, timed by the runner around the request and by the badge, the larger
                         # counts; a checked proof is judged in three separate fresh badge runs (each
-                        # warmed on an organiser input) and the median of its three times counts (a
-                        # badge run of c intermediate checks is bounded by 60 s + 2 (c + 1) v_cap)
+                        # warmed on an organiser input, checking it alone) and the median of its three
+                        # times counts (a judged run of an intermediate output is bounded by
+                        # 60 s + 4 v_cap, a canary run of c canaries by 60 s + 2 (c + 1) v_cap)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
 setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB
