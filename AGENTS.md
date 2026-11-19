@@ -76,9 +76,9 @@ judged by a *signed proof* `(π, tr, σ)`: the proof, the oracle answers its ver
 trace), and the service's signature on the trace. Checking a child therefore never evaluates the
 secret-keyed oracle: it checks a signature and runs `V` on the trace.
 
-- **Relation** `Rel acc` ([`Relation.lean#L138-L143`](RecursionFast/Contract/Relation.lean#L138-L143)):
+- **Relation** `Rel acc` ([`Relation.lean#L141-L146`](RecursionFast/Contract/Relation.lean#L141-L146)):
   `c = leafStmt (leafValue s n) n` with `n ≤ leafCap = 2^22`
-  ([`#L57-L58`](RecursionFast/Contract/Relation.lean#L57-L58)), or
+  ([`#L60-L61`](RecursionFast/Contract/Relation.lean#L60-L61)), or
   `c = nodeStmt c₁ c₂` with `acc c₁ p₁` and `acc c₂ p₂`.
 - **Byte layouts** (normative; the contract, the service and the runner hash the same bytes):
   `leafItem s j = Keccak-256(0x48 ‖ s ‖ enc64 j)`, `leafValue s n` the XOR of `leafItem s j` over
@@ -87,13 +87,13 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   Ethereum's: FIPS 202's sponge over `Keccak-f[1600]`, rate 136 bytes, padding `0x01 … 0x80` (not
   SHA3-256's `0x06`), 32-byte output ([`Hash/Keccak.lean`](RecursionFast/Contract/Hash/Keccak.lean));
   a leaf item is 41 bytes, one permutation
-  ([`Relation.lean#L64-L105`](RecursionFast/Contract/Relation.lean#L64-L105)); the trace digest and
+  ([`Relation.lean#L67-L108`](RecursionFast/Contract/Relation.lean#L67-L108)); the trace digest and
   the signature ([`Signature.lean#L18-L33`](RecursionFast/Contract/Signature.lean#L18-L33)).
 - **Acceptance** `Submission.acc S vk c p`
   ([`Certificate.lean#L96-L104`](RecursionFast/Contract/Certificate.lean#L96-L104)), in this order:
   `|π| < 2^64`; `|tr| ≤ qV`; every query in `tr` at most `queryCap = 2^20` bytes
-  ([`Relation.lean#L54-L55`](RecursionFast/Contract/Relation.lean#L54-L55));
-  `SigOk vk (traceDigest tr) σ` ([`Signature.lean#L98-L103`](RecursionFast/Contract/Signature.lean#L98-L103));
+  ([`Relation.lean#L57-L58`](RecursionFast/Contract/Relation.lean#L57-L58));
+  `SigOk vk (traceDigest tr) σ` ([`Signature.lean#L100-L105`](RecursionFast/Contract/Signature.lean#L100-L105));
   and `(V vk c π).runSeq tr = some true`: `V`'s `i`-th query is answered by the `i`-th entry of
   `tr`, which must be for that query, and the trace is used up exactly
   ([`Oracle.lean#L49-L56`](RecursionFast/Contract/Oracle.lean#L49-L56)).
@@ -115,17 +115,17 @@ has four fields, and `CertificateR declared S`
 `ε`, `δ`, `qV`, `fuel` are within the declared ones and the declared fuel within the budget.
 
 - **`secure : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV`**
-  ([`Security.lean#L141-L153`](RecursionFast/Contract/Security.lean#L141-L153)). `V` asks at most
+  ([`Security.lean#L143-L155`](RecursionFast/Contract/Security.lean#L143-L155)). `V` asks at most
   `qV` queries on every input and every oracle function; and for every adversary, a query program
   asking at most `Q` queries on every oracle function and outputting `(c, π)`, with
   `Q + qV ≤ logCap`, run and then followed by `V` against one lazily sampled random oracle
-  (`prob`, [`#L133-L142`](RecursionFast/Contract/Security.lean#L130-L139)), the probability that
+  (`prob`, [`#L132-L141`](RecursionFast/Contract/Security.lean#L132-L141)), the probability that
   `V` accepts on the final query log while `E c π log` returns no witness of the relation is at most
   `(Q + qV) · ε`. The extractor reads the final log, the verifier's answers included (how this
   relates to the textbook notion: §12). The adversary is computationally unbounded, bounded only in
   queries.
 - **`complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ`**
-  ([`Security.lean#L155-L159`](RecursionFast/Contract/Security.lean#L155-L159)): on every statement
+  ([`Security.lean#L157-L161`](RecursionFast/Contract/Security.lean#L157-L161)): on every statement
   and witness of the relation, `P`'s proof, produced and then verified against one random oracle,
   is rejected with probability at most `δ`. Grinding is admitted. It is required for **every**
   witness, node witnesses with any accepted children included.
@@ -135,7 +135,7 @@ has four fields, and `CertificateR declared S`
   ([`Machine.lean#L97-L133`](RecursionFast/Contract/Machine.lean#L97-L133)), on the input tape
   `extractorInput c π L` ([`Extractor.lean#L105-L108`](RecursionFast/Contract/Extractor.lean#L105-L108)),
   halts within `fuel t` steps (`t` the tape's length in words) with at most `outCap` words that
-  denote `E c π L` through `decodeWit` ([`#L168-L170`](RecursionFast/Contract/Extractor.lean#L165-L167)).
+  denote `E c π L` through `decodeWit` ([`#L165-L167`](RecursionFast/Contract/Extractor.lean#L165-L167)).
   This holds for every statement, proof of at most `8 · outCap` bytes (128 MiB) and log whose
   queries are below `2^64` bytes and whose tape is at most `2^64` words. The tape and output formats
   are normative ([`#L13-L33`](RecursionFast/Contract/Extractor.lean#L13-L33)). `E` takes no `vk`.
@@ -143,14 +143,14 @@ has four fields, and `CertificateR declared S`
 
 | Cap | Value | Lean |
 |---|---|---|
-| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L123-L124`](RecursionFast/Contract/Security.lean#L123-L124) |
-| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L161-L162`](RecursionFast/Contract/Security.lean#L161-L162) |
+| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L125-L126`](RecursionFast/Contract/Security.lean#L125-L126) |
+| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L163-L164`](RecursionFast/Contract/Security.lean#L163-L164) |
 | `qV ≤` | `2^16` | [`Certificate.lean#L117`](RecursionFast/Contract/Certificate.lean#L117) |
 | `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L171-L172`](RecursionFast/Contract/Extractor.lean#L171-L172) |
 | `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L177-L178`](RecursionFast/Contract/Extractor.lean#L177-L178) |
-| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L126-L128`](RecursionFast/Contract/Security.lean#L126-L128) |
+| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L128-L130`](RecursionFast/Contract/Security.lean#L128-L130) |
 | `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L174-L175`](RecursionFast/Contract/Extractor.lean#L174-L175) |
-| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L54-L58`](RecursionFast/Contract/Relation.lean#L54-L58) |
+| `queryCap`, `leafCap` | `2^20` bytes, `2^22` hashes | [`Relation.lean#L57-L61`](RecursionFast/Contract/Relation.lean#L57-L61) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
 kernel-checked) offers routes and parts: a potential on logs, `KState`, with its bridge
@@ -542,9 +542,11 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
   the key would be accept-all.
 - **On paper, not in the kernel**: unforgeability of the signature (EUF-CMA) and the bounds on the
   probabilities of the walk's EUF-CMA and collision outcomes (the per-run reduction to them, given
-  the service's signed traces, is kernel; the model has no signing oracle), and the PRF step from
-  the random oracle to the keyed deployment. The composition across the stream is kernel
-  (`compose_prob_stream`, `compose_prob_stream_signed`).
+  the service's signed traces, is kernel; the model has no signing oracle), lazy sampling against
+  a random function, randomised adversaries (an average of deterministic ones), and the PRF step
+  from the random oracle to the keyed deployment. The composition across the stream is kernel for
+  one deterministic query program against the lazily sampled oracle, given the service's signed
+  traces (`compose_prob_stream`, `compose_prob_stream_signed`).
 - **`KS` is textbook knowledge soundness only for adversaries that ask the verifier's queries
   themselves**: its extractor also reads the verifier's answers, so for an adversary that leaves
   fresh queries to the verifier it is weaker than the textbook notion (`Controls/Security.lean`,

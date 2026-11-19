@@ -6,7 +6,7 @@
   soundness by a union bound over the extracted proofs. Fix a submission `S` and a public key
   `vk`. The leaves' digests are `leafStmt hᵢ n` (the runner computes them from the leaf values
   `hᵢ` it knows, with `n ≤ leafCap`). The benchmark is a **stream** of `M` steps (plain IVC):
-  `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` (`streamStmt`, the runner's digests), a left-leaning
+  `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` (`streamStmt`, `Contract/Tree.lean`), a left-leaning
   chain whose every node's second child is a leaf; `walkStream` and `compose_prob_stream` cover
   it. A **balanced tree** of `2^r` leaves has the root digest `treeRoot` of them; `walk` and
   `compose_prob` cover it (the setting of `Contract/Tree.lean` and its known-answer control). The
@@ -66,8 +66,10 @@
   `(2M - 1) · (Q + qV) · ε` (`escape_prob_le` over `combPaths M`; for `M = 8`, `15` members, where
   depth alone would give `2^8 - 1`), and `walkStream_not_escaped` is its lossless form.
   `walkStreamSigned`, `compose_prob_stream_signed` and `walkStreamSigned_not_escaped` are the
-  signed variants, through `Outcome.reduce`. `walkStreamFrom_one`, `walkStreamFrom_succ_succ` and
-  `walkStreamFrom_escape` read the walk on known extractor outputs.
+  signed variants, through `Outcome.reduce`. Returned seeds are the leaves' seeds
+  (`Outcome.forall₂_of_seeds?`, `SignedOutcome.forall₂_of_seeds?`), so off the bounded events all
+  `M` seeds are extracted. `walkStreamFrom_one`, `walkStreamFrom_node`, `walkStreamFrom_succ_succ`
+  and `walkStreamFrom_escape` read the walk on known extractor outputs.
 
   **The forgery outcome against the service's signed traces** (`Forgery.reduce`, `walkSigned`).
   Let `T` list the traces the service signed, with their signatures, and `Honest T L` say that
@@ -390,7 +392,7 @@ def walkFrom (L : Log) (n : ℕ) (hn : n ≤ leafCap) (c₀ : Digest) (p₀ : Si
         | .seeds _ _, .escape c q bs' m hd' h' => .escape c q bs' m hd' h'
       else .collision (nodeCollision he (hroot.symm.trans hw.1))
 
-/-- **The walk over the harness tree**: from the log `L` and an accepted root signed
+/-- **The walk over a balanced tree**: from the log `L` and an accepted root signed
 proof, the root's leaf seeds, an explicit collision, an explicit capped forgery in the extraction
 tree of the root signed proof, or an escape in it within depth `r`, computed from it through `S.E`
 on `L`. Its type `Outcome` is not the statement (a collision inhabits it); the content is this
@@ -595,6 +597,14 @@ theorem cases_of_seeds?_none {o : SignedOutcome S vk L T n hs c₀ p₀ d} (h : 
   | euf => exact .inr (.inl trivial)
   | escape => exact .inr (.inr trivial)
 
+/-- **Returned seeds are the leaves' seeds**: if the outcome returns the seeds `ss`, the `n`
+hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
+theorem forall₂_of_seeds? {o : SignedOutcome S vk L T n hs c₀ p₀ d} {ss : List Digest}
+    (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
+  cases o with
+  | seeds ss' h' => cases h; exact h'
+  | _ => cases h
+
 end SignedOutcome
 
 /-- **The walk's outcome against signed traces `T`** the log accounts for: a forgery is reduced
@@ -755,13 +765,6 @@ theorem walkFrom_leaf {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {
 
 /-! ## The stream: `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` -/
 
-/-- **The stream's digest** over the leaf values `hs` of size `n`, oldest first, as the runner
-computes it: `c_1 = leafStmt h_1 n` and `c_i = nodeStmt c_(i-1) (leafStmt h_i n)`; the zero
-digest for no leaf. -/
-def streamStmt (n : ℕ) : List Digest → Digest
-  | [] => Vector.replicate 32 0
-  | h :: hs => hs.foldl (fun c h => nodeStmt c (leafStmt h n)) (leafStmt h n)
-
 /-- One more step of a non-empty stream is the node statement of the stream and the new leaf. -/
 theorem streamStmt_append (n : ℕ) {hs : List Digest} (hne : hs ≠ []) (h : Digest) :
     streamStmt n (hs ++ [h]) = nodeStmt (streamStmt n hs) (leafStmt h n) := by
@@ -826,6 +829,15 @@ theorem Outcome.Escaped.exists_in {L : Log} {n : ℕ} {hs : List Digest} {c₀ :
   | escape c q bs m _ he => exact ⟨c, q, bs, hP, m, he⟩
   | _ => exact h.elim
 
+/-- **Returned seeds are the leaves' seeds**: if the outcome returns the seeds `ss`, the `n`
+hashes of `ss[i]` have the value `hs[i]`, for every leaf. -/
+theorem Outcome.forall₂_of_seeds? {L : Log} {n : ℕ} {hs : List Digest} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} {o : Outcome S vk L n hs c₀ p₀ d} {ss : List Digest}
+    (h : o.seeds? = some ss) : List.Forall₂ (fun s h => leafValue s n = h) ss hs := by
+  cases o with
+  | seeds ss' h' => cases h; exact h'
+  | _ => cases h
+
 /-- **Two outcomes over adjacent leaf ranges, joined**: the seeds of both, or the first outcome
 that is not the seeds. -/
 def Outcome.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest} {p₀ : Signed}
@@ -844,6 +856,15 @@ theorem Outcome.EscapeIn.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Diges
     {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d}
     (h₁ : o₁.EscapeIn P) (h₂ : o₂.EscapeIn P) : (o₁.append hsplit o₂).EscapeIn P := by
   cases o₁ <;> cases o₂ <;> trivial
+
+/-- An escape joined with any outcome is that escape. -/
+theorem Outcome.Escaped.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} {P : List Bool → Prop} {hsplit : hs₁ ++ hs₂ = hs}
+    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} (o₂ : Outcome S vk L n hs₂ c₀ p₀ d) (h : o₁.Escaped)
+    (hP : o₁.EscapeIn P) : (o₁.append hsplit o₂).Escaped ∧ (o₁.append hsplit o₂).EscapeIn P := by
+  cases o₁ with
+  | escape => exact ⟨trivial, hP⟩
+  | _ => exact h.elim
 
 theorem Outcome.seeds?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {hsplit : hs₁ ++ hs₂ = hs}
@@ -931,7 +952,8 @@ theorem walkStream_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E ε) {L 
 at most `Q` queries and outputting a signed proof of the stream's digest, with
 `Q + qV ≤ logCap`, the probability that `acc` accepts it and the stream walk on `A`'s final log
 ends in an escape is at most `(2|hs| - 1) · (Q + qV) · ε`: a union bound over the stream's
-`|hs| - 1` nodes and `|hs|` leaves. -/
+`|hs| - 1` nodes and `|hs|` leaves. Off that event the walk returns the seeds of all `|hs|`
+leaves (`Outcome.forall₂_of_seeds?`), a collision or a forgery in the extraction tree. -/
 theorem compose_prob_stream (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
     (hn : n ≤ leafCap) (hs : List Digest) (A : OProg Signed) {Q : ℕ}
     (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap) :
@@ -964,7 +986,8 @@ theorem walkStreamSigned_not_escaped (k : KState (Rel (S.acc vk)) (S.V vk) S.E �
 traces**: the probability that `acc` accepts the adversary's signed proof of the stream's digest
 and the stream walk against `T p L` returns no leaf seeds is at most
 `(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision and that it
-returns an EUF-CMA forgery against the signing record of `T p L`. -/
+returns an EUF-CMA forgery against the signing record of `T p L`. Off these events the walk
+returns the seeds of all `|hs|` leaves (`SignedOutcome.forall₂_of_seeds?`). -/
 theorem compose_prob_stream_signed (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) (n : ℕ)
     (hn : n ≤ leafCap) (hs : List Digest) (A : OProg Signed) {Q : ℕ}
     (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
@@ -996,6 +1019,30 @@ theorem walkStreamFrom_one {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Dige
   unfold walkStreamFrom
   exact walkFrom_leaf hn (hr := rfl) rfl rfl hin hE hend
 
+/-- **The stream walk at a node, unfolded**: if the signed proof's trace is in the log and the
+extractor opens it to a node witness of the relation whose children are the statements of the
+stream without its last leaf and of that leaf, the walk joins the walk over the shorter stream at
+the first child and the one-leaf walk at the second. -/
+theorem walkStreamFrom_node {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest}
+    {p₀ : Signed} {M k : ℕ} {hs : List Digest} (hne : hs ≠ []) {hk : hs.length = k + 2} {j : ℕ}
+    {hj : j + (k + 2) = M} {p : Signed} {hacc : S.acc vk (streamStmt n hs) p = true}
+    {hmem : InTree S L c₀ p₀ (List.replicate j false) (streamStmt n hs) p}
+    (hin : ∀ e ∈ p.tr, e ∈ L) {p₁ p₂ : Signed}
+    (hE : S.E (streamStmt n hs) p.π L = some
+      (.node (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) p₁ p₂))
+    (hR : Rel (S.acc vk) (streamStmt n hs)
+      (.node (streamStmt n hs.dropLast) (leafStmt (hs.getLast hne) n) p₁ p₂)) :
+    (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1 =
+      (walkStreamFrom L n hn c₀ p₀ M (k + 1) hs.dropLast (by simp [hk]) (j + 1) (by omega) p₁
+        hR.2.1 (InTree.left hmem hE)).1.append (List.dropLast_append_getLast hne)
+      (walkFrom L n hn c₀ p₀ (M - 1) 0 [hs.getLast hne] rfl p₂ (true :: List.replicate j false)
+        (by simp only [List.length_cons, List.length_replicate]; omega) hR.2.2
+        (InTree.right hmem hE)) := by
+  conv_lhs => unfold walkStreamFrom
+  rw [extract_of_E hacc hin hE hR]
+  dsimp only
+  rw [dite_eq_left_of_eq_true (eq_true ⟨rfl, rfl⟩)]
+
 /-- **The stream walk at a node**: if the signed proof's trace is in the log, the extractor
 opens it to a node witness whose children are the statements of the stream without its last
 leaf and of that leaf, the walk over the shorter stream returns the seeds `ss`, and the last
@@ -1016,24 +1063,23 @@ theorem walkStreamFrom_succ_succ {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ 
     (hE₂ : S.E (leafStmt (hs.getLast hne) n) p₂.π L = some (.leaf s n))
     (hend : leafValue s n = hs.getLast hne) :
     (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.seeds? = some (ss ++ [s]) := by
-  unfold walkStreamFrom
-  rw [extract_of_E hacc hin hE hR]
-  dsimp only
-  rw [dite_eq_left_of_eq_true (eq_true ⟨rfl, rfl⟩)]
+  rw [walkStreamFrom_node hn hne hin hE hR]
   exact Outcome.seeds?_append (hsplit := List.dropLast_append_getLast _) (hrec _ _ _ _)
     (walkFrom_leaf hn (hr := rfl) rfl rfl hin₂ hE₂ hend)
 
 /-- **The stream walk escapes at a node** whose signed proof's trace is in the log and which the
-extractor opens to no witness of the relation. -/
+extractor opens to no witness of the relation: an escape at that node's path. -/
 theorem walkStreamFrom_escape {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {p₀ : Signed}
     {M k : ℕ} {hs : List Digest} {hk : hs.length = k + 2} {j : ℕ} {hj : j + (k + 2) = M}
     {p : Signed} {hacc : S.acc vk (streamStmt n hs) p = true}
     {hmem : InTree S L c₀ p₀ (List.replicate j false) (streamStmt n hs) p}
     (hin : ∀ e ∈ p.tr, e ∈ L)
     (hno : ¬ ∃ w, S.E (streamStmt n hs) p.π L = some w ∧ Rel (S.acc vk) (streamStmt n hs) w) :
-    (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.Escaped := by
+    (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.Escaped ∧
+      (walkStreamFrom L n hn c₀ p₀ M (k + 2) hs hk j hj p hacc hmem).1.EscapeIn
+        (· = List.replicate j false) := by
   unfold walkStreamFrom
   rw [extract_escape hacc hin hno]
-  trivial
+  exact ⟨trivial, rfl⟩
 
 end RecursionFast.Compose

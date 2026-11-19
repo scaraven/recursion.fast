@@ -1,23 +1,37 @@
 /-
-# Contract: the recursion tree's root (a specification of the runner)                (TRUSTED)
+# Contract: the stream's statement and the tree's root (a specification of the runner) (TRUSTED)
 
-The root digest of `2^r` leaves, computed from the
-leaf digests by hashing up (`nodeStmt`, adjacent pairs, level by level), never from a digest a
-prover supplies. No prover is benchmarked on a tree, and the runner computes no tree root: the
-benchmark is one stream of `nodeStmt` steps (`c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i`), which
-the library's stream walk covers (`Library/Compose.lean`, `walkStream`, `compose_prob_stream`).
-The tree is the setting of the library's tree composition theorem (`walk`, `compose_prob`) and
-of its known-answer control (`Controls/Tree.lean`, `treeRoot_kat`, against a value computed with
-the harness's Python Keccak-256 reference).
+**The stream's statement (the benchmark).** The benchmark is one stream of `M` steps (plain IVC)
+over the leaf values `h_1 … h_M` of size `n`, oldest first: `c_1 = L_1`,
+`c_i = nodeStmt c_(i-1) L_i` with `L_i = leafStmt h_i n` (`streamStmt`, the digest of the last
+step; each `c_i` is `streamStmt` of the first `i` leaves). The runner computes these digests from
+its own seeds (`harness/rfh/digest.py`, `stream_statements`), never from a digest a prover
+supplies; a known-answer control pins the two together (`Controls/Tree.lean`,
+`streamStmt_kat`). The library's stream walk is stated over it (`Library/Compose.lean`,
+`walkStream`, `compose_prob_stream`).
+
+**The tree's root.** The root digest of `2^r` leaves, computed from the leaf digests by hashing
+up (`nodeStmt`, adjacent pairs, level by level). No prover is benchmarked on a tree, and the
+runner computes no tree root. The tree is the setting of the library's tree composition theorem
+(`walk`, `compose_prob`) and of its known-answer control (`Controls/Tree.lean`, `treeRoot_kat`,
+against a value computed with the harness's Python Keccak-256 reference).
 
 **Convention.** The tree composition theorem has a power of two of leaves. `treeRoot` is total:
 on an odd level the last digest is carried up unhashed, a single digest is its own root, and the
 empty list has the zero digest. The theorem uses none of these cases but the single digest.
+`streamStmt` of no leaf is the zero digest; the benchmark's streams have `M = 8` leaves.
 -/
 import RecursionFast.Contract.Relation
 import Mathlib.Logic.Function.Iterate
 
 namespace RecursionFast
+
+/-- **The stream's statement** over the leaf values `hs` of size `n`, oldest first, as the runner
+computes it: `c_1 = leafStmt h_1 n`, `c_i = nodeStmt c_(i-1) (leafStmt h_i n)`; the zero digest
+for no leaf. -/
+def streamStmt (n : ℕ) : List Digest → Digest
+  | [] => Vector.replicate 32 0
+  | h :: hs => hs.foldl (fun c h => nodeStmt c (leafStmt h n)) (leafStmt h n)
 
 /-- One level up: adjacent digests paired by `nodeStmt`; an odd last digest is carried up. -/
 def treeLevel : List Digest → List Digest

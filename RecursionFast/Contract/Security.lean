@@ -104,8 +104,8 @@ stands (a degree-2 sumcheck round costs `2^-127`): it must draw its challenges f
 or repeat. Composing the stream from single-output knowledge soundness takes a union bound over
 the extracted proofs (`Library/Compose.lean`, `compose_prob_stream`): the final output of the
 8-step stream and the proofs extracted from it, its `2 · 8 - 1 = 15` members (7 nodes, 8 leaves),
-at `2^30` queries cost at most `15 · 2^30 · 2^-128 < 2^-94`; walking each of the 8 outputs,
-`Σ (2i - 1) = 64` members, `2^-92`.
+at `Q + qV = 2^30` cost at most `15 · 2^30 · 2^-128 < 2^-94`; walking each of the 8 outputs,
+`Σ (2i - 1) = 64` members, `2^6 · 2^30 · 2^-128 = 2^-92`.
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs

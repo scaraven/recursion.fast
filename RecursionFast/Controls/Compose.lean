@@ -44,19 +44,24 @@ accepted by the one-query verifier `oneQuery qMax` (`Controls/Relation.lean`):
 The stream walk (`walkStream`, over the benchmark's shape `c_1 = L_1`,
 `c_i = nodeStmt c_(i-1) L_i`), on the witness-sending submission under the reference signer's
 key, with the empty log:
-* Positive: `walkStream_two_leaves`, on the two-leaf stream whose proof is the signed node proof
-  over the two signed leaf proofs, returns `[s₁, s₂]`; `walkStream_three_leaves`, on the
+* Positive: `walkStream_one_leaf`, on the one-leaf stream whose proof is the signed leaf proof,
+  returns `[s]`; `walkStream_two_leaves`, on the two-leaf stream whose proof is the signed node
+  proof over the two signed leaf proofs, returns `[s₁, s₂]`; `walkStream_three_leaves`, on the
   three-leaf stream whose proof is the signed node proof over that node proof and a third signed
   leaf proof (`streamSigned`), returns `[s₁, s₂, s₃]`; `walkStreamSigned_two_leaves`: against a
   service that signed nothing (the traces are empty), the same seeds.
 * Negative: `noExt`'s stream walk escapes at the root of the two-leaf stream
   (`noExt_walkStream_escaped`), so the adversary that outputs that proof makes
-  `compose_prob_stream`'s event certain (`noExt_stream_escape_prob`).
+  `compose_prob_stream`'s event certain (`noExt_stream_escape_prob`). An escape below the root:
+  `topOnly`'s extractor opens only proofs longer than the two-leaf node proof, so on the
+  three-leaf stream it opens the root and the walk escapes at the root's first child, the path
+  `[false]` (`topOnly_walkStream_escaped`).
 * `ws_compose_prob_stream`: under every key and against every adversary, the witness-sending
   stream walk escapes with probability `0` (`compose_prob_stream` at `ε = 0`, `qV = 0`).
 
 Symbolic (`decode_encode`, `sigOk_sign`, `extract_of_E`, `walkFrom_leaf`, `walkStreamFrom_one`,
-`walkStreamFrom_succ_succ`, `walkStreamFrom_escape`); no hash is evaluated.
+`walkStreamFrom_node`, `walkStreamFrom_succ_succ`, `walkStreamFrom_escape`); no hash is
+evaluated.
 -/
 import RecursionFast.Library.Compose
 import RecursionFast.Library.WitnessSending
@@ -316,6 +321,14 @@ theorem walkSigned_queryLeaf_seeds (sk : ℕ → ℕ → Digest) (s a : Digest) 
 
 /-! ## The stream walk: `c_1 = L_1`, `c_i = nodeStmt c_(i-1) L_i` -/
 
+/-- **The stream walk on a one-leaf stream** returns the leaf's seed. -/
+theorem walkStream_one_leaf (sk : ℕ → ℕ → Digest) (s : Digest) {n : ℕ} (hn : n ≤ leafCap) :
+    (walkStream [] n hn [leafValue s n] (leafSigned sk 0 s n)
+      (acc_leafSigned sk (by decide) s hn)).seeds? = some [s] := by
+  unfold walkStream
+  exact walkStreamFrom_one (L := []) (p := leafSigned sk 0 s n) hn nofun
+    (decode_encode (.leaf s n) (hn.trans_lt (by decide))) rfl
+
 /-- The signed node proof over two signed leaf proofs is accepted for the two-leaf stream's
 digest (the same digest as the two-leaf tree's root). -/
 theorem acc_nodeSigned_stream (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) {n : ℕ}
@@ -402,8 +415,9 @@ theorem noExt_walkStream_escaped (sk : ℕ → ℕ → Digest) (s₁ s₂ : Dige
     (walkStream (S := noExt) [] n hn [leafValue s₁ n, leafValue s₂ n] (nodeSigned sk s₁ s₂ n)
       (acc_nodeSigned_stream sk s₁ s₂ hn)).Escaped := by
   unfold walkStream
-  exact walkStreamFrom_escape (k := 0) (hs := [leafValue s₁ n, leafValue s₂ n])
-    (p := nodeSigned sk s₁ s₂ n) hn nofun (by simp [noExt])
+  exact (walkStreamFrom_escape (S := noExt) (L := []) (k := 0)
+    (hs := [leafValue s₁ n, leafValue s₂ n]) (p := nodeSigned sk s₁ s₂ n) hn nofun
+    (by simp [noExt])).1
 
 /-- **`compose_prob_stream`'s event is certain** for `noExt` and the adversary that outputs the
 honest two-leaf stream's signed proof. -/
@@ -431,5 +445,44 @@ theorem walkStreamSigned_two_leaves (sk : ℕ → ℕ → Digest) (s₁ s₂ : D
     (walkStreamSigned [] [] ⟨nofun, nofun⟩ n hn [leafValue s₁ n, leafValue s₂ n]
       (nodeSigned sk s₁ s₂ n) (acc_nodeSigned_stream sk s₁ s₂ hn)).seeds? = some [s₁, s₂] :=
   (Outcome.seeds?_reduce _ _).trans (walkStream_two_leaves sk s₁ s₂ hn)
+
+/-! ## Negative: an escape below the root of the stream -/
+
+/-- The witness-sending submission with an extractor that opens only proofs longer than the
+two-leaf node proof `nodeSigned sk s₁ s₂ n`: on the three-leaf stream it opens the root and not
+the root's first child. -/
+def topOnly (sk : ℕ → ℕ → Digest) (s₁ s₂ : Digest) (n : ℕ) : Submission :=
+  { submission with
+    E := fun _ π _ => if (nodeSigned sk s₁ s₂ n).π.size < π.size then decode π else none }
+
+/-- **An escape at a non-root member**: on the honest three-leaf stream, `topOnly`'s stream walk
+opens the root and escapes at its first child, the path `[false]` (the node over the first two
+leaves). -/
+theorem topOnly_walkStream_escaped (sk : ℕ → ℕ → Digest) (s₁ s₂ s₃ : Digest) {n : ℕ}
+    (hn : n ≤ leafCap) :
+    (walkStream (S := topOnly sk s₁ s₂ n) [] n hn
+        [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n] (streamSigned sk s₁ s₂ s₃ n)
+        (acc_streamSigned sk s₁ s₂ s₃ hn)).Escaped ∧
+      (walkStream (S := topOnly sk s₁ s₂ n) [] n hn
+        [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n] (streamSigned sk s₁ s₂ s₃ n)
+        (acc_streamSigned sk s₁ s₂ s₃ hn)).EscapeIn (· = [false]) := by
+  have hR := rel_streamWit sk s₁ s₂ s₃ hn
+  have hE : (topOnly sk s₁ s₂ n).E (streamStmt n [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n])
+      (streamSigned sk s₁ s₂ s₃ n).π [] = some (streamWit sk s₁ s₂ s₃ n) := by
+    have hlt := (size_child_lt
+      (nodeStmt (leafStmt (leafValue s₁ n) n) (leafStmt (leafValue s₂ n) n))
+      (leafStmt (leafValue s₃ n) n) (nodeSigned sk s₁ s₂ n) (leafSigned sk 3 s₃ n)).1
+    simp only [topOnly, streamSigned, hlt, ↓reduceIte]
+    exact decode_encode _ (fits_of_rel hR)
+  have e := walkStreamFrom_node (S := topOnly sk s₁ s₂ n) (L := []) (M := 3) (k := 1)
+    (hs := [leafValue s₁ n, leafValue s₂ n, leafValue s₃ n]) (p := streamSigned sk s₁ s₂ s₃ n)
+    (hk := rfl) (j := 0) (hj := rfl) (hacc := acc_streamSigned sk s₁ s₂ s₃ hn) (hmem := .root)
+    hn (List.cons_ne_nil _ _) nofun hE hR
+  have he := walkStreamFrom_escape (S := topOnly sk s₁ s₂ n) (L := []) (M := 3) (k := 0)
+    (hs := [leafValue s₁ n, leafValue s₂ n]) (p := nodeSigned sk s₁ s₂ n) (j := 1) (hj := rfl)
+    (hk := rfl) (hacc := acc_nodeSigned_stream sk s₁ s₂ hn) (hmem := InTree.left .root hE) hn
+    nofun (by simp [topOnly])
+  exact (congrArg (fun o => o.Escaped ∧ o.EscapeIn (· = [false])) e).mpr
+    (Outcome.Escaped.append _ he.1 he.2)
 
 end RecursionFast.Controls.Compose
