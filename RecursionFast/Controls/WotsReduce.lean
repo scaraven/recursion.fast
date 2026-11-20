@@ -35,6 +35,12 @@ Negative (the inversion outcome is not satisfiable by revealed values).
   with that index has an inversion outcome: the reduction needs one message per index, which that
   record violates (`not_oneMsg_twice`).
 
+The hypotheses of `compose_prob_stream_wots` on a non-empty transcript (`transcript_honest_one`):
+an honestly signed trace whose entries are in the log meets both `Transcript` and `Honest`; and
+`accounted_transcript`: `accounted T L` of a transcript meets both, for every log. Negative
+(`transcript_nil_any`): the empty transcript meets both for every run, so that `T` is the
+service's **complete** transcript is not a hypothesis of the theorem: it stays on paper.
+
 Negative (what the type does not say). `wotsBreak_nonempty`: `WotsBreak sk R m σ` is inhabited for
 every forgery, by a pigeonhole collision (`Controls/Compose.lean`, `collision_nonempty`), so the
 collision branch's content is the compiled `wotsReduce`. `no_self_collision`: the `collision`
@@ -203,5 +209,29 @@ theorem queryLeaf_inversion_prob_tree (xs : List Digest) (a : Digest)
       (walkSigned L [] ⟨nofun, nofun⟩ xs.length hn 0 [dataRoot xs] rfl p hacc).IsWotsInversion
         (transcript_nil sk)) (.ret (queryLeaf sk xs a)) [] = 1 :=
   (prob_ret _ _ _).trans (ind_of ⟨_, walkSigned_queryLeaf_inversion sk xs a hn⟩)
+
+/-! ## The transcript hypotheses -/
+
+/-- **A non-empty honest transcript**: one trace, signed by the reference signer at index `0`,
+whose entries are the log's, meets both `Transcript` and `Honest`. -/
+theorem transcript_honest_one (tr : Trace) (hcap : ∀ e ∈ tr, e.1.size ≤ queryCap) :
+    Transcript sk [(tr, sign sk 0 (traceDigest tr))] ∧
+      Honest [(tr, sign sk 0 (traceDigest tr))] tr := by
+  refine ⟨⟨?_, ?_⟩, ⟨?_, ?_⟩⟩
+  · intro x hx; rw [List.mem_singleton.mp hx]; rfl
+  · intro x hx y hy _; rw [List.mem_singleton.mp hx, List.mem_singleton.mp hy]
+  · intro x hx e he; rw [List.mem_singleton.mp hx] at he; exact he
+  · intro x hx e he; rw [List.mem_singleton.mp hx] at he; exact hcap e he
+
+/-- **`accounted` meets both hypotheses**, for every transcript and log. -/
+theorem accounted_transcript {T : List (Trace × Sig)} (hS : Transcript sk T) (L : Log) :
+    Transcript sk (accounted T L) ∧ Honest (accounted T L) L :=
+  ⟨hS.accounted sk L, honest_accounted T L⟩
+
+/-- **Completeness of the transcript is not a hypothesis**: the empty transcript meets both
+`Transcript` and `Honest` for every run. -/
+theorem transcript_nil_any (L : Log) :
+    Transcript sk ([] : List (Trace × Sig)) ∧ Honest ([] : List (Trace × Sig)) L :=
+  ⟨⟨nofun, nofun⟩, ⟨nofun, nofun⟩⟩
 
 end RecursionFast.Controls.WotsReduce

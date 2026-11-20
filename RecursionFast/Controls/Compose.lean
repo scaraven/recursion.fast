@@ -65,8 +65,17 @@ key, with the empty log:
   `topOnly`'s extractor opens only proofs longer than the two-leaf node proof, so on the
   three-leaf stream it opens the root and the walk escapes at the root's first child, the path
   `[false]` (`topOnly_walkStream_escaped`).
+  Escapes at the second children (`true :: [false]^j`): `blind π₀` opens every proof but `π₀`;
+  on the three-leaf stream, blind to the second leaf's proof, the walk escapes at `[true, false]`
+  (depth two: the node `[false]` and the leaf `[false, false]` open, `blind_walkStream_escaped_true_false`),
+  and blind to the third leaf's, at `[true]` (`blind_walkStream_escaped_true`), the leaves'
+  data distinct.
 * `ws_compose_prob_stream`: under every key and against every adversary, the witness-sending
   stream walk escapes with probability `0` (`compose_prob_stream` at `ε = 0`, `qV = 0`).
+  `compose_prob_stream_sixteen`: at the season's `M = 16` the bound reads `31 · (Q + qV) · ε`.
+* The runner's data: `toRunner_walkStream_two_leaves` (positive: on the honest two-leaf stream
+  `toRunner` returns the runner's data) and `toRunner_other_data` (negative: data other than the
+  runner's, with the same roots, become a collision).
 
 The leaves' data are generic: every list of at most `leafCap` blocks, and in the trees and streams
 lists of one length `n` (the seeds and sizes of the earlier seed leaf's controls, ported with their
@@ -583,5 +592,154 @@ theorem topOnly_walkStream_escaped (sk : ℕ → ℕ → Digest) {xs₁ xs₂ xs
     nofun (by simp [topOnly])
   exact (congrArg (fun o => o.Escaped ∧ o.EscapeIn (· = [false])) e).mpr
     (Outcome.Escaped.append _ he.1 he.2)
+
+
+/-! ## The runner's data (`Outcome.toRunner`) -/
+
+/-- **Positive**: on the honest two-leaf stream, the walk against the runner's data returns the
+runner's data. -/
+theorem toRunner_walkStream_two_leaves (sk : ℕ → ℕ → Digest) {xs₁ xs₂ : List Digest} {n : ℕ}
+    (h₁ : xs₁.length = n) (h₂ : xs₂.length = n) (hn : n ≤ leafCap) :
+    ((walkStream [] n hn ([xs₁, xs₂].map dataRoot) (nodeSigned sk xs₁ xs₂ n)
+      (acc_nodeSigned_stream sk h₁ h₂ hn)).toRunner (by simp [h₁, h₂])).data? =
+      some [xs₁, xs₂] :=
+  Outcome.toRunner_of_data? _ (walkStream_two_leaves sk h₁ h₂ hn)
+
+/-- **Negative**: returned data other than the runner's, with the same roots, are turned into a
+collision: `toRunner` never passes on data that are not the runner's. -/
+theorem toRunner_other_data {S : Submission} {vk : Digest} {L : Log} {n : ℕ}
+    {xss yss : List (List Digest)} {c₀ : Digest} {p₀ : Signed} {d : ℕ}
+    (hlen : ∀ xs ∈ xss, xs.length = n)
+    (h : List.Forall₂ (fun xs h => dataRoot xs = h ∧ xs.length = n) yss (xss.map dataRoot))
+    (hne : yss ≠ xss) :
+    ∃ col, (Outcome.data (S := S) (vk := vk) (L := L) (c₀ := c₀) (p₀ := p₀) (d := d) yss h).toRunner
+      hlen = .collision col :=
+  ⟨_, by simp only [Outcome.toRunner, hne, ↓reduceDIte]; rfl⟩
+
+/-! ## Escapes at the stream's second children and at depth two -/
+
+/-- The witness-sending submission with an extractor that opens every proof but `π₀`. -/
+def blind (π₀ : Proof) : Submission :=
+  { submission with E := fun _ π _ => if π = π₀ then none else decode π }
+
+theorem encode_leaf_ne {xs ys : List Digest} (hx : xs.length < 2 ^ 64) (hy : ys.length < 2 ^ 64)
+    (h : xs ≠ ys) : encode (.leaf xs) ≠ encode (.leaf ys) := fun he => h (by
+  have := (decode_encode (.leaf xs) hx).symm.trans (he ▸ decode_encode (.leaf ys) hy)
+  simpa using this)
+
+theorem encode_node_ne_leaf {w : Wit} (hw : w.Fits) (hn : ∀ xs, w ≠ .leaf xs) {ys : List Digest}
+    (hy : ys.length < 2 ^ 64) : encode w ≠ encode (.leaf ys) := fun he =>
+  hn ys (Option.some.inj ((decode_encode w hw).symm.trans (he ▸ decode_encode (.leaf ys) hy)))
+
+/-- **An escape at the second child `[true, false]`, at depth two**: on the honest three-leaf
+stream, the extractor blind to the second leaf's proof opens the root, the node over the first
+two leaves and the first leaf, and the walk escapes at the second leaf (`true :: [false]`). -/
+theorem blind_walkStream_escaped_true_false (sk : ℕ → ℕ → Digest) {xs₁ xs₂ xs₃ : List Digest}
+    {n : ℕ} (h₁ : xs₁.length = n) (h₂ : xs₂.length = n) (h₃ : xs₃.length = n) (hn : n ≤ leafCap)
+    (h12 : xs₁ ≠ xs₂) :
+    (walkStream (S := blind (encode (.leaf xs₂))) [] n hn
+        [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃] (streamSigned sk xs₁ xs₂ xs₃ n)
+        (acc_streamSigned sk h₁ h₂ h₃ hn)).Escaped ∧
+      (walkStream (S := blind (encode (.leaf xs₂))) [] n hn
+        [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃] (streamSigned sk xs₁ xs₂ xs₃ n)
+        (acc_streamSigned sk h₁ h₂ h₃ hn)).EscapeIn (· = [true, false]) := by
+  have hn₁ : xs₁.length < 2 ^ 64 := (h₁.trans_le hn).trans_lt (by decide)
+  have hn₂ : xs₂.length < 2 ^ 64 := (h₂.trans_le hn).trans_lt (by decide)
+  have hR := rel_streamWit sk h₁ h₂ h₃ hn
+  have hR₂ := rel_nodeWit sk h₁ h₂ hn
+  have hE : (blind (encode (.leaf xs₂))).E
+      (streamStmt n [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃])
+      (streamSigned sk xs₁ xs₂ xs₃ n).π [] = some (streamWit sk xs₁ xs₂ xs₃ n) := by
+    simp only [blind, streamSigned,
+      encode_node_ne_leaf (fits_of_rel hR) (fun _ => Wit.noConfusion) hn₂, ↓reduceIte]
+    exact decode_encode _ (fits_of_rel hR)
+  have hE₂ : (blind (encode (.leaf xs₂))).E
+      (nodeStmt (leafStmt (dataRoot xs₁) n) (leafStmt (dataRoot xs₂) n))
+      (nodeSigned sk xs₁ xs₂ n).π [] = some (nodeWit sk xs₁ xs₂ n) := by
+    simp only [blind, nodeSigned,
+      encode_node_ne_leaf (fits_of_rel hR₂) (fun _ => Wit.noConfusion) hn₂, ↓reduceIte]
+    exact decode_encode _ (fits_of_rel hR₂)
+  have e := walkStreamFrom_node (S := blind (encode (.leaf xs₂))) (L := []) (M := 3) (k := 1)
+    (hs := [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃]) (p := streamSigned sk xs₁ xs₂ xs₃ n)
+    (hk := rfl) (j := 0) (hj := rfl) (hacc := acc_streamSigned sk h₁ h₂ h₃ hn) (hmem := .root)
+    hn (List.cons_ne_nil _ _) nofun hE hR
+  have e₂ := walkStreamFrom_node (S := blind (encode (.leaf xs₂))) (L := []) (M := 3) (k := 0)
+    (hs := [dataRoot xs₁, dataRoot xs₂]) (p := nodeSigned sk xs₁ xs₂ n) (hk := rfl) (j := 1)
+    (hj := rfl) (hacc := acc_nodeSigned_stream sk h₁ h₂ hn) (hmem := InTree.left .root hE) hn
+    (List.cons_ne_nil _ _) nofun hE₂ hR₂
+  have a₁ := walkStreamFrom_one (S := blind (encode (.leaf xs₂))) (L := []) (M := 3) (j := 2)
+    (hj := rfl) (p := leafSigned sk 0 xs₁) (hk := rfl) (hacc := hR₂.2.1)
+    (hmem := InTree.left (InTree.left .root hE) hE₂) hn nofun
+    (by simp only [blind, leafSigned, encode_leaf_ne hn₁ hn₂ h12, ↓reduceIte]
+        exact decode_encode (.leaf xs₁) hn₁) rfl h₁
+  have b₂ := walkFrom_leaf_escape (S := blind (encode (.leaf xs₂))) (L := []) hn
+    (c₀ := streamStmt n [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃])
+    (p₀ := streamSigned sk xs₁ xs₂ xs₃ n) (d := 3 - 1)
+    (h := dataRoot xs₂) (hr := rfl) (p := leafSigned sk 1 xs₂) (bs := [true, false])
+    (hd := by decide) (hacc := hR₂.2.2) (hmem := InTree.right (InTree.left .root hE) hE₂) nofun
+    (by simp [blind, leafSigned])
+  have o₁ := (congrArg (fun o => o.Escaped ∧ o.EscapeIn (· = [true, false])) e₂).mpr
+    (Outcome.Escaped.append_right a₁ b₂.1 b₂.2)
+  exact (congrArg (fun o => o.Escaped ∧ o.EscapeIn (· = [true, false])) e).mpr
+    (Outcome.Escaped.append _ o₁.1 o₁.2)
+
+/-- **An escape at the root's second child `[true]`**: on the honest three-leaf stream, the
+extractor blind to the third leaf's proof opens everything else, and the walk escapes at the third
+leaf. -/
+theorem blind_walkStream_escaped_true (sk : ℕ → ℕ → Digest) {xs₁ xs₂ xs₃ : List Digest}
+    {n : ℕ} (h₁ : xs₁.length = n) (h₂ : xs₂.length = n) (h₃ : xs₃.length = n) (hn : n ≤ leafCap)
+    (h13 : xs₁ ≠ xs₃) (h23 : xs₂ ≠ xs₃) :
+    (walkStream (S := blind (encode (.leaf xs₃))) [] n hn
+        [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃] (streamSigned sk xs₁ xs₂ xs₃ n)
+        (acc_streamSigned sk h₁ h₂ h₃ hn)).Escaped ∧
+      (walkStream (S := blind (encode (.leaf xs₃))) [] n hn
+        [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃] (streamSigned sk xs₁ xs₂ xs₃ n)
+        (acc_streamSigned sk h₁ h₂ h₃ hn)).EscapeIn (· = [true]) := by
+  have hn₁ : xs₁.length < 2 ^ 64 := (h₁.trans_le hn).trans_lt (by decide)
+  have hn₂ : xs₂.length < 2 ^ 64 := (h₂.trans_le hn).trans_lt (by decide)
+  have hn₃ : xs₃.length < 2 ^ 64 := (h₃.trans_le hn).trans_lt (by decide)
+  have hR := rel_streamWit sk h₁ h₂ h₃ hn
+  have hR₂ := rel_nodeWit sk h₁ h₂ hn
+  have hE : (blind (encode (.leaf xs₃))).E
+      (streamStmt n [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃])
+      (streamSigned sk xs₁ xs₂ xs₃ n).π [] = some (streamWit sk xs₁ xs₂ xs₃ n) := by
+    simp only [blind, streamSigned,
+      encode_node_ne_leaf (fits_of_rel hR) (fun _ => Wit.noConfusion) hn₃, ↓reduceIte]
+    exact decode_encode _ (fits_of_rel hR)
+  have e := walkStreamFrom_node (S := blind (encode (.leaf xs₃))) (L := []) (M := 3) (k := 1)
+    (hs := [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃]) (p := streamSigned sk xs₁ xs₂ xs₃ n)
+    (hk := rfl) (j := 0) (hj := rfl) (hacc := acc_streamSigned sk h₁ h₂ h₃ hn) (hmem := .root)
+    hn (List.cons_ne_nil _ _) nofun hE hR
+  have a₁ := walkStreamFrom_succ_succ (S := blind (encode (.leaf xs₃))) (L := []) (M := 3)
+    (k := 0) (hs := [dataRoot xs₁, dataRoot xs₂]) (p := nodeSigned sk xs₁ xs₂ n) (j := 1)
+    (hj := rfl) (hk := rfl) (hacc := hR.2.1) (hmem := InTree.left .root hE) hn
+    (List.cons_ne_nil _ _) nofun
+    (by simp only [blind, nodeSigned,
+          encode_node_ne_leaf (fits_of_rel hR₂) (fun _ => Wit.noConfusion) hn₃, ↓reduceIte]
+        exact decode_encode _ (fits_of_rel hR₂)) hR₂
+    (fun _ _ _ _ => walkStreamFrom_one (p := leafSigned sk 0 xs₁) hn nofun
+      (by simp only [blind, leafSigned, encode_leaf_ne hn₁ hn₃ h13, ↓reduceIte]
+          exact decode_encode (.leaf xs₁) hn₁) rfl h₁) nofun (xs := xs₂)
+    (by simp only [blind, leafSigned, encode_leaf_ne hn₂ hn₃ h23, ↓reduceIte]
+        exact decode_encode (.leaf xs₂) hn₂) rfl h₂
+  have b₃ := walkFrom_leaf_escape (S := blind (encode (.leaf xs₃))) (L := []) hn
+    (c₀ := streamStmt n [dataRoot xs₁, dataRoot xs₂, dataRoot xs₃])
+    (p₀ := streamSigned sk xs₁ xs₂ xs₃ n) (d := 3 - 1)
+    (h := dataRoot xs₃) (hr := rfl) (p := leafSigned sk 3 xs₃) (bs := [true])
+    (hd := by decide) (hacc := hR.2.2) (hmem := InTree.right .root hE) nofun
+    (by simp [blind, leafSigned])
+  exact (congrArg (fun o => o.Escaped ∧ o.EscapeIn (· = [true])) e).mpr
+    (Outcome.Escaped.append_right a₁ b₃.1 b₃.2)
+
+/-! ## The season's size -/
+
+/-- **At `M = 16`** the stream bound reads `31 · (Q + qV) · ε`: 15 nodes and 16 leaves. -/
+theorem compose_prob_stream_sixteen {S : Submission} {vk : Digest} {ε : ℝ≥0} {qV : ℕ}
+    (hks : KS (Rel (S.acc vk)) (S.V vk) S.E ε qV) {n : ℕ} (hn : n ≤ leafCap) (hs : List Digest)
+    (hlen : hs.length = 16) (A : OProg Signed) {Q : ℕ} (hA : ∀ H, (A.queries H).length ≤ Q)
+    (hQ : Q + qV ≤ logCap) :
+    prob (fun p L => ∃ hacc : S.acc vk (streamStmt n hs) p = true,
+      (walkStream L n hn hs p hacc).Escaped) A [] ≤ 31 * ((Q + qV) * ε) :=
+  (compose_prob_stream hks n hn hs A hA hQ).trans_eq (by rw [hlen]; norm_num)
 
 end RecursionFast.Controls.Compose

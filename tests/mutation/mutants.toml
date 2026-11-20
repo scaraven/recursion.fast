@@ -704,6 +704,14 @@ equivalent = true
 # ---------------------------------------------------------------- Extractor.lean
 
 [[mutant]]
+id = "ext-tape-no-log"
+file = "Extractor.lean"
+original = '''packBytes c.toList ++ bytesWords π.data.toList ++ logWords L'''
+replacement = '''packBytes c.toList ++ bytesWords π.data.toList ++ logWords []'''
+breaks = "the extractor's tape omits the log: no program can read the verifier's answers, so a verifier extracted from its query log is not certifiable"
+expect = "Controls.MaskedLeaf.computes / Controls.LogScan.scan_computes"
+
+[[mutant]]
 id = "ext-tag-swap"
 file = "Extractor.lean"
 original = '''  | 0 => return .leaf (← readList readDigest (← readNat))
