@@ -1,27 +1,573 @@
 [
  {
-  "id": "rel-leafcap-2^23",
+  "id": "rel-no-leafcap",
   "file": "Relation.lean",
-  "breaks": "the leaf bound is 2^23, not the season's 2^22",
-  "expect": "a pin of leafCap's value (none before this run)",
-  "calibrate": "survive",
+  "breaks": "a leaf witness of any number of blocks is in the relation (no leafCap bound)",
+  "expect": "Controls.Relation.leaf_over_leafCap",
+  "calibrate": "",
   "equivalent": false,
   "stage_seconds": {
-   "contract": 14.6,
-   "build": 135.6
+   "contract": 15.5,
+   "build": 33.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 205,
+  "error": "Insufficient number of fields for `⟨...⟩` constructor: Constructor `Eq.refl` does not have explicit fields, but 2 were provided",
+  "failing": [
+   [
+    "RecursionFast.Library.WitnessSending",
+    205
+   ]
+  ],
+  "seconds": 49.3
+ },
+ {
+  "id": "rel-leafcap-2^21",
+  "file": "Relation.lean",
+  "breaks": "the leaf bound is 2^21 blocks, not 2^20 (a leaf at the cap would not fit outCap with its node)",
+  "expect": "Controls.Relation.leaf_over_2pow20",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 16.0,
+   "build": 319.7
   },
   "status": "KILLED",
   "stage": "proofs",
   "by": "RecursionFast.Controls.Relation",
-  "line": 161,
-  "error": "Tactic `decide` proved that the proposition ¬2 ^ 22 + 1 ≤ leafCap is false - RecursionFast.Controls.Relation",
+  "line": 317,
+  "error": "Tactic `decide` proved that the proposition ¬2 ^ 20 + 1 ≤ leafCap is false - RecursionFast.Controls.Relation",
   "failing": [
    [
     "RecursionFast.Controls.Relation",
-    161
+    317
    ]
   ],
-  "seconds": 150.8
+  "seconds": 336.3
+ },
+ {
+  "id": "rel-leafcap-2^19",
+  "file": "Relation.lean",
+  "breaks": "the leaf bound is 2^19 blocks: completeness is no longer asked up to 2^20",
+  "expect": "Controls.Relation.leaf_at_2pow20",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.6,
+   "build": 320.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 306,
+  "error": "Tactic `decide` proved that the proposition 2 ^ 20 ≤ leafCap is false - RecursionFast.Controls.Relation",
+  "failing": [
+   [
+    "RecursionFast.Controls.Relation",
+    306
+   ]
+  ],
+  "seconds": 340.5
+ },
+ {
+  "id": "rel-leafitem-no-tag",
+  "file": "Relation.lean",
+  "breaks": "a block's hash carries no domain tag",
+  "expect": "Controls.Relation.item_kat / tags_separate",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.3,
+   "build": 15.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 193,
+  "error": "unsolved goals x : Digest ⊢ keccakDigest (tagItem :: Vector.toList x) = keccakDigest (Vector.toList x)",
+  "failing": [
+   [
+    "RecursionFast.Library.Fast",
+    193
+   ]
+  ],
+  "seconds": 31.2
+ },
+ {
+  "id": "rel-datanode-swap",
+  "file": "Relation.lean",
+  "breaks": "a data node hashes its children in the wrong order",
+  "expect": "Controls.Relation.root2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.7,
+   "build": 14.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 197,
+  "error": "unsolved goals l r : Digest ⊢ keccakDigest (tagData :: (Vector.toList l ++ Vector.toList r)) = keccakDigest (tagData :: (Vector.toList r ++ Vector.toList l))",
+  "failing": [
+   [
+    "RecursionFast.Library.Fast",
+    197
+   ]
+  ],
+  "seconds": 30.5
+ },
+ {
+  "id": "rel-datanode-no-tag",
+  "file": "Relation.lean",
+  "breaks": "a data node carries no domain tag (its 64-byte input is not separated from other hashes)",
+  "expect": "Controls.Relation.root2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.9,
+   "build": 14.4
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 197,
+  "error": "unsolved goals l r : Digest ⊢ keccakDigest (tagData :: (Vector.toList l ++ Vector.toList r)) = keccakDigest (Vector.toList l ++ Vector.toList r)",
+  "failing": [
+   [
+    "RecursionFast.Library.Fast",
+    197
+   ]
+  ],
+  "seconds": 29.4
+ },
+ {
+  "id": "rel-tagdata-eq-tagnode",
+  "file": "Relation.lean",
+  "breaks": "data nodes and node statements share a domain tag",
+  "expect": "Controls.Relation.tags_separate / root2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.9,
+   "build": 322.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 140,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (dataRootF (blks 2)) = hex \"a8886ea246bda7de84ecc698aa1cc03cf96654a74818887a43b3d042e5935020\") = true →",
+  "failing": [
+   [
+    "RecursionFast.Controls.Relation",
+    140
+   ]
+  ],
+  "seconds": 337.7
+ },
+ {
+  "id": "rel-datalevel-pair-swap",
+  "file": "Relation.lean",
+  "breaks": "a level pairs adjacent digests in the wrong order",
+  "expect": "Controls.Relation.root2_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.3,
+   "build": 17.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 107,
+  "error": "Type mismatch congrArg (fun x => dataNode a b :: x) (go cs) has type dataNode a b :: dataLevel cs = dataNode a b :: level dataNode cs but is expected to have type dataLevel (a :: b :: cs) = level dataNode (a :: b :: cs)",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    107
+   ]
+  ],
+  "seconds": 32.8
+ },
+ {
+  "id": "rel-datalevel-carry-dup",
+  "file": "Relation.lean",
+  "breaks": "an odd last digest is paired with itself instead of carried up",
+  "expect": "Controls.Relation.root1_kat / root3_kat / carry_not_duplicated",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 17.4,
+   "build": 19.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 109,
+  "error": "Type mismatch rfl has type ?m.25 = ?m.25 but is expected to have type dataLevel [head✝] = level dataNode [head✝]",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    109
+   ]
+  ],
+  "seconds": 38.3
+ },
+ {
+  "id": "rel-datalevel-carry-drop",
+  "file": "Relation.lean",
+  "breaks": "an odd last digest is dropped instead of carried up",
+  "expect": "Controls.Relation.root1_kat / root3_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 17.4,
+   "build": 13.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 109,
+  "error": "Type mismatch rfl has type ?m.25 = ?m.25 but is expected to have type dataLevel [head✝] = level dataNode [head✝]",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    109
+   ]
+  ],
+  "seconds": 31.9
+ },
+ {
+  "id": "rel-dataroot-half-levels",
+  "file": "Relation.lean",
+  "breaks": "the root takes |xs| / 2 levels, too few at three blocks",
+  "expect": "Controls.Relation.root3_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.6,
+   "build": 14.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 115,
+  "error": "unsolved goals xs : List Digest ⊢ ((level dataNode)^[xs.length / 2] (List.map leafItem xs)).headD (Vector.replicate 32 0) = ((level dataNode)^[xs.length] (List.map leafItem xs)).headD (Vector.replicate 32 0)",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    115
+   ]
+  ],
+  "seconds": 28.6
+ },
+ {
+  "id": "rel-dataroot-levels-minus-one",
+  "file": "Relation.lean",
+  "breaks": "nothing: |xs| - 1 levels still reach one digest (|xs| - 1 ≥ ⌈log2 |xs|⌉ for |xs| ≥ 1)",
+  "expect": "survives (equivalent), unless a library proof depends on the count",
+  "calibrate": "survive",
+  "equivalent": true,
+  "stage_seconds": {
+   "contract": 14.9,
+   "build": 20.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 115,
+  "error": "unsolved goals xs : List Digest ⊢ ((level dataNode)^[xs.length - 1] (List.map leafItem xs)).headD (Vector.replicate 32 0) = ((level dataNode)^[xs.length] (List.map leafItem xs)).headD (Vector.replicate 32 0)",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    115
+   ]
+  ],
+  "seconds": 36.8
+ },
+ {
+  "id": "rel-dataroot-empty-one",
+  "file": "Relation.lean",
+  "breaks": "the root of no block is not the zero digest",
+  "expect": "Controls.Relation.leafStmt_empty_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.9,
+   "build": 20.2
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 115,
+  "error": "unsolved goals xs : List Digest ⊢ ((level dataNode)^[xs.length] (List.map leafItem xs)).headD (Vector.replicate 32 1) = ((level dataNode)^[xs.length] (List.map leafItem xs)).headD (Vector.replicate 32 0)",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    115
+   ]
+  ],
+  "seconds": 40.2
+ },
+ {
+  "id": "rel-dataroot-no-items",
+  "file": "Relation.lean",
+  "breaks": "the tree is built over the blocks themselves, not their hashes",
+  "expect": "Controls.Relation.root1_kat / wrong_root",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.8,
+   "build": 20.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Tree",
+  "line": 115,
+  "error": "unsolved goals xs : List Digest ⊢ ((level dataNode)^[xs.length] xs).headD (Vector.replicate 32 0) = ((level dataNode)^[xs.length] (List.map leafItem xs)).headD (Vector.replicate 32 0)",
+  "failing": [
+   [
+    "RecursionFast.Library.Tree",
+    115
+   ]
+  ],
+  "seconds": 40.3
+ },
+ {
+  "id": "rel-leaf-count-zero",
+  "file": "Relation.lean",
+  "breaks": "the relation's leaf statement does not bind the number of blocks",
+  "expect": "Controls.Relation.rel_root4",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.6,
+   "build": 30.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 205,
+  "error": "Application type mismatch: The argument h.right has type c = leafStmt (dataRoot xs) xs.length but is expected to have type c = leafStmt (dataRoot xs) 0 in the application",
+  "failing": [
+   [
+    "RecursionFast.Library.WitnessSending",
+    205
+   ]
+  ],
+  "seconds": 45.2
+ },
+ {
+  "id": "rel-querycap-2^21",
+  "file": "Relation.lean",
+  "breaks": "acc accepts queries of up to 2^21 bytes, above the service's 2^20 cap",
+  "expect": "Controls.Relation.acc_query_over_2pow20 (added after this mutant survived)",
+  "calibrate": "survive",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 14.2,
+   "build": 329.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 529,
+  "error": "Tactic `decide` proved that the proposition queryCap < 2 ^ 20 + 1 is false - RecursionFast.Controls.Relation",
+  "failing": [
+   [
+    "RecursionFast.Controls.Relation",
+    529
+   ]
+  ],
+  "seconds": 344.0
+ },
+ {
+  "id": "rel-nodestmt-swap",
+  "file": "Relation.lean",
+  "breaks": "the node layout hashes the children in the wrong order",
+  "expect": "Controls.Relation.nodeStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.5,
+   "build": 21.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 228,
+  "error": "unsolved goals a b : Digest ⊢ keccakDigest (tagNode :: (Vector.toList a ++ Vector.toList b)) = keccakDigest (tagNode :: (Vector.toList b ++ Vector.toList a))",
+  "failing": [
+   [
+    "RecursionFast.Library.Fast",
+    228
+   ]
+  ],
+  "seconds": 40.7
+ },
+ {
+  "id": "rel-tagitem-eq-tagleaf",
+  "file": "Relation.lean",
+  "breaks": "leaf items and leaf statements share a domain tag",
+  "expect": "Controls.Relation.tags_separate / item_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.6,
+   "build": 297.8
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Relation",
+  "line": 110,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (leafItemF s0) = hex \"09910f8c671ec97437b818fd5a1cb7f10ce4be81bf37778b0605b381eaabbe69\") = true →",
+  "failing": [
+   [
+    "RecursionFast.Controls.Relation",
+    110
+   ]
+  ],
+  "seconds": 312.3
+ },
+ {
+  "id": "rel-enc64-big-endian",
+  "file": "Relation.lean",
+  "breaks": "enc64 is big-endian, not Rust's u64::to_le_bytes",
+  "expect": "Controls.Relation.leafStmt_season_kat / enc64_season",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 13.4,
+   "build": 14.3
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Words",
+  "line": 72,
+  "error": "Tactic `rewrite` failed: Did not find an occurrence of the pattern ofLE (List.ofFn fun i => (?x / 256 ^ ↑i).toUInt8) in the target expression ofLE (List.ofFn fun i => (n / 256 ^ (7 - ↑i)).toUInt8) = n % 2 ^ 64 n : ℕ ⊢ ofLE (List.ofFn fun i => (n / 256 ^ (7 - ↑i)).toUInt8) = n % 2 ^ 64",
+  "failing": [
+   [
+    "RecursionFast.Library.Words",
+    72
+   ],
+   [
+    "RecursionFast.Library.Fast",
+    50
+   ]
+  ],
+  "seconds": 28.6
+ },
+ {
+  "id": "rel-leafstmt-no-count",
+  "file": "Relation.lean",
+  "breaks": "the leaf statement does not commit to the number of blocks",
+  "expect": "Controls.Relation.leafStmt_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.1,
+   "build": 19.7
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.Fast",
+  "line": 224,
+  "error": "unsolved goals h : Digest n : ℕ ⊢ keccakDigest (tagLeaf :: (Vector.toList h ++ enc64 n)) = keccakDigest (tagLeaf :: Vector.toList h)",
+  "failing": [
+   [
+    "RecursionFast.Library.Fast",
+    224
+   ]
+  ],
+  "seconds": 38.7
+ },
+ {
+  "id": "rel-node-drop-acc2",
+  "file": "Relation.lean",
+  "breaks": "a node's second child is not checked",
+  "expect": "Controls.Relation.second_child_rejected",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.6,
+   "build": 39.0
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 209,
+  "error": "Insufficient number of fields for `⟨...⟩` constructor: Constructor `Eq.refl` does not have explicit fields, but 2 were provided",
+  "failing": [
+   [
+    "RecursionFast.Library.WitnessSending",
+    209
+   ]
+  ],
+  "seconds": 58.5
+ },
+ {
+  "id": "rel-node-acc2-wrong-child",
+  "file": "Relation.lean",
+  "breaks": "a node's second proof is checked against the first child's digest",
+  "expect": "Controls.Relation.node_of_two_leaves / second_child_rejected",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.5,
+   "build": 37.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 209,
+  "error": "Application type mismatch: The argument h.right has type submission.acc vk c₂ p₂ = true but is expected to have type submission.acc vk c₁ p₂ = true in the application",
+  "failing": [
+   [
+    "RecursionFast.Library.WitnessSending",
+    209
+   ]
+  ],
+  "seconds": 57.0
+ },
+ {
+  "id": "rel-docstring-only",
+  "file": "Relation.lean",
+  "breaks": "nothing: only a docstring changes",
+  "expect": "survives (equivalent)",
+  "calibrate": "survive",
+  "equivalent": true,
+  "stage_seconds": {
+   "contract": 18.6,
+   "build": 327.2
+  },
+  "status": "SURVIVED",
+  "seconds": 346.9
+ },
+ {
+  "id": "ext-tape-no-log",
+  "file": "Extractor.lean",
+  "breaks": "the extractor's tape omits the log: no program can read the verifier's answers, so a verifier extracted from its query log is not certifiable",
+  "expect": "Controls.MaskedLeaf.computes / Controls.LogScan.scan_computes",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 9.8,
+   "build": 13.6
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Library.WitnessSending",
+  "line": 321,
+  "error": "unsolved goals c : Digest π : Proof L : Log ⊢ packBytes (Vector.toList c) ++ toWord π.data.toList.length :: (packBytes π.data.toList ++ logWords []) = packBytes (Vector.toList c) ++ toWord π.data.toList.length :: (packBytes π.data.toList ++ logWords L) - RecursionFast.Library.WitnessSending",
+  "failing": [
+   [
+    "RecursionFast.Library.WitnessSending",
+    321
+   ]
+  ],
+  "seconds": 24.3
  },
  {
   "id": "ext-computes-small-domain",
@@ -31,21 +577,69 @@
   "calibrate": "",
   "equivalent": false,
   "stage_seconds": {
-   "contract": 10.4,
-   "build": 21.4
+   "contract": 9.6,
+   "build": 22.0
   },
   "status": "KILLED",
   "stage": "proofs",
   "by": "RecursionFast.Controls.Extractor",
-  "line": 113,
+  "line": 127,
   "error": "Application type mismatch: The argument h₂ has type ByteArray.size π ≤ 8 * outCap but is expected to have type ByteArray.size π ≤ outCap in the application",
   "failing": [
    [
     "RecursionFast.Controls.Extractor",
-    113
+    127
    ]
   ],
-  "seconds": 32.5
+  "seconds": 33.1
+ },
+ {
+  "id": "rel-tagsignode-eq-tagnode",
+  "file": "Relation.lean",
+  "breaks": "signature Merkle nodes and relation nodes share a domain tag",
+  "expect": "Controls.Relation.tags_separate / Controls.Signature.sigNode_kat",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 18.2,
+   "build": 40.9
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Signature",
+  "line": 138,
+  "error": "(kernel) application type mismatch id (Eq.refl true) argument has type true = true but function has type decide (Vector.toList (sigNodeF (Vector.replicate 32 1) (Vector.replicate 32 2)) =",
+  "failing": [
+   [
+    "RecursionFast.Controls.Signature",
+    138
+   ]
+  ],
+  "seconds": 60.0
+ },
+ {
+  "id": "ext-progcap-2^21",
+  "file": "Extractor.lean",
+  "breaks": "the program-size cap is 2^21 statements: a 17-bit lookup-table extractor fits",
+  "expect": "Controls.Certificate.big_program_no_certificate; Controls.Extractor's lookup-table control (added for review R5 LOW-1) on its own",
+  "calibrate": "",
+  "equivalent": false,
+  "stage_seconds": {
+   "contract": 9.6,
+   "build": 22.1
+  },
+  "status": "KILLED",
+  "stage": "proofs",
+  "by": "RecursionFast.Controls.Extractor",
+  "line": 328,
+  "error": "omega could not prove the goal: a possible counterexample may satisfy the constraints 131072 ≤ b ≤ 209715 a ≥ 17 where a := ↑k b := ↑2 ^ k",
+  "failing": [
+   [
+    "RecursionFast.Controls.Extractor",
+    328
+   ]
+  ],
+  "seconds": 33.2
  },
  {
   "id": "ext-computes-short-queries",
@@ -55,21 +649,21 @@
   "calibrate": "survive",
   "equivalent": false,
   "stage_seconds": {
-   "contract": 10.4,
-   "build": 21.7
+   "contract": 9.7,
+   "build": 20.8
   },
   "status": "KILLED",
   "stage": "proofs",
   "by": "RecursionFast.Controls.Extractor",
-  "line": 132,
+  "line": 146,
   "error": "unsolved goals q : ByteArray a : Digest h : q.size = 2 ^ 64 - 1 hc : Computes haltProg Equery fun x => 1 ⊢ False",
   "failing": [
    [
     "RecursionFast.Controls.Extractor",
-    132
+    146
    ]
   ],
-  "seconds": 32.7
+  "seconds": 31.7
  },
  {
   "id": "ext-computes-short-tape",
@@ -79,20 +673,20 @@
   "calibrate": "survive",
   "equivalent": false,
   "stage_seconds": {
-   "contract": 10.4,
-   "build": 21.8
+   "contract": 9.6,
+   "build": 20.9
   },
   "status": "KILLED",
   "stage": "proofs",
   "by": "RecursionFast.Controls.Extractor",
-  "line": 135,
+  "line": 149,
   "error": "Tactic `decide` proved that the proposition (32 + 7) / 8 + (0 + 1) + (ByteArray.empty.size + 7) / 8 + ((2 ^ 64 - 1 + 7) / 8 + 1 + (32 + 7) / 8 + 1) ≤ 2 ^ 32 is false",
   "failing": [
    [
     "RecursionFast.Controls.Extractor",
-    135
+    149
    ]
   ],
-  "seconds": 33.1
+  "seconds": 31.6
  }
 ]

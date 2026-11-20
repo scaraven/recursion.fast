@@ -6,118 +6,130 @@ Mutants: `tests/mutation/mutants.toml`. A mutant is KILLED by the first module w
 if the contract itself no longer compiles, SURVIVED otherwise. An accepted survivor's reason, and a
 note on a mutant whose kill or invalidity is worth explaining, are in `tests/mutation/accepted.toml`.
 
-**Totals**: INVALID 2, KILLED 96, SURVIVED (accepted) 1
+**Totals**: INVALID 2, KILLED 108, SURVIVED (accepted) 1
 
 | file | INVALID | KILLED | SURVIVED (accepted) |
 |---|---|---|---|
-| Relation.lean | 0 | 13 | 1 |
+| Relation.lean | 0 | 23 | 1 |
 | Tree.lean | 0 | 4 | 0 |
 | Oracle.lean | 0 | 5 | 0 |
 | Certificate.lean | 0 | 17 | 0 |
 | Security.lean | 0 | 11 | 0 |
 | Signature.lean | 0 | 12 | 0 |
 | Hash/Keccak.lean | 1 | 10 | 0 |
-| Extractor.lean | 0 | 13 | 0 |
+| Extractor.lean | 0 | 15 | 0 |
 | Machine.lean | 1 | 11 | 0 |
 
 | id | file | breaks | status | killed by | s |
 |---|---|---|---|---|---|
-| `rel-no-leafcap` | Relation.lean | a leaf witness of any size is in the relation (no leafCap bound) | KILLED | `RecursionFast.Library.Compose`:330 | 71.1 |
-| `rel-leafcap-2^23` | Relation.lean | the leaf bound is 2^23, not the season's 2^22 | KILLED (calibration: expected to survive) | `RecursionFast.Library.Compose`:312 (the first kill is incidental (a Library/Compose.lean term unfolds leafCap to 2^22); Controls.Relation.leaf_over_season kills it on its own) | 78.2 |
-| `rel-querycap-2^21` | Relation.lean | acc accepts queries of up to 2^21 bytes, above the service's 2^20 cap | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Relation`:366 | 253.3 |
-| `rel-nodestmt-swap` | Relation.lean | the node layout hashes the children in the wrong order | KILLED | `RecursionFast.Library.Fast`:197 | 37.5 |
-| `rel-tagitem-eq-tagleaf` | Relation.lean | leaf items and leaf statements share a domain tag | KILLED | `RecursionFast.Controls.Relation`:88 | 240.8 |
-| `rel-enc64-big-endian` | Relation.lean | enc64 is big-endian, not Rust's u64::to_le_bytes | KILLED | `RecursionFast.Library.Words`:70 | 30.2 |
-| `rel-leafvalue-shift` | Relation.lean | the leaf value XORs items 1 … n, dropping item 0 and adding item n | KILLED | `RecursionFast.Library.Fast`:186 | 36.7 |
-| `rel-leafvalue-nonzero-start` | Relation.lean | the leaf value starts from a nonzero digest | KILLED | `RecursionFast.Library.Fast`:190 | 37.1 |
-| `rel-xor-or` | Relation.lean | the leaf value combines items by OR, not XOR | KILLED | `RecursionFast.Controls.Relation`:103 | 234.1 |
-| `rel-leafstmt-no-count` | Relation.lean | the leaf statement does not commit to the number of hashes | KILLED | `RecursionFast.Library.Fast`:193 | 41.2 |
-| `rel-node-drop-acc2` | Relation.lean | a node's second child is not checked | KILLED | `RecursionFast.Library.Compose`:332 | 72.5 |
-| `rel-node-acc2-wrong-child` | Relation.lean | a node's second proof is checked against the first child's digest | KILLED | `RecursionFast.Library.WitnessSending`:199 | 66.1 |
-| `rel-docstring-only` | Relation.lean | nothing: only a docstring changes | SURVIVED (calibration: expected to survive) | equivalent: changes only a docstring | 269.9 |
-| `tree-stream-args-swapped` | Tree.lean | the stream step hashes the new leaf before the previous statement | KILLED | `RecursionFast.Library.Compose`:769 | 31.1 |
-| `tree-stream-reversed` | Tree.lean | the stream folds its later leaves newest first | KILLED | `RecursionFast.Library.Compose`:769 | 29.6 |
-| `tree-level-swap` | Tree.lean | the tree pairs adjacent digests right to left | KILLED | `RecursionFast.Library.Compose`:283 | 27.5 |
-| `tree-root-half-levels` | Tree.lean | the root iterates |cs|/2 levels: equal on powers of two, wrong on 3 leaves | KILLED | `RecursionFast.Library.Tree`:52 | 12.6 |
-| `oracle-runseq-leftover` | Oracle.lean | runSeq accepts a trace with entries left over (no exact consumption) | KILLED | `RecursionFast.Library.Trace`:47 | 29.6 |
-| `oracle-runseq-no-query-check` | Oracle.lean | runSeq answers a query by an entry for another query | KILLED | `RecursionFast.Library.Trace`:65 | 31.8 |
-| `oracle-runlog-last-entry` | Oracle.lean | runLog reads the last entry for a query, not the first (prob's table reads the first) | KILLED | `RecursionFast.Library.Oracle`:44 | 25.2 |
-| `oracle-queries-drop-head` | Oracle.lean | queries omits each query asked, so qV and Q bound nothing | KILLED | `RecursionFast.Library.Oracle`:37 | 23.5 |
-| `oracle-bind-ignores-answer` | Oracle.lean | bind feeds the zero digest to the program instead of the oracle's answer | KILLED | `RecursionFast.Library.Oracle`:56 | 22.4 |
-| `cert-acc-no-qv` | Certificate.lean | acc accepts traces longer than the declared qV | KILLED | `RecursionFast.Library.Fast`:210 | 20.5 |
-| `cert-acc-no-querycap` | Certificate.lean | acc accepts trace queries of any length | KILLED | `RecursionFast.Library.Fast`:210 | 20.6 |
-| `cert-acc-no-sigok` | Certificate.lean | acc does not check the signature on the trace | KILLED | `RecursionFast.Library.Fast`:210 | 20.2 |
-| `cert-acc-runlog` | Certificate.lean | acc reads the trace by lookup, not in order and used up exactly | KILLED | `RecursionFast.Library.Fast`:210 | 21.0 |
-| `cert-acc-word-le` | Certificate.lean | acc accepts a proof of exactly 2^64 bytes, whose length no 64-bit word writes | KILLED | `RecursionFast.Library.Fast`:210 | 20.3 |
-| `cert-acc-qv-lt` | Certificate.lean | acc rejects a trace of exactly qV entries | KILLED | `RecursionFast.Library.Fast`:210 | 20.4 |
-| `cert-acc-querycap-lt` | Certificate.lean | acc rejects a query of exactly queryCap bytes | KILLED | `RecursionFast.Library.Fast`:210 | 20.3 |
-| `cert-secure-one-key` | Certificate.lean | knowledge soundness under one fixed key, not every key | KILLED | `RecursionFast.Library.WitnessSending`:369 | 25.5 |
-| `cert-no-complete` | Certificate.lean | the certificate asks no completeness | KILLED | `RecursionFast.Library.WitnessSending`:370 (killed syntactically (the library constructs the field); the semantic weakening is cert-complete-error-1) | 26.4 |
-| `cert-complete-error-1` | Certificate.lean | completeness at error 1 (vacuous), not the declared delta | KILLED | `RecursionFast.Library.WitnessSending`:370 | 26.6 |
-| `cert-no-computes` | Certificate.lean | the extractor program need not compute E | KILLED | `RecursionFast.Library.WitnessSending`:371 (killed syntactically (the library constructs the field); the domain weakenings are the ext-computes-* mutants) | 27.5 |
-| `cert-cap-qv-2^17` | Certificate.lean | the certificate admits 2^17 verifier queries | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:101 | 192.6 |
-| `cert-cap-no-fuel` | Certificate.lean | the fuel is not bounded by the budget | KILLED | `RecursionFast.Library.WitnessSending`:372 | 26.8 |
-| `cert-cap-no-progcap` | Certificate.lean | the extractor program may have any size | KILLED | `RecursionFast.Controls.Certificate`:124 | 198.6 |
-| `certr-bounds-flipped` | Certificate.lean | the declared errors and query bound are lower bounds, not upper bounds | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:80 | 196.6 |
-| `certr-fuel-flipped` | Certificate.lean | the declared fuel is a lower bound of the submission's | KILLED | `RecursionFast.Controls.Certificate`:80 | 199.0 |
-| `certr-no-budget` | Certificate.lean | the declared fuel may exceed the budget | KILLED | `RecursionFast.Controls.Certificate`:65 | 203.2 |
-| `sec-errorcap-2^-64` | Security.lean | the knowledge error cap is 2^-64 per query, not 2^-128 | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Potential`:251 | 45.2 |
-| `sec-completenesscap-2^-20` | Security.lean | the completeness error cap is 2^-20, not 2^-40 | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Completeness`:161 | 51.1 |
-| `sec-logcap-2^64` | Security.lean | knowledge soundness is claimed only up to 2^64 queries | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Potential`:432 | 47.1 |
-| `sec-ks-no-qv-conjunct` | Security.lean | KS does not bound the verifier's own queries by qV | KILLED | `RecursionFast.Library.KS`:88 | 33.2 |
-| `sec-ks-extractor-no-log` | Security.lean | the extractor is given the empty log instead of the final query log | KILLED | `RecursionFast.Library.KS`:57 | 34.4 |
-| `sec-ks-no-qv-charge` | Security.lean | the verifier's own queries are not charged in the error | KILLED | `RecursionFast.Library.KS`:57 | 32.3 |
-| `sec-ks-logcap-only-q` | Security.lean | the logCap restriction ignores the verifier's queries | KILLED | `RecursionFast.Library.KS`:57 | 35.3 |
-| `sec-ks-verdict-empty-log` | Security.lean | the adversary's win reads the verifier's verdict on the empty log | KILLED | `RecursionFast.Library.KS`:57 | 34.9 |
-| `sec-complete-b-true` | Security.lean | completeness bounds the probability of acceptance, not of rejection | KILLED | `RecursionFast.Library.Completeness`:48 | 34.5 |
-| `sec-prob-not-recorded` | Security.lean | a fresh answer is not recorded: a repeated query is re-sampled (no function) | KILLED | `RecursionFast.Library.Prob`:91 | 29.6 |
-| `sec-prob-weight` | Security.lean | a fresh answer is weighted 2^-255, so prob is not a probability | KILLED | `RecursionFast.Library.Prob`:91 | 29.4 |
-| `sig-no-checksum` | Signature.lean | the checksum digits are constant: a signature advances to another message | KILLED | `RecursionFast.Library.Signer`:193 | 33.5 |
-| `sig-checksum-no-complement` | Signature.lean | the checksum sums the digits, not their complements (no domination) | KILLED | `RecursionFast.Library.Signer`:193 | 34.5 |
-| `sig-msgdigits-high-first` | Signature.lean | message digits are taken high bits first | KILLED | `RecursionFast.Library.Signer`:126 | 34.8 |
-| `sig-step-no-key-index` | Signature.lean | the chain step is not tweaked by the key index | KILLED | `RecursionFast.Library.Fast`:92 | 25.5 |
-| `sig-step-no-position` | Signature.lean | the chain step is not tweaked by the position | KILLED | `RecursionFast.Library.Fast`:92 | 24.7 |
-| `sig-ends-to-2` | Signature.lean | the verifier walks each chain to position 2, not to its end | KILLED | `RecursionFast.Library.Fast`:150 | 24.6 |
-| `sig-leaf-no-index` | Signature.lean | the WOTS leaf does not commit to its key index | KILLED | `RecursionFast.Library.Fast`:117 | 24.2 |
-| `sig-root-swap` | Signature.lean | the Merkle path takes the current value as the right child at even index | KILLED | `RecursionFast.Library.Fast`:138 | 24.5 |
-| `sig-no-idx-check` | Signature.lean | a signature index of 2^16 or more is accepted | KILLED | `RecursionFast.Library.Fast`:150 | 24.5 |
-| `sig-no-path-length` | Signature.lean | a signature with a path of any length is accepted | KILLED | `RecursionFast.Library.Fast`:150 | 23.8 |
-| `sig-trace-no-length` | Signature.lean | the trace encoding drops each query's length (not injective) | KILLED | `RecursionFast.Library.Fast`:74 | 24.4 |
-| `sig-trace-no-tag` | Signature.lean | the trace digest has no domain tag | KILLED | `RecursionFast.Library.Fast`:82 | 24.0 |
-| `keccak-pad-0x06` | Hash/Keccak.lean | SHA3-256's domain suffix instead of Keccak's padding | KILLED | `RecursionFast.Library.KeccakFast`:266 | 35.2 |
-| `keccak-pad-single-0x01` | Hash/Keccak.lean | a single padding byte omits the final 0x80 bit | KILLED | `RecursionFast.Library.KeccakFast`:265 | 33.4 |
-| `keccak-rc5` | Hash/Keccak.lean | one round constant (round 5) is wrong | KILLED | `RecursionFast.Controls.Signature`:64 | 80.7 |
-| `keccak-rho4` | Hash/Keccak.lean | one rho offset (lane 4) is wrong | KILLED | `RecursionFast.Library.KeccakFast`:121 | 66.2 |
-| `keccak-rate-135` | Hash/Keccak.lean | the sponge's rate is 135 bytes | KILLED | `RecursionFast.Library.KeccakFast`:226 | 37.0 |
-| `keccak-out-31` | Hash/Keccak.lean | the output is 31 bytes | INVALID | `RecursionFast.Contract.Relation`:66 (not a contract: keccakDigest's proof that the output has 32 bytes fails, so the type system rejects it) | 7.3 |
-| `keccak-chi-mirrored` | Hash/Keccak.lean | chi negates the wrong neighbour | KILLED | `RecursionFast.Library.KeccakFast`:131 | 38.3 |
-| `keccak-theta-swapped` | Hash/Keccak.lean | theta's neighbouring columns are swapped | KILLED | `RecursionFast.Library.KeccakFast`:116 | 37.7 |
-| `keccak-23-rounds` | Hash/Keccak.lean | the permutation has 23 rounds | KILLED | `RecursionFast.Library.KeccakFast`:148 | 34.5 |
-| `keccak-blocklane-xor` | Hash/Keccak.lean | nothing: the eight shifted bytes are disjoint, so OR and XOR agree | KILLED (calibration: expected to survive) | `RecursionFast.Library.KeccakFast`:218 (equivalent (the eight shifted bytes are disjoint, so OR and XOR agree); killed only because Library/KeccakFast.lean unfolds blockLane by rfl to the OR form) | 39.7 |
-| `ext-tag-swap` | Extractor.lean | the output's tags 0 and 1 are swapped | KILLED | `RecursionFast.Library.Words`:275 | 21.6 |
-| `ext-readbytes-lenient` | Extractor.lean | a byte field that runs past the end decodes (not strict) | KILLED | `RecursionFast.Controls.Backdoor`:181 | 40.6 |
-| `ext-logwords-no-count` | Extractor.lean | the log on the tape carries no entry count | KILLED | `RecursionFast.Library.Words`:246 | 22.1 |
-| `ext-pack-big-endian` | Extractor.lean | bytes are packed big-endian | KILLED | `RecursionFast.Library.Words`:34 | 22.1 |
-| `ext-readsig-counts-swapped` | Extractor.lean | the signature's chain values and path are read with each other's counts | KILLED | `RecursionFast.Library.Words`:256 | 21.7 |
-| `ext-budget-2^17` | Extractor.lean | the budget charges 2^17 steps per input word | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:91 | 217.5 |
-| `ext-outcap-2^25` | Extractor.lean | the output cap is 2^25 words, so the proof domain 256 MiB | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Extractor`:222 | 52.8 |
-| `ext-computes-small-domain` | Extractor.lean | efficient extraction is asked only for proofs of at most 16 MiB | KILLED | `RecursionFast.Controls.Extractor`:124 | 53.5 |
-| `ext-computes-no-outcap` | Extractor.lean | the extractor's output is not capped | KILLED | `RecursionFast.Library.WitnessSending`:363 | 34.3 |
-| `mach-sub-reversed` | Machine.lean | sub computes b - a | KILLED | `RecursionFast.Controls.Machine`:49 | 28.6 |
-| `mach-remu-zero` | Machine.lean | x % 0 is 0, not x | KILLED | `RecursionFast.Controls.Machine`:49 | 29.1 |
-| `mach-shl-unmasked` | Machine.lean | shl shifts by the whole word, not its low 6 bits | KILLED | `RecursionFast.Controls.Machine`:49 | 29.4 |
-| `mach-clmulh-63` | Machine.lean | clmulh returns the wrong window of the carry-less product | KILLED | `RecursionFast.Controls.Machine`:49 | 33.0 |
-| `mach-ite-swapped` | Machine.lean | ite runs p when the cell is zero | KILLED | `RecursionFast.Library.Machine`:92 | 28.7 |
-| `mach-mem-free` | Machine.lean | memory is not charged | KILLED | `RecursionFast.Library.Machine`:146 | 24.2 |
-| `mach-output-reversed` | Machine.lean | the output words come out in reverse order | KILLED | `RecursionFast.Library.Machine`:29 | 24.3 |
-| `mach-loop-size-free` | Machine.lean | a loop statement does not count toward the program size cap | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Machine`:205 | 29.4 |
-| `mach-loop-no-fuel` | Machine.lean | a loop iteration consumes no fuel | INVALID | `RecursionFast.Contract.Machine`:110 (not a contract: exec's structural recursion on the fuel no longer terminates, so Lean rejects the definition) | 5.0 |
-| `rel-tagsignode-eq-tagnode` | Relation.lean | signature Merkle nodes and relation nodes share a domain tag | KILLED | `RecursionFast.Controls.Signature`:138 | 88.6 |
-| `keccak-pi-transposed` | Hash/Keccak.lean | pi reads A[y, x + 3y] | KILLED | `RecursionFast.Library.KeccakFast`:126 | 43.1 |
-| `ext-readstring-off-by-one` | Extractor.lean | a byte string is read one byte longer than its length word | KILLED | `RecursionFast.Library.Words`:208 | 27.9 |
-| `ext-progcap-2^21` | Extractor.lean | the program-size cap is 2^21 statements: a 17-bit lookup-table extractor fits | KILLED | `RecursionFast.Controls.Extractor`:325 | 56.6 |
-| `ext-computes-short-queries` | Extractor.lean | efficient extraction is asked only for logs of queries under 2^32 bytes | KILLED (calibration: expected to survive) | `RecursionFast.Controls.LogScan`:343 (the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longQuery kills it on its own) | 58.0 |
-| `ext-computes-short-tape` | Extractor.lean | efficient extraction is asked only for tapes of at most 2^32 words | KILLED (calibration: expected to survive) | `RecursionFast.Controls.LogScan`:342 (the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longTape kills it on its own) | 56.0 |
-| `mach-load-address` | Machine.lean | load copies the address cell instead of the cell it names | KILLED | `RecursionFast.Library.Machine`:67 | 27.7 |
-| `mach-input-past-end-one` | Machine.lean | an input read past the tape's end is 1, not 0 | KILLED | `RecursionFast.Library.Machine`:75 | 27.1 |
-| `mach-run-mem-lt` | Machine.lean | a run needs one step more than its memory before any statement | KILLED | `RecursionFast.Library.Machine`:144 | 25.0 |
+| `rel-no-leafcap` | Relation.lean | a leaf witness of any number of blocks is in the relation (no leafCap bound) | KILLED | `RecursionFast.Library.WitnessSending`:205 | 63.0 |
+| `rel-leafcap-2^21` | Relation.lean | the leaf bound is 2^21 blocks, not 2^20 (a leaf at the cap would not fit outCap with its node) | KILLED | `RecursionFast.Controls.Relation`:317 | 371.3 |
+| `rel-leafcap-2^19` | Relation.lean | the leaf bound is 2^19 blocks: completeness is no longer asked up to 2^20 | KILLED | `RecursionFast.Controls.Relation`:306 | 369.5 |
+| `rel-leafitem-no-tag` | Relation.lean | a block's hash carries no domain tag | KILLED | `RecursionFast.Library.Fast`:193 | 41.4 |
+| `rel-datanode-swap` | Relation.lean | a data node hashes its children in the wrong order | KILLED | `RecursionFast.Library.Fast`:197 | 43.8 |
+| `rel-datanode-no-tag` | Relation.lean | a data node carries no domain tag (its 64-byte input is not separated from other hashes) | KILLED | `RecursionFast.Library.Fast`:197 | 35.6 |
+| `rel-tagdata-eq-tagnode` | Relation.lean | data nodes and node statements share a domain tag | KILLED | `RecursionFast.Controls.Relation`:140 | 372.5 |
+| `rel-datalevel-pair-swap` | Relation.lean | a level pairs adjacent digests in the wrong order | KILLED | `RecursionFast.Library.Tree`:107 | 24.1 |
+| `rel-datalevel-carry-dup` | Relation.lean | an odd last digest is paired with itself instead of carried up | KILLED | `RecursionFast.Library.Tree`:109 | 27.4 |
+| `rel-datalevel-carry-drop` | Relation.lean | an odd last digest is dropped instead of carried up | KILLED | `RecursionFast.Library.Tree`:109 | 25.8 |
+| `rel-dataroot-half-levels` | Relation.lean | the root takes |xs| / 2 levels, too few at three blocks | KILLED | `RecursionFast.Library.Tree`:115 | 24.2 |
+| `rel-dataroot-levels-minus-one` | Relation.lean | nothing: |xs| - 1 levels still reach one digest (|xs| - 1 ≥ ⌈log2 |xs|⌉ for |xs| ≥ 1) | KILLED (calibration: expected to survive) | `RecursionFast.Library.Tree`:115 (equivalent: |xs| - 1 levels still reach one digest (|xs| - 1 >= ceil(log2 |xs|) for |xs| >= 1, and no level for no block); a kill is incidental (a library proof that rewrites the count |xs|)) | 24.0 |
+| `rel-dataroot-empty-one` | Relation.lean | the root of no block is not the zero digest | KILLED | `RecursionFast.Library.Tree`:115 | 23.6 |
+| `rel-dataroot-no-items` | Relation.lean | the tree is built over the blocks themselves, not their hashes | KILLED | `RecursionFast.Library.Tree`:115 | 24.1 |
+| `rel-leaf-count-zero` | Relation.lean | the relation's leaf statement does not bind the number of blocks | KILLED | `RecursionFast.Library.Compose`:495 | 83.4 |
+| `rel-querycap-2^21` | Relation.lean | acc accepts queries of up to 2^21 bytes, above the service's 2^20 cap | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Relation`:529 | 392.6 |
+| `rel-nodestmt-swap` | Relation.lean | the node layout hashes the children in the wrong order | KILLED | `RecursionFast.Library.Fast`:228 | 36.5 |
+| `rel-tagitem-eq-tagleaf` | Relation.lean | leaf items and leaf statements share a domain tag | KILLED | `RecursionFast.Controls.Relation`:110 | 386.2 |
+| `rel-enc64-big-endian` | Relation.lean | enc64 is big-endian, not Rust's u64::to_le_bytes | KILLED | `RecursionFast.Library.Words`:72 | 26.4 |
+| `rel-leafstmt-no-count` | Relation.lean | the leaf statement does not commit to the number of blocks | KILLED | `RecursionFast.Library.Fast`:224 | 49.8 |
+| `rel-node-drop-acc2` | Relation.lean | a node's second child is not checked | KILLED | `RecursionFast.Library.Compose`:497 | 82.4 |
+| `rel-node-acc2-wrong-child` | Relation.lean | a node's second proof is checked against the first child's digest | KILLED | `RecursionFast.Library.WitnessSending`:209 | 67.9 |
+| `rel-docstring-only` | Relation.lean | nothing: only a docstring changes | SURVIVED (calibration: expected to survive) | equivalent: changes only a docstring (harness passed: extract, lean signer vs service) | 527.9 |
+| `tree-stream-args-swapped` | Tree.lean | the stream step hashes the new leaf before the previous statement | KILLED | `RecursionFast.Library.Compose`:943 | 39.4 |
+| `tree-stream-reversed` | Tree.lean | the stream folds its later leaves newest first | KILLED | `RecursionFast.Library.Compose`:943 | 31.3 |
+| `tree-level-swap` | Tree.lean | the tree pairs adjacent digests right to left | KILLED | `RecursionFast.Library.Tree`:101 | 11.7 |
+| `tree-root-half-levels` | Tree.lean | the root iterates |cs|/2 levels: equal on powers of two, wrong on 3 leaves | KILLED | `RecursionFast.Library.Tree`:111 | 11.8 |
+| `oracle-runseq-leftover` | Oracle.lean | runSeq accepts a trace with entries left over (no exact consumption) | KILLED | `RecursionFast.Library.Trace`:47 | 28.4 |
+| `oracle-runseq-no-query-check` | Oracle.lean | runSeq answers a query by an entry for another query | KILLED | `RecursionFast.Library.Trace`:65 | 32.3 |
+| `oracle-runlog-last-entry` | Oracle.lean | runLog reads the last entry for a query, not the first (prob's table reads the first) | KILLED | `RecursionFast.Library.Oracle`:44 | 26.9 |
+| `oracle-queries-drop-head` | Oracle.lean | queries omits each query asked, so qV and Q bound nothing | KILLED | `RecursionFast.Library.Oracle`:37 | 21.9 |
+| `oracle-bind-ignores-answer` | Oracle.lean | bind feeds the zero digest to the program instead of the oracle's answer | KILLED | `RecursionFast.Library.Oracle`:56 | 21.8 |
+| `cert-acc-no-qv` | Certificate.lean | acc accepts traces longer than the declared qV | KILLED | `RecursionFast.Library.Fast`:241 | 18.9 |
+| `cert-acc-no-querycap` | Certificate.lean | acc accepts trace queries of any length | KILLED | `RecursionFast.Library.Fast`:241 | 19.5 |
+| `cert-acc-no-sigok` | Certificate.lean | acc does not check the signature on the trace | KILLED | `RecursionFast.Library.Fast`:241 | 19.4 |
+| `cert-acc-runlog` | Certificate.lean | acc reads the trace by lookup, not in order and used up exactly | KILLED | `RecursionFast.Library.Fast`:241 | 21.0 |
+| `cert-acc-word-le` | Certificate.lean | acc accepts a proof of exactly 2^64 bytes, whose length no 64-bit word writes | KILLED | `RecursionFast.Library.Fast`:241 | 19.9 |
+| `cert-acc-qv-lt` | Certificate.lean | acc rejects a trace of exactly qV entries | KILLED | `RecursionFast.Library.Fast`:241 | 19.7 |
+| `cert-acc-querycap-lt` | Certificate.lean | acc rejects a query of exactly queryCap bytes | KILLED | `RecursionFast.Library.Fast`:241 | 18.9 |
+| `cert-secure-one-key` | Certificate.lean | knowledge soundness under one fixed key, not every key | KILLED | `RecursionFast.Library.WitnessSending`:379 | 24.5 |
+| `cert-no-complete` | Certificate.lean | the certificate asks no completeness | KILLED | `RecursionFast.Library.WitnessSending`:380 (killed syntactically (the library constructs the field); the semantic weakening is cert-complete-error-1) | 24.7 |
+| `cert-complete-error-1` | Certificate.lean | completeness at error 1 (vacuous), not the declared delta | KILLED | `RecursionFast.Library.WitnessSending`:380 | 29.2 |
+| `cert-no-computes` | Certificate.lean | the extractor program need not compute E | KILLED | `RecursionFast.Library.WitnessSending`:381 (killed syntactically (the library constructs the field); the domain weakenings are the ext-computes-* mutants) | 31.0 |
+| `cert-cap-qv-2^17` | Certificate.lean | the certificate admits 2^17 verifier queries | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:101 | 363.9 |
+| `cert-cap-no-fuel` | Certificate.lean | the fuel is not bounded by the budget | KILLED | `RecursionFast.Library.WitnessSending`:382 | 31.8 |
+| `cert-cap-no-progcap` | Certificate.lean | the extractor program may have any size | KILLED | `RecursionFast.Controls.MaskedLeaf`:753 | 57.2 |
+| `certr-bounds-flipped` | Certificate.lean | the declared errors and query bound are lower bounds, not upper bounds | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:80 | 343.0 |
+| `certr-fuel-flipped` | Certificate.lean | the declared fuel is a lower bound of the submission's | KILLED | `RecursionFast.Controls.Certificate`:80 | 337.3 |
+| `certr-no-budget` | Certificate.lean | the declared fuel may exceed the budget | KILLED | `RecursionFast.Controls.MaskedLeaf`:764 | 47.7 |
+| `sec-errorcap-2^-64` | Security.lean | the knowledge error cap is 2^-64 per query, not 2^-128 | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Potential`:251 | 44.9 |
+| `sec-completenesscap-2^-20` | Security.lean | the completeness error cap is 2^-20, not 2^-40 | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Completeness`:161 | 48.7 |
+| `sec-logcap-2^64` | Security.lean | knowledge soundness is claimed only up to 2^64 queries | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Potential`:432 | 41.4 |
+| `sec-ks-no-qv-conjunct` | Security.lean | KS does not bound the verifier's own queries by qV | KILLED | `RecursionFast.Library.KS`:88 | 30.6 |
+| `sec-ks-extractor-no-log` | Security.lean | the extractor is given the empty log instead of the final query log | KILLED | `RecursionFast.Library.KS`:57 | 30.5 |
+| `sec-ks-no-qv-charge` | Security.lean | the verifier's own queries are not charged in the error | KILLED | `RecursionFast.Library.KS`:57 | 30.1 |
+| `sec-ks-logcap-only-q` | Security.lean | the logCap restriction ignores the verifier's queries | KILLED | `RecursionFast.Library.KS`:57 | 30.4 |
+| `sec-ks-verdict-empty-log` | Security.lean | the adversary's win reads the verifier's verdict on the empty log | KILLED | `RecursionFast.Library.KS`:57 | 29.9 |
+| `sec-complete-b-true` | Security.lean | completeness bounds the probability of acceptance, not of rejection | KILLED | `RecursionFast.Library.Completeness`:48 | 28.9 |
+| `sec-prob-not-recorded` | Security.lean | a fresh answer is not recorded: a repeated query is re-sampled (no function) | KILLED | `RecursionFast.Library.Prob`:91 | 26.4 |
+| `sec-prob-weight` | Security.lean | a fresh answer is weighted 2^-255, so prob is not a probability | KILLED | `RecursionFast.Library.Prob`:91 | 26.2 |
+| `sig-no-checksum` | Signature.lean | the checksum digits are constant: a signature advances to another message | KILLED | `RecursionFast.Library.Signer`:193 | 31.2 |
+| `sig-checksum-no-complement` | Signature.lean | the checksum sums the digits, not their complements (no domination) | KILLED | `RecursionFast.Library.Signer`:193 | 31.4 |
+| `sig-msgdigits-high-first` | Signature.lean | message digits are taken high bits first | KILLED | `RecursionFast.Library.Signer`:126 | 31.9 |
+| `sig-step-no-key-index` | Signature.lean | the chain step is not tweaked by the key index | KILLED | `RecursionFast.Library.Fast`:94 | 23.1 |
+| `sig-step-no-position` | Signature.lean | the chain step is not tweaked by the position | KILLED | `RecursionFast.Library.Fast`:94 | 22.9 |
+| `sig-ends-to-2` | Signature.lean | the verifier walks each chain to position 2, not to its end | KILLED | `RecursionFast.Library.Fast`:152 | 23.2 |
+| `sig-leaf-no-index` | Signature.lean | the WOTS leaf does not commit to its key index | KILLED | `RecursionFast.Library.Fast`:119 | 22.6 |
+| `sig-root-swap` | Signature.lean | the Merkle path takes the current value as the right child at even index | KILLED | `RecursionFast.Library.Fast`:140 | 22.4 |
+| `sig-no-idx-check` | Signature.lean | a signature index of 2^16 or more is accepted | KILLED | `RecursionFast.Library.Fast`:152 | 22.4 |
+| `sig-no-path-length` | Signature.lean | a signature with a path of any length is accepted | KILLED | `RecursionFast.Library.Fast`:152 | 22.5 |
+| `sig-trace-no-length` | Signature.lean | the trace encoding drops each query's length (not injective) | KILLED | `RecursionFast.Library.Fast`:76 | 20.8 |
+| `sig-trace-no-tag` | Signature.lean | the trace digest has no domain tag | KILLED | `RecursionFast.Library.Fast`:84 | 20.8 |
+| `keccak-pad-0x06` | Hash/Keccak.lean | SHA3-256's domain suffix instead of Keccak's padding | KILLED | `RecursionFast.Library.KeccakFast`:266 | 31.3 |
+| `keccak-pad-single-0x01` | Hash/Keccak.lean | a single padding byte omits the final 0x80 bit | KILLED | `RecursionFast.Library.KeccakFast`:265 | 31.0 |
+| `keccak-rc5` | Hash/Keccak.lean | one round constant (round 5) is wrong | KILLED | `RecursionFast.Controls.Signature`:64 | 70.8 |
+| `keccak-rho4` | Hash/Keccak.lean | one rho offset (lane 4) is wrong | KILLED | `RecursionFast.Library.KeccakFast`:121 | 64.4 |
+| `keccak-rate-135` | Hash/Keccak.lean | the sponge's rate is 135 bytes | KILLED | `RecursionFast.Library.KeccakFast`:226 | 31.0 |
+| `keccak-out-31` | Hash/Keccak.lean | the output is 31 bytes | INVALID | `RecursionFast.Contract.Relation`:74 (not a contract: keccakDigest's proof that the output has 32 bytes fails, so the type system rejects it) | 6.8 |
+| `keccak-chi-mirrored` | Hash/Keccak.lean | chi negates the wrong neighbour | KILLED | `RecursionFast.Library.KeccakFast`:131 | 36.1 |
+| `keccak-theta-swapped` | Hash/Keccak.lean | theta's neighbouring columns are swapped | KILLED | `RecursionFast.Library.KeccakFast`:116 | 35.3 |
+| `keccak-23-rounds` | Hash/Keccak.lean | the permutation has 23 rounds | KILLED | `RecursionFast.Library.KeccakFast`:148 | 30.6 |
+| `keccak-blocklane-xor` | Hash/Keccak.lean | nothing: the eight shifted bytes are disjoint, so OR and XOR agree | KILLED (calibration: expected to survive) | `RecursionFast.Library.KeccakFast`:218 (equivalent (the eight shifted bytes are disjoint, so OR and XOR agree); killed only because Library/KeccakFast.lean unfolds blockLane by rfl to the OR form) | 37.7 |
+| `ext-tape-no-log` | Extractor.lean | the extractor's tape omits the log: no program can read the verifier's answers, so a verifier extracted from its query log is not certifiable | KILLED | `RecursionFast.Library.WitnessSending`:321 | 30.4 |
+| `ext-tag-swap` | Extractor.lean | the output's tags 0 and 1 are swapped | KILLED | `RecursionFast.Library.Words`:283 | 19.8 |
+| `ext-leaf-one-block` | Extractor.lean | a leaf's count word is not read: every leaf decodes as one block | KILLED | `RecursionFast.Library.Words`:283 | 19.9 |
+| `ext-readbytes-lenient` | Extractor.lean | a byte field that runs past the end decodes (not strict) | KILLED | `RecursionFast.Controls.Extractor`:453 | 48.6 |
+| `ext-logwords-no-count` | Extractor.lean | the log on the tape carries no entry count | KILLED | `RecursionFast.Library.Words`:257 | 20.0 |
+| `ext-pack-big-endian` | Extractor.lean | bytes are packed big-endian | KILLED | `RecursionFast.Library.Words`:36 | 19.6 |
+| `ext-readsig-counts-swapped` | Extractor.lean | the signature's chain values and path are read with each other's counts | KILLED | `RecursionFast.Library.Words`:265 | 19.5 |
+| `ext-budget-2^17` | Extractor.lean | the budget charges 2^17 steps per input word | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Certificate`:91 | 339.4 |
+| `ext-outcap-2^25` | Extractor.lean | the output cap is 2^25 words, so the proof domain 256 MiB | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Extractor`:225 | 47.8 |
+| `ext-computes-small-domain` | Extractor.lean | efficient extraction is asked only for proofs of at most 16 MiB | KILLED | `RecursionFast.Controls.Extractor`:127 | 51.6 |
+| `ext-computes-no-outcap` | Extractor.lean | the extractor's output is not capped | KILLED | `RecursionFast.Library.WitnessSending`:373 | 30.4 |
+| `mach-sub-reversed` | Machine.lean | sub computes b - a | KILLED | `RecursionFast.Controls.Machine`:49 | 25.9 |
+| `mach-remu-zero` | Machine.lean | x % 0 is 0, not x | KILLED | `RecursionFast.Controls.Machine`:49 | 25.5 |
+| `mach-shl-unmasked` | Machine.lean | shl shifts by the whole word, not its low 6 bits | KILLED | `RecursionFast.Controls.Machine`:49 | 25.6 |
+| `mach-clmulh-63` | Machine.lean | clmulh returns the wrong window of the carry-less product | KILLED | `RecursionFast.Controls.Machine`:49 | 25.7 |
+| `mach-ite-swapped` | Machine.lean | ite runs p when the cell is zero | KILLED | `RecursionFast.Library.Machine`:92 | 21.9 |
+| `mach-mem-free` | Machine.lean | memory is not charged | KILLED | `RecursionFast.Library.Machine`:146 | 21.8 |
+| `mach-output-reversed` | Machine.lean | the output words come out in reverse order | KILLED | `RecursionFast.Library.Machine`:29 | 21.5 |
+| `mach-loop-size-free` | Machine.lean | a loop statement does not count toward the program size cap | KILLED (calibration: expected to survive) | `RecursionFast.Controls.Machine`:205 | 25.6 |
+| `mach-loop-no-fuel` | Machine.lean | a loop iteration consumes no fuel | INVALID | `RecursionFast.Contract.Machine`:110 (not a contract: exec's structural recursion on the fuel no longer terminates, so Lean rejects the definition) | 4.4 |
+| `rel-tagsignode-eq-tagnode` | Relation.lean | signature Merkle nodes and relation nodes share a domain tag | KILLED | `RecursionFast.Controls.Signature`:138 | 72.5 |
+| `keccak-pi-transposed` | Hash/Keccak.lean | pi reads A[y, x + 3y] | KILLED | `RecursionFast.Library.KeccakFast`:126 | 37.7 |
+| `ext-readstring-off-by-one` | Extractor.lean | a byte string is read one byte longer than its length word | KILLED | `RecursionFast.Library.Words`:211 | 19.2 |
+| `ext-progcap-2^21` | Extractor.lean | the program-size cap is 2^21 statements: a 17-bit lookup-table extractor fits | KILLED | `RecursionFast.Controls.Extractor`:328 | 48.4 |
+| `ext-computes-short-queries` | Extractor.lean | efficient extraction is asked only for logs of queries under 2^32 bytes | KILLED (calibration: expected to survive) | `RecursionFast.Controls.LogScan`:364 (the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longQuery kills it on its own) | 45.7 |
+| `ext-computes-short-tape` | Extractor.lean | efficient extraction is asked only for tapes of at most 2^32 words | KILLED (calibration: expected to survive) | `RecursionFast.Controls.LogScan`:363 (the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longTape kills it on its own) | 45.7 |
+| `mach-load-address` | Machine.lean | load copies the address cell instead of the cell it names | KILLED | `RecursionFast.Library.Machine`:67 | 21.8 |
+| `mach-input-past-end-one` | Machine.lean | an input read past the tape's end is 1, not 0 | KILLED | `RecursionFast.Library.Machine`:75 | 22.1 |
+| `mach-run-mem-lt` | Machine.lean | a run needs one step more than its memory before any statement | KILLED | `RecursionFast.Library.Machine`:144 | 21.5 |

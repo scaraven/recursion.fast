@@ -13,17 +13,12 @@ on it.
   written (an equivalent change, or a constant no check pinned); `equivalent = true` one that
   changes no meaning.
 * `accepted.toml`: survivors accepted as such, each with its reason (an equivalent mutant).
-* `run.py`: the runner; `results.json` and `results.md`: the last results (generated). **Pending:**
-  the committed `results.*` and `targeted.*` are the last full run's, over the earlier seed leaf
-  (99 mutants, base `377b489`); the committed-data leaf replaced its six leaf mutants by fifteen
-  (`rel-leafcap-2^21` … `rel-leaf-count-zero`) and added `ext-leaf-one-block` and
-  `rel-datanode-no-tag` (a data node without its tag, added after review) and `ext-tape-no-log` (a
-tape without the log, which `Controls/MaskedLeaf.lean`'s log-reading extractor kills), and the run
-over all 111
-  and the targeted re-run of the `rel-*` mutants (`--targets RecursionFast.Controls.Relation
-  --every`) are still to be made (their slots need `systemd-run --user` scopes);
-  `targeted.json`, `targeted.md`: the controls added by this suite, each run alone against its
-  mutant (`--targets <control module> --every`).
+* `run.py`: the runner; `results.json` and `results.md`: the last full run's results (generated):
+  all 111 mutants with `--harness`, at `c89ba13` (the contract as at `d0f0f6d`): 108 killed, 2
+  invalid, 1 survivor (accepted). `targeted.json`, `targeted.md`: control modules run alone against
+  their mutants (`--targets <control module> --every`): the `rel-*` mutants against
+  `Controls.Relation`, the extractor's domain and program-size mutants against
+  `Controls.Extractor`, `ext-tape-no-log` against `Controls.MaskedLeaf`.
 
 ## The pipeline
 
@@ -87,8 +82,8 @@ directory). Every command runs as `systemd-run --user --scope -p MemoryMax=16G t
 timeout 1500 …` with `LEAN_NUM_THREADS=4`; the default cores are `16-20`, `21-25` and `26-31`, one
 range per job (`--cores`, `--jobs`, `--threads`). Build logs are in `<scratch>/logs/`.
 
-A run of every mutant (109; 99 before the committed-data leaf) takes about 30 minutes with 3 jobs on 16 cores (77 minutes of build
-time in all, median 32 s per mutant): most are killed within a minute (the first failing module is
+A run of every mutant (111) took 39 minutes with 3 jobs on 16 cores (117 minutes of build time in
+all, median 30 s per mutant): most are killed within a minute (the first failing module is
 reached early and the build is stopped), and a survivor costs a rebuild of everything that imports
 its file (about 3 to 4 minutes). It is not part of the CI (too slow
 for every pull request, and it needs `systemd-run --user` scopes and 16 free cores): run it locally
