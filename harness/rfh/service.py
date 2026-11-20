@@ -5,8 +5,9 @@ and one for the calibration. `start` launches `rf-oracle` with its socket in a f
 under its own memory cap (and `--io-timeout`, if given), and waits for `ready`. The control lines
 on its stdin (`service/PROTOCOL.md` §6): `replay` puts it in replay mode for one timed pass (it
 prints `key <hex k>`, its PRF key, resets its replay index to 0 and then re-issues only the
-signatures it made, at the same indices, for the same trace digests); `drop` shuts every open
-connection down and returns how many are still open after its wait (`dropped live=N`; the runner
+signatures it made, at the same indices, for the same trace digests); `drop` closes every
+connection still queued in the listen backlog, shuts every open connection down and returns how
+many are still open after its wait (`dropped live=N`; the runner
 requires 0 after every request); `stats` returns its counters without stopping it; `stop` closes
 its stdin, which makes it wipe its keys and exit, and returns its final counters. The client
 (`Client`) is used by tests and by the smoke's deliberately broken provers, not by the benchmark.
@@ -109,9 +110,10 @@ class Service:
             raise ServiceError(f"the service's control pipe is closed ({e})")
 
     def drop(self, timeout=30):
-        """Shut every open connection down (the control line `drop`): the service closes them all,
-        which frees their queues and any descriptor in flight there, waits up to 5 s for their
-        threads and prints `dropped live=N`; N, the connections still open (the runner requires 0)."""
+        """Close every connection (the control line `drop`): the service closes those still queued in
+        its listen backlog and shuts the open ones down, which frees their queues and any descriptor
+        in flight there, waits up to 5 s for their workers and prints `dropped live=N`; N, the
+        connections still open (the runner requires 0)."""
         self._control("drop")
         _, line = self._until(lambda l: l.startswith("dropped "), "`dropped live=N`", time.monotonic() + timeout)
         k, _, v = line[len("dropped "):].partition("=")

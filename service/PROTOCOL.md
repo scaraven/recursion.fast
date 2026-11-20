@@ -18,10 +18,13 @@ service run is fixed.
   request only after it has written the response to the previous one, so a client may pipeline
   (write a request before reading the previous response) only if it keeps reading responses while
   it writes, otherwise both sides can block on full socket buffers. The service serves each connection on
-  its own thread, so **use one connection per prover thread** to hash in parallel (the service
-  computes on the same CPUs as the prover; it is not a co-processor).
-- At most **32** connections are open at a time; a further connection receives a `CAP` response and
-  is closed.
+  one of its 32 worker threads (started with the service; none starts or ends per connection), so
+  **use one connection per prover thread** to hash in parallel (the service computes on the same
+  CPUs as the prover; it is not a co-processor).
+- At most **32** connections are open at a time; a further connection receives a `CAP` response
+  when it is accepted, before any request, and is closed. The listen backlog holds at most 64
+  connections not yet accepted; a connect beyond it waits (or fails with `EAGAIN` on a non-blocking
+  socket).
 - After any error response the service closes the connection.
 - **Deadlines.** A connection on which one read or one write of the service waits longer than the
   runner's io timeout (`--io-timeout`, 60 s unless the runner sets it; the benchmark sets the step
@@ -177,7 +180,7 @@ kills the prover first.
   path); the time of a request is about proportional to its permutation count
   `Σ (⌊(32 + |q_i|) / 136⌋ + 1)`. A `SIGN` adds the trace digest and up to `133 · 4` permutations of
   the signature (the chain starts and their steps).
-- Each request is computed on the connection's thread; use several connections to use several
+- Each request is computed on the connection's worker thread; use several connections to use several
   cores.
 
 ## 5. Replay mode (the timed runs)
@@ -230,9 +233,11 @@ replay ready
 
 The runner sends `replay` before each timed pass and reads up to `replay ready`.
 
-The line `drop` shuts every open connection down (both directions), which also frees its receive
-queue and any file descriptor in flight there, waits up to 5 s for their threads to end, and prints
-one line, flushed:
+The line `drop` closes every connection still waiting in the listen backlog (connected but never
+accepted, so neither counted nor served: without this it would be served once the request that
+opened it is dead), shuts every open connection down (both directions), which also frees its receive
+queue and any file descriptor in flight there, waits up to 5 s for their workers to finish them, and
+prints one line, flushed:
 
 ```
 dropped live=<N>
@@ -240,7 +245,7 @@ dropped live=<N>
 
 `N` the connections still open at the end of the wait. The runner sends `drop` after every request
 (service run, calibration, timed pass), when no process of the request is alive, and requires
-`live=0`.
+`live=0`: then no connection of the request is left, accepted or queued.
 
 The line `stats` prints the statistics line below (the same keys, the counts so far), flushed, and
 the service keeps serving; the runner reads it after each timed pass (the pass's `mismatches`).

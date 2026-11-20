@@ -8,11 +8,13 @@
 //! `--io-timeout SECS` (default 60) a decimal count of seconds from 1 to 86400; any other value is a
 //! usage error (exit 2).
 //!
-//! At start it fixes glibc's mmap threshold (so that no request's allocation cost depends on an
-//! earlier connection's frees), draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed
+//! At start it fixes glibc's mmap threshold and limits glibc to one malloc arena (so that no
+//! request's allocation cost depends on an earlier connection's frees or threads), draws a fresh 32-byte PRF key `k` and a fresh 32-byte signing seed
 //! from `getrandom`, generates the `2^16` one-time keys and the Merkle tree (`vk` its root), binds
 //! the Unix socket PATH (mode 0600), and prints `vk <hex>`, `keygen_ms <ms>`, `simd scalar` and
-//! `ready` on stdout. It serves one thread per connection: `QUERY` (a batch of byte strings →
+//! `ready` on stdout. It serves each connection on one of `MAX_CONNS` = 32 worker threads started
+//! with it (none is started or ends per connection, so no thread-stack cache or arena count carries
+//! one request's threads into a later one's), from a listen backlog of 64: `QUERY` (a batch of byte strings →
 //! `PRF_k(q) = Keccak-256(k ‖ q)` of each), `SIGN` (a batch of byte strings → their answers,
 //! computed here, and a signature on the trace digest with the next one-time key; refused after
 //! `2^16`), `VK`. It records the trace digest it signed at each one-time key index. A connection
@@ -25,8 +27,9 @@
 //! ready`. In replay mode `SIGN` takes the next replay index `j` and re-issues the service run's
 //! signature at `j` if the trace digest is the one signed there, else refuses with `MISMATCH`; it
 //! never signs a new digest. `replay` may come again: each resets the index to 0. The line `drop`
+//! closes every connection still waiting in the listen backlog (never accepted, so in no count),
 //! shuts every open connection down (which also frees anything queued on it), waits up to 5 s for
-//! their threads to end and prints `dropped live=N`; the line `stats` prints the `stats …` line. At
+//! their workers to finish them and prints `dropped live=N`; the line `stats` prints the `stats …` line. At
 //! end of file (the runner closes the pipe) it takes the key lock, overwrites the keys, prints
 //! `stats …`, removes the socket and exits 0. The signing seed is never written anywhere, and `k`
 //! only to stdout after `replay`; the process is made non-dumpable, so a process of the same uid
@@ -64,6 +67,8 @@ extern "C" {
     fn getrandom(buf: *mut u8, buflen: usize, flags: u32) -> isize;
     fn prctl(option: i32, ...) -> i32;
     fn mallopt(param: i32, value: i32) -> i32;
+    fn listen(fd: i32, backlog: i32) -> i32;
+    fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
     fn recvmsg(fd: i32, msg: *mut MsgHdr, flags: i32) -> isize;
     fn close(fd: i32) -> i32;
 }
@@ -81,6 +86,28 @@ const DROP_WAIT: Duration = Duration::from_secs(5);
 /// request would depend on what an earlier connection asked (review R5 LOW 2).
 const M_MMAP_THRESHOLD: i32 = -3;
 const MMAP_THRESHOLD: i32 = 128 << 10;
+/// `M_ARENA_MAX` of glibc's `mallopt`: one arena for every thread, so that how many arenas exist,
+/// and how full each is, does not depend on how many threads an earlier connection kept busy
+/// (review R4b LOW 5).
+const M_ARENA_MAX: i32 = -8;
+/// The listen backlog: connections the kernel queues before `accept` (Rust's default is the
+/// system's `somaxconn`, 4096). A connection still queued when `drop` comes is closed by it.
+const BACKLOG: i32 = 2 * MAX_CONNS as i32;
+
+#[repr(C)]
+struct PollFd {
+    fd: i32,
+    events: i16,
+    revents: i16,
+}
+const POLLIN: i16 = 1;
+
+/// Wait until `fd` is readable (a connection waits in the backlog); an interrupted or failed poll
+/// returns too (the caller's `accept` then decides).
+fn wait_readable(fd: i32) {
+    let mut p = PollFd { fd, events: POLLIN, revents: 0 };
+    unsafe { poll(&mut p, 1, -1) };
+}
 
 /// Fill `b` with 32 bytes from the kernel's CSPRNG (`getrandom`, else `/dev/urandom`), in place, so
 /// that no copy of a key is left on the stack.
@@ -111,8 +138,13 @@ struct State {
     /// connection's thread ends (after its registry entry is removed and its socket closed).
     conns: AtomicUsize,
     /// A clone of every served connection's socket, by connection number, so that `drop` can shut
-    /// them down; an entry is removed when its thread ends.
+    /// them down; an entry is removed when its worker has finished it.
     registry: Mutex<HashMap<u64, UnixStream>>,
+    /// The listening socket (non-blocking: the accept loop waits in `poll`).
+    listener: UnixListener,
+    /// Held from a connection's `accept` to its registration, and by `drop` while it empties the
+    /// backlog and shuts the registered connections down: no connection is between the two then.
+    gate: Mutex<()>,
     io_timeout: Duration,
     requests: AtomicU64,
     queries: AtomicU64,
@@ -389,19 +421,133 @@ fn stats_line(st: &State) -> String {
     )
 }
 
-/// The `drop` control line: shut every open connection down (both directions: a blocked read
-/// sees the end, a blocked write fails, so its thread ends and its socket is closed, which frees
-/// its receive queue and any file descriptor in flight there), wait up to `DROP_WAIT` for the
-/// slots to be released, and print `dropped live=N`, `N` the connections still open.
-fn drop_conns(st: &State) {
-    for s in st.registry.lock().unwrap_or_else(|e| e.into_inner()).values() {
-        let _ = s.shutdown(Shutdown::Both);
+/// Accept and close every connection waiting in the listen backlog of the non-blocking `l`, until
+/// none is left; how many. A queued connection was never accepted, so it is in no count (`live`)
+/// and no registry: without this it would be served after the request that opened it is dead
+/// (review R4b LOW 4).
+fn drain_backlog(l: &UnixListener) -> usize {
+    let mut n = 0;
+    loop {
+        match l.accept() {
+            Ok((c, _)) => {
+                drop(c);
+                n += 1;
+            }
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => return n,           // WouldBlock: the backlog is empty
+        }
+    }
+}
+
+/// The `drop` control line: under the accept gate, close every connection still in the listen
+/// backlog (`drain_backlog`) and shut every registered connection down (both directions: a blocked
+/// read sees the end, a blocked write fails, so its worker finishes it and its socket is closed,
+/// which frees its receive queue and any file descriptor in flight there); then wait up to
+/// `DROP_WAIT` for the slots to be released, and print `dropped live=N`, `N` the connections still
+/// open (returned).
+fn drop_conns(st: &State) -> usize {
+    {
+        let _g = st.gate.lock().unwrap_or_else(|e| e.into_inner());
+        drain_backlog(&st.listener);
+        for s in st.registry.lock().unwrap_or_else(|e| e.into_inner()).values() {
+            let _ = s.shutdown(Shutdown::Both);
+        }
     }
     let t0 = Instant::now();
     while st.conns.load(Ordering::SeqCst) > 0 && t0.elapsed() < DROP_WAIT {
         std::thread::sleep(Duration::from_millis(2));
     }
-    say(&format!("dropped live={}", st.conns.load(Ordering::SeqCst)));
+    let live = st.conns.load(Ordering::SeqCst);
+    say(&format!("dropped live={live}"));
+    live
+}
+
+/// A connection's slot and registry entry, released when its worker has finished it (by return or
+/// by panic), or at once if it is never handed to a worker.
+struct Slot(&'static State, u64);
+impl Drop for Slot {
+    fn drop(&mut self) {
+        // the registry's clone is the last descriptor of the socket: closing it frees the queue
+        drop(self.0.registry.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1));
+        self.0.conns.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The state of a service listening on `listener` (made non-blocking, its backlog `BACKLOG`).
+fn new_state(keys: Option<Keys>, listener: UnixListener, io_timeout: Duration, socket: String) -> io::Result<&'static State> {
+    listener.set_nonblocking(true)?;
+    if unsafe { listen(listener.as_raw_fd(), BACKLOG) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Box::leak(Box::new(State {
+        keys: RwLock::new(keys),
+        conns: AtomicUsize::new(0),
+        registry: Mutex::new(HashMap::new()),
+        listener,
+        gate: Mutex::new(()),
+        io_timeout,
+        requests: AtomicU64::new(0),
+        queries: AtomicU64::new(0),
+        query_bytes: AtomicU64::new(0),
+        signatures: AtomicU64::new(0),
+        replays: AtomicU64::new(0),
+        mismatches: AtomicU64::new(0),
+        socket,
+    })))
+}
+
+/// Start the `MAX_CONNS` workers, then accept connections for ever: each, under the gate, takes a
+/// slot (or is refused with `CAP` above `MAX_CONNS`), is registered and is handed to a worker.
+fn accept_loop(st: &'static State) -> ! {
+    let (tx, rx) = std::sync::mpsc::channel::<(UnixStream, Slot)>();
+    let rx: &'static Mutex<std::sync::mpsc::Receiver<(UnixStream, Slot)>> = Box::leak(Box::new(Mutex::new(rx)));
+    for _ in 0..MAX_CONNS {
+        std::thread::Builder::new()
+            .spawn(move || loop {
+                let job = rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                let Ok((conn, slot)) = job else { return };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve(conn, st)));
+                drop(slot);
+            })
+            .expect("rf-oracle: cannot start a worker");
+    }
+    let mut next_id = 0u64;
+    loop {
+        wait_readable(st.listener.as_raw_fd());
+        let g = st.gate.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = match st.listener.accept() {
+            Ok((c, _)) => c,
+            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => continue,
+            Err(_) => {
+                drop(g);
+                std::thread::sleep(Duration::from_millis(10));      // e.g. out of descriptors
+                continue;
+            }
+        };
+        if st.conns.fetch_add(1, Ordering::SeqCst) >= MAX_CONNS {
+            st.conns.fetch_sub(1, Ordering::SeqCst);
+            drop(g);
+            let mut c = conn;
+            // the refusal fits an empty socket buffer; the timeout only bounds the accept loop
+            let _ = c.set_nonblocking(false);
+            let _ = c.set_write_timeout(Some(Duration::from_secs(1)));
+            let _ = refuse(&mut c, ST_CAP, "more than 32 connections");
+            continue;
+        }
+        next_id += 1;
+        let slot = Slot(st, next_id);
+        let Ok(clone) = conn
+            .set_nonblocking(false)
+            .and_then(|_| conn.set_read_timeout(Some(st.io_timeout)))
+            .and_then(|_| conn.set_write_timeout(Some(st.io_timeout)))
+            .and_then(|_| conn.try_clone())
+        else {
+            continue;
+        };
+        st.registry.lock().unwrap_or_else(|e| e.into_inner()).insert(next_id, clone);
+        drop(g);
+        let _ = tx.send((conn, slot));
+    }
 }
 
 /// The `replay` control line: once in-flight requests finish (the write lock), enter replay mode
@@ -525,8 +671,8 @@ fn main() {
     let threads = threads.unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
     // a fixed mmap threshold (glibc's dynamic one would make a request's allocation cost depend on
     // an earlier connection's frees); glibc's mallopt returns 1 on success
-    if unsafe { mallopt(M_MMAP_THRESHOLD, MMAP_THRESHOLD) } != 1 {
-        eprintln!("rf-oracle: mallopt(M_MMAP_THRESHOLD) failed");
+    if unsafe { mallopt(M_MMAP_THRESHOLD, MMAP_THRESHOLD) } != 1 || unsafe { mallopt(M_ARENA_MAX, 1) } != 1 {
+        eprintln!("rf-oracle: mallopt(M_MMAP_THRESHOLD, M_ARENA_MAX) failed");
         std::process::exit(1);
     }
     if data_roots {
@@ -571,19 +717,12 @@ fn main() {
         std::process::exit(1)
     }
     let vk = signer.vk();
-    let st: &'static State = Box::leak(Box::new(State {
-        keys: RwLock::new(Some(Keys { prf, signer, replay: None })),
-        conns: AtomicUsize::new(0),
-        registry: Mutex::new(HashMap::new()),
-        io_timeout: Duration::from_secs(io_timeout.unwrap_or(DEFAULT_IO_TIMEOUT)),
-        requests: AtomicU64::new(0),
-        queries: AtomicU64::new(0),
-        query_bytes: AtomicU64::new(0),
-        signatures: AtomicU64::new(0),
-        replays: AtomicU64::new(0),
-        mismatches: AtomicU64::new(0),
-        socket: socket.clone(),
-    }));
+    let io_timeout = Duration::from_secs(io_timeout.unwrap_or(DEFAULT_IO_TIMEOUT));
+    let st = new_state(Some(Keys { prf, signer, replay: None }), listener, io_timeout, socket.clone()).unwrap_or_else(|e| {
+        eprintln!("rf-oracle: cannot listen on {socket}: {e}");
+        let _ = std::fs::remove_file(&socket);
+        std::process::exit(1)
+    });
     println!("vk {}", hex(&vk));
     println!("keygen_ms {keygen_ms:.1}");
     println!("simd scalar");
@@ -601,57 +740,37 @@ fn main() {
             }
             match line.as_slice() {
                 b"replay\n" => enter_replay(st),
-                b"drop\n" => drop_conns(st),
+                b"drop\n" => {
+                    drop_conns(st);
+                }
                 b"stats\n" => say(&stats_line(st)),
                 _ => eprintln!("rf-oracle: ignored control line {:?}", String::from_utf8_lossy(&line[..line.len().min(64)])),
             }
         }
         shutdown(st)
     });
-    // a connection's slot and registry entry, released when its thread ends (by return or by
-    // panic), or at once if no thread is started for it
-    struct Slot(&'static State, u64);
-    impl Drop for Slot {
-        fn drop(&mut self) {
-            // the registry's clone is the last descriptor of the socket: closing it frees the queue
-            drop(self.0.registry.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1));
-            self.0.conns.fetch_sub(1, Ordering::SeqCst);
-        }
-    }
-    let mut next_id = 0u64;
-    for conn in listener.incoming() {
-        let Ok(conn) = conn else { continue };
-        if st.conns.fetch_add(1, Ordering::SeqCst) >= MAX_CONNS {
-            st.conns.fetch_sub(1, Ordering::SeqCst);
-            let mut c = conn;
-            // the refusal fits an empty socket buffer; the timeout only bounds the accept loop
-            let _ = c.set_write_timeout(Some(Duration::from_secs(1)));
-            let _ = refuse(&mut c, ST_CAP, "more than 32 connections");
-            continue;
-        }
-        next_id += 1;
-        let slot = Slot(st, next_id);
-        let Ok(clone) = conn
-            .set_read_timeout(Some(st.io_timeout))
-            .and_then(|_| conn.set_write_timeout(Some(st.io_timeout)))
-            .and_then(|_| conn.try_clone())
-        else {
-            continue;
-        };
-        st.registry.lock().unwrap_or_else(|e| e.into_inner()).insert(next_id, clone);
-        let _ = std::thread::Builder::new().spawn(move || {
-            let _slot = slot;
-            let _ = serve(conn, st);
-        });
-    }
+    accept_loop(st)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::os::fd::FromRawFd;
+
     extern "C" {
         fn sendmsg(fd: i32, msg: *const MsgHdr, flags: i32) -> isize;
+        fn socket(domain: i32, ty: i32, protocol: i32) -> i32;
+        fn connect(fd: i32, addr: *const u8, len: u32) -> i32;
+    }
+
+    /// `connect` the (non-blocking) `c` to the abstract address `a`; whether it was queued.
+    fn connect_abstract(c: &UnixStream, a: &std::os::unix::net::SocketAddr) -> bool {
+        use std::os::linux::net::SocketAddrExt;
+        let name = a.as_abstract_name().unwrap();
+        let mut sa = vec![1u8, 0, 0];             // sun_family = AF_UNIX (little-endian u16), then the 0 of an abstract name
+        sa.extend_from_slice(name);
+        unsafe { connect(c.as_raw_fd(), sa.as_ptr(), sa.len() as u32) == 0 }
     }
 
     /// Send `data` on `s` with one `SCM_RIGHTS` message carrying `fds`.
@@ -726,6 +845,80 @@ mod tests {
         assert!(r.read(&mut got).is_err() && r.ancillary);
         d.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         assert_eq!(d.read(&mut got).unwrap(), 0);
+    }
+
+    /// A listener on a fresh abstract address (no file), and a client's address for it.
+    fn abstract_listener(tag: &str) -> (UnixListener, std::os::unix::net::SocketAddr) {
+        use std::os::linux::net::SocketAddrExt;
+        let name = format!("rf-oracle-test-{tag}-{}-{:?}", std::process::id(), Instant::now());
+        let a = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        (UnixListener::bind_addr(&a).unwrap(), a)
+    }
+
+    /// Connections never accepted (the accept loop is not running): each written to, then left.
+    fn queued(a: &std::os::unix::net::SocketAddr, n: usize) -> Vec<UnixStream> {
+        (0..n)
+            .map(|_| {
+                let c = UnixStream::connect_addr(a).unwrap();
+                (&c).write_all(&[0u8; 16]).unwrap();
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                c
+            })
+            .collect()
+    }
+
+    /// Every client of `cs` sees its connection closed: the end of the stream, or a reset.
+    fn all_closed(cs: &mut [UnixStream]) -> bool {
+        cs.iter_mut().all(|c| {
+            let mut b = [0u8; 1];
+            match c.read(&mut b) {
+                Ok(0) => true,
+                Err(e) => e.kind() == io::ErrorKind::ConnectionReset,
+                Ok(_) => false,
+            }
+        })
+    }
+
+    #[test]
+    fn drain_closes_the_backlog() {
+        let (l, a) = abstract_listener("drain");
+        l.set_nonblocking(true).unwrap();
+        let mut cs = queued(&a, 7);
+        assert_eq!(drain_backlog(&l), 7);
+        assert_eq!(l.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(all_closed(&mut cs));
+        assert_eq!(drain_backlog(&l), 0);
+    }
+
+    #[test]
+    fn drop_leaves_no_backlog() {
+        // a service's state with no keys and no accept loop: every connection stays in the backlog
+        let (l, a) = abstract_listener("drop");
+        let st = new_state(None, l, Duration::from_secs(5), String::new()).unwrap();
+        let mut cs = queued(&a, 40);           // more than MAX_CONNS, within BACKLOG
+        assert_eq!(st.conns.load(Ordering::SeqCst), 0);   // in no count: `live=0` before the fix too
+        assert_eq!(drop_conns(st), 0);
+        // nothing is left to be accepted and served after the request's death
+        assert_eq!(st.listener.accept().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert!(all_closed(&mut cs));
+    }
+
+    #[test]
+    fn the_backlog_is_bounded() {
+        let (l, a) = abstract_listener("backlog");
+        let _st = new_state(None, l, Duration::from_secs(5), String::new()).unwrap();
+        // a non-blocking connect past the backlog fails (EAGAIN) instead of queueing without bound
+        let mut ok = 0;
+        for _ in 0..(4 * BACKLOG) {
+            let s = unsafe { socket(1, 1 | 0o4000, 0) };           // AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK
+            assert!(s >= 0);
+            let c = unsafe { UnixStream::from_raw_fd(s) };
+            if connect_abstract(&c, &a) {
+                ok += 1;
+            }
+            std::mem::forget(c);              // kept open until the test ends
+        }
+        assert!(ok <= BACKLOG as usize + 1 && ok >= MAX_CONNS, "{ok} connections queued");
     }
 
     #[test]

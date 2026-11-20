@@ -573,8 +573,9 @@ def main():
     cb.close()
     conns = [Client(sock) for _ in range(32)]
     extra = Client(sock)
-    st, _, msg = extra.call(OP_VK)
-    check(st == 2, f"33rd connection refused (status {st})")
+    # the refusal comes at accept, before any request (a request written after it may meet a closed socket)
+    st, _, n = struct.unpack("<B3xIQ", extra._recv(16))
+    check(st == 2 and b"32 connections" in extra._recv(n), f"33rd connection refused (status {st})")
     for cc in conns:
         cc.close()
     stop(p)
