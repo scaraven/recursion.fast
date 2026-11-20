@@ -10,6 +10,19 @@
 #             lemma reported as a pinned dependency's note
 #   neg       tests/gate/GateNeg.lean: REJECT `badS.ext` (rule 4), `@[implemented_by]` (rule 3),
 #             the `partial` definition (rule 2)
+#   manifest-dup  the manifest with one more line, a core module's path under a pinned package's
+#             tag: the gate refuses it (a path's class must not depend on the line order)
+#   tamper    a copy of the organiser module RecursionFast.Contract.Tree with one more theorem,
+#             compiled under the same module name into a directory that precedes LEAN_PATH (a
+#             stale or tampered organiser .olean): REJECT for rule 5 alone
+#   import    tests/gate/GateImport.lean, importing Lean.Compiler.LCNF.PhaseExt (outside the
+#             allowlist), with --allowed-imports: REJECT for rule 6 alone (the direct import and
+#             rule 6t's transitive reach); with --badge-root importS: REJECT for rule 8 too
+#   badgeroot a badge root declared in a trusted module outside the allowlist (the core module
+#             Lean.Compiler.LCNF.PhaseExt, gated as the environment's module): REJECT for rule 8
+#             alone (rules 6 and 6t see only untrusted modules; rule 8 is what remains)
+#   meta      tests/gate/GateMeta.lean, a definition whose value is Lean.modifyEnv, reached through
+#             allowlisted imports, with --allowed-imports: REJECT for rule 7 alone
 #   wiring    the badge's per-entry module (harness/badge/Verify.lean.in) rendered around
 #             tests/gate/GateWiringSub.lean: PASS (rule 9, `--wiring`); around
 #             tests/gate/GateWiringHijack.lean, whose notation turns `RFBadge.main` into an
@@ -26,7 +39,7 @@ M=.lake/rf/manifest.sha256
   || { M=$T/manifest.sha256; python3 -I scripts/olean-manifest.py gen "$M" > "$T/manifest.log"; }
 G=$HERE/harness/lean-tools/.lake/build/bin/gate
 [[ -x $G ]] || fail "build the gate first (harness/lean-tools)"
-gate() { lake env bash -c "LEAN_PATH=$T/olean:\$LEAN_PATH $G $*"; }
+gate() { lake env bash -c "LEAN_PATH=${GP:-$T/olean}:\$LEAN_PATH $G $*"; }   # GP: the search path prefix
 mkdir -p "$T/olean"
 lake env lean -o "$T/olean/GateNeg.olean" tests/gate/GateNeg.lean
 
@@ -64,6 +77,43 @@ echo "comppoly: PASS ($(grep -c '^gate: note:' "$T/comppoly.log") note(s) on pin
 neg badS_fact badS "badS.ext: badExt has no compiled code"
 neg implS_fact implS "@\[implemented_by"
 neg partialS_fact partialS "partial"
+
+rej() {  # NAME EXPECTED_SUBSTRING GATE_ARGS...: REJECT, every REJECT line holding EXPECTED_SUBSTRING
+  local name=$1 want=$2; shift 2
+  if gate "$@" > "$T/$name.log" 2>&1; then cat "$T/$name.log"; fail "$name: ACCEPTED"; fi
+  local rejs; rejs=$(grep "^gate: REJECT" "$T/$name.log" || true)
+  grep -qF -- "$want" <<< "$rejs" || { cat "$T/$name.log"; fail "$name: not rejected for $want"; }
+  [[ -z $(grep -vF -- "$want" <<< "$rejs") ]] || { cat "$T/$name.log"; fail "$name: rejected by another rule too"; }
+  echo "$name: REJECT ($(grep -m1 -F -- "$want" <<< "$rejs" | cut -c14-160))"
+}
+# the manifest: two keys with one module path (the class would follow the line order) are an error
+{ cat "$M"; grep -m1 "  core/Init/Prelude.olean$" "$M" | sed 's#  core/#  packages/CompPoly/#'; } > "$T/dup.sha256"
+gate GateNeg badS_fact --manifest "$T/dup.sha256" > "$T/dup.log" 2>&1 && { cat "$T/dup.log"; fail "manifest-dup: ACCEPTED"; }
+grep -qF "packages/CompPoly/Init/Prelude.olean have one module path Init/Prelude.olean" "$T/dup.log" \
+  || { cat "$T/dup.log"; fail "manifest-dup: not refused for the duplicate path"; }
+echo "manifest-dup: error ($(grep -m1 -oF "manifest keys core/Init/Prelude.olean and packages/CompPoly/Init/Prelude.olean have one module path Init/Prelude.olean" "$T/dup.log"))"
+# rule 5: a tampered (or stale) organiser .olean, found before the organiser's own (Lean resolves
+# a module's package root `RecursionFast` on the search path, so the tampered tree is a copy of the
+# organiser's with one module recompiled)
+mkdir -p "$T/tamper" "$T/tsrc/RecursionFast/Contract"
+cp -r .lake/build/lib/lean/RecursionFast "$T/tamper/"
+{ cat RecursionFast/Contract/Tree.lean; echo; echo "theorem gateTampered : True := trivial"; } > "$T/tsrc/RecursionFast/Contract/Tree.lean"
+lake env lean --root="$T/tsrc" -o "$T/tamper/RecursionFast/Contract/Tree.olean" "$T/tsrc/RecursionFast/Contract/Tree.lean"
+GP=$T/tamper:$T/olean rej tamper "organiser module RecursionFast.Contract.Tree: .olean does not match the manifest" \
+  RecursionFast.Contract.Tree gateTampered --manifest "$M"
+# rules 6 and 8: an import outside the allowlist
+lake env lean -o "$T/olean/GateImport.olean" tests/gate/GateImport.lean
+rej import "outside the allowed imports" GateImport importS_fact --manifest "$M" --allowed-imports "$A"
+gate GateImport importS_fact --manifest "$M" --allowed-imports "$A" --badge-root importS > "$T/import8.log" 2>&1 \
+  && { cat "$T/import8.log"; fail "import8: ACCEPTED"; }
+grep -qF "REJECT badge root importS is declared in module GateImport, which imports (transitively)" "$T/import8.log" \
+  || { cat "$T/import8.log"; fail "import8: not rejected for rule 8"; }
+echo "import8: REJECT ($(grep -m1 -F "REJECT badge root importS" "$T/import8.log" | cut -c14-160))"
+rej badgeroot "badge root Lean.Compiler.LCNF.impureExt is declared in module Lean.Compiler.LCNF.PhaseExt, which imports (transitively)" \
+  Lean.Compiler.LCNF.PhaseExt Nat.le_refl --manifest "$M" --allowed-imports "$A" --badge-root Lean.Compiler.LCNF.impureExt
+# rule 7: a definition over the environment's API, through allowlisted imports
+lake env lean -o "$T/olean/GateMeta.olean" tests/gate/GateMeta.lean
+rej meta "module GateMeta: wipeEnv refers to the compiler/environment API" GateMeta meta_fact --manifest "$M" --allowed-imports "$A"
 
 # rule 9: the badge's per-entry module, rendered from the template as harness/evaluate.py does
 wiring() {  # NAME SOLUTION_MODULE EXTRA_LINE
