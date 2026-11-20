@@ -43,6 +43,10 @@ Rejected (the words and forms; a word is a whole word, so the Library's `run_mon
     `builtin_…` (these leave declarations, which gate rules 3 and 7 also see);
   load-time code: `initialize`, `builtin_initialize`, every `register_…` command
     (`register_simp_attr`, `register_option`, … expand to `initialize`);
+  native evaluation in proofs: `native_decide` and the word `native` (`decide +native`,
+    `(native := true)`; a certificate that uses it depends on an auxiliary axiom
+    `_native.decide.ax_…`, which gate rule 1 and the axiom audits reject: this net only fails
+    earlier, and a config built from `DecideConfig.mk` positionally is caught by the axiom net alone);
   `unsafe`, `partial`, and the names `unsafeCast`, `unsafeBaseIO`, `unsafeIO`, `unsafeEIO` (any
     word starting with `unsafe` or ending in `Unsafe`), `persistentEnvExtensionsRef`,
     `envExtensionsRef`;
@@ -73,7 +77,8 @@ BANNED = {  # whole words (a longer identifier such as the Library's `run_mono` 
     "cbv_simproc_decl", "cbv_simproc_pattern", "cbv_eval", "def_eval_config_item",
     "command_elab", "term_elab", "delab", "app_unexpander", "tactic_extension",
     "leading_parser", "trailing_parser", "elab_stx_quot", "grind_propagator",
-    "set_library_suggestions", "library_suggestions", "sudo", "idbg"}
+    "set_library_suggestions", "library_suggestions", "sudo", "idbg", "native_decide", "native"}
+NAME_COMPONENTS = ("persistentEnvExtensionsRef", "envExtensionsRef", "native")   # also as a name's component
 BANNED_PREFIXES = ("register_", "builtin_", "declare_")   # every register_…/builtin_…/declare_… word
 ATTRS = ("tactic", "init", "export")                  # banned only as attributes: `[` or `,` before
 HASH_OK = {"#check", "#print", "#reduce", "#guard_msgs"}
@@ -270,7 +275,7 @@ def lexer_findings(src, line_of):
             if nxt == "%":
                 bad.append((ln, "eval%"))
         elif t in BANNED or t.startswith(BANNED_PREFIXES) or \
-                any(c in ("persistentEnvExtensionsRef", "envExtensionsRef") for c in comps):
+                any(c in NAME_COMPONENTS for c in comps):
             bad.append((ln, t))
         elif t.startswith("#") and len(t) > 1 and t not in HASH_OK and t != "#v[":
             bad.append((ln, t))
