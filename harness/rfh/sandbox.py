@@ -6,17 +6,22 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
   * a read-only root that is an empty tmpfs holding only what `binds` lists (for a prover: its binary
     read-only at /prover, the setup directory read-only at /setup, the request's own socket
     directory read-only at /run/rf, and a request's own private tmpfs at /work, `prover.request`),
-    plus a fresh /dev, /proc of its own pid namespace, a tmpfs /tmp and the CPU topology
-    (/sys/devices/system/cpu, read-only);
+    plus a fresh /dev (bubblewrap's: a tmpfs of its own, a devpts of its own, and the host's
+    `null`, `zero`, `full`, `random`, `urandom` and `tty` bound in), /proc of its own pid
+    namespace, a tmpfs /tmp and the CPU topology (/sys/devices/system/cpu, read-only);
   * **nothing of the host's disks, sysfs or /proc beyond the masked procfs in a request or a badge
     run**: every directory and file bound into them is on the runner's own tmpfs (`runner_dir`) or
-    fresh per sandbox. A lookup of an absent name leaves a negative dentry in the host's dcache on a
-    disk filesystem or sysfs, and a disk file's page-cache folios keep a shape (a PMD folio after a
-    `MADV_HUGEPAGE` fault): both persist into a later sandbox that sees the same directory or file
-    and can time the lookup or read `/proc/self/smaps` (review LR4 H1, H2). tmpfs keeps no negative
-    dentry, and a file the runner wrote in full there is resident and order-0. The build and setup
-    sandboxes alone bind host directories (the toolchain, the build and setup directories), which no
-    later sandbox sees;
+    fresh per sandbox, but the six device nodes, whose one writable state (their timestamps) the
+    filter closes (the `utime` family, below; bubblewrap cannot bind them read-only: its
+    `--remount-ro` adds `nodev`, and opening the node then fails with EACCES). A lookup of an
+    absent name leaves a negative dentry in the host's dcache on a disk filesystem or sysfs, and a
+    disk file's page-cache folios keep a shape (a PMD folio after a `MADV_HUGEPAGE` fault): both
+    persist into a later sandbox that sees the same directory or file and can time the lookup or
+    read `/proc/self/smaps` (review LR4 H1, H2). tmpfs keeps no negative dentry, and a file the
+    runner wrote in full there is resident and order-0. The build and setup sandboxes alone bind
+    host directories (the toolchain, the build and setup directories), which no later sandbox sees;
+    every read-write mount of a request, a setup or a badge run but those six nodes is a superblock
+    of its own (`tests/harness/test_sandbox.py` 11. lists the mount table);
   * **no tmpfs file shared across a boundary that matters**: a tmpfs inode keeps state that a
     process with only a read-only handle on it can set and a later process with another handle can
     read: its shared memory policy (`mbind` on a read-only `MAP_SHARED` mapping, read back with
@@ -26,9 +31,8 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     a fresh copy for the service run and for each timed pass (`prover.Run.publish`), shared only by
     the steps of one pass (one clock); every badge run gets fresh copies of everything it sees
     (`checks.Badge`); every sandbox gets its own mask sources and its own copy of the CPU tree
-    (`SandboxView`); a request's socket directory and /work are its own. The mbind family is
-    refused besides (ENOSYS: `mbind`, `migrate_pages`, `move_pages`, `set_mempolicy_home_node`;
-    `set_mempolicy` and `get_mempolicy` act on the calling task and stay);
+    (`SandboxView`); a request's socket directory and /work are its own (the mbind family is
+    refused besides);
   * **no machine-wide counter in /proc** (`proc_masks`): the host's /proc top level is listed when
     the sandbox is built (the set depends on the kernel), and an empty file is bound over every file
     and an empty directory over every directory of it but the pid directories, `self` and
@@ -39,19 +43,11 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     of its own (`/proc/self/autogroup`, `sched`, mount ids) remain; the filter stops a request from
     moving the autogroup counter (`setsid`), and the memory cap's cgroup (systemd) gives each
     sandbox its own scheduler entities;
-  * a seccomp filter that fails (EPERM) the system calls a prover never needs and that widen the
-    kernel's attack surface or reach other processes (ptrace, process_vm_*, kcmp, pidfd_getfd, bpf,
-    perf_event_open, userfaultfd, io_uring, keyrings, mounts, namespaces, module and kexec loading,
-    handle-based opens, quotas), fails `socket` and `socketpair` for every domain but `AF_UNIX` (the
-    oracle's socket is the only one a prover needs; an `AF_INET` datagram would raise machine-wide
-    counters, `/proc/self/net/softnet_stat`), fails the calls that read or write other machine-wide
-    state a request could leave for a later one (`statfs`/`fstatfs`/`ustat`, ENOSYS: free space;
-    pidfds: pidfs inode numbers; `SO_COOKIE`; `setsid`: the autogroup counter; `MADV_COLD`,
-    `MADV_PAGEOUT`, `process_madvise`: reclaim of the runner's tmpfs pages; the mbind family, ENOSYS:
-    a tmpfs file's shared memory policy; `seccomp_program`), and kills a process that uses another
-    syscall ABI; a prover's request (`request=True`) also fails `sendmsg` and `sendmmsg` (no
-    descriptor passed into the service's queue, review R5 HIGH 1) and `sysinfo` (machine-wide load,
-    process and memory counters, review R8 HIGH 1);
+  * a seccomp filter (`seccomp_program`) whose refusals are one table, `refusal_table()`, written
+    out in `harness/PROVER.md` §2 (a test checks the two are equal): the calls a prover never needs
+    that widen the kernel's attack surface or reach other processes, and the calls that read or
+    write machine-wide state a request could leave for a later one; a call of the x32 ABI fails
+    with EPERM, and a process of another architecture is killed;
   * a memory cap on the whole process tree: a transient systemd scope with `MemoryMax` and no swap
     (`systemd-run --user --scope`), or, where no user systemd manager is reachable, an address-space
     limit (`prlimit --as`), which is recorded as the weaker method: every sandbox then shares the
@@ -77,76 +73,127 @@ import threading
 import time
 import uuid
 
-# x86-64 system call numbers failed with EPERM
+# The filter's refusals, as x86-64 system call numbers (the one table: `refusal_table`, written out
+# in harness/PROVER.md §2; `WHY` says why each is refused). In every sandbox, with EPERM:
 DENY = {
     "ptrace": 101, "process_vm_readv": 310, "process_vm_writev": 311, "kcmp": 312, "pidfd_getfd": 438,
     "bpf": 321, "perf_event_open": 298, "userfaultfd": 323, "io_uring_setup": 425, "io_uring_enter": 426,
     "io_uring_register": 427, "keyctl": 250, "add_key": 248, "request_key": 249, "mount": 165, "umount2": 166,
-    "pivot_root": 155, "mount_setattr": 442, "move_mount": 429, "open_tree": 428, "fsopen": 430,
-    "fsconfig": 431, "fsmount": 432, "fspick": 433, "unshare": 272, "setns": 308, "init_module": 175,
-    "finit_module": 313, "delete_module": 176, "kexec_load": 246, "kexec_file_load": 320,
-    "open_by_handle_at": 304, "name_to_handle_at": 303, "fanotify_init": 300, "acct": 163, "swapon": 167,
-    "swapoff": 168, "reboot": 169, "syslog": 103, "quotactl": 179, "iopl": 172, "ioperm": 173,
-    "uselib": 134, "lookup_dcookie": 212, "vhangup": 153, "open_tree_attr": 467, "quotactl_fd": 443,
-    # the machine-wide channels a request could write and a later one read (`seccomp_program`):
-    # pidfs inode numbers; the machine-wide autogroup counter (`/proc/self/autogroup`), which every
-    # new session moves; another process's (or, by `PIDFD_SELF`, its own) page reclaim
+    "pivot_root": 155, "mount_setattr": 442, "move_mount": 429, "open_tree": 428, "open_tree_attr": 467,
+    "fsopen": 430, "fsconfig": 431, "fsmount": 432, "fspick": 433, "unshare": 272, "setns": 308,
+    "init_module": 175, "finit_module": 313, "delete_module": 176, "kexec_load": 246, "kexec_file_load": 320,
+    "open_by_handle_at": 304, "name_to_handle_at": 303, "acct": 163, "swapon": 167, "swapoff": 168,
+    "reboot": 169, "syslog": 103, "quotactl": 179, "quotactl_fd": 443, "iopl": 172, "ioperm": 173,
+    "uselib": 134, "lookup_dcookie": 212, "vhangup": 153,
     "pidfd_open": 434, "setsid": 112, "process_madvise": 440,
+    "utime": 132, "utimes": 235, "futimesat": 261, "utimensat": 280,
+    "fanotify_init": 300, "inotify_init": 253, "inotify_init1": 294, "inotify_add_watch": 254,
 }
-# x86-64 system call numbers failed with ENOSYS: free disk space (`seccomp_program`); glibc's
-# `pathconf` falls back to its defaults on ENOSYS (on EPERM it fails); `clone3` (libc falls back to
-# `clone`, where `CLONE_PIDFD` is refused); the mbind family, which sets a memory policy on a shared
-# file's pages (a tmpfs inode keeps it for the next process that maps the file, review LR5 H1) or
-# moves another process's pages (libnuma treats ENOSYS as "no NUMA support")
+# in every sandbox, with ENOSYS (a library takes it as "not supported" and falls back):
 ENOSYS = {"statfs": 137, "fstatfs": 138, "ustat": 136, "clone3": 435, "mbind": 237, "migrate_pages": 256,
           "move_pages": 279, "set_mempolicy_home_node": 450}
-# a request's sandbox alone (`seccomp_program(request=True)`, `prover.request`; the badge and the
-# build keep them): `sendmsg` and `sendmmsg` (EPERM), the only calls that pass file descriptors or
-# credentials over a Unix socket (`SCM_RIGHTS`: an fd parked unread in the service's receive queue
-# outlives the request, holding memory outside every cap and a connection slot a later request
-# could count, review R5 HIGH 1; provers write with `write`, `writev`, `send` and `sendto`); and
-# `sysinfo` (ENOSYS): its load averages, process count and free, shared and buffer memory are
-# machine-wide counters a request can move and a later one read (review R8 HIGH 1, R4 LOW 3)
+# in a prover's request alone (`seccomp_program(request=True)`, `prover.request`; the setup, the
+# badge and the build keep them): with EPERM, and with ENOSYS
 REQUEST_DENY = {"sendmsg": 46, "sendmmsg": 307}
 REQUEST_ENOSYS = {"sysinfo": 99}
-
 
 AF_UNIX = 1
 SOCKET = {"socket": 41, "socketpair": 53}       # allowed only for the domain (first argument) AF_UNIX
 CLONE, CLONE_PIDFD = 56, 0x1000                  # clone refused with CLONE_PIDFD
 GETSOCKOPT, SETSOCKOPT = 55, 54
 SO_COOKIE, SO_PEERPIDFD, SO_PASSPIDFD = 57, 77, 76
-MADVISE, MADV_COLD, MADV_PAGEOUT = 28, 20, 21     # refused: they would reclaim the runner's tmpfs pages
+GETSOCKOPT_REFUSED = {"SO_COOKIE": SO_COOKIE, "SO_PEERPIDFD": SO_PEERPIDFD}     # the option name, any level
+SETSOCKOPT_REFUSED = {"SO_PASSPIDFD": SO_PASSPIDFD}
+MADVISE = 28
+MADV_REFUSED = {"MADV_COLD": 20, "MADV_PAGEOUT": 21, "MADV_COLLAPSE": 25}       # the advice
+
+# why each refusal is made, in the table's order: the reason of every call in DENY, ENOSYS and
+# REQUEST_*, and of every argument rule (by the name of the domain, flag, option or advice)
+REASONS = (
+    ("ptrace process_vm_readv process_vm_writev kcmp pidfd_getfd", "other processes (their memory, descriptors, "
+     "identity)"),
+    ("bpf perf_event_open userfaultfd io_uring_setup io_uring_enter io_uring_register keyctl add_key request_key "
+     "mount umount2 pivot_root mount_setattr move_mount open_tree open_tree_attr fsopen fsconfig fsmount fspick "
+     "unshare setns init_module finit_module delete_module kexec_load kexec_file_load open_by_handle_at "
+     "name_to_handle_at acct swapon swapoff reboot syslog quotactl quotactl_fd iopl ioperm uselib lookup_dcookie "
+     "vhangup", "the kernel's attack surface, never needed: BPF, perf, userfaultfd, io_uring, keyrings, mounts, "
+     "namespaces, module and kexec loading, handle-based opens (a file outside the sandbox), quotas, "
+     "administration"),
+    ("AF_INET", "network counters (an `AF_INET` datagram moves `/proc/self/net/softnet_stat`); the oracle's Unix "
+     "socket is the only one a prover needs"),
+    ("pidfd_open CLONE_PIDFD SO_PEERPIDFD SO_PASSPIDFD clone3", "pidfds: a pidfd's inode number counts every process "
+     "the machine started (on `clone3`'s ENOSYS libc falls back to `clone`: `fork`, `posix_spawn` and threads "
+     "work)"),
+    ("SO_COOKIE", "a socket's cookie, drawn from a machine-wide counter"),
+    ("setsid", "the machine-wide autogroup counter (`/proc/self/autogroup`), which every new session moves (the "
+     "prover is a session leader already)"),
+    ("statfs fstatfs ustat", "free space, which the runner's and a request's writes move (so `statvfs` fails; "
+     "glibc's `pathconf` answers its defaults)"),
+    ("process_madvise MADV_COLD MADV_PAGEOUT MADV_COLLAPSE", "the page state of the runner's read-only tmpfs copies "
+     "(swapped out, or collapsed into huge pages: a pattern one request could leave for a later one; other "
+     "advice works)"),
+    ("mbind migrate_pages move_pages set_mempolicy_home_node", "a shared memory policy, which a tmpfs file keeps in "
+     "its inode for the next process that maps it (review LR5 H1), or another process's pages (`set_mempolicy` "
+     "and `get_mempolicy`, the thread's own, work; libnuma takes ENOSYS as no NUMA)"),
+    ("utime utimes futimesat utimensat", "the timestamps of an inode other sandboxes see: the host's device nodes in "
+     "every /dev, and the host's /dev/null as the setup's and the build's fd 0 (review R4b HIGH 1)"),
+    ("fanotify_init inotify_init inotify_init1 inotify_add_watch", "filesystem events: fanotify's marks, and "
+     "inotify's rename cookie, drawn from a machine-wide counter that every rename moves (review R4b HIGH 2)"),
+    ("sendmsg sendmmsg", "a file descriptor or credential parked unread in the service's receive queue would "
+     "outlive the request (review R5 HIGH 1); write with `write`, `writev`, `send` or `sendto`"),
+    ("sysinfo", "load averages, process count and free memory, all machine-wide (review R8 HIGH 1; glibc's "
+     "`get_phys_pages` and `sysconf(_SC_PHYS_PAGES)` then fail or return garbage)"),
+    ("x32", "another system call ABI (call numbers from 2^30)"),
+    ("arch", "another architecture"),
+)
+WHY = {n: why for names, why in REASONS for n in names.split()}
+
+
+def refusal_table():
+    """The filter's refusals (`seccomp_program`) as one Markdown table, a row per reason (`REASONS`),
+    derived from `DENY`, `ENOSYS`, `REQUEST_DENY`, `REQUEST_ENOSYS` and the argument rules: what
+    `harness/PROVER.md` §2 shows between its `refusals` markers (`tests/harness/test_request_filter.py`
+    checks that they are equal). `python3 harness/rfh/sandbox.py --refusals` prints it."""
+    entries = []                                    # (reason key, calls, errno, where)
+    for table, err, where in ((DENY, "EPERM", "every sandbox"), (ENOSYS, "ENOSYS", "every sandbox"),
+                              (REQUEST_DENY, "EPERM", "a request alone"), (REQUEST_ENOSYS, "ENOSYS", "a request alone")):
+        entries += [(n, f"`{n}`", err, where) for n in table]
+    entries += [("AF_INET", f"{', '.join(f'`{n}`' for n in SOCKET)} for a domain other than `AF_UNIX`", "EPERM",
+                 "every sandbox"), ("CLONE_PIDFD", "`clone` with `CLONE_PIDFD`", "EPERM", "every sandbox")]
+    entries += [(o, f"`getsockopt` `{o}`", "EPERM", "every sandbox") for o in GETSOCKOPT_REFUSED]
+    entries += [(o, f"`setsockopt` `{o}`", "EPERM", "every sandbox") for o in SETSOCKOPT_REFUSED]
+    entries += [(a, f"`madvise` `{a}`", "EPERM", "every sandbox") for a in MADV_REFUSED]
+    entries += [("x32", "any call of the x32 ABI", "EPERM", "every sandbox"),
+                ("arch", "any call of another architecture", "the process killed", "every sandbox")]
+    rows = []
+    for names, why in REASONS:
+        mine = [e for e in entries if e[0] in names.split()]
+        for where in ("every sandbox", "a request alone"):
+            here = [e for e in mine if e[3] == where]
+            if not here:
+                continue
+            by_err = {}
+            for _, calls, err, _ in here:
+                by_err.setdefault(err, []).append(calls)
+            rows.append(f"| {'; '.join(', '.join(cs) + f' ({err})' for err, cs in by_err.items())} | {where} | {why} |")
+    assert sum(len([e for e in entries if e[0] in names.split()]) for names, _ in REASONS) == len(entries)
+    return "\n".join(["| refused (errno) | in | why |", "|---|---|---|"] + rows) + "\n"
 
 
 def seccomp_program(request=False) -> bytes:
-    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`; with
-    `request` (a prover's request, `prover.request` and `Run.oneshot`) also `REQUEST_DENY` and
-    `REQUEST_ENOSYS`: no file descriptor or credential sent over the oracle's socket, no
-    `sysinfo(2)`. Besides the
-    `DENY` list and the socket domains, it closes machine-wide counters a request could write and a
-    later request read (AGENTS.md §5): `statfs`, `fstatfs` and `ustat` (ENOSYS: the free space of
-    the filesystems behind the sandbox's binds, which the runner's writes move and a prover's
-    outputs, logs and refusals move with them); every way to a pidfd, whose pidfs inode number
-    counts every process and thread the machine has started (`pidfd_open`, `clone` with
-    `CLONE_PIDFD`, `clone3`, which fails with ENOSYS so that libc falls back to `clone`,
-    `SO_PEERPIDFD`, `SO_PASSPIDFD`); `SO_COOKIE`, a socket's cookie, drawn from a machine-wide
-    counter; `setsid`, which moves the machine-wide autogroup counter that `/proc/self/autogroup`
-    shows (the prover is a session leader already, bubblewrap's `--new-session`); and `madvise`
-    with `MADV_COLD` or `MADV_PAGEOUT` and `process_madvise`, which could push pages of the
-    runner's read-only tmpfs copies (`/setup`, `/prover`) out to swap, where one request could
-    leave a pattern for a later one; and, with ENOSYS, `mbind`, `migrate_pages`, `move_pages` and
-    `set_mempolicy_home_node`: `mbind` on a `MAP_SHARED` mapping of a tmpfs file sets the file's
-    shared memory policy, which persists in the inode for the next process that maps it (review LR5
-    H1; the copies are separate per pass and per badge run besides), and the others move pages of
-    other processes or set a policy on shared ranges."""
+    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`: the refusals
+    of `refusal_table` (`DENY`, `ENOSYS`, the argument rules of `socket`, `socketpair`, `clone`,
+    `getsockopt`, `setsockopt` and `madvise`, the x32 ABI, another architecture), and with `request`
+    (a prover's request, `prover.request` and `Run.oneshot`) `REQUEST_DENY` and `REQUEST_ENOSYS`.
+    The arguments are compared in their low 32 bits, which is what the kernel reads of a domain, an
+    option name or an advice (an int), and where `CLONE_PIDFD` lies."""
     LD, JEQ, JGE, JSET, RET = 0x20, 0x15, 0x35, 0x45, 0x06   # BPF_LD|W|ABS, BPF_JMP|JEQ|K, JGE, JSET, BPF_RET|K
     ALLOW, ERRNO = 0x7FFF0000, 0x00050000                 # SECCOMP_RET_ALLOW, SECCOMP_RET_ERRNO
     ins = [(LD, 0, 0, 4),                               # seccomp_data.arch
            (JEQ, 1, 0, 0xC000003E),                     # AUDIT_ARCH_X86_64
            (RET, 0, 0, 0x80000000),                     # SECCOMP_RET_KILL_PROCESS
            (LD, 0, 0, 0),                               # seccomp_data.nr
-           (JGE, "errno", 0, 0x40000000)]               # the x32 ABI
+           (JGE, "errno", 0, 0x40000000)]               # the x32 ABI: EPERM
     deny, enosys = dict(DENY), dict(ENOSYS)
     if request:
         deny.update(REQUEST_DENY)
@@ -156,8 +203,7 @@ def seccomp_program(request=False) -> bytes:
     ins += [(JEQ, "socket", 0, nr) for nr in sorted(SOCKET.values())]
     ins += [(JEQ, "clone", 0, CLONE), (JEQ, "getsockopt", 0, GETSOCKOPT), (JEQ, "setsockopt", 0, SETSOCKOPT),
             (JEQ, "madvise", 0, MADVISE)]
-    # the arguments' low 32 bits (seccomp_data.args[i] at 16 + 8 i): the kernel reads the domain and
-    # the option name as ints, and CLONE_PIDFD is a low bit of the flags
+    # the arguments' low 32 bits (seccomp_data.args[i] at 16 + 8 i)
     ins += [(RET, 0, 0, ALLOW),
             "socket",
             (LD, 0, 0, 16),                             # args[0], the domain
@@ -168,19 +214,17 @@ def seccomp_program(request=False) -> bytes:
             (JSET, "errno", 0, CLONE_PIDFD),
             (RET, 0, 0, ALLOW),
             "getsockopt",
-            (LD, 0, 0, 32),                             # args[2], the option name (at any level)
-            (JEQ, "errno", 0, SO_COOKIE),
-            (JEQ, "errno", 0, SO_PEERPIDFD),
-            (RET, 0, 0, ALLOW),
+            (LD, 0, 0, 32)]                             # args[2], the option name (at any level)
+    ins += [(JEQ, "errno", 0, v) for v in GETSOCKOPT_REFUSED.values()]
+    ins += [(RET, 0, 0, ALLOW),
             "setsockopt",
-            (LD, 0, 0, 32),
-            (JEQ, "errno", 0, SO_PASSPIDFD),
-            (RET, 0, 0, ALLOW),
+            (LD, 0, 0, 32)]
+    ins += [(JEQ, "errno", 0, v) for v in SETSOCKOPT_REFUSED.values()]
+    ins += [(RET, 0, 0, ALLOW),
             "madvise",
-            (LD, 0, 0, 32),                             # args[2], the advice
-            (JEQ, "errno", 0, MADV_COLD),
-            (JEQ, "errno", 0, MADV_PAGEOUT),
-            (RET, 0, 0, ALLOW),
+            (LD, 0, 0, 32)]                             # args[2], the advice
+    ins += [(JEQ, "errno", 0, v) for v in MADV_REFUSED.values()]
+    ins += [(RET, 0, 0, ALLOW),
             "enosys",
             (RET, 0, 0, ERRNO | 38),                    # ENOSYS
             "errno",
@@ -212,9 +256,10 @@ SYS_CPU_NEVER = ("power",)                        # runtime counters, at any dep
 # (review LR4 H1), and a disk file's page-cache folios keep a shape (a PMD folio after a
 # MADV_HUGEPAGE fault, 64 KiB ones after a re-read) that a later sandbox can read in
 # /proc/self/smaps (H2). tmpfs keeps no negative dentry (`always_delete_dentry`), and a file the
-# runner wrote in full is resident and order-0 (`huge=never`): fadvise is a no-op, MADV_COLLAPSE
-# fails without huge pages, no hole can be faulted in, and the calls that would swap a page out are
-# refused (`seccomp_program`). A read-only bind does not make a tmpfs file stateless, though: its
+# runner wrote in full is resident and order-0 (`huge=never`): fadvise is a no-op, no hole can be
+# faulted in, and the calls that would swap a page out or collapse a range into a huge page are
+# refused (`MADV_REFUSED`, `process_madvise`: a kernel may collapse tmpfs pages whatever the mount
+# says, review R4b LOW 6). A read-only bind does not make a tmpfs file stateless, though: its
 # inode keeps a shared memory policy that `mbind` on a read-only MAP_SHARED mapping sets and
 # `get_mempolicy` reads back (review LR5 H1), and its pages keep flags. So no copy is shared across
 # a boundary that matters (a pass, a badge run, a sandbox for the mask sources and the CPU tree),
@@ -914,3 +959,11 @@ class Sandbox:
             pass
         if self.proc.poll() is not None:
             self.view.remove()                 # its own files, once nothing of it runs
+
+
+if __name__ == "__main__":
+    import sys
+    if sys.argv[1:] == ["--refusals"]:
+        sys.stdout.write(refusal_table())
+    else:
+        sys.exit("usage: python3 harness/rfh/sandbox.py --refusals   (the filter's refusals, harness/PROVER.md §2)")

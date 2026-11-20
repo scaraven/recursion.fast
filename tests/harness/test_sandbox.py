@@ -32,7 +32,13 @@
     `statfs`/`fstatfs`/`statvfs`/`ustat` (free disk space) fail with ENOSYS while `pathconf`
     answers; every way to a pidfd (pidfs inode numbers), `SO_COOKIE`, `setsid` in a child,
     `madvise` MADV_COLD and MADV_PAGEOUT, `process_madvise`, `quotactl_fd` and `open_tree_attr` are
-    refused (EPERM), `clone3` is ENOSYS and `fork` and threads work;
+    refused (EPERM), `clone3` is ENOSYS and `fork` and threads work; the `utime` family (by path and
+    by fd, on /dev/null and on /tmp), the inotify calls and `madvise` MADV_COLLAPSE fail with EPERM
+    and /dev/null's timestamps do not move, while the devices still read and write data; the mount
+    table of a request, of `prover setup` and of a badge run holds no read-write mount of a
+    superblock the host has mounted (which every other sandbox could bind), but the six device
+    nodes, each a single node of the host's devtmpfs (the filter closes their timestamps; bubblewrap
+    cannot bind them read-only); with a host directory bound read-write, the control, it does;
     `mlock` of N pages in one request raises the host's `unevictable_pgs_mlocked` by N and the next
     request sees none of it; a request's first inode number does not depend on how many files an
     earlier request made (with a shared tmpfs, the control, it does); with the runner's scrub
@@ -43,7 +49,7 @@
     dentries in every directory a request sees (`/setup`, `/prover`, the masked `/proc` entries,
     the CPU tree: the reader classifies one timed lookup per name at chance; a work-disk directory
     bound into both, the control, carries the bits), the folio shape of a setup file (evicted
-    regions faulted back through MADV_HUGEPAGE, MADV_COLLAPSE, MADV_PAGEOUT refused: FilePmdMapped
+    regions faulted back through MADV_HUGEPAGE, MADV_COLLAPSE and MADV_PAGEOUT refused: FilePmdMapped
     does not move; a disk file re-read by the runner, the control, shows the written regions), the
     autogroup counter (a request's setsid attempts fail and move it by about nothing; K setsids on
     the host move it by K), and the inodes staged before `go` through `Bench.one` (the same count at
@@ -190,10 +196,11 @@ def channels(tmp, svc, iso_run, iso_req):
     reads = []
     for bits in (0b100110010, 0b011001101):
         w = iso_req(f"fold /setup/big {REGIONS} {bits}")
-        reads.append((pmd(iso_req(f"pmd /setup/big {REGIONS}")), "pageout -1(1)" in (w.proof or b"").decode()))
+        t = (w.proof or b"").decode()
+        reads.append((pmd(iso_req(f"pmd /setup/big {REGIONS}")), "pageout -1(1)" in t and "collapse -1(1)" in t))
     check(len(before) == REGIONS and all(v == before and refused for v, refused in reads),
           f"folio shape: evicting chosen 2 MiB regions of a setup file and faulting them back through MADV_HUGEPAGE "
-          f"(with MADV_COLLAPSE; MADV_PAGEOUT refused) leaves the copy's folios as they were: FilePmdMapped "
+          f"(MADV_COLLAPSE and MADV_PAGEOUT refused) leaves the copy's folios as they were: FilePmdMapped "
           f"{before} before, {[v for v, _ in reads]} after two patterns")
     cand = [os.environ.get("RF_FOLIO_CONTROL")] + sorted(
         (os.path.join(d, n) for d in ("/usr/lib/x86_64-linux-gnu",) if os.path.isdir(d) for n in os.listdir(d)),
@@ -554,6 +561,34 @@ def main():
     report(f"a request ({r.status})", (r.proof or b"").decode(errors="replace"))
     report(f"prover setup (ok={setup_report[0]})", setup_report[1])
 
+    # the mount table: no read-write mount of a superblock the host has mounted (every other
+    # sandbox could bind it), the device nodes aside (the probe checks they are single nodes)
+    host = sorted({l.split()[2] for l in open("/proc/self/mountinfo")})
+    listed = ",".join(host)
+
+    def rw_lines(text):
+        return [l.split() for l in text.splitlines() if l.startswith("rw ") and len(l.split()) == 4]
+    r = iso_req(f"rw {listed}")
+    req_rw = rw_lines((r.proof or b"").decode(errors="replace"))
+    set_rw = rw_lines(setup_report[1])
+    check(r.status == "ok" and b"rwshared=0" in (r.proof or b"") and {m[3] for m in req_rw} >= {"/work", "/tmp", "/dev"}
+          and not any(m[1] in host for m in req_rw + set_rw) and {m[3] for m in set_rw} >= {"/setup", "/tmp"},
+          f"the mount table: every read-write mount of a request and of prover setup is a superblock of its own, none "
+          f"the host has mounted (request: {[(m[1], m[2], m[3]) for m in req_rw]}; setup: "
+          f"{[(m[1], m[2], m[3]) for m in set_rw]}; the host's: {len(host)} superblocks)")
+
+    class RwCtl(Run):
+        def binds(self, work, sock_dir=None, setup_rw=False):
+            return super().binds(work, sock_dir, setup_rw) + [("rw", ctl_dir, "/ctl")]
+    ctl_dir = os.path.join(tmp, "rw-ctl")
+    os.makedirs(ctl_dir)
+    rc = RwCtl(iso_run.bin_dir, iso_run.setup_dir, iso_run.mem)
+    rc.view = iso_run.view
+    r = iso_req(f"rw {listed}", rc)
+    check(b"rwshared=1" in (r.proof or b"") and b"FAIL rw" in (r.proof or b""),
+          f"the control: a host directory bound read-write is a read-write mount of a superblock the host has "
+          f"mounted, and the probe fails on it ({[l for l in (r.proof or b'').decode().splitlines() if 'ctl' in l]})")
+
     def vmstat(key="unevictable_pgs_mlocked"):
         for line in open("/proc/vmstat"):
             k, _, v = line.partition(" ")
@@ -688,6 +723,15 @@ def main():
     except BadgeError as e:
         res, why = None, str(e)[-400:]
     check(res is not None and res[0][0], f"a badge run: masks, the socket rule and the counters' refusals hold ({why})")
+    open(os.path.join(store, "rw.bin"), "w").write(f"mode rw {listed}")      # the answer: `accept N`, N shared
+    rb = Badge(pdir, "256M", os.path.join(tmp, "hang-scratch"))
+    try:
+        rb.verify([(b"v" * 32, b"c" * 32, "rw.bin")], store, timeout=30)
+        shared, why = rb.last[0][1], ""
+    except BadgeError as e:
+        shared, why = None, str(e)[-400:]
+    check(shared == 0, f"a badge run's mount table: no read-write mount of a superblock the host has mounted, the "
+                       f"device nodes aside (shared: {shared}; 10^6 added if a check failed) {why}")
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0
 

@@ -16,7 +16,19 @@
  *     MADV_COLD or MADV_PAGEOUT, `process_madvise`, `quotactl_fd` and `open_tree_attr` fail with
  *     EPERM, other advice works; `mbind`, `migrate_pages`, `move_pages` and
  *     `set_mempolicy_home_node` fail with ENOSYS (a tmpfs file's shared memory policy, review LR5
- *     H1), while `get_mempolicy` and `set_mempolicy` (the task's own) work.
+ *     H1), while `get_mempolicy` and `set_mempolicy` (the task's own) work;
+ *   - the timestamps of a shared inode cannot be set: `utime`, `utimes`, `futimesat` and `utimensat`
+ *     (a path, and an fd of /dev/null; NULL times and UTIME_NOW) fail with EPERM, and /dev/null's
+ *     times do not move; `inotify_init`, `inotify_init1` and `inotify_add_watch` fail with EPERM
+ *     (inotify's machine-wide rename cookie); `madvise` MADV_COLLAPSE fails with EPERM;
+ *   - the devices work: /dev/zero reads zeros, /dev/urandom and /dev/random read bytes, /dev/null
+ *     takes a write, /dev/full refuses one with ENOSPC;
+ *   - the mount table (`/proc/self/mountinfo`): every read-write mount is a fresh superblock of the
+ *     sandbox's own (a tmpfs, devpts, proc or mqueue mounted at its root, `/`), but the six device
+ *     nodes bubblewrap binds from the host's devtmpfs (`null`, `zero`, `full`, `random`, `urandom`,
+ *     `tty`), each a single node whose one writable state, its timestamps, the filter closes; each
+ *     read-write mount is reported as `rw MAJ:MIN FSTYPE MOUNTPOINT` (`rw LIST` counts those whose
+ *     superblock is in LIST: the test passes the host's).
  *
  * Request modes (the request's input `mode`, read at `go`): `probe` (the checks), `mlock N` (lock N
  * pages, which raises the machine-wide `unevictable_pgs_mlocked` by N), `ino K` (the inode number
@@ -31,7 +43,9 @@
  * `polw FILE N TAG` (map N pages of FILE read-only and MAP_SHARED, and `mbind` MPOL_PREFERRED on the
  * pages whose bit is 1: the file's shared memory policy, review LR5 H1), `polr FILE N TAG` (read each
  * page's policy back with `get_mempolicy(MPOL_F_ADDR)`: the share of bits right, 0.5 by chance).
- * Several modes may be given, separated by `;`. A oneshot `inoK` does `ino K` without the handshake.
+ * `rw LIST` (the read-write mounts, `rwshared=N` the number of them, the device nodes aside, whose
+ * MAJ:MIN is in the comma-separated LIST; a badge answers N). Several modes may be given, separated
+ * by `;`. A oneshot `inoK` does `ino K` without the handshake.
  * The report is `proof.bin` (a request), `/setup/report.txt` (setup), `/work/ino.txt` (a oneshot),
  * or the badge's answer: for a checked file that begins with `mode `, the modes it names are run
  * and the answer is `accept R`, R the last `polr`'s count of bits right (or `polw`'s of policies
@@ -53,6 +67,7 @@
 #include <sys/statfs.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -166,6 +181,121 @@ static long readable(const char *p) {
 
 static void *nop(void *a) { return a; }
 
+/* a shared inode's timestamps (review R4b HIGH 1), inotify (HIGH 2), MADV_COLLAPSE (LOW 6) */
+static void times_and_events(void) {
+    struct stat a, b;
+    int fd = open("/dev/null", O_WRONLY);
+    if (fd < 0 || fstat(fd, &a)) FAIL("/dev/null: %s\n", strerror(errno));
+    struct timespec now[2] = {{0, UTIME_NOW}, {0, UTIME_NOW}};
+    struct timeval tv[2] = {{1, 0}, {1, 0}};
+    struct { long nr; const char *name; long a, b, c, d; } ut[] = {
+        {132, "utime /dev/null", (long)"/dev/null", 0, 0, 0},
+        {235, "utimes /dev/null", (long)"/dev/null", 0, 0, 0},
+        {235, "utimes /dev/null (times)", (long)"/dev/null", (long)tv, 0, 0},
+        {261, "futimesat /dev/null", AT_FDCWD, (long)"/dev/null", 0, 0},
+        {280, "utimensat /dev/null", AT_FDCWD, (long)"/dev/null", 0, 0},
+        {280, "utimensat /dev/null UTIME_NOW", AT_FDCWD, (long)"/dev/null", (long)now, 0},
+        {280, "utimensat fd of /dev/null (futimens)", fd, 0, (long)now, 0},
+        {280, "utimensat fd 0", 0, 0, 0, 0},
+        {280, "utimensat /tmp", AT_FDCWD, (long)"/tmp", 0, 0}};
+    for (size_t i = 0; i < sizeof ut / sizeof *ut; i++) {
+        long r = syscall(ut[i].nr, ut[i].a, ut[i].b, ut[i].c, ut[i].d);
+        if (r == 0 || errno != EPERM) FAIL("%s: %ld (%s), not EPERM\n", ut[i].name, r, r ? strerror(errno) : "done");
+    }
+    int r = futimens(fd, 0);
+    if (r == 0 || errno != EPERM) FAIL("futimens /dev/null: %d (%s), not EPERM\n", r, r ? strerror(errno) : "done");
+    if (fd >= 0 && (fstat(fd, &b) || a.st_mtim.tv_sec != b.st_mtim.tv_sec || a.st_mtim.tv_nsec != b.st_mtim.tv_nsec
+                    || a.st_atim.tv_nsec != b.st_atim.tv_nsec || a.st_ctim.tv_nsec != b.st_ctim.tv_nsec))
+        FAIL("/dev/null's timestamps moved\n");
+    if (fd >= 0) close(fd);
+    if (syscall(253 /* inotify_init */) >= 0 || errno != EPERM) FAIL("inotify_init: %s\n", strerror(errno));
+    if (syscall(294 /* inotify_init1 */, 0) >= 0 || errno != EPERM) FAIL("inotify_init1: %s\n", strerror(errno));
+    if (syscall(254 /* inotify_add_watch */, 0, "/tmp", 0xfff) >= 0 || errno != EPERM) FAIL("inotify_add_watch: %s\n", strerror(errno));
+    char *m = mmap(0, 2L << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (m != MAP_FAILED) {
+        m[0] = 1;
+        if (madvise(m, 2L << 20, 25 /* MADV_COLLAPSE */) == 0 || errno != EPERM) FAIL("madvise MADV_COLLAPSE: %s\n", strerror(errno));
+        munmap(m, 2L << 20);
+    }
+}
+
+/* the device nodes still work for data */
+static void devices(void) {
+    unsigned char b[64];
+    int fd = open("/dev/zero", O_RDONLY);
+    ssize_t r = fd >= 0 ? read(fd, b, sizeof b) : -1;
+    int zero = r == (ssize_t)sizeof b;
+    for (ssize_t i = 0; zero && i < r; i++) zero = !b[i];
+    if (!zero) FAIL("/dev/zero: %zd bytes (%s)\n", r, strerror(errno));
+    if (fd >= 0) close(fd);
+    static const char *const rnd[] = {"/dev/urandom", "/dev/random", 0};
+    for (const char *const *p = rnd; *p; p++) {
+        fd = open(*p, O_RDONLY | O_NONBLOCK);
+        r = fd >= 0 ? read(fd, b, 16) : -1;
+        if (r != 16) FAIL("%s: %zd bytes (%s)\n", *p, r, strerror(errno));
+        if (fd >= 0) close(fd);
+    }
+    fd = open("/dev/null", O_WRONLY);
+    if (fd < 0 || write(fd, b, sizeof b) != (ssize_t)sizeof b) FAIL("/dev/null: a write: %s\n", strerror(errno));
+    if (fd >= 0) close(fd);
+    fd = open("/dev/full", O_WRONLY);
+    if (fd < 0 || write(fd, b, 1) != -1 || errno != ENOSPC) FAIL("/dev/full: a write not ENOSPC: %s\n", strerror(errno));
+    if (fd >= 0) close(fd);
+    add("devices: zero, urandom, random, null, full work\n");
+}
+
+/* the mount table: every read-write mount a fresh superblock of the sandbox's own, but the device
+ * nodes; with `shared` (MAJ:MIN,…), the number of read-write mounts whose superblock is in it */
+static const char *const DEVNODES[] = {"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", 0};
+static const char *const FRESH[] = {"tmpfs", "devpts", "proc", "mqueue", 0};
+static void unescape(char *s) {
+    char *o = s;
+    for (; *s; s++)
+        if (s[0] == '\\' && s[1] >= '0' && s[1] <= '7' && s[2] && s[3]) *o++ = (char)((s[1] - '0') * 64 + (s[2] - '0') * 8 + (s[3] - '0')), s += 3;
+        else *o++ = *s;
+    *o = 0;
+}
+static long mounts(const char *shared, int report) {
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    if (!f) {
+        FAIL("/proc/self/mountinfo: %s\n", strerror(errno));
+        return -1;
+    }
+    char line[4096];
+    long n = 0, rw = 0, in_list = 0, dev = 0;
+    while (fgets(line, sizeof line, f)) {
+        char id[32], parent[32], mm[32], root[1024], mp[1024], opts[512], *sep = strstr(line, " - ");
+        char fstype[64] = "?";
+        if (sscanf(line, "%31s %31s %31s %1023s %1023s %511s", id, parent, mm, root, mp, opts) != 6 || !sep) continue;
+        sscanf(sep + 3, "%63s", fstype);
+        unescape(root), unescape(mp);
+        n++;
+        char o[520];
+        snprintf(o, sizeof o, ",%s,", opts);
+        if (!strstr(o, ",rw,")) continue;
+        rw++;
+        int node = in(mp, DEVNODES);
+        if (node) {
+            dev++;
+            if (strcmp(fstype, "devtmpfs") || strcmp(root, mp + 4)) FAIL("rw %s: a %s mount of %s, not a single node of the host's devtmpfs\n", mp, fstype, root);
+            continue;
+        }
+        if (!in(fstype, FRESH) || strcmp(root, "/")) FAIL("rw %s: %s %s at %s, not a fresh superblock of the sandbox's own\n", mm, fstype, root, mp);
+        if (report) add("rw %s %s %s\n", mm, fstype, mp);
+        if (shared) {
+            char l[8200], k[40];
+            snprintf(l, sizeof l, ",%s,", shared);
+            snprintf(k, sizeof k, ",%s,", mm);
+            if (strstr(l, k)) in_list++, add("rw %s %s %s: a superblock in the list\n", mm, fstype, mp);
+        }
+    }
+    fclose(f);
+    if (!shared) add("mounts: %ld, %ld read-write (%ld of them the device nodes)\n", n, rw, dev);
+    if (dev != 6) FAIL("%ld read-write device nodes, not the six\n", dev);
+    if (shared) add("rwshared=%ld\n", in_list);
+    return in_list;
+}
+
 static void checks(void) {
     int n = masked("/proc", keep_proc);
     add("/proc: %d masked entries\n", n);
@@ -273,6 +403,9 @@ static void checks(void) {
     if (f < 0 || waitpid(f, &ws, 0) != f || !WIFEXITED(ws) || WEXITSTATUS(ws) != 7) FAIL("fork: %s\n", strerror(errno));
     pthread_t th;
     if (pthread_create(&th, 0, nop, 0) || pthread_join(th, 0)) FAIL("pthread_create\n");
+    times_and_events();
+    devices();
+    mounts(0, 1);
     add("%s\n", fails ? "checks failed" : "checks passed");
 }
 
@@ -508,6 +641,9 @@ static void run_mode(const char *mode) {
         char *m = mmap(0, n * pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (m == MAP_FAILED || mlock(m, n * pg)) FAIL("mlock %ld pages: %s\n", n, strerror(errno));
         else add("mlocked %ld pages\n", n), munlock(m, n * pg);
+    } else if (!strncmp(mode, "rw ", 3)) {
+        char l[8192];
+        if (sscanf(mode + 3, "%8191s", l) == 1) answer = mounts(l, 1) + (fails ? 1000000 : 0);
     } else if (!strncmp(mode, "polw ", 5) || !strncmp(mode, "polr ", 5)) {
         char f[256];
         long n = 0, tag = 0;
@@ -524,7 +660,7 @@ int main(int argc, char **argv) {
         char line[4096];
         while (fgets(line, sizeof line, stdin)) {
             fails = 0, len = 0;
-            char vk[80], st[80], path[1024], m[512] = {0};
+            char vk[80], st[80], path[1024], m[8192] = {0};
             int f = sscanf(line, "%79s %79s %1023s", vk, st, path) == 3 ? open(path, O_RDONLY) : -1;
             long k = f >= 0 ? read(f, m, sizeof m - 1) : -1;
             if (f >= 0) close(f);
@@ -554,7 +690,7 @@ int main(int argc, char **argv) {
     }
     puts("ready");
     fflush(stdout);
-    char b[8], mode[512] = {0};
+    char b[8], mode[8192] = {0};
     if (!fgets(b, sizeof b, stdin)) return 9;
     int fd = open("mode", O_RDONLY);
     if (fd < 0 || read(fd, mode, sizeof mode - 1) < 0) return 8;

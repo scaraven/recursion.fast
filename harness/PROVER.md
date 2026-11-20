@@ -41,7 +41,7 @@ the compiled `acc` (`harness/FORMAT.md`); nothing it says is trusted.
 | `/work` | the request's own private tmpfs (a superblock of its own, fresh for every request), read-write, the working directory |
 | `/run/rf/oracle.sock` | the oracle service's socket (`RF_ORACLE`), **only from `go` on**: connect after `go` |
 | `/tmp` | an empty tmpfs (counted in the memory cap) |
-| `/dev`, `/proc` | minimal devices (`null`, `zero`, `urandom`, …); `/proc` lists only the prover's own processes and holds no machine-wide counter: every top-level entry but the pid directories, `self` and `thread-self` reads empty (`stat`, `vmstat`, `meminfo`, `loadavg`, `interrupts`, `pressure`, `cpuinfo`, …; use `cpuid`); the links `mounts` and `net` lead into `self` |
+| `/dev`, `/proc` | minimal devices (`null`, `zero`, `full`, `random`, `urandom`, `tty`: the host's nodes, read and written as usual, their timestamps unsettable) in a tmpfs of the sandbox's own; `/proc` lists only the prover's own processes and holds no machine-wide counter: every top-level entry but the pid directories, `self` and `thread-self` reads empty (`stat`, `vmstat`, `meminfo`, `loadavg`, `interrupts`, `pressure`, `cpuinfo`, …; use `cpuid`); the links `mounts` and `net` lead into `self` |
 | `/sys/devices/system/cpu` | the CPU topology, read-only: a static copy of its description as read when the runner starts, written afresh for every sandbox (`cpuidle`, `cpufreq`, `power` and the tree's links are absent) |
 
 Nothing else exists: no `/usr`, no shell, no network, no other process. Nothing a request sees is
@@ -61,28 +61,14 @@ Resources: every CPU of the machine (shared with the service, which computes the
 CPUs), memory capped by a cgroup (`memory.prover` of the season, 8 GiB in season 1; the service
 has its own 2 GiB), `oom_score_adj = 1000`. The setup's copy is the runner's (written by it, charged
 to it, resident while its pass runs): up to `setup_cap` (4 GiB) of read-only setup is resident beyond the
-prover's 8 GiB, and mapping it costs no page-in. A seccomp filter fails (EPERM) `ptrace`,
-`process_vm_*`, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_*`, key management, mounts,
-namespaces and module loading, and `socket` and `socketpair` for every domain but `AF_UNIX` (the
-oracle's socket is the only one a prover needs). It also refuses what would read a machine-wide
-counter that one request could set for a later one: `statfs`, `fstatfs` (so `statvfs`) and `ustat`
-fail with ENOSYS (free space; glibc's `pathconf` then answers its defaults); `setsid` fails (the
-prover is a session leader already; a new session would move the machine-wide autogroup counter);
-`madvise` with `MADV_COLD` or `MADV_PAGEOUT`, and `process_madvise`, fail (they could push the
-runner's tmpfs pages out to swap); `mbind`, `migrate_pages`, `move_pages` and
-`set_mempolicy_home_node` fail with ENOSYS (a policy set on a shared file's pages stays in the file;
-`set_mempolicy` and `get_mempolicy`, the thread's own policy, work, and so does libnuma's fallback
-to "no NUMA"); no pidfd can be made, since a pidfd's inode number counts every
-process the machine started (`pidfd_open`, `clone` with `CLONE_PIDFD`, `getsockopt` `SO_PEERPIDFD`
-and `setsockopt` `SO_PASSPIDFD` fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to
-`clone`, so `fork`, `posix_spawn` and threads work); `getsockopt` `SO_COOKIE` fails (socket cookies
-come from a machine-wide counter). **In a request** (not in `prover setup` or the badge), also
-`sysinfo` fails with ENOSYS (load averages, process count and free memory are machine-wide; glibc's
-`get_phys_pages`, `get_avphys_pages` and `sysconf(_SC_PHYS_PAGES)` then fail or return garbage, so
-read nothing from them: the cap is the season's `memory.prover`), and `sendmsg` and `sendmmsg` fail
-with EPERM (no file descriptor or credential can be passed; talk to the service with `write`,
-`writev`, `send` or `sendto`, which work; the service also refuses any message carrying ancillary
-data). Before every request (and every badge run) the runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
+prover's 8 GiB, and mapping it costs no page-in. A seccomp filter refuses the calls in the table
+below, the one list of them (generated from the filter's own: `python3 harness/rfh/sandbox.py
+--refusals`; `tests/harness/test_request_filter.py` checks that this copy equals it). In practice:
+talk to the service with `write`, `writev`, `send` or `sendto` (the service also refuses any
+message carrying ancillary data); take the memory cap from the season (`memory.prover`), not from
+`sysinfo`, glibc's `get_phys_pages` or `sysconf(_SC_PHYS_PAGES)`; set no timestamps (`touch`,
+`utimensat`) and watch no files (inotify). Before every request (and every badge run) the runner
+moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
 files and memfds) to the end of their batch and then a uniform random offset into a fresh one
 (`harness/tools/scrub.c`, one pinned thread per CPU, about 0.1 s, recorded as `scrub_s`), so a
 pipe's or memfd's inode number says nothing of what an earlier request did on that CPU; before
@@ -90,6 +76,26 @@ every timed request it also takes a uniform random number in `[0, 256)` of fresh
 kind machine-wide (AGENTS.md §12). When a
 request ends, every process the prover started is killed. The same `/proc` and CPU-tree masks and the same filter apply to `prover setup`
 and to every badge run of the benchmark job (which runs the entry's compiled `V`).
+
+<!-- refusals: generated by `python3 harness/rfh/sandbox.py --refusals`; do not edit by hand -->
+| refused (errno) | in | why |
+|---|---|---|
+| `ptrace`, `process_vm_readv`, `process_vm_writev`, `kcmp`, `pidfd_getfd` (EPERM) | every sandbox | other processes (their memory, descriptors, identity) |
+| `bpf`, `perf_event_open`, `userfaultfd`, `io_uring_setup`, `io_uring_enter`, `io_uring_register`, `keyctl`, `add_key`, `request_key`, `mount`, `umount2`, `pivot_root`, `mount_setattr`, `move_mount`, `open_tree`, `open_tree_attr`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `unshare`, `setns`, `init_module`, `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`, `open_by_handle_at`, `name_to_handle_at`, `acct`, `swapon`, `swapoff`, `reboot`, `syslog`, `quotactl`, `quotactl_fd`, `iopl`, `ioperm`, `uselib`, `lookup_dcookie`, `vhangup` (EPERM) | every sandbox | the kernel's attack surface, never needed: BPF, perf, userfaultfd, io_uring, keyrings, mounts, namespaces, module and kexec loading, handle-based opens (a file outside the sandbox), quotas, administration |
+| `socket`, `socketpair` for a domain other than `AF_UNIX` (EPERM) | every sandbox | network counters (an `AF_INET` datagram moves `/proc/self/net/softnet_stat`); the oracle's Unix socket is the only one a prover needs |
+| `pidfd_open`, `clone` with `CLONE_PIDFD`, `getsockopt` `SO_PEERPIDFD`, `setsockopt` `SO_PASSPIDFD` (EPERM); `clone3` (ENOSYS) | every sandbox | pidfds: a pidfd's inode number counts every process the machine started (on `clone3`'s ENOSYS libc falls back to `clone`: `fork`, `posix_spawn` and threads work) |
+| `getsockopt` `SO_COOKIE` (EPERM) | every sandbox | a socket's cookie, drawn from a machine-wide counter |
+| `setsid` (EPERM) | every sandbox | the machine-wide autogroup counter (`/proc/self/autogroup`), which every new session moves (the prover is a session leader already) |
+| `statfs`, `fstatfs`, `ustat` (ENOSYS) | every sandbox | free space, which the runner's and a request's writes move (so `statvfs` fails; glibc's `pathconf` answers its defaults) |
+| `process_madvise`, `madvise` `MADV_COLD`, `madvise` `MADV_PAGEOUT`, `madvise` `MADV_COLLAPSE` (EPERM) | every sandbox | the page state of the runner's read-only tmpfs copies (swapped out, or collapsed into huge pages: a pattern one request could leave for a later one; other advice works) |
+| `mbind`, `migrate_pages`, `move_pages`, `set_mempolicy_home_node` (ENOSYS) | every sandbox | a shared memory policy, which a tmpfs file keeps in its inode for the next process that maps it (review LR5 H1), or another process's pages (`set_mempolicy` and `get_mempolicy`, the thread's own, work; libnuma takes ENOSYS as no NUMA) |
+| `utime`, `utimes`, `futimesat`, `utimensat` (EPERM) | every sandbox | the timestamps of an inode other sandboxes see: the host's device nodes in every /dev, and the host's /dev/null as the setup's and the build's fd 0 (review R4b HIGH 1) |
+| `fanotify_init`, `inotify_init`, `inotify_init1`, `inotify_add_watch` (EPERM) | every sandbox | filesystem events: fanotify's marks, and inotify's rename cookie, drawn from a machine-wide counter that every rename moves (review R4b HIGH 2) |
+| `sendmsg`, `sendmmsg` (EPERM) | a request alone | a file descriptor or credential parked unread in the service's receive queue would outlive the request (review R5 HIGH 1); write with `write`, `writev`, `send` or `sendto` |
+| `sysinfo` (ENOSYS) | a request alone | load averages, process count and free memory, all machine-wide (review R8 HIGH 1; glibc's `get_phys_pages` and `sysconf(_SC_PHYS_PAGES)` then fail or return garbage) |
+| any call of the x32 ABI (EPERM) | every sandbox | another system call ABI (call numbers from 2^30) |
+| any call of another architecture (the process killed) | every sandbox | another architecture |
+<!-- /refusals -->
 
 ## 3. Invocations
 
@@ -257,12 +263,13 @@ runner's own writes fail, an output that cannot be read.
   (output 1, a leaf, has no first child: only its flipped statement). An entry that meets `final` but not `every` is
   scored in `final` only, the result saying why (`score.tracks_reason`); intermediate outputs need
   not be proofs at all. A crash or timeout of an intermediate check, or of the canaries of outputs
-  1 and 2, costs only the track `every` (a judged run of an intermediate output is bounded by
-  `60 s + 4 · v_cap`, the canary run of `c` canaries by `60 s + 2 (c + 1) · v_cap`); those canaries
+  1 and 2, costs only the track `every` (every judged run is bounded by `60 s + 4 · v_cap`, the
+  canary run of `c` canaries by `60 s + 2 (c + 1) · v_cap`); those canaries
   are checked even once the track is lost (the number of badge runs never depends on the entry).
 
-The final output's three judged runs have no time cap of their own (their `V` is capped by
-`v_cap`); its canary run is bounded like any canary run, `60 s + 2 (c + 1) · v_cap`. Every badge run ends within one bound
+The final output's three judged runs are bounded like every judged run, `60 s + 4 · v_cap` each (a
+timeout there is the entry's REJECT), and its canary run like any canary run, `60 s + 2 (c + 1) ·
+v_cap`. Every badge run ends within one bound
 shared by all of them, 30 s past `stream_s`, and none starts once `stream_s` is reached. Calibration samples (AGENTS.md §6) are
 taken before the service run's step 1 (and every `every` steps), before each timed pass, and a
 closing one if 30 s of `stream_s` remain. The whole benchmark, the service run, every request, check,
