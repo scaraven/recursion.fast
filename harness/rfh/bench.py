@@ -191,17 +191,30 @@ def fingerprint(path=None):
     return out
 
 
+def _sysfs(path):
+    """A short sysfs setting as text, or None."""
+    try:
+        return open(path).read().strip()[:200]
+    except OSError:
+        return None
+
+
 def machine():
     """What the result records about the machine (no CPU model, no CPU flags): the fingerprint's
-    hash and status, the unhashed `host_kernel`, the job's CPUs and memory, and the
-    runner as the workflow names it (AGENTS.md §8: `RUNNER_NAME`, `RF_RUNNER_ENVIRONMENT` =
-    `runner.environment`, `RF_RUNNER_LABELS` = the job's `runs-on` labels, comma-separated)."""
+    hash and status, the unhashed `host_kernel`, the job's CPUs and memory, the kernel the runner
+    runs on, the memory settings the sandbox relies on (`ksm_run`: KSM merging, which would time
+    one sandbox's pages against another's, should be off, `0`; `thp_shmem_enabled`, which
+    `sandbox.tmpfs_problem` refuses at `force`; review R4b LOW 6), and the runner as the workflow
+    names it (AGENTS.md §8: `RUNNER_NAME`, `RF_RUNNER_ENVIRONMENT` = `runner.environment`,
+    `RF_RUNNER_LABELS` = the job's `runs-on` labels, comma-separated)."""
     mem = next((int(l.split()[1]) for l in open("/proc/meminfo") if l.startswith("MemTotal")), None)
     labels = [x for x in os.environ.get("RF_RUNNER_LABELS", "").split(",") if x]
     fp = fingerprint()
     return {"fingerprint": fp["hash"], "fingerprint_status": fp["status"], "fingerprint_reason": fp["reason"],
             "host_kernel": fp.get("host_kernel"),
             "nproc": os.cpu_count(), "mem_total_kb": mem, "kernel": platform.release(),
+            "ksm_run": _sysfs("/sys/kernel/mm/ksm/run"),
+            "thp_shmem_enabled": _sysfs("/sys/kernel/mm/transparent_hugepage/shmem_enabled"),
             "memcap": memcap_method(), "runner_name": os.environ.get("RUNNER_NAME"),
             "runner_environment": os.environ.get("RF_RUNNER_ENVIRONMENT"), "runner_labels": labels}
 
@@ -374,7 +387,7 @@ class Bench:
         self.due(what)
         return self.verify(items, what, timeout if timeout is not None else self.capped(), warm=True)
 
-    def judged(self, item, what, bounded=False):
+    def judged(self, item, what):
         """The verifier check of one checked proof `item` (vk, stmt, store-relative path; AGENTS.md
         §6): `JUDGED_RUNS` = 3 separate badge runs (`check`), each a fresh process warmed with the
         organiser's input that checks this proof once and nothing else. So no judged check runs in a
@@ -385,7 +398,9 @@ class Bench:
         memo (`MemoChildSub.lean`). Returns (accepted in the first run, accepted in every run, its
         three times in run order, their median `V`). A rejection is an answer; a failed run (timed
         out, too slow to start, crashed) raises `Fail` and the caller decides. Each run ends within
-        `bounded(1)` with `bounded`, else within 30 s of the stream's cap. **All three runs are made
+        `bounded(1)`, every judged run's bound, the final output's too (review R4b MED 3: a verifier
+        stalling one of the final output's three runs for a chosen time, which the median forgives,
+        would move the clock a timed request reads). **All three runs are made
         even when one fails** (the first failure is raised after them, unless it is the stream's cap):
         the number of sandboxes the benchmark creates (their mount and namespace ids, the inode
         numbers of their copies on the runner's tmpfs) must not depend on the entry's verifier
@@ -393,8 +408,7 @@ class Bench:
         runs, failed = [], None
         for r in range(1, JUDGED_RUNS + 1):
             try:
-                (got,) = self.check([item], f"{what}, judged run {r} of {JUDGED_RUNS}",
-                                    self.bounded(1) if bounded else None)
+                (got,) = self.check([item], f"{what}, judged run {r} of {JUDGED_RUNS}", self.bounded(1))
                 runs.append(got)
             except Fail as e:
                 if e.stage == "stream-cap":
@@ -422,12 +436,13 @@ class Bench:
         return out, len(items)
 
     def bounded(self, c):
-        """The timeout of one badge run of `c` checks whose failure costs only the track `every` (a
-        judged run of an intermediate output, `c = 1`, or a canary run of `c` canaries), its warm-up
-        included: `INTERMEDIATE_SLACK_S + 2·(c + 1)·v_cap`, within the stream's cap; also the final
-        output's canary run (its failure is still the entry's REJECT; review R8 HIGH 1). (The final
-        output's three judged runs are bounded by the stream's cap alone: their `V` is capped by
-        `v_cap`.)"""
+        """The timeout of one badge run of `c` checks, its warm-up included:
+        `INTERMEDIATE_SLACK_S + 2·(c + 1)·v_cap`, within the stream's cap. Every badge run of the
+        stream has it: each judged run (`c = 1`) and each canary run (`c` canaries), of the
+        intermediate outputs, whose failure costs only the track `every`, and of the final output,
+        whose failure is the entry's REJECT (review R8 HIGH 1, R4b MED 3: no badge run can stall for a
+        chosen time beyond it, so the clock a timed request reads moves by at most that much per
+        run)."""
         return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (c + 1) * self.p.v_cap_ms / 1e3)
 
     def scrub(self, batches=0):
@@ -708,7 +723,8 @@ class Bench:
 
         The intermediate outputs are checked with `acc` against the runner's statements between
         steps (every `check_every` steps), each output judged on its own in three fresh warmed badge
-        runs that check nothing else (`judged`, each run bounded by `bounded(1)`): `V_i` is the
+        runs that check nothing else (`judged`, each run bounded by `bounded(1)`, the final output's
+        too): `V_i` is the
         median of the output's three times (`V_runs_ns`, in run order); rejected in the first run is
         `accepted = False`, accepted there and rejected in a later run is `recheck_rejected`. Then,
         with no entry process alive, the **final** output on its own, in three runs of its own: it must be accepted against `c_M` in all three, with
@@ -738,7 +754,7 @@ class Bench:
             pending.clear()
             for k, it in todo:
                 try:
-                    ok, again, runs, v = self.judged(it, f"the service run's intermediate output {k + 1}", bounded=True)
+                    ok, again, runs, v = self.judged(it, f"the service run's intermediate output {k + 1}")
                 except Fail as e:
                     if e.stage == "stream-cap":
                         raise

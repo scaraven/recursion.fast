@@ -27,9 +27,9 @@
    v_cap, a statement canary accepted, any output above pi_cap, where an output `acc` did not accept
    (rejected in any run, or its check crashed in any run) is sized by its whole file: each the
    entry's REJECT. An intermediate output rejected by acc, or with V above v_cap, or an accepted
-   canary of output 1 or 2: scored in `final` only, the reason recorded. Each judged run of an
-   intermediate output (`c = 1`), and the canary run of outputs 1 and 2, is bounded by `60 s + 2 (c +
-   1) v_cap`; the final output's runs by the stream's cap.
+   canary of output 1 or 2: scored in `final` only, the reason recorded. Every judged run (`c = 1`),
+   the final output's too, and the canary run of outputs 1 and 2, is bounded by `60 s + 2 (c + 1)
+   v_cap`.
 5. The stream's cap reached is the entry's REJECT (no truncation), also when it is reached during the
    checks: no badge run starts past it, and every badge run shares one absolute bound, 30 s past it.
 6. Calibration samples: before the service run's step 1, before each timed pass and a closing one.
@@ -402,9 +402,10 @@ def main():
     vc = b.p.v_cap_ms / 1e3
     check(len(judged) == 12 and all(warm for _, _, warm in judged)
           and [round(t, 9) for w, t, _ in judged if "intermediate" in w] == [round(60 + 2 * 2 * vc, 9)] * 9
-          and [t for w, t, _ in judged if "final" in w] == [130.0] * 3 and [round(t, 9) for t in cv] == [round(60 + 2 * 4 * vc, 9)],
-          f"each judged run is a fresh warmed badge run; a run of an intermediate output (c = 1), and the canary run of "
-          f"outputs 1 and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap, the final output's by the stream's cap: "
+          and [round(t, 9) for w, t, _ in judged if "final" in w] == [round(60 + 2 * 2 * vc, 9)] * 3
+          and [round(t, 9) for t in cv] == [round(60 + 2 * 4 * vc, 9)],
+          f"each judged run is a fresh warmed badge run; every judged run (c = 1), the final output's too (review R4b "
+          f"MED 3), and the canary run of outputs 1 and 2 (c = 3 canaries), is bounded by 60 s + 2 (c + 1) v_cap: "
           f"{[(w[-24:], round(t, 3)) for w, t, _ in b.timeouts]}")
     fails_with("a crashed check of the final output", "service run: the final output, judged run 1 of 3: verify: exit -11", "check",
                crash=("the final output",))

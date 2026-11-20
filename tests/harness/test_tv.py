@@ -10,8 +10,8 @@ synthetic steps.
    time bound and is refused. The verifier check (`Bench.judged`): every proof is judged in three
    separate fresh, warmed badge runs of its own, each checking it once and nothing else; `V` is the
    median of its three times; a rejection in the first run is a rejection, in a later run a rejection
-   when checked again; a run of `c` checks whose failure costs only `every` is bounded by `60 s + 2
-   (c + 1) v_cap`. Past the stream's cap no badge run starts (`stream-cap`); a badge run that failed
+   when checked again; every judged run (an intermediate output's and the final output's) and every
+   canary run of `c` checks is bounded by `60 s + 2 (c + 1) v_cap`, within the stream's cap. Past the stream's cap no badge run starts (`stream-cap`); a badge run that failed
    past it stays a failed check (`check`), its message naming the cap.
 2. The score (AGENTS.md §7), pinned by hand-computed vectors: `T_t = Σ_i P_{i,t}` per timed pass,
    `P_total = T_{t*}` the median of the three (ties: the lowest index), `P_i = P_{i,t*}`;
@@ -62,7 +62,7 @@ class StubBadge:
 
 def bench(script, reject=()):
     b = Bench.__new__(Bench)
-    b.p = SimpleNamespace()
+    b.p = SimpleNamespace(v_cap_ms=64.0)
     b.badge, b.store = StubBadge(script, reject), "/nonexistent"
     b.deadline = (time.monotonic() + 1000, "the stream's cap")
     return b
@@ -121,7 +121,7 @@ def main():
     # its times
     b = bench([30, 70, 40, 900, 10, 60])
     b.p = SimpleNamespace(v_cap_ms=64.0)
-    res = [b.judged(it, "output", bounded=True) for it in two]
+    res = [b.judged(it, "output") for it in two]
     check(res == [(True, True, [30, 70, 40], 40), (True, True, [900, 10, 60], 60)] and b.badge.calls == 6
           and b.badge.warm == [True] * 6 and b.badge.items == [["f"]] * 3 + [["g"]] * 3,
           f"each proof judged in three separate warmed badge runs of its own, each checking it once and nothing else; V "
@@ -130,15 +130,20 @@ def main():
     check([round(t, 9) for t in b.badge.timeouts] == [round(60 + 2 * 2 * vc, 9)] * 6
           and abs(Bench.bounded(b, 1) - (60 + 4 * vc)) < 1e-12
           and abs(Bench.bounded(b, 10 ** 6) - b.capped()) < 1,
-          f"a run of c checks whose failure costs only `every` is bounded by 60 s + 2 (c + 1) v_cap, within the "
-          f"stream's cap: {b.badge.timeouts}")
+          f"every judged run (c = 1) is bounded by 60 s + 2 (c + 1) v_cap, within the stream's cap: {b.badge.timeouts}")
     b = bench([1] * 6, reject={(1, 0), (5, 0)})
     b.p = SimpleNamespace(v_cap_ms=64.0)
     res = [b.judged(it, "output") for it in two]
     check([(ok, again) for ok, again, _, _ in res] == [(False, False), (True, False)]
-          and 1029 < b.badge.timeouts[0] <= 1030,
+          and [round(t, 9) for t in b.badge.timeouts] == [round(60 + 4 * vc, 9)] * 6,
           "rejected in the first run: rejected; accepted in the first and rejected in a later run: rejected when "
-          "checked again (both recorded); without `bounded` a run is bounded by the stream's cap plus 30 s")
+          "checked again (both recorded); every judged run bounded by 60 s + 4 v_cap")
+    b = bench([1, 1, 1])
+    b.p = SimpleNamespace(v_cap_ms=64.0)
+    b.deadline = (time.monotonic() + 10, b.deadline[1])          # 10 s of the stream left: its cap binds first
+    b.judged(two[0], "output")
+    check(9 < b.badge.timeouts[0] <= 40,
+          f"... and within the stream's cap plus 30 s when that comes first ({b.badge.timeouts[0]:.1f} s)")
 
     p = Params.load(os.path.join(ROOT, "harness", "season.toml"))
     cal = {"c_P": 1.0}

@@ -261,7 +261,7 @@ def main():
             m = load(out).get("machine") or {}
             check(load(out).get("verdict") == "ACCEPT" and m.get("fingerprint") == fp and len(fp or "") == 64
                   and "cpu_model" not in m and "simd" not in m and "microcode" not in m and m.get("host_kernel") == "smoke-kernel"
-                  and m.get("runner_labels") == ["rf-bench"],
+                  and m.get("runner_labels") == ["rf-bench"] and "ksm_run" in m and "thp_shmem_enabled" in m,
                   f"one evaluation: {load(out).get('verdict')}, the fingerprint's hash {m.get('fingerprint')} and host kernel "
                   f"recorded (no microcode), no CPU model or flags, the runner {m.get('runner_name')} {m.get('runner_labels')}")
             seasons = {}

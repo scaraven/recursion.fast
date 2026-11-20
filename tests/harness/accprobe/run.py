@@ -188,7 +188,7 @@ def main():
     b.p, b.badge, b.store = SEASON, badge("memochild"), D
     b.deadline = (time.monotonic() + 600, "the test's bound")
     t0 = time.monotonic()
-    got = [b.judged((svc.vk, c, os.path.relpath(f, D)), f"output {k}", bounded=True)
+    got = [b.judged((svc.vk, c, os.path.relpath(f, D)), f"output {k}")
            for k, (c, f) in enumerate(((zero, lf), (ones, nf)), 1)]
     dt = time.monotonic() - t0
     good = (all(ok and again and len(runs) == 3 and all(r > cap for r in runs) for ok, again, runs, _ in got)
