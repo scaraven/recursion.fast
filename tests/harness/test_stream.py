@@ -796,7 +796,7 @@ def main():
     svc2.sock_dir = os.path.join(w2.work, "svc", "stream")
     svc2.socket_path = os.path.join(svc2.sock_dir, "oracle.sock")
     live = [0]
-    svc2.drop = lambda: (drops.append(1), live[0])[1]
+    svc2.drop = lambda: (drops.append(1), live.pop(0) if len(live) > 1 else live[0])[1]
 
     def req2(run, kind, work, sock, inputs, step_s, file_cap, **kw):
         dls.append(kw["deadline"] - _time.monotonic())
@@ -806,8 +806,10 @@ def main():
     real_request, bench_mod.request = bench_mod.request, req2
     try:
         w2.one(svc2, "service1", "first", {"leaf.json": b"{}"})
+        live[:] = [2, 0]                    # a connection still computing: `drop` asked again until it ends
         w2.one(svc2, "timed1-step1", "first", {"leaf.json": b"{}", "oracle.key": b"k" * 65})
-        live[0] = 1
+        live[:] = [1]
+        w2.p.step_s, bench_mod.DROP_WAIT_S = 0, 0.3
         try:
             w2.one(svc2, "timed1-step2", "step", {"oracle.key": b"k" * 65})
             err = None
@@ -815,10 +817,11 @@ def main():
             err = str(e)
     finally:
         bench_mod.request = real_request
-    check(scrubs == [0, bench_mod.SCRUB_BATCHES, bench_mod.SCRUB_BATCHES] and len(drops) == 3
+    check(scrubs == [0, bench_mod.SCRUB_BATCHES, bench_mod.SCRUB_BATCHES] and len(drops) >= 5
           and abs(w2.left() - (100 - 3 * 2.5)) < 1e-3 and all(abs(x - y) < 0.05 for x, y in zip(dls, (100, 97.5, 95)))
           and err and "still open after `drop`" in err,
-          f"Bench.one: the scrub ({scrubs}; random batches before a timed request) and `drop` after every request are "
+          f"Bench.one: the scrub ({scrubs}; random batches before a timed request) and `drop` after every request "
+          f"(asked again while a connection is left: {len(drops)} calls) are "
           f"off the clock, the request's start-up and timed part on it (left {w2.left():.2f} s, the deadlines passed "
           f"{[round(x, 2) for x in dls]} s ahead); a connection left after `drop` is a harness error: {err}")
     # Bench.verify charges the badge process's own time (`Badge.run_s`), not its copies

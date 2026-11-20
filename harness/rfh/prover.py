@@ -22,6 +22,7 @@ interface). Every step runs in `sandbox.Sandbox`.
   sandbox also refuses `sendmsg`, `sendmmsg` and `sysinfo` (`sandbox.seccomp_program(request=True)`).
 * `oneshot`: a program with no handshake, timed from exec to exit (the sandbox tests).
 """
+import errno
 import glob
 import hashlib
 import os
@@ -281,6 +282,12 @@ class Run:
                                          f"{MAX_REL_PATH} bytes counts as inf), together above setup_cap = {size_cap}")
             try:
                 copy_tree(held, self.setup_dir, max_entries=max_entries)
+            except OSError as e:
+                remove_tree(self.setup_dir)
+                if e.errno in (errno.ENOSPC, errno.EDQUOT, errno.EIO, errno.EROFS):
+                    # the work disk's fault, not the tree's: the runner's (a harness error)
+                    raise RuntimeError(f"copying the setup to the work disk: {e}") from None
+                return False, dt, log + f"\nthe setup directory could not be copied ({type(e).__name__}: {e})"
             except Exception as e:  # noqa: BLE001 (the entry's tree)
                 remove_tree(self.setup_dir)
                 return False, dt, log + f"\nthe setup directory could not be copied ({type(e).__name__}: {e})"

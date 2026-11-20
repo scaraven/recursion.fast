@@ -569,10 +569,19 @@ class Bench:
         drop = getattr(svc, "drop", None)
         if drop is None:                    # the unit tests' stand-in services
             return
-        try:
-            live = drop()
-        except ServiceError as e:
-            raise RuntimeError(f"{tag}: the service did not answer `drop` ({e})") from None
+        # a connection whose request the service is still computing ends when that computation does
+        # (a shutdown does not interrupt it; at most 32 bodies of 16 MiB): `drop` is asked again,
+        # each waiting up to 5 s, for up to `step_s` before a count above zero is the runner's
+        # failure (review R5 HIGH 1; the later review of this fix)
+        t_end = time.monotonic() + max(DROP_WAIT_S, self.p.step_s)
+        while True:
+            try:
+                live = drop()
+            except ServiceError as e:
+                raise RuntimeError(f"{tag}: the service did not answer `drop` ({e})") from None
+            if live == 0 or time.monotonic() >= t_end:
+                break
+            time.sleep(0.1)
         if live != 0:
             raise RuntimeError(f"{tag}: {live} connection(s) to the service still open after `drop`")
 
@@ -897,6 +906,7 @@ class Bench:
 STAGED = {"leaf.json": 0, "leaf.bin": 0, "prev.stmt": 65, "prev.bin": 0, "oracle.key": 65}
 SCRUB_BATCHES = 256        # before every timed request the scrub takes [0, 256) machine-wide batches of each kind
 PASS_DELAY_S = 2.0         # the untimed delay before each timed pass is uniform in [0, 2) s
+DROP_WAIT_S = 10.0         # `drop` is asked again for at least this long (and `step_s`) until no connection is left
 
 
 def key_of(inputs):
