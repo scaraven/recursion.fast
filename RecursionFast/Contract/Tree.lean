@@ -23,8 +23,9 @@ the root does not commit to the number of leaves (`treeRoot [a, b] = treeRoot [n
 `treeRoot [a, b, c] = treeRoot [nodeStmt a b, c]`), which is harmless where it is used: the tree
 composition fixes `2^r` leaves, and nothing in `Certificate.lean` or `Security.lean` uses
 `treeRoot`.
-`streamStmt` does commit to its length and to `n`: two different streams with one statement give
-a Keccak collision (unwinding ends at a leaf's statement against a node's). `streamStmt` of no
+`streamStmt` does commit to its length and to `n` (for `n < 2^64`: `enc64` keeps the low 64 bits,
+so `n` and `n + 2^64` give one statement): two different streams with one statement give a Keccak
+collision (unwinding ends at a leaf's statement against a node's). `streamStmt` of no
 leaf is the zero digest; the benchmark's streams have `M` leaves, `M` of `harness/season.toml`.
 -/
 import RecursionFast.Contract.Relation

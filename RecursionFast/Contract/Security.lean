@@ -29,10 +29,12 @@ log is the verifier's verdict in the game (`Library/KS.lean`, `prob_accept_eq_ve
   adversary followed by `V` is a textbook adversary of `Q + qV` queries, bound `(Q + 2qV) · ε ≤ 2 (Q
   + qV) · ε` (`Library/KS.lean`, `KSTextbook.ks`). `KS` ⇏ textbook: a verifier that accepts when its
   own fresh answer, masked, is the statement's witness is knowledge-sound (`KS`) at error `0` with
-  an extractor that reads that answer (it has no complete prover, so it is not certified), against
-  about `2^-112` textbook for every efficient extractor (`Controls/Security.lean`, `lucky_ks`,
-  `lucky_not_textbook`; the efficient bound on paper). The deployment needs no more: every run in
-  it is normalised, since the verifier reads only the signed trace and every signed answer is in
+  an extractor that reads that answer, against about `2^-112` textbook for every efficient
+  extractor (`Controls/Security.lean`, `lucky_ks`, `lucky_not_textbook`; the efficient bound on
+  paper). Completeness does not exclude it: joined with the witness-sending decision it has a
+  complete prover (`Controls/MaskedLeaf.lean` certifies such a join, a verifier that asks the
+  oracle and is extracted from the log). What closes the gap is the deployment's normalisation, not
+  completeness: every run in it is normalised, since the verifier reads only the signed trace and every signed answer is in
   the run's log (`SIGN` computes the answers it signs, so the normalised run is the prover together
   with those evaluations, as one query program; `Library/Compose.lean` matches every signed trace
   to that log or reduces it to a forgery); and in the tree's composition an extracted member's verifier asks nothing fresh (`Library/KS.lean`, `KS.select`). An
@@ -101,18 +103,20 @@ entrant, a REJECT). And the game runs `V`, not `acc`: `acc`'s other conjuncts (`
 trace at most `qV` entries of queries of at most `queryCap` bytes, the signature) are not in it.
 
 **Why `2^-40`.** A completeness failure is no security event: it costs only its entrant, as one
-rejected proof and a failed run. An evaluation's prover makes 8 output proofs (the service run's 8
-steps; the timed passes only reproduce them byte for byte), so at `2^-40` each a run fails this way
-with probability about `2^-37`. Grinding to difficulty `2^g` meets
+rejected proof and a failed run. An evaluation's prover makes at most `2M − 1` proofs, `M` of
+`harness/season.toml` (the service run's `M` output proofs and the leaf proof inside each of its
+`M − 1` node steps; the timed passes only reproduce them byte for byte), so at `2^-40` each a run
+fails this way with probability at most `(2M − 1) · 2^-40`: at `M = 16`, `31 · 2^-40 < 2^-35`. Grinding to difficulty `2^g` meets
 the cap with about `40 · ln 2 · 2^g ≈ 28 · 2^g` attempts (`89 · 2^g` at `2^-128`).
 
 **Why `errorCap = 2^-128`.** 128 bits per fresh query. A design over GF(2^128) does not fit as it
 stands (a degree-2 sumcheck round costs `2^-127`): it must draw its challenges from a larger field
 or repeat. Composing the stream from single-output knowledge soundness takes a union bound over
 the extracted proofs (`Library/Compose.lean`, `compose_prob_stream`): the final output of the
-8-step stream and the proofs extracted from it, its `2 · 8 - 1 = 15` members (7 nodes, 8 leaves),
-at `Q + qV = 2^30` cost at most `15 · 2^30 · 2^-128 < 2^-94`; walking each of the 8 outputs,
-`Σ (2i - 1) = 64` members, `2^6 · 2^30 · 2^-128 = 2^-92`.
+`M`-step stream and the proofs extracted from it, its `2M − 1` members (`M − 1` nodes, `M`
+leaves), at `Q + qV = 2^30` cost at most `(2M − 1) · 2^30 · 2^-128`; walking each of the `M`
+outputs (a union over them, on paper), `Σ_{i ≤ M} (2i − 1) = M²` members, `M² · 2^30 · 2^-128`. At
+`M = 16` (`harness/season.toml`): `31 · 2^30 · 2^-128 < 2^-93`, and `2^8 · 2^30 · 2^-128 = 2^-90`.
 -/
 import RecursionFast.Contract.Oracle
 import Mathlib.Basic.NNReal.Defs

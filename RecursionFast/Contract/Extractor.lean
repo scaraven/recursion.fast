@@ -69,10 +69,10 @@ MiB), the node fits. A leaf proof that sends its data whole (`16 + 32n` bytes, t
 encoding) is a child of `601 + 4n` words, so at `leafCap`, beside a first child at the file cap, the
 node takes `2^23 + 2^22 + 57,954 < 2^23 + 2^22 + 2^17 < 2^24` words. Two children both within about
 `458,800` bytes of the file cap may not fit (with the most padding); with word-aligned fields they
-fit up to 36 bytes below it (two files of `2^26 − 1000` bytes, no trace, take `16,776,975 ≤ 2^24`
-words), so near the cap `outCap` may bind before the file cap. A node whose children do not fit
-cannot be extracted, so its verifier is not certifiable, which is the intended outcome: the entry's
-`V` bounds the children it accepts.
+fit up to 40 bytes below it (two files of `2^26 − 1000` bytes, no trace, take `16,776,975 ≤ 2^24`
+words), so near the cap `outCap` may bind before the file cap. A certified verifier cannot accept a
+node whose children do not fit by a proof of at most `8 · outCap` bytes (its extractor would have no
+output to give), which is the intended outcome: the entry's `V` bounds the children it accepts.
 
 **Budget.** `B t` charges `2^16` steps per input word and a fixed `2^48`. The fixed term covers a
 quasi-linear Reed–Solomon decoder of the word a node extractor must decode (about `2^29` symbols,
@@ -80,7 +80,9 @@ quasi-linear Reed–Solomon decoder of the word a node extractor must decode (ab
 covers indexing the log: copy each entry's answer and tape position into memory and merge-sort them
 by answer in a scratch of the same size (`memPerWord = 2`, `Machine.lean`), `t · log t ≤ 64 · t`
 comparisons of 4-word digests at about `2^5` statements each, so about `2^11` steps per word; a
-lookup is then a binary search. The decoded word's symbols are read from the log, so the decoder's
+lookup is then a binary search. (Above `2^63` tape words that memory is past what a 64-bit address
+reaches; an index of tape positions only, one word per entry and so at most `t / 5` words, sorted by
+the answers it points to, still fits.) The decoded word's symbols are read from the log, so the decoder's
 memory is also proportional to `t`. A leaf extractor must output up to `2 + 4 · 2^20` words, for
 every `n ≤ leafCap` (0, 1 and odd sizes included), and recovers them from the log when the proof
 commits to the data instead of carrying it. That fits both terms. The data at the cap is `2^25`
@@ -90,7 +92,8 @@ within the fixed term. For an extractor that decodes the data from the log, the 
 are on its tape (`t ≥ 2^22`), so writing the output, a few steps per word, is within the linear
 term; for any extractor that output, `2^22 + 2` words, is within the fixed term (`2^48`) too. One
 scan of the log for an answer is a kernel-checked control within `16 · t` steps
-(`Controls/LogScan.lean`). Within the domain `B t < 2^81`, so enumerating `2^128` candidates is
+(`Controls/LogScan.lean`), and a certified extractor that scans it by query within `32 · t`
+(`Controls/MaskedLeaf.lean`). Within the domain `B t < 2^81`, so enumerating `2^128` candidates is
 excluded; the relation has no shorter secret.
 -/
 import RecursionFast.Contract.Machine
