@@ -52,7 +52,8 @@ stream_s = 2000   # seconds of the entry's time for the whole benchmark from its
                   # every badge run (the service run, its checks and canaries, the timed passes; no
                   # check has a cap of its own); reaching it is the entry's REJECT. The runner's own
                   # work (copies, scrubs, samples, views, staging, the untimed delays) is off this
-                  # clock, recorded as stream.clock and bounded by the job's PART_S (AGENTS.md §9).
+                  # clock, recorded as stream.clock, budgeted by runner_budget_s and bounded by the
+                  # job's PART_S (AGENTS.md §9).
                   # 64 requests (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the badge runs:
                   # the per-request caps bind first except when an entry uses nearly every cap at
                   # once. The timed passes repeat the service run's requests, so about 4 × the
@@ -69,6 +70,12 @@ scrub_batches = 4096   # AGENTS.md §12: before every timed request the scrub (h
                   # batches of each kind, 12 bits of noise on the batch counters (256 until the final
                   # review's follow-up); off the clock, about 10 s per timed request (AGENTS.md §9); a
                   # power of two up to 65536
+runner_budget_s = 900   # AGENTS.md §9: the runner's own time inside the stream (stream.clock's
+                  # runner_overhead_s) that PART_S is sized for: measured at 8–11 min on the 32-CPU
+                  # development host, set with margin; the VM's figure is measured before the pin moves.
+                  # A benchmark part killed at PART_S is the entry's REJECT (`stream-cap`) only if its
+                  # last recorded overhead is within this budget and the entry's own clock is past
+                  # stream_s; otherwise the organiser's ERROR `overhead` (harness/evaluate.py)
 
 [calibration]     # AGENTS.md §6: interleaved samples with no entry process alive, medians used
 every = 8         # samples before the service run's steps 1 and 9, one before each timed pass and a

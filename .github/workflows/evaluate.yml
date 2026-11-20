@@ -62,13 +62,19 @@
 #     about 10 s, up to about 20 s, before each timed request with its random batches), each
 #     sandbox's view and set-up, the staging, the outputs' reads and walks, the calibration samples
 #     (about 6 × 3 s), the untimed delays before the timed passes (under 2 s each), the `drop` after
-#     each request: recorded as `stream.clock.runner_overhead_s`, of order 8–11 minutes (7–8 of them
-#     the 48 timed requests' scrubs), bounded by PART_S. The
-#     rest of PART_S (23.7 min, that overhead included) is for the organiser's own steps (the
-#     calibration instance, the leaf data and digests, the at most 30 s the checks may run past
-#     stream_s in all (one bound for every badge run; none starts past the cap), the service's
-#     stop, the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
-#     restore, the certificate download, the fetch, the result upload). The server kills a bench
+#     each request: recorded as `stream.clock.runner_overhead_s` (and checkpointed as it changes),
+#     of order 8–11 minutes on the 32-CPU development host (7–8 of them the 48 timed requests'
+#     scrubs; the VM's figure is measured before the pin moves, AGENTS.md §9), budgeted by
+#     `[stream] runner_budget_s` = 900 s (15 min). The rest of PART_S, 3840 − 2420 = 1420 s
+#     (23.7 min), holds that budget, the at most 30 s the checks may run past stream_s in all (one
+#     bound for every badge run; none starts past the cap) and 490 s (8.2 min) for the organiser's
+#     own steps (the calibration instance, the leaf data and digests, the service's stop, the
+#     score). A part killed at PART_S from the calibration on is the entry's REJECT (`stream-cap`)
+#     only if its runner's last checkpoint shows the entry's clock past stream_s with the overhead
+#     within runner_budget_s; otherwise the organiser's ERROR `overhead`, never counted against the
+#     author (harness/evaluate.py `part_timeout`). 6 min outside PART_S for the fixed steps
+#     (checkout, runner setup, the service restore, the certificate download, the fetch, the
+#     result upload). The server kills a bench
 #     VM 90 minutes after its job starts (infra/slots.json `hard_limit_s`), 20 above this limit.
 # Worst case 200 minutes (210 with nanoda); with the core commit's caches in place the `rf-bench`
 # slot is held for at most certificate + benchmark = 120 minutes (130) per evaluation (AGENTS.md

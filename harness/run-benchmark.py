@@ -35,7 +35,11 @@ record the score cannot be computed from (`rfh.bench.MalformedStream`: a step wi
 `timed_runs` timed times, or a record not of the shape `rfh.bench.check_record` requires) is a
 runner fault: `benchmark: error` named `malformed`, never the entry's. Every checkpoint of the result says `benchmark: incomplete`; only the
 final record (stage `done`) says `pass`, `fail` or `error`, and a failed write of the run log never
-stops the run.
+stops the run. During the stream every checkpoint also carries the stream's clock as last read
+(`stream_clock`: `entry_s`, `wall_s`, `runner_overhead_s`, `entry_running`, `at`; rewritten as each
+request or badge run starts and as it is charged, `rfh.bench.Bench.tick`), so that a part killed at
+`PART_S` is judged by whose time ran it past the bound (`evaluate.py`, AGENTS.md §9); the final
+record drops it (its `stream.clock` holds the figures).
 """
 import argparse
 import glob
@@ -200,6 +204,11 @@ def main():
             log(f"calibration: service {res['calibration']['service']}")
         if "stream" in parts:
             save("stream")
+
+            def progress(c):
+                res["stream_clock"] = c
+                save("stream")
+            bench.progress = progress
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
             log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), (a health check)")
@@ -242,6 +251,7 @@ def main():
         log(f"HARNESS ERROR: {e!r}")
     if res["benchmark"] == "incomplete":       # no failure and no error: the run passed
         res["benchmark"] = "pass"
+    res.pop("stream_clock", None)       # the checkpoints' (evaluate.py's at a PART_S kill); `stream.clock` holds it
     res["stage"] = "done"
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     tmp = a.out + ".tmp"

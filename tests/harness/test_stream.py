@@ -68,7 +68,10 @@
 13. The stream's clock counts the entry's time alone (review R3 L1): the runner's work (the scrub,
     with random machine-wide batches before a timed request only, the `drop` after every request,
     a badge run's copies) leaves `left()` unchanged, a request's start-up and timed part and a
-    badge process's own time are charged; a connection left after `drop` is a harness error.
+    badge process's own time are charged; a connection left after `drop` is a harness error. The
+    clock goes to the runner's checkpoint (`Bench.progress`, `tick`) as each request and badge run
+    starts (`entry_running`) and as it is charged, and at the stream's start and end, the last
+    reading the stream's recorded `clock` (what `evaluate.py` judges a part killed at `PART_S` by).
 14. The timed passes: an untimed random delay before each (recorded), the final output's canary run
     bounded like any canary run, the clock recorded in the stream (`clock`), and the replay
     refusals of a pass read from the service's counter (`stats`), however many (review R5 LOW 5,
@@ -788,6 +791,8 @@ def main():
     w2 = Bench.__new__(Bench)
     w2.p, w2.run, w2.work, w2.scrub_bin, w2.phase, w2.log = make().p, None, tempfile.mkdtemp(dir=os.environ.get("RF_TEST_TMP")), None, "request", (lambda m: None)
     w2.deadline = (_time.monotonic() + 100, "the cap")
+    w2._t_stream, ticks = _time.monotonic(), []
+    w2.progress = ticks.append
     scrubs, drops, dls = [], [], []
 
     def slow_scrub(batches=0):
@@ -809,6 +814,7 @@ def main():
     real_request, bench_mod.request = bench_mod.request, req2
     try:
         w2.one(svc2, "service1", "first", {"leaf.json": b"{}"})
+        tick1 = list(ticks)
         live[:] = [2, 0]                    # a connection still computing: `drop` asked again until it ends
         w2.one(svc2, "timed1-step1", "first", {"leaf.json": b"{}", "oracle.key": b"k" * 65})
         live[:] = [1]
@@ -827,6 +833,13 @@ def main():
           f"(asked again while a connection is left: {len(drops)} calls) are "
           f"off the clock, the request's start-up and timed part on it (left {w2.left():.2f} s, the deadlines passed "
           f"{[round(x, 2) for x in dls]} s ahead); a connection left after `drop` is a harness error: {err}")
+    check([t["entry_running"] for t in tick1] == [True, False] and tick1[0]["entry_s"] == 0.0
+          and abs(tick1[1]["entry_s"] - 2.5) < 1e-9 and tick1[0]["wall_s"] >= 0.1
+          and abs(tick1[1]["runner_overhead_s"] - (tick1[1]["wall_s"] - 2.5)) < 1e-9
+          and tick1[1]["runner_budget_s"] == w2.p.runner_budget_s and tick1[1]["at"] >= tick1[0]["at"],
+          f"Bench.one checkpoints the clock as the request starts (in flight, after the 0.1 s scrub: wall "
+          f"{tick1[0]['wall_s']:.2f} s) and as it is charged (entry_s {tick1[1]['entry_s']}, overhead "
+          f"{tick1[1]['runner_overhead_s']:.2f} s)")
     # Bench.verify charges the badge process's own time (`Badge.run_s`), not its copies
     v2 = Bench.__new__(Bench)
     v2.p, v2.store, v2.scrub_bin = make().p, "/nonexistent", None
@@ -840,14 +853,26 @@ def main():
             self.run_s = 4.0                  # its process, from release to the last answer: the entry's
             return [(True, 1)]
     v2.badge = SlowBadge()
+    v2._t_stream, vt = _time.monotonic(), []
+    v2.progress = vt.append
     v2.verify([(b"k", b"s", "x")], "a check", 50)
-    check(abs(v2.left() - 96.0) < 1e-3, f"Bench.verify charges the badge run's own 4 s, not its copies: left {v2.left():.3f} s")
+    check(abs(v2.left() - 96.0) < 1e-3 and [t["entry_running"] for t in vt] == [True, False]
+          and [t["entry_s"] for t in vt] == [0.0, 4.0],
+          f"Bench.verify charges the badge run's own 4 s, not its copies: left {v2.left():.3f} s; it checkpoints the "
+          f"clock as the run starts and as it is charged ({[(t['entry_running'], t['entry_s']) for t in vt]})")
 
     # 14. the timed passes: an untimed random delay before each, the replay refusals from the service's
     # counter (`stats`, every one, not the first 32 logged), the final output's canaries bounded
     b = make()
+    sticks = []
+    b.progress = sticks.append
     rec = b.stream_run()
     delays = rec.get("pass_delays_s") or []
+    check(len(sticks) >= 2 and sticks[0]["entry_s"] == 0.0 and not sticks[-1]["entry_running"]
+          and all(sticks[-1][k] == rec["clock"][k] for k in ("entry_s", "wall_s", "runner_overhead_s", "runner_budget_s"))
+          and rec["clock"]["runner_budget_s"] == b.p.runner_budget_s,
+          f"the stream checkpoints its clock at its start and its end, the last reading its recorded clock "
+          f"({len(sticks)} readings, the last {sticks[-1] if sticks else None})")
     fin = [t for what, t, _ in b.timeouts if what == "service run: the final output canaries"]
     check(len(delays) == 3 and all(0 <= x < 0.01 for x in delays) and fin and fin[0] <= bench_mod.INTERMEDIATE_SLACK_S + 2 * 3 * b.p.v_cap_ms / 1e3 + 1e-9
           and isinstance(rec.get("clock"), dict) and rec["clock"]["stream_s"] == b.p.stream_s,

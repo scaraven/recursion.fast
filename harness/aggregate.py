@@ -26,7 +26,10 @@ seasons), `drift` (AGENTS.md §6, calibration), `setup` (the setup jobs did not 
 cache was missing), `malformed` (a passed run's stream record is missing, has a step without exactly
 `timed_runs` timed times, or is not of the shape `rfh.bench.check_record` requires: steps 1 … M, each
 verifier time the median of its three judged runs, the final step accepted within its caps; so no
-score can be computed from it: `rfh.bench.MalformedStream`). They never count
+score can be computed from it: `rfh.bench.MalformedStream`), `overhead` (a benchmark part killed at
+`evaluate.py`'s `PART_S` that the entry's own time does not explain: the runner's recorded overhead
+in the stream past the season's `[stream] runner_budget_s`, or the entry's clock within `stream_s`,
+or no reading of the clock; `evaluate.part_timeout`, AGENTS.md §9). They never count
 against the author in the bot's fair order; `harness` (the
 certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one.
 
@@ -70,7 +73,10 @@ counts as passed only with its runner's final record (`stage: done`): a checkpoi
 that died (`benchmark: incomplete`), or any other value, is the runner's failure, an ERROR.
 
 **The provisional ranking**:
-`--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
+`--rank` ranks the results of each harness commit (`harness_commit`) on their own, never across
+commits (another pin's rules may score in other units: seconds before v6's `P_total · |π|`,
+seconds · bytes since), one ranking per commit (`rankings`, the most recent first, by its latest
+`finished`). Within one, it groups results by the entry (its name in the submissions repository, `entry.name`; the
 binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
 three evaluations, by the median score of its last three (by `finished`), each REJECT,
 PROVISIONAL or otherwise not comparable run counting as infinite, once per track, each run's score
@@ -91,7 +97,7 @@ import sys
 ALL_PARTS = "calibrate,stream"
 # one benchmark job; `split` is the same one job (the name callers pass)
 PLANS = {"split": ["all"], "single": ["all"]}
-ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed")
+ORGANISER_ERRORS = ("fingerprint", "lengths", "drift", "setup", "cache", "harness", "malformed", "overhead")
 
 
 def test_overrides(machine):
@@ -349,11 +355,29 @@ def track_score(r, track):
 
 
 def rank(results):
-    """The provisional ranking: per entry and per track, the median of its last three
-    evaluations' scores, each REJECT, PROVISIONAL or otherwise not comparable run counting as
-    infinite (none of them can help), and so does, per track, a run outside the track; an entry is
-    ranked only once it has at least three counted evaluations. ERROR results (the organiser's) are
-    not counted."""
+    """The provisional rankings, one per harness commit (`harness_commit`): the scores of different
+    commits are never compared or combined (a pin's rules fix the score's units), so each commit's
+    results are ranked on their own (`rank_rows`); the most recent commit's first (by its latest
+    `finished`)."""
+    by = collections.defaultdict(list)
+    for r in results:
+        by[r.get("harness_commit")].append(r)
+    order = sorted(by, key=lambda c: max(r.get("finished") or "" for r in by[c]), reverse=True)
+    return {"schema": "recursion.fast/v6/ranking-2",
+            "rule": "per harness commit (scores of different commits never compared), per entry (its name in the "
+                    "submissions repository) and per track (final: S, every: S_every, each read through "
+                    "score.tracks), the median score of its last three evaluations, a REJECT, PROVISIONAL or not "
+                    "comparable run, or one outside the track, counting as infinite; ranked from three evaluations, "
+                    "ordered by the track final (median_S)",
+            "rankings": [{"harness_commit": c, "entries": rank_rows(by[c])} for c in order]}
+
+
+def rank_rows(results):
+    """The provisional ranking of one harness commit's results: per entry and per track, the median
+    of its last three evaluations' scores, each REJECT, PROVISIONAL or otherwise not comparable run
+    counting as infinite (none of them can help), and so does, per track, a run outside the track;
+    an entry is ranked only once it has at least three counted evaluations. ERROR results (the
+    organiser's) are not counted."""
     by = collections.defaultdict(list)
     for r in results:
         if r.get("verdict") == "ERROR" or not entry_key(r):
@@ -374,12 +398,7 @@ def rank(results):
                                         else (med if med != inf else "failed"))
         rows.append(row)
     rows.sort(key=lambda x: (not isinstance(x["median_S"], float), x["median_S"] if isinstance(x["median_S"], float) else 0))
-    return {"schema": "recursion.fast/v6/ranking-1",
-            "rule": "per entry (its name in the submissions repository) and per track (final: S, every: S_every, each "
-                    "read through score.tracks), the median score of its last three evaluations, a REJECT, PROVISIONAL "
-                    "or not comparable run, or one outside the track, counting as infinite; ranked from three "
-                    "evaluations, ordered by the track final (median_S)",
-            "entries": rows}
+    return rows
 
 
 if __name__ == "__main__":

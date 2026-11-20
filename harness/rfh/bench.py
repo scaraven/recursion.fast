@@ -68,6 +68,7 @@ class Params:
     check_every: int
     timed_runs: int
     scrub_batches: int
+    runner_budget_s: float
     calib_every: int
     calib_idle_s: float
     calib_rounds: int
@@ -103,6 +104,7 @@ class Params:
             M=s.get("M"), n=s.get("n"), ready_s=g("stream", "ready_s"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
             timed_runs=g("stream", "timed_runs"), scrub_batches=g("stream", "scrub_batches"),
+            runner_budget_s=float(g("stream", "runner_budget_s")),
             calib_every=g("calibration", "every"), calib_idle_s=float(g("calibration", "idle_s")),
             calib_rounds=g("calibration", "rounds"), calib_ref_ns=float(g("calibration", "ref_ns")),
             calib_drift=float(g("calibration", "c_P_drift")), calib_runs=g("calibration", "runs_per_sample"),
@@ -273,6 +275,7 @@ class Bench:
         os.makedirs(self.badge.scratch, exist_ok=True)
         self.deadline = None                 # the running cap (`stream_s`), on the entry's clock (`deadline`)
         self.samples = []                    # the interleaved calibration samples
+        self.progress = None                 # called with the stream's clock at every change (`tick`)
 
     # -- the stream's clock: the entry's time alone (review R3 L1) ---------------------------------
     @property
@@ -284,8 +287,10 @@ class Bench:
         Everything the runner does in between (the copies, the scrubs, the sandboxes' views and
         set-up, the staging, the outputs' reads and walks, the calibration samples, the service's
         control lines, the untimed delays) is off the clock: recorded as the runner's overhead
-        (`stream.clock`) and bounded by the benchmark job's `PART_S` (`harness/evaluate.py`), so an
-        entry is never rejected for the runner's own time. Setting it to (t, reason) starts a cap
+        (`stream.clock`, checkpointed as it changes, `tick`) and bounded by the benchmark job's
+        `PART_S` (`harness/evaluate.py`), whose end is the organiser's ERROR when that overhead is
+        past the season's `runner_budget_s` or the entry's clock within `stream_s`
+        (`evaluate.part_timeout`), so an entry is never rejected for the runner's own time. Setting it to (t, reason) starts a cap
         that is reached when the entry has used `t − now` more seconds; None stops it."""
         cap = getattr(self, "_cap", None)
         return None if cap is None else (time.monotonic() + cap - self.entry_s, self._cap_why)
@@ -301,6 +306,29 @@ class Bench:
         """Count `seconds` of the entry's time on the stream's clock."""
         if getattr(self, "_cap", None) is not None and seconds:
             self.entry_s += seconds
+
+    def clock_now(self, entry_running=False):
+        """The stream's clock now (`stream.clock`): the entry's time counted (`entry_s`), the wall
+        time since the stream began (`wall_s`) and the runner's overhead between them, with the
+        season's `stream_s` and `runner_budget_s`; `entry_running`: an entry process (a request
+        or a badge run) is in flight and not yet charged; `at`: the epoch time of the reading. None
+        outside the stream."""
+        t0 = getattr(self, "_t_stream", None)
+        if t0 is None:
+            return None
+        wall = time.monotonic() - t0
+        return {"stream_s": self.p.stream_s, "runner_budget_s": self.p.runner_budget_s,
+                "entry_s": self.entry_s, "wall_s": wall, "runner_overhead_s": wall - self.entry_s,
+                "entry_running": bool(entry_running), "at": time.time()}
+
+    def tick(self, entry_running, c=None):
+        """The stream's clock to the runner's checkpoint (`progress`, run-benchmark.py's
+        `stream_clock`), as an entry process starts (`entry_running`) and as it is charged: if the
+        benchmark job's `PART_S` kills the runner, `evaluate.py` reads from the last one whose
+        time, the entry's or the runner's, ran the part past it (AGENTS.md §9)."""
+        cb, c = getattr(self, "progress", None), c or self.clock_now(entry_running)
+        if cb is not None and c is not None:
+            cb(c)
 
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
@@ -354,6 +382,7 @@ class Bench:
         shared = self.deadline is not None and timeout >= self.left() + 30 - 1e-3   # the run had the shared bound
         self.scrub()        # as before a request: no badge run reads an earlier one's per-CPU inode counts
         self.badge.run_s = 0.0
+        self.tick(True)
         try:
             return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
         except BadgeError as e:
@@ -364,6 +393,7 @@ class Bench:
                        kind=e.kind, stage="check")
         finally:
             self.charge(getattr(self.badge, "run_s", 0.0))     # the badge process's own time (`Badge.run_s`)
+            self.tick(False)
 
     def capped(self):
         """The timeout of one badge run: what is left of one absolute bound, 30 s past the stream's
@@ -563,11 +593,15 @@ class Bench:
         scrub_s = self.scrub(batches=self.p.scrub_batches if key_of(inputs) else 0)
         dl = self.deadline[0] if self.deadline else None       # after the runner's own work (off the clock)
         pads = [bytes(n) for name, n in STAGED.items() if name not in inputs]
+        # the clock to the checkpoint (`tick`), after the scrub: one file replaced, the same for every
+        # request whatever an earlier one did, so it adds nothing a request could read of another
+        self.tick(True)
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
                     preset={"vk.hex": (svc.vk.hex() + "\n").encode()}, pads=pads)
         r.scrub_s = scrub_s
         self.charge((r.startup_s or 0.0) + (r.seconds or 0.0))      # the entry's time: start-up and the timed part
+        self.tick(False)
         self.alive(svc)
         self.dropped(svc, tag)
         remove_tree(sock)
@@ -662,15 +696,16 @@ class Bench:
         else:
             n, dt = self.run.copies[-1]
             rec["copies"] = [{"for": "the service run", "bytes": n, "seconds": dt}]
-        t_stream = time.monotonic()
+        t_stream = self._t_stream = time.monotonic()
         self.deadline = (t_stream + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s of the entry's time was reached")
+        self.tick(False)
 
         def clock():
             """The stream's clock (`deadline`): the entry's time it counted, the wall time, and the
-            runner's overhead, off the clock, between them."""
-            wall = time.monotonic() - t_stream
-            rec["clock"] = {"stream_s": p.stream_s, "entry_s": self.entry_s, "wall_s": wall,
-                            "runner_overhead_s": wall - self.entry_s}
+            runner's overhead, off the clock, between them (`clock_now`), also to the checkpoint."""
+            c = self.clock_now()
+            rec["clock"] = {k: c[k] for k in ("stream_s", "runner_budget_s", "entry_s", "wall_s", "runner_overhead_s")}
+            self.tick(False, c)
         try:
             try:
                 self.phase = "request"

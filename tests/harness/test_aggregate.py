@@ -11,14 +11,16 @@ intermediate output was rejected is in the track `final` only); a step record wi
 timed times is an organiser ERROR named `malformed`, never comparable, and so is a passed run whose
 record is not of the season's shape (`rfh.bench.check_record`: no stream record or no steps, a stream
 that kept 2 of its M steps, a duplicated index, a `V_ns` that is not the median of three judged times,
-a final output not accepted within its caps), and a part the runner named `malformed`; the part
+a final output not accepted within its caps), and a part the runner named `malformed` (or
+`evaluate.py` named `overhead`, killed at PART_S on the runner's time) is that ERROR; the part
 dropped, duplicated, replaced by another part set, or two harness commits give ERROR; a failed part
 gives REJECT; a rejected certificate gives REJECT; a REJECT carries its `reject_stage` (the
 certificate's, else the failed part's own); a stream flagged truncated (no v6 runner writes one)
 is not comparable. The ranking takes, per entry (not per binary) and per track (`final` from `S`,
 `every` from `S_every`, read through `score.tracks`), the median of its last three evaluations, a
 REJECT, a not comparable run or a run outside the track counting as its worst, and ranks only from
-three evaluations.
+three evaluations; results of different harness commits (whose rules may score in other units) are
+ranked apart, one ranking per commit, never in one median.
 AGENTS.md §6: with a season that names a machine fingerprint, a benchmark on another machine, or with a
 missing or unreadable fingerprint, is an organiser ERROR whatever the entry did (the reason says
 which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts any machine. The score does not depend on `c_P` (AGENTS.md §6), and the result records the runner (AGENTS.md §8) and no CPU model. A stream whose shape
@@ -164,6 +166,11 @@ def main():
     mal = part("calibrate,stream", benchmark="error")
     mal["organiser_error"] = "malformed"
     holds(run(tmp, [mal]).get("organiser_error") == "malformed", "a part the runner named `malformed` is that ERROR")
+    ovh = part("calibrate,stream", benchmark="error")
+    ovh["stage"], ovh["organiser_error"] = "stream", "overhead"      # evaluate.py's part killed at PART_S
+    r = run(tmp, [ovh])
+    holds(r["verdict"] == "ERROR" and r.get("organiser_error") == "overhead" and r.get("reject_stage") is None,
+          f"a part evaluate.py named `overhead` (killed at PART_S on the runner's time) is that ERROR: {r['verdict']}")
     r = run(tmp, [part("calibrate,stream", accepted=(False, True))])
     check(r, "ACCEPT", "an intermediate output rejected (the final accepted)")
     holds(r["score"]["tracks"] == {"final": "S"} and "output 1 rejected by acc" in r["score"]["tracks_reason"]["every"],
@@ -295,9 +302,9 @@ def main():
     check(run(tmp, [part(A, fp=FP), part(A, fp="e" * 64)], season=fixed), "ERROR",
           "two parts (a plan error first) with different fingerprints")
 
-    def res(S, verdict="ACCEPT", when="t", e="e", comparable=None, binary=None, every=True):
+    def res(S, verdict="ACCEPT", when="t", e="e", comparable=None, binary=None, every=True, commit=None):
         """A result scoring S in `final` and S + 100 in `every` (S_every, read through score.tracks)."""
-        return {"verdict": verdict, "comparable": (verdict == "ACCEPT") if comparable is None else comparable,
+        return {"verdict": verdict, "harness_commit": commit, "comparable": (verdict == "ACCEPT") if comparable is None else comparable,
                 "finished": when, "entry": {"name": e}, "prover_sha256": binary or when,
                 "score": {"S": S, **({"S_every": S + 100} if every else {}),
                           "tracks": {"final": "S", **({"every": "S_every"} if every else {})}} if S is not None else {}}
@@ -312,7 +319,9 @@ def main():
         files.append(os.path.join(tmp, f"r{k}.json"))
         json.dump(r, open(files[-1], "w"))
     subprocess.run([sys.executable, "-I", AGG, "--rank", "--out", rk, *files], check=True, capture_output=True)
-    rows = {x["entry"]: x for x in json.load(open(rk))["entries"]}
+    rks = json.load(open(rk))["rankings"]
+    holds(len(rks) == 1 and rks[0]["harness_commit"] is None, f"one harness commit, one ranking: {len(rks)}")
+    rows = {x["entry"]: x for x in rks[0]["entries"]}
     holds(rows["e"]["median_S"] == 2.0 and rows["e"]["evaluations"] == 4 and rows["g"]["median_S"] == 1.5
           and rows["g"]["failures"] == 1 and rows["g"]["evaluations"] == 3,
           f"ranking per entry, though every run has its own binary: median of the last three (e: 1, 2, 9 → 2), a REJECT "
@@ -326,6 +335,23 @@ def main():
           and "unranked" in rows["one"]["median_S_every"],
           f"the track `every` is ranked the same way from each run's S_every, a run outside it counting as infinite "
           f"(e: ∞, 102, 109 → 109): {rows['e']['last_three_every']}")
+    # results of different harness commits are ranked apart (a pin's rules fix the score's units:
+    # seconds under one, seconds · bytes under the next), never in one median (final review LOW)
+    files = []
+    for k, r in enumerate([res(1.0, when="1", commit="old"), res(2.0, when="2", commit="old"), res(3.0, when="3", commit="old"),
+                           res(4e5, when="4", commit="new"), res(5e5, when="5", commit="new"), res(6e5, when="6", commit="new"),
+                           res(0.5, when="1", e="x", commit="old"), res(0.6, when="2", e="x", commit="old"),
+                           res(7e5, when="6", e="x", commit="new")]):
+        files.append(os.path.join(tmp, f"m{k}.json"))
+        json.dump(r, open(files[-1], "w"))
+    subprocess.run([sys.executable, "-I", AGG, "--rank", "--out", rk, *files], check=True, capture_output=True)
+    rks = json.load(open(rk))["rankings"]
+    by = {x["harness_commit"]: {y["entry"]: y for y in x["entries"]} for x in rks}
+    holds([x["harness_commit"] for x in rks] == ["new", "old"] and by["old"]["e"]["median_S"] == 2.0
+          and by["new"]["e"]["median_S"] == 5e5 and by["old"]["e"]["evaluations"] == 3
+          and "unranked" in by["old"]["x"]["median_S"] and "unranked" in by["new"]["x"]["median_S"],
+          f"two harness commits, two rankings (the latest first), no median across them: e {by['old']['e']['median_S']} "
+          f"(old) and {by['new']['e']['median_S']} (new), x unranked in both (2 + 1 evaluations)")
     # a part without its runner's final record (`stage: done`) is never a pass (review R3 H3)
     died = part("calibrate,stream", benchmark="incomplete")
     died["stage"] = "stream"

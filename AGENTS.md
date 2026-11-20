@@ -374,9 +374,11 @@ comes from a run in which the prover never had the key.
   answer), summed as each ends. The runner's own work is off that clock: the copies of the setup,
   the scrubs, each sandbox's view and set-up, the staging of the inputs, the outputs' reads and
   walks, the calibration samples, the service's control lines, the untimed delays. The result
-  records both (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`); the runner's overhead
-  is bounded by the benchmark job's `PART_S` (§9), whose end during the stream is still the
-  entry's REJECT (`stream-cap`), since the overhead grows only with what the entry's caps allow.
+  records both (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`, and the runner's
+  checkpoints as they change); the runner's overhead has a budget, `[stream] runner_budget_s`,
+  inside the benchmark job's `PART_S` (§9). A part killed at `PART_S` is the entry's REJECT
+  (`stream-cap`) only when the entry's own clock is past `stream_s` with the overhead within its
+  budget; otherwise it is the organiser's ERROR `overhead` (§8, §9).
 - **Calibration.** Before the service run's steps 1 and 9 (every `every` = 8 steps), before each
   timed pass, and after the timed passes (if 30 s of `stream_s` remain), always
   with no entry process alive: three runs of the organiser's prover-shaped workload `calib`
@@ -482,8 +484,8 @@ runner fault, an organiser ERROR named `malformed` (§8).
 |---|---|
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
-| REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (a rejected certificate; it takes precedence), `prover` (the prover's build, its setup or the setup's hash, anything before the stream, or the benchmark job's `PART_S` reached during them), `request` (a service-run request failed: an exit, a timeout, no `ready` line, memory, `/work`; or its output's size broke `pi_cap` as it arrived, or `final_pi_cap`), `check` (a badge run failed: a crash, a timeout, a slow start-up; the final output rejected in any judged run, or its `V` above `v_cap`; a statement canary accepted; an output above `pi_cap` only because a rejection sized it by its file), `timed-pass` (a byte mismatch, a failed timed request, the service not entering replay mode, a replay `MISMATCH` or the replay audit) or `stream-cap` (`stream_s` reached before a request or a badge run, or ending a request; `PART_S` reached from the calibration on). A failure with no stage of its own (the service dying) takes the phase's: `request` in the service run, `timed-pass` after |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a machine with no systemd user manager for the sandboxes' memory scopes, or a benchmark run under a test-only override (`machine.memcap_override`, `machine.badge_host_root`, `machine.memcap = prlimit`; all named `fingerprint`), a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint, shape or `malformed` failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) but `harness` never count against the author; `harness` (the certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one. A benchmark part counts as passed only with its runner's final record (`stage: done`); a runner that died after a checkpoint is an unnamed ERROR, never a pass |
+| REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (a rejected certificate; it takes precedence), `prover` (the prover's build, its setup or the setup's hash, anything before the stream, or the benchmark job's `PART_S` reached during them), `request` (a service-run request failed: an exit, a timeout, no `ready` line, memory, `/work`; or its output's size broke `pi_cap` as it arrived, or `final_pi_cap`), `check` (a badge run failed: a crash, a timeout, a slow start-up; the final output rejected in any judged run, or its `V` above `v_cap`; a statement canary accepted; an output above `pi_cap` only because a rejection sized it by its file), `timed-pass` (a byte mismatch, a failed timed request, the service not entering replay mode, a replay `MISMATCH` or the replay audit) or `stream-cap` (`stream_s` reached before a request or a badge run, or ending a request; `PART_S` reached from the calibration on with the entry's clock past `stream_s` and the runner's overhead within `runner_budget_s`, §9). A failure with no stage of its own (the service dying) takes the phase's: `request` in the service run, `timed-pass` after |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a machine with no systemd user manager for the sandboxes' memory scopes, or a benchmark run under a test-only override (`machine.memcap_override`, `machine.badge_host_root`, `machine.memcap = prlimit`; all named `fingerprint`), a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache, a benchmark part killed at `PART_S` that the entry's own time does not explain (`overhead`, §9: the runner's overhead past `runner_budget_s`, or the entry's clock within `stream_s`; an entry can lengthen the runner's work, so it is a kind an entry might provoke)); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint, shape or `malformed` failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) but `harness` never count against the author; `harness` (the certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one. A benchmark part counts as passed only with its runner's final record (`stage: done`); a runner that died after a checkpoint is an unnamed ERROR, never a pass |
 
 A result is **comparable** iff it is ACCEPT and the job plan matched (an ACCEPT is always on the
 season's machine and with the season's shape: anything else is ERROR). A stream that reaches
@@ -564,7 +566,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | gate; badge build | 120 s; 180 s |
 | prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB with the prover binary, `2^16` entries, paths of at most 2,048 bytes |
 | start-up to `ready`; one request (`step_s`) | 10 s; 20 s |
-| the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s of the entry's time: its requests' start-ups and timed parts and its badge runs (reached: REJECT); the runner's own work is off this clock, inside `PART_S` |
+| the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s of the entry's time: its requests' start-ups and timed parts and its badge runs (reached: REJECT); the runner's own work is off this clock, budgeted by `runner_budget_s` = 900 s inside `PART_S` |
 | an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 64 ms (the median of three fresh judged runs) |
 | a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
 | timed passes (`timed_runs`); a timed pass's output | 3; byte-identical to the service run's |
@@ -611,9 +613,18 @@ staging of the inputs, the outputs' reads and walks, the scrubs (about 0.1 s bef
 badge run, and before each of the 48 timed requests its random machine-wide batches, about 10 s on
 average and up to about 20 s), the calibration samples (2 s idle and three short runs each, about
 18 s), the untimed delays before the timed passes (under 2 s each) and the service's `drop` after each
-request. It is bounded by the benchmark job's `PART_S` (64 minutes), whose 23.7 minutes beyond the
-capped steps hold it (`.github/workflows/evaluate.yml` has the arithmetic). Measured on the
-development host (kernel 7.0, 32 CPUs, `/dev/shm`):
+request. It has a budget, `[stream] runner_budget_s` = 900 s (15 minutes), inside the benchmark
+job's `PART_S` (64 minutes), whose 23.7 minutes beyond the capped steps hold the budget, the checks'
+30 s past `stream_s` and 8.2 minutes for the organiser's other steps (`.github/workflows/evaluate.yml`
+has the arithmetic). The runner checkpoints the clock as each request and badge run starts and as
+it is charged (`stream_clock` in its checkpoint: `entry_s`, `wall_s`, `runner_overhead_s`, whether
+an entry process is in flight), so a part killed at `PART_S` is judged by whose time ran it there
+(`harness/evaluate.py` `part_timeout`; the time since the last reading is the entry's if an entry
+process was in flight, else the runner's): the entry's REJECT (`stream-cap`) only when its own clock
+is past `stream_s` with the runner's overhead within `runner_budget_s`; the organiser's ERROR
+`overhead` (§8; never counted against the author) when the overhead is past the budget, when the
+entry's clock is within `stream_s`, or with no reading (a kill during the calibration). Measured on
+the development host (kernel 7.0, 32 CPUs, `/dev/shm`):
 
 | the runner's work inside the stream | each | in a stream |
 |---|---|---|
@@ -624,8 +635,10 @@ development host (kernel 7.0, 32 CPUs, `/dev/shm`):
 
 With the samples and the delays, the overhead of a stream at the season's caps is of order eight to
 eleven minutes, most of it the timed requests' scrubs, every second of it outside `stream_s` and
-inside `PART_S`'s 23.7 minutes beyond the capped steps (measured on a loaded host, load 15–30 on its
-32 CPUs; the VM's own figure is not measured). (Until review R3, `stream_s` was wall time and these
+within `runner_budget_s` (measured on a loaded host, load 15–30 on its 32 CPUs). The benchmark VM's
+own figure (4 cores / 8 threads; the scrub is nearly serial, so fewer CPUs do not shorten it) is not
+yet measured: it must be measured with a stream at the season's caps on the VM, and
+`runner_budget_s` (with `PART_S`) set from it with margin, before the pin moves to these rules. (Until review R3, `stream_s` was wall time and these
 copies left an entry at every cap about 3–19 s for its badge start-ups; until the setup was copied
 to the runner's tmpfs, the runner re-read it before every request.) A toy setup's copy (the smoke's)
 takes about 5 ms. The smoke's honest stream (`M` = 4, 16 requests, 12 of them timed, its

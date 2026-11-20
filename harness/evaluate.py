@@ -50,7 +50,8 @@ kernel's, which leaves the certificate unchecked):
   each kernel run's memory peak (`kernel_runs`, sampled while it runs).
   With `--export-build DIR` and status `ok`, the entry modules' build outputs and their manifest
   are written to DIR (`entry_build` in the result; the bot caches them if the result is a record).
-The benchmark job (`bench`; the organiser's evaluation machine): `harness/run-benchmark.py` with the badge.
+The benchmark job (`bench`; the organiser's evaluation machine): `harness/run-benchmark.py` with the badge,
+within `PART_S`; a part killed there is judged by its runner's last checkpoint (`part_timeout`).
 Verdict: ACCEPT (certificate ok, benchmark pass), PROVISIONAL (certificate provisional, benchmark
 pass; never ranked, its numbers marked uncomparable), REJECT (anything else).
 """
@@ -72,6 +73,7 @@ from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
 PART_S = 3840           # the benchmark job (64 min of its 70): the outer bound of its capped steps
+                        # and of the runner's own time, `[stream] runner_budget_s` of it in the stream
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
 
 
@@ -502,6 +504,44 @@ def build_badge(org, tree, log, timeout, res):
     return out
 
 
+def part_timeout(res, stream_s, runner_budget_s, now):
+    """A benchmark part killed at `PART_S`, judged from its runner's last checkpoint `res` (None if
+    unreadable) at the epoch time `now`: (benchmark, reject_stage, organiser_error, reason).
+
+    Before the prover's build: the organiser's (an unnamed harness error). During the prover's
+    build or setup (each capped by the season, `build_s`, `setup_s`): the entry's REJECT at `prover`.
+    From the calibration on, the stream's clock as last checkpointed (`stream_clock`,
+    `rfh.bench.Bench.tick`) is brought up to `now`: the time since the checkpoint is the entry's if
+    an entry process was in flight (`entry_running`), else the runner's. The part is the entry's
+    REJECT (`stream-cap`) only when the entry's own time is what overran: its clock past `stream_s`
+    with the runner's overhead within `runner_budget_s`. Otherwise (no clock: the calibration, or
+    the stream before its first reading; the runner's overhead past its budget; the entry's clock
+    within `stream_s`) the organiser's ERROR named `overhead`, which never counts against the author
+    (AGENTS.md §8, §9)."""
+    stage = (res or {}).get("stage") or "organiser setup"
+    head = f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
+    if stage == "organiser setup":
+        return "error", None, None, head + ": a harness error"
+    if stage in ("prover build", "prover setup"):
+        return "fail", "prover", None, head + ": the entry's failure"
+    c = res.get("stream_clock")
+    num = lambda k: c.get(k) if isinstance(c, dict) and type(c.get(k)) in (int, float) else None  # noqa: E731
+    if None in (num("entry_s"), num("wall_s"), num("at")):
+        return "error", None, "overhead", (head + ", with no reading of the stream's clock (no entry time counted "
+                                           "against stream_s): the organiser's ERROR `overhead`")
+    since = max(0.0, now - c["at"])
+    entry_s = c["entry_s"] + (since if c.get("entry_running") is True else 0.0)
+    overhead = c["wall_s"] + since - entry_s
+    figs = (f"the entry's clock {entry_s:.1f} s of stream_s = {stream_s} s, the runner's overhead {overhead:.1f} s "
+            f"of runner_budget_s = {runner_budget_s} s ({since:.1f} s since the last reading, "
+            + ("an entry process in flight" if c.get("entry_running") is True else "no entry process in flight") + ")")
+    if overhead > runner_budget_s:
+        return "error", None, "overhead", f"{head}: {figs}: the runner's own time ran past its budget, the organiser's ERROR `overhead`"
+    if entry_s <= stream_s:
+        return "error", None, "overhead", f"{head}: {figs}: the entry's clock is within stream_s, the organiser's ERROR `overhead`"
+    return "fail", "stream-cap", None, f"{head}: {figs}: the entry's own time overran, the entry's failure"
+
+
 def bench_job(a, cert):
     cmd = [sys.executable, "-I", os.path.join(HERE, "run-benchmark.py"), "--season", a.season, "--entry", a.entry,
            "--badge", cert["badge_dir"], "--service", a.service, "--bench", a.bench, "--work", a.work, "--out", a.out]
@@ -522,21 +562,25 @@ def bench_job(a, cert):
                 f"harness error: the runner ended without completing its result (its last checkpoint: "
                 f"`{res.get('stage')}`)")
     except subprocess.TimeoutExpired:
-        # the part ran past its bound; once the prover's build has started, the entry's
-        # steps are what can take that long (every organiser step is bounded far below it), so it is
-        # the entry's failure, never a missing part
+        # the part ran past its bound: whose time did it is read from the runner's last checkpoint
+        # (`part_timeout`): the prover's build or setup, or the entry's clock past `stream_s` with
+        # the runner's overhead within `[stream] runner_budget_s`, is the entry's REJECT; anything
+        # else (the runner's own time, about 8–11 min of scrubs and copies in a stream at the
+        # season's caps, past its budget, or the entry's clock within `stream_s`) is the organiser's
+        # ERROR `overhead`, never the entry's (AGENTS.md §9)
+        now = time.time()
         try:
             res = json.load(open(a.out))
         except (OSError, ValueError):
             res = {"stage": "organiser setup", "reasons": []}
-        stage = res.get("stage") or "organiser setup"
-        entry_stage = stage not in ("organiser setup",)
-        res["benchmark"] = "fail" if entry_stage else "error"
-        if entry_stage:      # before the stream, the prover's build or setup; from it on, the stream's time
-            res["reject_stage"] = "prover" if stage in ("prover build", "prover setup") else "stream-cap"
-        res.setdefault("reasons", []).append(
-            f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
-            + (": the entry's failure" if entry_stage else ": a harness error"))
+        st = tomllib.load(open(a.season, "rb"))["stream"]
+        bm, rs, kind, why = part_timeout(res, st["stream_s"], st["runner_budget_s"], now)
+        res["benchmark"] = bm
+        if rs:
+            res["reject_stage"] = rs
+        if kind:
+            res["organiser_error"] = kind
+        res.setdefault("reasons", []).append(why)
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
                                                    "built_modules", "environment", "record_cache", "entry_build")}

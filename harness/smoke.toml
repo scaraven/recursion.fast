@@ -39,6 +39,7 @@ timed_runs = 3    # as the season's
 scrub_batches = 256   # AN EXCEPTION (the season's 4096): CI's smoke runs about 40 timed requests, which
                   # at 4096 would take about 10 s more each and overrun its time limits; the mechanism
                   # is the same, only the noise is smaller
+runner_budget_s = 300   # the smoke's: its honest stream's runner overhead is about 20 s
 
 [calibration]
 every = 4
