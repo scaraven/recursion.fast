@@ -65,6 +65,14 @@
     `RF_ALLOW_PRLIMIT=1` (recorded as `machine.memcap_override`), and so is `RF_TEST_BADGE_HOST_ROOT=1`
     unless `RF_TEST_OVERRIDES=1` (recorded as `machine.badge_host_root`). A kill by the OOM killer
     reads as the cap's only when the scope's memory events or its peak say so (`oom_label`).
+13. The stream's clock counts the entry's time alone (review R3 L1): the runner's work (the scrub,
+    with random machine-wide batches before a timed request only, the `drop` after every request,
+    a badge run's copies) leaves `left()` unchanged, a request's start-up and timed part and a
+    badge process's own time are charged; a connection left after `drop` is a harness error.
+14. The timed passes: an untimed random delay before each (recorded), the final output's canary run
+    bounded like any canary run, the clock recorded in the stream (`clock`), and the replay
+    refusals of a pass read from the service's counter (`stats`), however many (review R5 LOW 5,
+    R8 HIGH 1).
 """
 import importlib.util
 import json

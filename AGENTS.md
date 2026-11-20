@@ -207,8 +207,12 @@ key.
   only if its trace digest is the one signed at the same index in the service run, and then
   returns that same signature (otherwise status 4, `MISMATCH`). Replay mode never signs anything
   new.
-- **The prover may:** use any algorithm; precompute in an untimed `setup` (no instance, no service);
-  use every CPU and up to 32 connections; batch up to `2^18` queries per `QUERY`; make any number of
+- **The prover may:** use any algorithm; precompute in an untimed `setup` (no instance, no service;
+  its `/setup` a private tmpfs charged to its memory cap, at most `setup_cap` together with the
+  binary, `2^16` entries, paths of at most 2,048 bytes);
+  use every CPU and up to 32 connections (each closed when it is idle or its answer unread for
+  `step_s`, and every connection closed by the runner after each request, the control line `drop`;
+  [`service/PROTOCOL.md`](service/PROTOCOL.md) §1, §6); batch up to `2^18` queries per `QUERY`; make any number of
   `SIGN`s within `2^16` per stream; dispatch on `cpuid`.
 - **The prover must:** in the service run, obtain every oracle answer from the service (the key is
   secret; Merkle and Fiat–Shamir hashes included); in the timed passes, where `/work/oracle.key`
@@ -230,15 +234,21 @@ key.
   pidfd can be made (`pidfd_open`, `clone` with `CLONE_PIDFD`, `SO_PEERPIDFD` and `SO_PASSPIDFD`
   fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to `clone`); `SO_COOKIE` fails;
   `setsid` fails (the prover is a session leader already); `mbind`, `migrate_pages`, `move_pages`
-  and `set_mempolicy_home_node` fail with ENOSYS. Nothing a request or a badge run sees is on the
+  and `set_mempolicy_home_node` fail with ENOSYS; in a request (not in the setup or the badge)
+  `sysinfo` fails with ENOSYS (its load averages, process count and free memory are machine-wide)
+  and `sendmsg` and `sendmmsg` fail with EPERM (no file descriptor or credential can be sent: one
+  parked in the service's receive queue would outlive the request; write with `write`, `writev`,
+  `send` or `sendto`), and the service refuses a message carrying ancillary data. Nothing a request or a badge run sees is on the
   host's disks or sysfs: `/prover` and `/setup` are the runner's copies on its own tmpfs, a fresh
   copy for the service run and for each timed pass, and so are the badge's files (fresh copies for
   every badge run), each request's socket directory (with a random name) and, for every sandbox,
   its own `/proc` mask files and its own copy of the CPU tree; each request's `/work` is a private
   tmpfs. A read-only file on tmpfs still keeps state a process can set through it (its shared
   memory policy), so no copy is shared across a pass, a badge run or a sandbox (§12). Before every
-  request the runner moves every CPU's inode counters to a fresh batch at a random offset
-  ([`harness/PROVER.md`](harness/PROVER.md) §2; what is left open, §12).
+  request the runner moves every CPU's inode counters to a fresh batch at a random offset, and
+  before every timed request it also takes a random number of fresh batches machine-wide
+  ([`harness/PROVER.md`](harness/PROVER.md) §2; what is left open, and what a leaked bit is worth,
+  §12).
 - The native prover is never proved. Only its signed proofs are checked, by `acc`. It need not
   agree with the Lean `P`.
 
@@ -300,9 +310,10 @@ comes from a run in which the prover never had the key.
   runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per MiB of file beyond
   the check itself), and by the badge's own clock; the larger counts
   ([`harness/rfh/checks.py`](harness/rfh/checks.py)). A judged run of an intermediate output is
-  bounded by `60 s + 4 · v_cap`, a canary run of `c` canaries of outputs 1 and 2 by `60 s + 2 (c +
-  1) · v_cap`; the final output's runs by the stream's cap alone. All badge runs share one bound,
-  30 s past `stream_s`, and none starts once `stream_s` is reached (the entry's REJECT, `stream-cap`).
+  bounded by `60 s + 4 · v_cap`, a canary run of `c` canaries (of outputs 1 and 2, or of the final
+  output) by `60 s + 2 (c + 1) · v_cap`; the final output's three judged runs by the stream's cap
+  alone (their `V` is capped by `v_cap`). All badge runs share one bound, 30 s past `stream_s`, and
+  none starts once `stream_s` is reached (the entry's REJECT, `stream-cap`).
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
   (a leaf: only the flipped statement) and 2 also. Each canary is checked once, in one badge run:
@@ -322,7 +333,7 @@ comes from a run in which the prover never had the key.
   nothing that depends on `k`, the data, the statement or the service can run in the untimed
   start-up (connect after `go`). The start-up (up to `ready_s` = 10 s, on every core) does see
   `vk.hex`, already in `/work`, and may do any work that depends on nothing else (pre-fault
-  memory, build tables). Every output must be byte-identical to the service run's output of that
+  memory, build tables, map and page in `/setup`: allowed by design, review R8 LOW 5). Every output must be byte-identical to the service run's output of that
   step; a difference in any pass is the entry's REJECT, with the step, the pass and the first
   differing byte. Nothing of the service run's requests survives into the timed passes: each
   request's `/work` is a private tmpfs of its own, gone with the request, so no file, inode number
@@ -332,7 +343,11 @@ comes from a run in which the prover never had the key.
   for each pass**: the service run's, then a fresh one before each timed pass, the previous one
   removed (a tmpfs file keeps state a process holding it read-only can set, its shared memory
   policy among them; only the steps of one pass, on one clock, share a copy), and before every
-  request every CPU's inode counters are moved to a fresh batch at a random offset (§5); the one
+  request every CPU's inode counters are moved to a fresh batch at a random offset, and before
+  every timed request a uniform random number in `[0, 256)` of fresh batches of each kind is taken
+  machine-wide (§5); before each timed pass the runner waits an untimed random delay, uniform in
+  `[0, 2)` s from the CSPRNG; after every request the service closes every connection still open
+  (`drop`) and the runner requires none left (else a harness ERROR); the one
   directory a request sees by a name the runner chose, its socket directory (bound at `/run/rf`;
   `/proc/self/mountinfo` shows its path), has 16 random hex characters for a name, fresh for every
   request, so no name a prover can read tells its pass or its step (counters that
@@ -344,7 +359,17 @@ comes from a run in which the prover never had the key.
 - **What is timed.** `P_{i,t}`: in timed pass `t`, from just before step `i`'s inputs are renamed
   into `/work` (a constant-time rename) to the death of the last process of the sandbox.
   Start-up to the `ready` line is untimed (capped by `ready_s`). The score takes the pass whose
-  total is the median of the three (§7).
+  total is the median of the three (§7). The pages of the request's `/work` are freed after that
+  instant, when the runner closes its descriptor (about 0.1–0.3 s per GiB): untimed, like the
+  kernel's teardown of any process.
+- **The stream's clock.** `stream_s` bounds **the entry's time**: every request's start-up (its
+  process start to `ready`) and timed part, and every badge run (from its release to its last
+  answer), summed as each ends. The runner's own work is off that clock: the copies of the setup,
+  the scrubs, each sandbox's view and set-up, the staging of the inputs, the outputs' reads and
+  walks, the calibration samples, the service's control lines, the untimed delays. The result
+  records both (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`); the runner's overhead
+  is bounded by the benchmark job's `PART_S` (§9), whose end during the stream is still the
+  entry's REJECT (`stream-cap`), since the overhead grows only with what the entry's caps allow.
 - **Calibration.** Before the service run's steps 1 and 9 (every `every` = 8 steps), before each
   timed pass, and after the timed passes (if 30 s of `stream_s` remain), always
   with no entry process alive: three runs of the organiser's prover-shaped workload `calib`
@@ -363,8 +388,9 @@ comes from a run in which the prover never had the key.
   the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
   it (§12).
 - **Throughput.** One evaluation at a time. The benchmark's capped entry steps sum to 2,420 s
-  (`build_s` 120 + `setup_s` 240 + the setup tree's hash 60 + `stream_s` 2,000), inside the
-  benchmark job's 64 minutes for its parts. With the core commit's caches in place, one evaluation
+  (`build_s` 120 + `setup_s` 240 + the setup tree's hash 60 + `stream_s` 2,000 of the entry's
+  time), inside the benchmark job's 64 minutes for its parts, which also hold the runner's own
+  overhead (§9). With the core commit's caches in place, one evaluation
   holds the benchmark slot for at most about 2 hours (the certificate job, at most 50 minutes, and
   the benchmark job, at most 70, §9, plus a few minutes of the setup jobs' cache lookups; 130
   minutes with a second kernel); when the caches must first be built, as after a pin move, up to
@@ -436,7 +462,7 @@ runner fault, an organiser ERROR named `malformed` (§8).
 | ACCEPT | certificate checked (`certificate: ok`) and every benchmark check passed |
 | PROVISIONAL | the Lean build succeeds and the only failures are of the certificate: the kernel rejects it (including a theorem that is not the rendered one), its closure uses `sorryAx`, or the kernel exceeds its time or memory cap; benchmarked and published, never a record |
 | REJECT | the entry failed a rule or a cap; the result names the reason and the stage, `reject_stage`: `certificate` (a rejected certificate; it takes precedence), `prover` (the prover's build, its setup or the setup's hash, anything before the stream, or the benchmark job's `PART_S` reached during them), `request` (a service-run request failed: an exit, a timeout, no `ready` line, memory, `/work`; or its output's size broke `pi_cap` as it arrived, or `final_pi_cap`), `check` (a badge run failed: a crash, a timeout, a slow start-up; the final output rejected in any judged run, or its `V` above `v_cap`; a statement canary accepted; an output above `pi_cap` only because a rejection sized it by its file), `timed-pass` (a byte mismatch, a failed timed request, the service not entering replay mode, a replay `MISMATCH` or the replay audit) or `stream-cap` (`stream_s` reached before a request or a badge run, or ending a request; `PART_S` reached from the calibration on). A failure with no stage of its own (the service dying) takes the phase's: `request` in the service run, `timed-pass` after |
-| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a machine with no systemd user manager for the sandboxes' memory scopes, or a benchmark run under a test-only override (`machine.memcap_override`, `machine.badge_host_root`, `machine.memcap = prlimit`; all named `fingerprint`), a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint or shape failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) never count against the author |
+| ERROR | the organiser's side failed (toolchain, missing or mismatched benchmark part, a machine fingerprint missing, unreadable or not the season's, a machine with no systemd user manager for the sandboxes' memory scopes, or a benchmark run under a test-only override (`machine.memcap_override`, `machine.badge_host_root`, `machine.memcap = prlimit`; all named `fingerprint`), a stream whose shape is not the season's, a stream record no score can be computed from (`malformed`), a `c_P` drift, a setup job or organiser cache); requeued once. The fingerprint is checked first, in the setup job, and the stream's shape against the season's at aggregation; a fingerprint, shape or `malformed` failure uses up no attempt (a retry at the same pin cannot clear it). A failure of the service run, a byte mismatch of a timed pass, or a service refusal during the entry's requests is the entry's REJECT, never ERROR. Repeated organiser errors, of any kind, pause the queue until the owner acts (the submissions repository's `AGENTS.md` §9: two, where one author's errors of a kind an entry might provoke count once). Named organiser errors (`organiser_error`) but `harness` never count against the author; `harness` (the certificate job ended without a certificate) and an unnamed ERROR count against the author after the entry's first one. A benchmark part counts as passed only with its runner's final record (`stage: done`); a runner that died after a checkpoint is an unnamed ERROR, never a pass |
 
 A result is **comparable** iff it is ACCEPT and the job plan matched (an ACCEPT is always on the
 season's machine and with the season's shape: anything else is ERROR). A stream that reaches
@@ -453,7 +479,11 @@ record in a track iff all of:
    the owner's server can register; and the signer's commit equals the result's `harness_commit`.
    The runner name (`rf-…`) and label (`rf-bench`; the server's runners carry exactly one label,
    `rf-bench` or `rf-light`) the result records are checked for consistency, but they
-   are what the server wrote and prove nothing by themselves;
+   are what the server wrote and prove nothing by themselves. The attested result also names what
+   it measured: `season_sha256` (checked against the core's `harness/season.toml`) and `entry`
+   (`sha`, the entry commit; `tree`, the git tree id of `submissions/<root>` at it, as the
+   certificate job fetched it; `name`, `<repo>:submissions/<root>`; `pr_ref`), which the bot
+   compares with the commit it asked for (`verify-record.sh --entry-sha`);
 3. `harness_commit` equals the core commit the submissions repository pins;
 4. no record of that track stands at the pin, or `S_t < (1 − margin) · S_t,record`, with `S_t` the
    track's score (`S` in `final`, `S_every` in `every`), `S_t,record` the standing record's own
@@ -474,7 +504,7 @@ a record.
 
 - **Records are per pin and per track**: a track's standing record is its newest, not retired,
   record evaluated at the pinned core commit. With none, the first result meeting items 1–3 and 5
-  is that track's record.
+  becomes that track's record once its confirmation run agrees (item 6), as any record does.
 - **A pin move ports the records first.** When the pin moves while a record stands, the bot
   re-evaluates each standing record's retained commit at the new pin before any other entry (one
   run when one commit holds both); a record keeps its crown if that is a comparable, attested ACCEPT.
@@ -487,9 +517,9 @@ a record.
   (about 0.9 %) gives about 0.15 % for it; an estimate for the score, `c_P`'s drift included, is
   0.2–0.5 % per evaluation. Neither is measured at this shape (§12). Two runs of one entry differ
   by about √2·σ, so a near-copy of the record can beat it by noise. The margin is
-  the same in both tracks. Byte copies
-  of an evaluated root and a record's prover binary are refused (item 5 and the submissions
-  repository's copy rule). The owner may change the margin between seasons, which changes this file.
+  the same in both tracks. A byte copy of an evaluated root is refused (the submissions
+  repository's copy rule), and a record's prover binary resubmitted is `accepted`, never a record
+  (item 5). The owner may change the margin between seasons, which changes this file.
 - The owner may retire a record of one track (a near-copy that beat it by noise, say) with the bot's
   `retire`; then no record stands in that track.
 
@@ -508,20 +538,24 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | entry's `lake build` (challenge and `Solution`'s import closure) | 1,200 s |
 | kernel replay (comparator, Lean kernel), memory | 600 s (a breach: PROVISIONAL), 14 GiB |
 | gate; badge build | 120 s; 180 s |
-| prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB, `2^20` entries |
+| prover build; `prover setup` (untimed); setup directory | 120 s; 240 s; 4 GiB with the prover binary, `2^16` entries, paths of at most 2,048 bytes |
 | start-up to `ready`; one request (`step_s`) | 10 s; 20 s |
-| the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s wall (reached: REJECT) |
+| the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s of the entry's time: its requests' start-ups and timed parts and its badge runs (reached: REJECT); the runner's own work is off this clock, inside `PART_S` |
 | an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 64 ms (the median of three fresh judged runs) |
 | a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
 | timed passes (`timed_runs`); a timed pass's output | 3; byte-identical to the service run's |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 8 GiB; 2 GiB; 4 GiB |
-| service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32; `2^16` |
+| service: query; request body; items per `QUERY` / `SIGN`; connections; signatures per stream | `2^20` B; 16 MiB; `2^18` / `2^16`; 32, each closed after `step_s` idle or unread and all after each request; `2^16` |
 | jobs: certificate (with nanoda); benchmark; setup, setup-tools; plan, attest | 50 min (60); 70 min; 30 min; 10 min |
 | the benchmark VM; evaluations at a time | 4 cores / 8 threads, 16 GB; 1 |
 
-The prover's 8 GiB is its memory cgroup's charge. After `setup` the runner copies the setup
-directory and the prover binary to its own tmpfs (§6), a fresh copy for the service run and for
+The prover's 8 GiB is its memory cgroup's charge. During `setup` the setup directory is a private
+tmpfs of the setup's sandbox, charged to that cap (the setup's files and its memory together: an
+unbounded writer fills its cap, never the runner's disk); once the setup is dead the runner checks
+it (with the prover binary, at most `setup_cap`; at most `2^16` entries, each costing the runner
+inode and dentry memory in every copy) and copies it to the work disk. After `setup` the runner
+copies the setup directory and the prover binary to its own tmpfs (§6), a fresh copy for the service run and for
 each timed pass, and every request binds the copy of its pass, so its pages are charged to the
 runner, not the request: read-only setup data (at most 4 GiB) that a prover maps or reads is in
 effect outside the 8 GiB. This is open to every entry. One copy exists at a time (the previous
@@ -539,36 +573,38 @@ runner too; a copy the prover makes counts toward its cap and `work_cap`. Each b
 (the badge directory, the files `verify` loads, the checked files, the warm-up file: about 140 MiB
 for the smoke's Lean badge) are made before it and removed after it.
 
-`stream_s` covers 64 requests (16 in the service run, 48 in the timed passes), each up to
-`ready_s + step_s` = 30 s (1,920 s in all), plus the checks, the calibration samples and the
-runner's work inside the stream: the inode counters' scrub before every request and badge run, the
-fresh copies of the binary and the setup before each of the three timed passes (the service run's
-copy is made before the stream's cap starts), each badge run's copies, and each sandbox's own mask
-files and CPU tree. So the per-request caps bind first, except when an entry uses nearly every cap
-at once (start-ups near 10 s, steps near 20 s, a setup directory near 4 GiB); there `stream_s`
-binds, and **an entry within every per-request cap can still reach it**, which is its REJECT: 64
-requests at their caps leave 80 s for the 50 badge runs (48 judged, 2 of canaries: about 12 s at
-`V` near 40 ms, but a start-up may take up to `badge_start_s` = 2 s in each, and a failed run of
-an intermediate output's check, which costs only the track `every`, up to `60 s + 4 · v_cap`;
-all three judged runs of a proof are made even after one fails), about six calibration samples
-(2 s idle and three short runs each, about 18 s), the scrub (about 0.1 s before each of the 64
-requests and 50 badge runs, about 11 s) and the copies (review LR5), measured on the development
-host (kernel 7.0, 32 CPUs, `/dev/shm`):
+`stream_s` counts **the entry's time alone** (review R3 L1): the 64 requests' start-ups and timed
+parts (16 in the service run, 48 in the timed passes, each up to `ready_s + step_s` = 30 s, 1,920 s
+in all) and the 50 badge runs from each process's release to its last answer (48 judged, 2 of
+canaries: about 12 s at `V` near 40 ms, a start-up up to `badge_start_s` = 2 s in each, and a failed
+run of an intermediate output's check, which costs only the track `every`, up to `60 s + 4 ·
+v_cap`; all three judged runs of a proof are made even after one fails). So an entry within every
+per-request cap has 80 s for its badge runs, whatever the runner's own work costs, and reaching
+`stream_s` is its REJECT. The runner's own work in the stream is off that clock and recorded in the
+result (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`): the copies of the binary and the
+setup before each timed pass, each badge run's copies, each sandbox's mask files and CPU tree, the
+staging of the inputs, the outputs' reads and walks, the scrubs (about 0.1 s before each request
+and badge run, and before each of the 48 timed requests its random machine-wide batches, up to
+about 1 s at 32 CPUs), the calibration samples (2 s idle and three short runs each, about 18 s), the
+untimed delays before the timed passes (under 2 s each) and the service's `drop` after each
+request. It is bounded by the benchmark job's `PART_S` (64 minutes), whose 23.7 minutes beyond the
+capped steps hold it (`.github/workflows/evaluate.yml` has the arithmetic). Measured on the
+development host (kernel 7.0, 32 CPUs, `/dev/shm`):
 
-| the runner's copies inside the stream | each | in a stream |
+| the runner's work inside the stream | each | in a stream |
 |---|---|---|
 | the setup at `setup_cap` = 4 GiB, before each timed pass | 2.4–4.1 s to copy (1.0–1.6 GiB/s; 0.69 GiB/s, 5.9 s, from a disk's page cache in the review's measurement), 0.55 s to remove | 3 passes: 9–19.5 s |
 | one badge run's copies (the smoke's 137 MiB Lean badge, its 6 libraries and `ld.so.cache`) | 0.15–0.25 s to make, 0.02 s to remove | 50 runs: 8–13 s |
 | one sandbox's mask files and CPU tree (2,437 entries at 32 CPUs, about 600 at the VM's 8) | 86 ms at 32 CPUs (about 25 ms at 8) | 114 sandboxes: 3–10 s |
+| the scrub with random batches, before a timed request | 0.5–1.0 s at 32 CPUs | 48 requests: 25–50 s |
 
-So the copies take about 20–35 s of the 80 s on the VM (with the views' 3 s at 8 CPUs; up to 42 s
-at this host's 32): with them, an entry at every request cap at once and a setup at 4 GiB has about
-3–19 s left for its badge runs' start-ups beyond 12 s of checks, 18 s of samples and 11 s of
-scrubs, where it had about 39 s before review LR5 (the margin was already gone for badge start-ups
-near 2 s). `stream_s` and `setup_cap` are unchanged; the owner decides whether to raise `stream_s`
-by the copies' 20–40 s. (Until the setup was copied to the runner's tmpfs, the runner re-read it before every
-request: about 1.3 s for 4 GiB at 3 GiB/s, 81 s of `stream_s` over 64 requests.) A toy setup's
-copy (the smoke's) takes about 5 ms.
+With the samples and the delays, the overhead of a stream at the season's caps is of order one to
+two minutes, every second of it outside `stream_s`. (Until review R3, `stream_s` was wall time and
+these copies left an entry at every cap about 3–19 s for its badge start-ups; until the setup was
+copied to the runner's tmpfs, the runner re-read it before every request.) A toy setup's copy (the
+smoke's) takes about 5 ms. The smoke's honest stream (`M` = 4, 16 requests, 12 of them timed) on
+the development host: 6.1 s of the entry's time, 26.1 s wall, 20.0 s of runner overhead, of which
+the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three delays 2.1 s.
 
 ## 10. Hard rules for the Lean side
 
@@ -683,8 +719,9 @@ copy (the smoke's) takes about 5 ms.
   √2·σ ≈ 2.5 %, above the 2 % margin (§8). At this shape the median of three pass totals is
   estimated at 0.2–0.5 % per evaluation, `c_P`'s drift included, but it is not measured. If the
   spread is that small, 2 % keeps out real improvements below it; if it is near 1.75 %, a
-  near-copy that is no faster can still beat the record by more than 2 %. Byte copies and re-used
-  record prover binaries are refused, and the owner retires a record won that way.
+  near-copy that is no faster can still beat the record by more than 2 %. Byte copies are refused,
+  a re-used record prover binary is never a record (§8 item 5), the confirmation run (item 6) needs
+  the noise to win twice, and the owner retires a record won that way.
 - **`c_P`'s drift is an organiser ERROR, not a score change**: `ref_ns` (316.2 ms) and
   `c_P_drift` (0.065: about four standard deviations of one `c_P` sample at the higher spread
   measured on the machine, 1.55 %, and far more of the median that is judged) are fixed
@@ -771,16 +808,41 @@ copy (the smoke's) takes about 5 ms.
   (random). Left open, from a service-run request to a later one:
   - **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a
     CPU takes next counts the batches taken machine-wide, which a request moves by making inodes
-    on every CPU: at most about 20 bits each per stream (an upper bound measured with no
-    background noise; the evaluation machine's background is not measured);
-  - **the load averages of `sysinfo(2)`** (masked in `/proc/loadavg`; the call stays, since libc
-    and the Lean runtime use it): a request sets the number of runnable tasks at the kernel's 5 s
-    samples, and the averages decay over minutes: of order 10 bits per average (an estimate);
-  - **the clocks**: a service-run step can stretch its own untimed duration, and a timed step can
-    read the clock against a timestamp kept in `/setup`: about 9 bits per stream (an estimate);
-    accepted;
+    on every CPU (about 1.5 ms per batch of 1,024 on one CPU, so up to about `2^17` batches in one
+    20 s step on 8 CPUs). Before every timed request the scrub takes a uniform random number in
+    `[0, 256)` of fresh batches of each kind (review R8 HIGH 1), so a timed request reads a
+    service-run request's count only under the sum of that noise over the timed requests before
+    it (at least one draw; 16 before step 16 of the first pass, about 300 batches of spread): about
+    7 bits per counter and stream at most, for a writer that spends a whole step on it (an
+    estimate; about 20 bits each before the noise);
+  - **`sysinfo(2)`** (load averages, process count, free, shared and buffer memory, all
+    machine-wide; masked in `/proc/loadavg` and `/proc/meminfo`) fails with ENOSYS in every request
+    since review R8 HIGH 1 (glibc's `get_phys_pages`/`sysconf(_SC_PHYS_PAGES)` then fail or return
+    garbage: a prover must not depend on them); `prover setup` and the badge keep it (the Lean
+    runtime calls it), and neither is read by a later request through it;
+  - **the clocks**: a service-run step can stretch its own untimed duration (up to `step_s`, on the
+    stream's clock), and a timed step can read the clock against a timestamp kept in `/setup`;
+    before each timed pass the runner waits a uniform random delay in `[0, 2)` s, so the 16 steps'
+    stretch (up to 320 s) reaches a timed request at about 2 s resolution: about 7 bits per stream
+    (an estimate); accepted. A badge run's duration is bounded the same way (every canary run is
+    bounded, the final output's too, so a verifier cannot stall a chosen time on a canary);
   - **micro-architectural state** (CPU caches, predictors), not cleared between requests; the
     calibration runs between requests disturb it.
+
+  **What a leaked bit is worth.** These channels only matter for state an output must reproduce:
+  the timed passes rerun the service run's computations, and the one search whose answer a
+  timed request could take from an earlier one is grinding (a proof-of-work nonce, searched in a
+  fixed order, PROVER.md §4). Each bit of the nonce leaked from the untimed service run into the
+  timed pass halves the timed search, so it buys one free grinding bit at the same timed cost,
+  which an entry can trade for fewer queries in its proof. The review's model of a WHIR-like final
+  proof (review R8 HIGH 1) gives about 1.1–2.8 KiB of `|π_16|` per grinding bit, so about 0.15–0.4 %
+  of `S` per leaked bit (10–12 bits: −1.5 … −4.5 %, inside the 2 % margin's reach only near its
+  top). With the noise above, the channels together carry of order 20 bits at most for a writer
+  that spends every untimed step on them, and less in practice (each bit costs the writer the
+  stream's own time, and decoding under the noise is not free); the owner accepts that residue for
+  this season, measured by no entry yet. The service's connection slots no longer carry anything:
+  every connection is closed after each request (`drop`), none may be left, and no descriptor can
+  be passed to the service (`sendmsg` refused, ancillary data refused).
 
   A request can tell its pass and its step from counters that advance with every sandbox (unique
   mount ids, namespace inode numbers, the network namespace's cookie, the inode numbers of the
@@ -868,8 +930,8 @@ are indicative only, except where a bullet says "on the machine".
 - **Determinism is a rule.** Seed every randomised choice from the inputs and the oracle's answers;
   search grinding nonces in a fixed order and take the first; never let the thread schedule pick
   between valid outputs. One-time signature indices follow the order in which `SIGN`s arrive, so
-  issue your `SIGN`s in an order fixed by the inputs (not from racing threads). Run your prover
-  twice locally and compare the bytes.
+  issue your `SIGN`s in an order fixed by the inputs (not from racing threads: indices follow the
+  order in which concurrent `SIGN`s complete). Run your prover twice locally and compare the bytes.
 - **The certificate build is tight**: a 199-module entry used 968–984 s of the 1,200 s cap on a
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
@@ -897,6 +959,10 @@ are indicative only, except where a bullet says "on the machine".
   not assemble; [`harness/tools/asm-compat.py`](harness/tools/asm-compat.py) rewrites them. The
   machine (§6) has AVX-512 and GFNI but may change between seasons: dispatch on `cpuid` with a
   portable fallback; a `SIGILL` fails the run.
+- **The setup is in memory while it runs**: `/setup` is a tmpfs charged to the setup's 8 GiB cap,
+  so a 4 GiB setup leaves 4 GiB for the setup's own process; and the prover binary counts toward
+  `setup_cap` with it. In a request `sysinfo` fails (ENOSYS) and `sendmsg` fails (EPERM): size
+  buffers from the season's caps, and talk to the service with `write`/`send`.
 - **Memory**: the 8 GiB cap counts `/tmp` and `/work` (a Spartan+Ligero leaf prover peaked at
   15.1 GiB at `n = 2^16`, 2.47 GiB after restructuring; an lvm2-style GKR prover peaked at 8.2 GiB
   at `2^20` hashes under the old 11 GiB cap). Stream the leaf's hashes in batches if they do not
@@ -918,7 +984,8 @@ The harness on an entry needs Linux x86-64, `bubblewrap` with unprivileged user 
 Ubuntu 24.04: `sysctl kernel.apparmor_restrict_unprivileged_userns=0`), a systemd user manager for
 the memory caps (without one the sandbox falls back to `prlimit`, under which the benchmark stops
 with an organiser ERROR, since every sandbox would share the runner's cgroup; set
-`RF_ALLOW_PRLIMIT=1` to run locally anyway, which the result records and `aggregate.py` refuses
+`RF_ALLOW_PRLIMIT=1` to run locally anyway (then the setup's and the build's private tmpfs are
+not capped either: an address-space limit does not count tmpfs pages), which the result records and `aggregate.py` refuses
 as an organiser ERROR unless the tests' `--allow-test-overrides`; the tests' stand-in badge with the
 host's /usr, `RF_TEST_BADGE_HOST_ROOT=1`, also needs `RF_TEST_OVERRIDES=1`), a tmpfs for the runner's
 copies (`/dev/shm`, with room for the setup), Rust (pinned by
@@ -933,8 +1000,10 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
 small shape (4 steps of 6 blocks each; the season's size caps, its own verifier and time caps: its
-`v_cap` is 128 ms, the one documented exception, because the toy's witness-sending `V` grows with
-the stream and CI runs the smoke on shared runners); `harness/season.toml` is the real one, and it
+`v_cap` is 128 ms, because the toy's witness-sending `V` grows with the stream and CI runs the smoke
+on shared runners, its `badge_start_s` 10 s (the season's 2 s) for the `--mock` Python stand-in
+badge, its `[certificate] build_s` 600 s (the season's 1,200 s), its `step_s` and `stream_s` its
+own, 60 s and 300 s); `harness/season.toml` is the real one, and it
 runs only on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an
 organiser ERROR before the prover is built, and its `c_P` drift check would too. To run the
 season's shape on your own machine, generate a local copy and pass it to `--season`:

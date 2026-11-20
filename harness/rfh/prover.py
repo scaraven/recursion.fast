@@ -2,10 +2,11 @@
 interface). Every step runs in `sandbox.Sandbox`.
 
 * `build`: `gcc -static -O2 -pthread *.s -o prover -lm` inside the sandbox (`.incbin` and
-  `.include` read only what the sandbox shows: the copied `.s` files and the toolchain), with the
-  toolchain's versions and the binary's hash recorded.
-* `setup`: `prover setup /setup`, untimed, before any instance or service exists; `/setup` is
-  read-only afterwards, and once hashed it and the binary are copied to the runner's tmpfs
+  `.include` read only what the sandbox shows: the copied `.s` files and the toolchain), on a
+  private tmpfs, with the toolchain's versions and the binary's hash recorded.
+* `setup`: `prover setup /setup`, untimed, before any instance or service exists, its `/setup` a
+  private tmpfs charged to its memory cap, measured and copied to the work disk once it is dead
+  (`Run.setup`); `/setup` is read-only afterwards, and once hashed it and the binary are copied to the runner's tmpfs
   (`Run.publish`), which every request binds instead of the work disk: a fresh copy for the service
   run and for each timed pass, the previous one removed first (review LR5 H1: a tmpfs file keeps
   state a read-only handle can set, its shared memory policy among them).
@@ -17,7 +18,8 @@ interface). Every step runs in `sandbox.Sandbox`.
   `/run/rf/oracle.sock` exists only from `go` on), links the inputs into /work and sends `go`; at
   the prover's `done` line, its stdout's end or its exit the runner kills the whole sandbox and
   **stops the clock when every process of it is dead** (`harness/PROVER.md` §3); then `proof.bin`
-  is read. A filesystem error in the request's directory is the entry's failure.
+  is read. A filesystem error in the request's directory is the entry's failure. The request's
+  sandbox also refuses `sendmsg`, `sendmmsg` and `sysinfo` (`sandbox.seccomp_program(request=True)`).
 * `oneshot`: a program with no handshake, timed from exec to exit (the sandbox tests).
 """
 import glob
@@ -344,7 +346,9 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     as `oracle.sock` (a connect through the link reaches the service), so no process of the
     request can reach the service before `go` (the untimed start-up cannot `QUERY`). `ready_s`
     (default `step_s`) bounds the start-up to `ready`, `step_s` the proving; `deadline` (a monotonic
-    time, the stream's cap) bounds both. **The clock stops when the request's process tree is
+    time, the stream's cap on the entry's clock) bounds both, moved later by the runner's own work
+    inside the request (the sandbox's view before its spawn, the staging before `go`); a wait it
+    ended sets `Step.at_deadline`. **The clock stops when the request's process tree is
     dead**: at the prover's `done` line, its stdout's end or its exit, the runner kills the whole
     sandbox at once (`Sandbox.kill_tree`) and stops the clock when the pid namespace's init has
     exited, which the kernel allows only after every other process in it is dead; only then is

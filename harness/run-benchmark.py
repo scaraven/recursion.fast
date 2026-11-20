@@ -33,7 +33,9 @@ drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `bench
 machine was not in its calibrated state, the organiser's failure, never a score change. A stream
 record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
 `timed_runs` timed times, or a record not of the shape `rfh.bench.check_record` requires) is a
-runner fault: `benchmark: error` named `malformed`, never the entry's.
+runner fault: `benchmark: error` named `malformed`, never the entry's. Every checkpoint of the result says `benchmark: incomplete`; only the
+final record (stage `done`) says `pass`, `fail` or `error`, and a failed write of the run log never
+stops the run.
 """
 import argparse
 import glob

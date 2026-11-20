@@ -7,8 +7,8 @@ sandboxed process; the service run and each timed pass bind their own copy of th
 setup (`Bench.fresh_copy`), every badge run its own copies of what it sees (`checks.Badge`); every
 check and every calibration sample runs while no entry process is alive.
 Every step the entry controls is capped by the season file, inside its job's time limit: a request
-over its cap, and a benchmark that reaches `stream_s` (a slow or hung check included), fails with
-the reason.
+over its cap, and a benchmark that reaches `stream_s` of the entry's time (a slow or hung check
+included; the runner's own work is off that clock, `Bench.deadline`), fails with the reason.
 """
 import hashlib
 import json

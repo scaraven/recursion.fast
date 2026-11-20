@@ -5,7 +5,7 @@ name = "smoke"
 [score]
 size_ref = 524288 # as the season's
 
-[certificate]     # the certificate job's Lean steps, as in the season
+[certificate]     # the certificate job's Lean steps, as in the season but build_s (the season's 1200)
 build_s = 600
 kernel_s = 600
 gate_s = 120
@@ -53,7 +53,7 @@ pi_cap = 1048576
 final_pi_cap = 524288
 badge_start_s = 10 # as the season's 2 s; 10 s for the Python stand-in badge of `--mock`,
                   # which compiles its C Keccak-256 reference on its first check
-v_cap_ms = 128    # THE ONE DOCUMENTED EXCEPTION to the season's caps (64 ms there): the toy's
+v_cap_ms = 128    # AN EXCEPTION to the season's caps (64 ms there; badge_start_s and build_s are the others): the toy's
                   # witness-sending V grows with the stream's history (each node checks its children
                   # again), its final V about 51–64 ms with the compiled badge on an organiser
                   # workstation, and CI runs the smoke on shared runners, where a 64 ms cap would make

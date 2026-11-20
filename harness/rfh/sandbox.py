@@ -49,7 +49,9 @@ the badge executables (which run the entry's compiled verifier) runs under `bubb
     pidfds: pidfs inode numbers; `SO_COOKIE`; `setsid`: the autogroup counter; `MADV_COLD`,
     `MADV_PAGEOUT`, `process_madvise`: reclaim of the runner's tmpfs pages; the mbind family, ENOSYS:
     a tmpfs file's shared memory policy; `seccomp_program`), and kills a process that uses another
-    syscall ABI;
+    syscall ABI; a prover's request (`request=True`) also fails `sendmsg` and `sendmmsg` (no
+    descriptor passed into the service's queue, review R5 HIGH 1) and `sysinfo` (machine-wide load,
+    process and memory counters, review R8 HIGH 1);
   * a memory cap on the whole process tree: a transient systemd scope with `MemoryMax` and no swap
     (`systemd-run --user --scope`), or, where no user systemd manager is reachable, an address-space
     limit (`prlimit --as`), which is recorded as the weaker method: every sandbox then shares the
@@ -688,7 +690,7 @@ class Sandbox:
     `stdin`/`stdout`: `subprocess` arguments. With `hold=True` the command is held before `exec` until `release()` (bubblewrap's `--block-fd`);
     `wait_ready()` returns once the sandbox exists and `wait_exit()` when the command exits
     (`--json-status-fd`), so that a timer between them counts the measured program, not the
-    sandbox's set-up or tear-down. With `status=True` bubblewrap reports the pid of
+    sandbox's set-up or tear-down. `request=True`: a prover's request (`seccomp_program`). With `status=True` bubblewrap reports the pid of
     the sandbox's first process (`child_pid`), the init of its pid namespace: `kill_tree()` kills
     every process of the sandbox and returns only when they are all dead (the namespace's init
     exits after the kernel has killed and reaped every other process in it, and its pidfd becomes

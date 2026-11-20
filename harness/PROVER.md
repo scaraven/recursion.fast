@@ -76,10 +76,18 @@ to "no NUMA"); no pidfd can be made, since a pidfd's inode number counts every
 process the machine started (`pidfd_open`, `clone` with `CLONE_PIDFD`, `getsockopt` `SO_PEERPIDFD`
 and `setsockopt` `SO_PASSPIDFD` fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to
 `clone`, so `fork`, `posix_spawn` and threads work); `getsockopt` `SO_COOKIE` fails (socket cookies
-come from a machine-wide counter). Before every request (and every badge run) the runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
+come from a machine-wide counter). **In a request** (not in `prover setup` or the badge), also
+`sysinfo` fails with ENOSYS (load averages, process count and free memory are machine-wide; glibc's
+`get_phys_pages`, `get_avphys_pages` and `sysconf(_SC_PHYS_PAGES)` then fail or return garbage, so
+read nothing from them: the cap is the season's `memory.prover`), and `sendmsg` and `sendmmsg` fail
+with EPERM (no file descriptor or credential can be passed; talk to the service with `write`,
+`writev`, `send` or `sendto`, which work; the service also refuses any message carrying ancillary
+data). Before every request (and every badge run) the runner moves every CPU's inode counters (behind the inode numbers of pipes, sockets, other pseudo
 files and memfds) to the end of their batch and then a uniform random offset into a fresh one
 (`harness/tools/scrub.c`, one pinned thread per CPU, about 0.1 s, recorded as `scrub_s`), so a
-pipe's or memfd's inode number says nothing of what an earlier request did on that CPU. When a
+pipe's or memfd's inode number says nothing of what an earlier request did on that CPU; before
+every timed request it also takes a uniform random number in `[0, 256)` of fresh batches of each
+kind machine-wide (AGENTS.md §12). When a
 request ends, every process the prover started is killed. The same `/proc` and CPU-tree masks and the same filter apply to `prover setup`
 and to every badge run of the benchmark job (which runs the entry's compiled `V`).
 
@@ -111,9 +119,13 @@ leaf is `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)`, `16 + 32 n` bytes, abov
 ### `prover setup /setup` (optional, untimed)
 
 Runs once per evaluation, before any instance or service exists, with `/setup` writable and no
-socket. It may write tables, keys or code there, within `setup_s` (4 min in season 1) and
-`setup_cap` (the directory holds at most 4 GiB in at most 2^20 entries afterwards, sparse files at
-their size, and must be hashable within that and 60 s; otherwise the setup fails).
+socket. `/setup` is then a **private tmpfs** of the setup's sandbox, charged to its memory cap
+(`memory.prover`, 8 GiB: the setup's files and its memory together); once the setup has exited the
+runner copies it out. It may write tables, keys or code there, within `setup_s` (4 min in season 1)
+and `setup_cap` (afterwards the directory and the prover binary together hold at most 4 GiB, sparse
+files at their size, in at most `2^16` entries with relative paths of at most 2,048 bytes, any
+bytes for names, and the directory must be hashable within that and 60 s; otherwise the setup
+fails, the entry's REJECT at `prover`).
 A prover with nothing to set up exits 0.
 
 ### The stream: `prover first /work`, then `prover step /work` (timed per request)
@@ -179,14 +191,14 @@ first differing byte offset. A prover's output must be a function of its inputs,
 oracle answers: no clock, no `/dev/urandom`, no thread-order dependence in what it writes, a
 deterministic grinding order (for example the least nonce in a fixed search order), and its `SIGN`
 requests in an order its inputs fix (the service assigns one-time indices in the order `SIGN`
-requests arrive, and a replay refuses any other digest at an index). **A timed pass must make
+requests complete, their answers computed, and a replay refuses any other digest at an index). **A timed pass must make
 exactly the service run's `SIGN` requests**: any replay `MISMATCH` (in any pass), and any total
 other than `timed_runs` times the service run's signatures, is the entry's REJECT (a refusal at an
 index would otherwise be a bit carried from the service run into a timed pass). A pass that does
 not finish is the entry's REJECT too. Three pitfalls: a
 `SIGN` that fails or is retried still consumes its index, so never retry a `SIGN` unless the retry
-is fixed by the inputs; no output may depend on measured memory, load or time (`sysinfo(2)` still
-reports the machine's), not even through a choice of chunk size or algorithm; and a local
+is fixed by the inputs; no output may depend on measured memory, load or time (in a request
+`sysinfo(2)` fails), not even through a choice of chunk size or algorithm; and a local
 PRF computed from `oracle.key` must match the service's `QUERY` byte for byte, multi-block queries
 included (test it on 0-, 103-, 104- and 239-byte queries).
 
@@ -246,16 +258,20 @@ runner's own writes fail, an output that cannot be read.
   scored in `final` only, the result saying why (`score.tracks_reason`); intermediate outputs need
   not be proofs at all. A crash or timeout of an intermediate check, or of the canaries of outputs
   1 and 2, costs only the track `every` (a judged run of an intermediate output is bounded by
-  `60 s + 4 · v_cap`, the canary run of `c` canaries by `60 s + 2 (c + 1) · v_cap`); once the track
-  is lost, those canaries are skipped.
+  `60 s + 4 · v_cap`, the canary run of `c` canaries by `60 s + 2 (c + 1) · v_cap`); those canaries
+  are checked even once the track is lost (the number of badge runs never depends on the entry).
 
-The final output's checks have no time cap of their own. Every badge run ends within one bound
+The final output's three judged runs have no time cap of their own (their `V` is capped by
+`v_cap`); its canary run is bounded like any canary run, `60 s + 2 (c + 1) · v_cap`. Every badge run ends within one bound
 shared by all of them, 30 s past `stream_s`, and none starts once `stream_s` is reached. Calibration samples (AGENTS.md §6) are
 taken before the service run's step 1 (and every `every` steps), before each timed pass, and a
 closing one if 30 s of `stream_s` remain. The whole benchmark, the service run, every request, check,
-canary, calibration sample and the three timed passes, runs within `stream_s` (2,000 s, wall time;
-the season file's value binds, and a later season may set another); reaching it is the entry's
-REJECT.
+canary and the three timed passes, runs within `stream_s` (2,000 s of **the entry's time**: every
+request's start-up and timed part, and every badge run from its release to its last answer; the
+runner's own work, its copies, scrubs, samples, untimed delays and the rest, is off that clock and
+recorded as `stream.clock`; the season file's value binds, and a later season may set another);
+reaching it is the entry's REJECT. Before each timed pass the runner waits an untimed random delay
+(uniform in `[0, 2)` s).
 
 **The score** (AGENTS.md §7; one score per track; lower is better, seconds):
 
@@ -284,7 +300,9 @@ sequence (the service re-computes those answers and signs their trace digest). S
 `service/PROTOCOL.md`. The answer to a query `q` is `Keccak-256(k ‖ q)` under the service's 32-byte
 secret key `k`: `floor((32 + |q|) / 136) + 1` permutations (one for `|q| ≤ 103` bytes). Use one
 connection per thread and batches of hundreds to thousands of
-queries. The service's measured throughput on the job's machine is published in every result
+queries. The service closes a connection idle, or with its answer unread, for `step_s`, and the
+runner has it close every connection after each request (`drop`): open your connections after
+`go`, within the request. The service's measured throughput on the job's machine is published in every result
 (`calibration.service`).
 
 ## 5. What fails a run

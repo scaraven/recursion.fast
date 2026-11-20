@@ -49,15 +49,16 @@ n = 262144        # 2^18 blocks of 32 bytes per step (leafCap = 2^20): every ste
                   # expansion of a fresh secret seed s_i per step and evaluation, published after it
 ready_s = 10      # seconds from a request's process start to its `ready` line
 step_s = 20       # seconds per request from its inputs to the death of its last process
-stream_s = 2000   # wall seconds for the whole benchmark from its first calibration sample: the service
-                  # run, its checks and canaries, the timed passes and the calibration samples (no
-                  # check has a cap of its own); reaching it is the entry's REJECT. 64 requests
-                  # (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the checks, the samples, the
-                  # scrubs and the runner's copies (the setup's before each timed pass, 3 × up to
-                  # about 6.5 s at setup_cap; each badge run's and each sandbox's: about 20–40 s in
-                  # all, AGENTS.md §9): the per-request caps bind first except when an entry uses
-                  # nearly every cap at once. The timed passes repeat the service run's requests, so
-                  # about 4 × the stream's proving time is needed. A later season may set another
+stream_s = 2000   # seconds of the entry's time for the whole benchmark from its first calibration
+                  # sample (rfh.bench.Bench.deadline): every request's start-up and timed part and
+                  # every badge run (the service run, its checks and canaries, the timed passes; no
+                  # check has a cap of its own); reaching it is the entry's REJECT. The runner's own
+                  # work (copies, scrubs, samples, views, staging, the untimed delays) is off this
+                  # clock, recorded as stream.clock and bounded by the job's PART_S (AGENTS.md §9).
+                  # 64 requests (16 + 3 × 16) × (ready_s + step_s) = 1,920 s, plus the badge runs:
+                  # the per-request caps bind first except when an entry uses nearly every cap at
+                  # once. The timed passes repeat the service run's requests, so about 4 × the
+                  # stream's proving time is needed. A later season may set another value.
 check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9–15 after step 16, the
                   # final output after them (no entry process alive during a check); every output
                   # is judged on its own, in three badge runs that check nothing else (45 runs for
@@ -83,8 +84,8 @@ c_P_drift = 0.065       # AGENTS.md §6: |c_P - 1| above it is an organiser ERRO
 service_s = 2           # seconds per service throughput measurement (published, not scored)
 
 [caps]            # AGENTS.md §6, §7: the size and verifier caps (acc itself only requires |π| to fit a
-                  # word); a breach of a final cap is the entry's REJECT, of an intermediate one its
-                  # exclusion from the track `every`
+                  # word); a breach of a final cap, and of pi_cap at any step, is the entry's REJECT,
+                  # of an intermediate output's v_cap its exclusion from the track `every`
 pi_cap = 1048576        # 1 MiB: every output, its |π| if it parses as a signed proof that acc accepts,
                         # else its file size (a breach is the entry's REJECT, whichever step)
 final_pi_cap = 524288   # 512 KiB: the final output's |π| (both tracks)
@@ -100,7 +101,8 @@ v_cap_ms = 64           # one acc check of a checked proof (file read and parse 
                         # 60 s + 4 v_cap, a canary run of c canaries by 60 s + 2 (c + 1) v_cap)
 file_cap = 67108864     # a signed-proof file the runner reads: ≤ 64 MiB
 setup_s = 240           # `prover setup` (untimed)
-setup_cap = 4294967296  # the setup directory after `prover setup`: ≤ 4 GiB; copied to the runner's tmpfs
+setup_cap = 4294967296  # the setup directory with the prover binary after `prover setup`: ≤ 4 GiB (and
+                        # ≤ 2^16 entries); copied to the runner's tmpfs
                         # afresh for the service run and each timed pass (one copy at a time), resident
                         # while its pass runs, charged to the runner ([memory])
 work_cap = 4294967296   # a request's /work when its prover is dead: ≤ 4 GiB, sparse files at their size
