@@ -3,7 +3,8 @@
 
 Keccak (known answers and FIPS 202's constants) · Relation (signed children, the reference
 signer) · Oracle (with `runSeq`) · Security · Completeness · Potential · Machine · Extractor (the
-output format) · LogScan · WitnessSending · Tree · Certificate (the key quantifier) · Backdoor
+output format) · LogScan · MaskedLeaf (a certified verifier that asks the oracle, extracted from
+the log: the satisfiability control for log-based extraction) · WitnessSending · Tree · Certificate (the key quantifier) · Backdoor
 (certified in the model, harmless under the keyed deployment) · Unforgeability (the forgery
 events and the service's signed traces) · Compose (the composition walks over trees and the
 stream, their reduction to EUF-CMA and collisions, and their probability) · Signature (trace
@@ -23,6 +24,7 @@ import RecursionFast.Controls.Potential
 import RecursionFast.Controls.Machine
 import RecursionFast.Controls.Extractor
 import RecursionFast.Controls.LogScan
+import RecursionFast.Controls.MaskedLeaf
 import RecursionFast.Controls.WitnessSending
 import RecursionFast.Controls.Tree
 import RecursionFast.Controls.Certificate
