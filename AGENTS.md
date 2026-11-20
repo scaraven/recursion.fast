@@ -106,7 +106,10 @@ secret-keyed oracle: it checks a signature and runs `V` on the trace.
   eight tags, one per hash input: `H` item, `D` data node, `L` leaf, `N` node, `T` trace, `W`, `K`,
   `M` the signature's
   ([`Relation.lean#L76-L125`](RecursionFast/Contract/Relation.lean#L76-L125)); the trace digest and
-  the signature ([`Signature.lean#L18-L32`](RecursionFast/Contract/Signature.lean#L18-L32)).
+  the signature ([`Signature.lean#L18-L32`](RecursionFast/Contract/Signature.lean#L18-L32)). The
+  oracle's input `k ‖ q` has no tag: the key's first byte is one of the eight tags with probability
+  `8/256`, and its separation from the public domains rests on the PRF assumption (§11), not on a
+  tag.
 - **Acceptance** `Submission.acc S vk c p`
   ([`Certificate.lean#L102-L110`](RecursionFast/Contract/Certificate.lean#L102-L110)), in this order:
   `|π| < 2^64`; `|tr| ≤ qV`; every query in `tr` at most `queryCap = 2^20` bytes
@@ -133,27 +136,27 @@ has four fields, and `CertificateR declared S`
 `ε`, `δ`, `qV`, `fuel` are within the declared ones and the declared fuel within the budget.
 
 - **`secure : ∀ vk, KS (Rel (S.acc vk)) (S.V vk) S.E S.ε S.qV`**
-  ([`Security.lean#L150-L162`](RecursionFast/Contract/Security.lean#L150-L162)). `V` asks at most
+  ([`Security.lean#L154-L166`](RecursionFast/Contract/Security.lean#L154-L166)). `V` asks at most
   `qV` queries on every input and every oracle function; and for every adversary, a query program
   asking at most `Q` queries on every oracle function and outputting `(c, π)`, with
   `Q + qV ≤ logCap`, run and then followed by `V` against one lazily sampled random oracle
-  (`prob`, [`#L140-L148`](RecursionFast/Contract/Security.lean#L140-L148)), the probability that
+  (`prob`, [`#L144-L152`](RecursionFast/Contract/Security.lean#L144-L152)), the probability that
   `V` accepts on the final query log while `E c π log` returns no witness of the relation is at most
   `(Q + qV) · ε`. The extractor reads the final log, the verifier's answers included (how this
   relates to the textbook notion: §12). The adversary is computationally unbounded, bounded only in
   queries.
 - **`complete : ∀ vk, CompleteWithError (Rel (S.acc vk)) (S.P vk) (S.V vk) S.δ`**
-  ([`Security.lean#L164-L168`](RecursionFast/Contract/Security.lean#L164-L168)): on every statement
+  ([`Security.lean#L168-L172`](RecursionFast/Contract/Security.lean#L168-L172)): on every statement
   and witness of the relation, `P`'s proof, produced and then verified against one random oracle,
   is rejected with probability at most `δ`. Grinding is admitted. It is required for **every**
   witness, node witnesses with any accepted children included.
 - **`computes : Computes S.ext S.E S.fuel`**
-  ([`Extractor.lean#L198-L206`](RecursionFast/Contract/Extractor.lean#L198-L206)): the program
+  ([`Extractor.lean#L201-L209`](RecursionFast/Contract/Extractor.lean#L201-L209)): the program
   `ext` of the contract's step-counting machine
   ([`Machine.lean#L95-L131`](RecursionFast/Contract/Machine.lean#L95-L131)), on the input tape
-  `extractorInput c π L` ([`Extractor.lean#L123-L126`](RecursionFast/Contract/Extractor.lean#L123-L126)),
+  `extractorInput c π L` ([`Extractor.lean#L126-L129`](RecursionFast/Contract/Extractor.lean#L126-L129)),
   halts within `fuel t` steps (`t` the tape's length in words) with at most `outCap` words that
-  denote `E c π L` through `decodeWit` ([`#L183-L185`](RecursionFast/Contract/Extractor.lean#L183-L185)).
+  denote `E c π L` through `decodeWit` ([`#L186-L188`](RecursionFast/Contract/Extractor.lean#L186-L188)).
   This holds for every statement, proof of at most `8 · outCap` bytes (128 MiB) and log whose
   queries are below `2^64` bytes and whose tape is at most `2^64` words. The tape and output formats
   are normative ([`#L11-L32`](RecursionFast/Contract/Extractor.lean#L11-L32)). `E` takes no `vk`.
@@ -161,13 +164,13 @@ has four fields, and `CertificateR declared S`
 
 | Cap | Value | Lean |
 |---|---|---|
-| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L132-L133`](RecursionFast/Contract/Security.lean#L132-L133) |
-| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L170-L171`](RecursionFast/Contract/Security.lean#L170-L171) |
+| `ε ≤ errorCap` (knowledge error per query) | `2^-128` | [`Security.lean#L136-L137`](RecursionFast/Contract/Security.lean#L136-L137) |
+| `δ ≤ completenessCap` | `2^-40` | [`Security.lean#L174-L175`](RecursionFast/Contract/Security.lean#L174-L175) |
 | `qV ≤` | `2^16` | [`Certificate.lean#L123`](RecursionFast/Contract/Certificate.lean#L123) |
-| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L189-L190`](RecursionFast/Contract/Extractor.lean#L189-L190) |
-| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L195-L196`](RecursionFast/Contract/Extractor.lean#L195-L196) |
-| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L135-L137`](RecursionFast/Contract/Security.lean#L135-L137) |
-| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L192-L193`](RecursionFast/Contract/Extractor.lean#L192-L193) |
+| `fuel t ≤ extractorBudget t` | `2^48 + 2^16 · t` | [`Extractor.lean#L192-L193`](RecursionFast/Contract/Extractor.lean#L192-L193) |
+| `ext.body.size ≤ progCap` (statements) | `2^20` | [`Extractor.lean#L198-L199`](RecursionFast/Contract/Extractor.lean#L198-L199) |
+| `logCap` (queries for which `KS` is claimed) | `2^96` | [`Security.lean#L139-L141`](RecursionFast/Contract/Security.lean#L139-L141) |
+| `outCap` (extractor output words) | `2^24` | [`Extractor.lean#L195-L196`](RecursionFast/Contract/Extractor.lean#L195-L196) |
 | `queryCap`, `leafCap` | `2^20` bytes, `2^20` blocks | [`Relation.lean#L66-L70`](RecursionFast/Contract/Relation.lean#L66-L70) |
 
 **How to prove it.** Any correct argument is accepted. The organiser library (untrusted,
@@ -175,7 +178,12 @@ kernel-checked) offers routes and parts: a potential on logs, `KState`, with its
 `KState.ks` to `KS` ([`Library/PaperTheorem.lean`](RecursionFast/Library/PaperTheorem.lean));
 `KSTextbook.ks` (textbook soundness implies `KS` at twice the error,
 [`Library/KS.lean`](RecursionFast/Library/KS.lean)); the witness-sending entry
-([`Library/WitnessSending.lean`](RecursionFast/Library/WitnessSending.lean)); and word-level twins
+([`Library/WitnessSending.lean`](RecursionFast/Library/WitnessSending.lean)); a certified verifier
+that asks the oracle and whose extractor finds the witness in the query log, by a program of the
+machine that scans the log by query within `32 · t` steps
+([`Controls/MaskedLeaf.lean`](RecursionFast/Controls/MaskedLeaf.lean), `certificateR`: a 32-byte
+proof masks the one block of a leaf under the answer to the statement's own query; any other proof
+is witness-sending); and word-level twins
 of Keccak-256 and `SigOk` proved equal to the contract's
 ([`Library/Fast.lean`](RecursionFast/Library/Fast.lean),
 [`Library/KeccakFast.lean`](RecursionFast/Library/KeccakFast.lean)).
@@ -186,8 +194,9 @@ takes at most `(f + 7(m + 1))/8` words of output; with the previous step's outpu
 file cap, the leaf child may take up to about 64 MiB (a leaf proof that sends its `2^20` blocks
 whole, `601 + 4n` words as a child, fits beside it: `2^23 + 2^22 + 57,954 < 2^24` words), but two
 children both within about 458,800 bytes of the file cap may not fit (with word-aligned fields
-they fit up to 36 bytes below it) ([`Extractor.lean#L60-L75`](RecursionFast/Contract/Extractor.lean#L60-L75)). A certifiable
-`V` bounds the children it accepts.
+they fit up to 40 bytes below it) ([`Extractor.lean#L60-L75`](RecursionFast/Contract/Extractor.lean#L60-L75)). A certified
+`V` cannot accept a node whose children do not fit by a proof of at most `8 · outCap` bytes (its
+extractor would have no output to give): it bounds the children it accepts.
 
 ## 5. The deployment: the signed random oracle
 
@@ -609,11 +618,14 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
 ## 10. Hard rules for the Lean side
 
 - **Axioms**: the certificate's closure uses only `propext`, `Classical.choice`, `Quot.sound`. No
-  `sorryAx`, `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler` (so no `native_decide`).
+  `sorryAx`, `Lean.ofReduceBool`, `Lean.ofReduceNat`, `Lean.trustCompiler`, and no other axiom (so
+  no `native_decide` or `decide +native`: their proofs depend on an auxiliary axiom
+  `…._native.decide.ax_…`).
 - **The source rule** ([`scripts/source-rule.py`](scripts/source-rule.py)) rejects, before
   anything is built, every elaboration-time code form: `#eval` and every `#`-command except
   `#check`, `#print`, `#reduce`, `#guard_msgs`; `run_cmd`, `run_meta`, `run_tac`, `by_elab`, …;
-  `elab`, `macro`, `syntax`, `simproc`, `declare_…`; `initialize`, `register_…`; `unsafe`,
+  `elab`, `macro`, `syntax`, `simproc`, `declare_…`; `initialize`, `register_…`; `native_decide`
+  and the word `native` (`decide +native`, `(native := true)`); `unsafe`,
   `partial`, `unsafeCast` and relatives; the attributes `implemented_by`, `extern`, `csimp`,
   `cpass`, `computed_field`; compiler, elaborator and debug `set_option`s; `import Lean…`,
   `import Lake…`, `import Qq…`, `open Lean…`, `open Qq…`. It scans comments and strings too (reword
@@ -624,7 +636,8 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   `csimp`, `cpass`, `computed_field`); `V`, `P` and `ext` of `submission` have compiled code; no
   entry definition refers to the compiler's or the environment's API; the module declaring
   `submission` reaches, transitively, only entry modules and the import allowlist; organiser modules
-  match the olean manifest; and, after the badge build, the badge's per-entry module holds
+  match the olean manifest (which may list a module path once only); and, after the badge build,
+  the badge's per-entry module holds
   `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else (rule 9: an entry's
   `notation` can turn the text `RFBadge.main` into another term in every module that imports it).
 - **Imports**: an entry module imports only its own modules and the import closure of `Mathlib`,
@@ -653,21 +666,30 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   whose clean badge has the first run's `badge_sha256` (the cache changed nothing the badge is
   built from) keeps the first REJECT.
 - **Keccak-256** (FIPS 202's `Keccak-f[1600]` sponge with Keccak's padding): collision resistance
-  on the eight tagged domains, and `Keccak-256(k ‖ ·)` with a secret
+  on the eight tagged domains (that every collision the walks and `wotsReduce` return is between
+  preimages of those domains is by inspection of the constructions: `Collision` carries no tag
+  predicate), and `Keccak-256(k ‖ ·)` with a secret
   32-byte key `k` as a PRF (also under the signing seed: the chain starts `chainStart` are
   pseudorandom), and **tweakable multi-target one-wayness of the WOTS chain step** `wotsStep`
   with pseudorandom starts: no adversary outputs *the honest* chain value at a position below
   every position the signer revealed of that chain, except with small probability (about
   `2^16 · 133` targets, each tweak `(j, i, s)` targeting one value; for a key the signer never
   used, that is guessing a value derived from the PRF). It is hard only because the starts are
-  random and unknown: a forger with `sk` built in reaches it for every fixed `sk`. The
+  random and unknown: a forger with `sk` built in reaches it for every fixed `sk`. The assumption
+  is **interactive**: the adversary chooses, through its `SIGN` requests, which positions are
+  revealed before it outputs. It is not reduced here to a non-interactive one; the standard WOTS+
+  and SPHINCS+ reductions (Hülsing 2013; Bernstein et al. 2019) reach it from one-wayness and
+  second-preimage resistance (SPHINCS+: SM-TCR, PRE, undetectability) of the tweakable chain step,
+  guessing the forged key and chain, at a loss in the number of targets. The
   signature's unforgeability (EUF-CMA, one message per index) is reduced in the kernel to a
   Keccak-256 collision or such a chain inversion
   ([`Library/WotsReduce.lean`](RecursionFast/Library/WotsReduce.lean), `wotsReduce`,
-  `eufReduce`), given that the signed traces are the service's **complete** transcript
-  (`Transcript`: every signature the reference signer's `sign sk j (traceDigest tr)`, one message
-  per index, replays allowed); an issued signature missing from it can be replayed and is then
-  reported as an inversion. The inversion's probability stays on paper. The composition across
+  `eufReduce`), given that the signed traces are the service's transcript (`Transcript`: every
+  signature the reference signer's `sign sk j (traceDigest tr)`, one message per index, replays
+  allowed) and that it is **complete**, which is on paper: `Transcript` does not say so (the empty
+  list meets it, `Controls/WotsReduce.lean`, `transcript_nil_any`); an issued signature missing
+  from it can be replayed and is then reported as an inversion. The inversion's probability stays
+  on paper. The composition across
   the stream needs collision resistance, the PRF and the chain's one-wayness only. The leaves' data
   the walk extracts are the runner's, or two block lists of one leaf, of one length and one root,
   give an explicit collision over the data tree (`dataCollision`, `Outcome.data_or_collision`). A signed trace
@@ -676,7 +698,9 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   ([`Library/Compose.lean`](RecursionFast/Library/Compose.lean), `Forgery.reduce`); the walk
   around it is kernel for the stream (`walkStreamSigned`, `compose_prob_stream_signed`, a union
   bound over its `2M - 1` members, and `compose_prob_stream_wots`, its EUF-CMA term split into a
-  collision and a chain inversion) and for balanced trees (`walkSigned`, `compose_prob_signed`,
+  collision and a chain inversion; `compose_prob_stream_wots_runner`, the same against the runner's
+  data, bounds the probability that the walk does not return them) and for balanced trees
+  (`walkSigned`, `compose_prob_signed`,
   `compose_prob_wots`). Security against signature-only forgery, which the original
   signed-oracle construction (Chiesa–Tromer, ICS 2010) also assumes, is not used: the walk
   matches a signed proof to the log by its trace, the signed message, not by its signature.
@@ -894,17 +918,30 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
 - **On paper, not in the kernel**: that the signature's chain starts are pseudorandom, and the
   bounds on the probabilities of the walk's collision and chain-inversion outcomes (the per-run
   reduction to them is kernel: `Forgery.reduce`, then `eufReduce` from EUF-CMA to a collision or
-  the honest chain value below every revealed position, given the service's complete signing
-  transcript, `Transcript`: the reference signer's signatures, one message per index; the model
-  has no signing oracle), lazy sampling against a random function, randomised adversaries (an
-  average of deterministic ones), and the PRF step from the random oracle to the keyed
-  deployment. The composition across the stream is kernel for one deterministic query program
-  against the lazily sampled oracle, given the service's signed traces (`compose_prob_stream`,
-  `compose_prob_stream_signed`, `compose_prob_stream_wots`).
+  the honest chain value below every revealed position, given the service's signing transcript,
+  `Transcript`: the reference signer's signatures, one message per index; the model has no
+  signing oracle), lazy sampling against a random function, randomised adversaries (an average of
+  deterministic ones), and the PRF step from the random oracle to the keyed deployment. Also:
+  * that `T` is the service's **complete** transcript (not a hypothesis: the empty transcript meets
+    `Transcript` and `Honest` for every run);
+  * that the reductions are **efficient**: the collision finder runs the walk, `2M - 1` runs of
+    `S.E` (each within its proved fuel) and `2(M - 1)` runs of `acc` (the `Rel` checks of the node
+    witnesses), besides leaf checks of at most `2^21` hashes each; `acc` runs `V`, whose time the
+    contract does not bound (only its queries), so the reduction is efficient only if `V` runs in
+    bounded time on every input within the caps;
+  * the **union over the `M` outputs** for the track `every`, each output's walk bounded alone
+    (`Σ (2i - 1) = M²` members, `Contract/Security.lean`).
+  The composition across the stream is kernel for one deterministic query program against the
+  lazily sampled oracle and one accepted output, given the service's signed traces
+  (`compose_prob_stream`, `compose_prob_stream_signed`, `compose_prob_stream_wots`,
+  `compose_prob_stream_wots_runner`).
 - **`KS` is textbook knowledge soundness only for adversaries that ask the verifier's queries
   themselves**: its extractor also reads the verifier's answers, so for an adversary that leaves
   fresh queries to the verifier it is weaker than the textbook notion (`Controls/Security.lean`,
-  `lucky_ks`). In the service run every signed answer is in the run's log (`SIGN` computes the
+  `lucky_ks`). Completeness does not close the gap: joined with the witness-sending decision such a
+  verifier is complete (`Controls/MaskedLeaf.lean` certifies a verifier extracted from its own
+  query's answer). The deployment's normalisation does: in the service run every signed answer is
+  in the run's log (`SIGN` computes the
   answers it signs), so the run as a whole, the prover together with the service's evaluations,
   is of the normalised kind; the composition matches every signed trace to that log or reduces it
   to a forgery (`Library/Compose.lean`).
@@ -946,6 +983,12 @@ are indicative only, except where a bullet says "on the machine".
 - **`errorCap = 2^-128` excludes plain GF(2^128) sumcheck** (a degree-2 round costs `2^-127`):
   draw challenges from a larger field (the recursive entry used GF(2^256) and claimed
   `15/2^132`), or repeat.
+- **The extractor budget fits unique decoding only.** The fixed `2^48` steps cover a quasi-linear
+  Reed–Solomon decoder of the about `2^29` symbols a node extractor decodes
+  ([`Extractor.lean`](RecursionFast/Contract/Extractor.lean), the budget); a list decoder
+  (Guruswami–Sudan, about `n² ≥ 2^58` field operations at that size) does not fit. A port of a
+  proximity-gap PCS (leanVM's WHIR, FRI) must extract within the unique-decoding radius: choose its
+  parameters for unique decoding, not list decoding.
 - **`acc` takes the submission**, so a recursive `V` cannot call it: restate it and prove the two
   equal; mirror every conjunct.
 - **`ε` and `δ` must not block compilation**: the badge compiles `submission`; a `noncomputable`
