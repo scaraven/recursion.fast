@@ -67,6 +67,7 @@ class Params:
     stream_s: float
     check_every: int
     timed_runs: int
+    scrub_batches: int
     calib_every: int
     calib_idle_s: float
     calib_rounds: int
@@ -101,7 +102,7 @@ class Params:
             name=t["name"],
             M=s.get("M"), n=s.get("n"), ready_s=g("stream", "ready_s"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
-            timed_runs=g("stream", "timed_runs"),
+            timed_runs=g("stream", "timed_runs"), scrub_batches=g("stream", "scrub_batches"),
             calib_every=g("calibration", "every"), calib_idle_s=float(g("calibration", "idle_s")),
             calib_rounds=g("calibration", "rounds"), calib_ref_ns=float(g("calibration", "ref_ns")),
             calib_drift=float(g("calibration", "c_P_drift")), calib_runs=g("calibration", "runs_per_sample"),
@@ -133,6 +134,9 @@ class Params:
         if type(self.timed_runs) is not int or self.timed_runs < 1 or self.timed_runs % 2 == 0:
             raise ValueError(f"[stream] timed_runs = {self.timed_runs!r}, not an odd positive integer (P_total is "
                              "the median of the pass totals)")
+        b = self.scrub_batches
+        if type(b) is not int or not 1 <= b <= 65536 or b & (b - 1):
+            raise ValueError(f"[stream] scrub_batches = {b!r}, not a power of two from 1 to 65536 (harness/tools/scrub.c)")
 
 
 LEAF_CAP = digest.LEAF_CAP       # the contract's leafCap = 2^20 blocks (`Relation.lean`)
@@ -449,7 +453,7 @@ class Bench:
         per-CPU inode counters (pipes, sockets and other pseudo files; memfds) set to a fresh batch
         and a uniform random offset on every CPU of the job (`harness/tools/scrub.c`), so that what an
         earlier request did on a CPU does not show in a later request's inode numbers. With
-        `batches` (before every timed request: `SCRUB_BATCHES`), the scrub also takes a uniform random
+        `batches` (before every timed request: the season's `[stream] scrub_batches`), the scrub also takes a uniform random
         number in [0, batches) of fresh batches of each kind from the machine-wide counters, so that
         the batch a timed request reads carries an earlier request's count only under that noise
         (review R8 HIGH 1; AGENTS.md §12 states what is left). Seconds, or
@@ -556,7 +560,7 @@ class Bench:
         # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
         sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", secrets.token_hex(8))
         fresh_dir(sock)
-        scrub_s = self.scrub(batches=SCRUB_BATCHES if key_of(inputs) else 0)
+        scrub_s = self.scrub(batches=self.p.scrub_batches if key_of(inputs) else 0)
         dl = self.deadline[0] if self.deadline else None       # after the runner's own work (off the clock)
         pads = [bytes(n) for name, n in STAGED.items() if name not in inputs]
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
@@ -919,7 +923,6 @@ class Bench:
 # that has one; the leaf's files and `prev.bin` have the step's sizes in the service run and in the
 # timed passes alike (step 1, which has no `prev.*`, is told by its command, `first`)
 STAGED = {"leaf.json": 0, "leaf.bin": 0, "prev.stmt": 65, "prev.bin": 0, "oracle.key": 65}
-SCRUB_BATCHES = 256        # before every timed request the scrub takes [0, 256) machine-wide batches of each kind
 PASS_DELAY_S = 2.0         # the untimed delay before each timed pass is uniform in [0, 2) s
 DROP_WAIT_S = 10.0         # `drop` is asked again for at least this long (and `step_s`) until no connection is left
 

@@ -72,8 +72,8 @@ moves every CPU's inode counters (behind the inode numbers of pipes, sockets, ot
 files and memfds) to the end of their batch and then a uniform random offset into a fresh one
 (`harness/tools/scrub.c`, one pinned thread per CPU, about 0.1 s, recorded as `scrub_s`), so a
 pipe's or memfd's inode number says nothing of what an earlier request did on that CPU; before
-every timed request it also takes a uniform random number in `[0, 256)` of fresh batches of each
-kind machine-wide (AGENTS.md §12). When a
+every timed request it also takes a uniform random number in `[0, 4096)` of fresh batches of each
+kind machine-wide (the season's `scrub_batches`; about 10 s, off the clock; AGENTS.md §12). When a
 request ends, every process the prover started is killed. The same `/proc` and CPU-tree masks and the same filter apply to `prover setup`
 and to every badge run of the benchmark job (which runs the entry's compiled `V`).
 

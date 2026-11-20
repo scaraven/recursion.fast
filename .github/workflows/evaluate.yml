@@ -59,10 +59,11 @@
 #     start-ups and timed parts, its badge runs; `rfh.bench.Bench.deadline`), and the runner's own
 #     work inside the stream is off that clock: the copies of the setup before each pass (at most
 #     about 6.5 s each at setup_cap), the scrubs (about 0.1 s before each request and badge run,
-#     up to about 1 s before each timed request with its random batches), each sandbox's view and
-#     set-up, the staging, the outputs' reads and walks, the calibration samples (about 6 × 3 s),
-#     the untimed delays before the timed passes (under 2 s each), the `drop` after each request:
-#     recorded as `stream.clock.runner_overhead_s`, of order 1–3 minutes, bounded by PART_S. The
+#     about 10 s, up to about 20 s, before each timed request with its random batches), each
+#     sandbox's view and set-up, the staging, the outputs' reads and walks, the calibration samples
+#     (about 6 × 3 s), the untimed delays before the timed passes (under 2 s each), the `drop` after
+#     each request: recorded as `stream.clock.runner_overhead_s`, of order 8–11 minutes (7–8 of them
+#     the 48 timed requests' scrubs), bounded by PART_S. The
 #     rest of PART_S (23.7 min, that overhead included) is for the organiser's own steps (the
 #     calibration instance, the leaf data and digests, the at most 30 s the checks may run past
 #     stream_s in all (one bound for every badge run; none starts past the cap), the service's

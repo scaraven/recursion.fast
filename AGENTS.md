@@ -351,8 +351,8 @@ comes from a run in which the prover never had the key.
   removed (a tmpfs file keeps state a process holding it read-only can set, its shared memory
   policy among them; only the steps of one pass, on one clock, share a copy), and before every
   request every CPU's inode counters are moved to a fresh batch at a random offset, and before
-  every timed request a uniform random number in `[0, 256)` of fresh batches of each kind is taken
-  machine-wide (§5); before each timed pass the runner waits an untimed random delay, uniform in
+  every timed request a uniform random number in `[0, 4096)` (`[stream] scrub_batches`) of fresh
+  batches of each kind is taken machine-wide (§5, §12); before each timed pass the runner waits an untimed random delay, uniform in
   `[0, 2)` s from the CSPRNG; after every request the service closes every connection still open
   (`drop`) and the runner requires none left (else a harness ERROR); the one
   directory a request sees by a name the runner chose, its socket directory (bound at `/run/rf`;
@@ -607,10 +607,10 @@ per-request cap has 80 s for its badge runs, whatever the runner's own work cost
 `stream_s` is its REJECT. The runner's own work in the stream is off that clock and recorded in the
 result (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`): the copies of the binary and the
 setup before each timed pass, each badge run's copies, each sandbox's mask files and CPU tree, the
-staging of the inputs, the outputs' reads and walks, the scrubs (about 0.1 s before each request
-and badge run, and before each of the 48 timed requests its random machine-wide batches, up to
-about 1 s at 32 CPUs), the calibration samples (2 s idle and three short runs each, about 18 s), the
-untimed delays before the timed passes (under 2 s each) and the service's `drop` after each
+staging of the inputs, the outputs' reads and walks, the scrubs (about 0.1 s before each request and
+badge run, and before each of the 48 timed requests its random machine-wide batches, about 10 s on
+average and up to about 20 s), the calibration samples (2 s idle and three short runs each, about
+18 s), the untimed delays before the timed passes (under 2 s each) and the service's `drop` after each
 request. It is bounded by the benchmark job's `PART_S` (64 minutes), whose 23.7 minutes beyond the
 capped steps hold it (`.github/workflows/evaluate.yml` has the arithmetic). Measured on the
 development host (kernel 7.0, 32 CPUs, `/dev/shm`):
@@ -620,15 +620,18 @@ development host (kernel 7.0, 32 CPUs, `/dev/shm`):
 | the setup at `setup_cap` = 4 GiB, before each timed pass | 2.4–4.1 s to copy (1.0–1.6 GiB/s; 0.69 GiB/s, 5.9 s, from a disk's page cache in the review's measurement), 0.55 s to remove | 3 passes: 9–19.5 s |
 | one badge run's copies (the smoke's 137 MiB Lean badge, its 6 libraries and `ld.so.cache`) | 0.15–0.25 s to make, 0.02 s to remove | 50 runs: 8–13 s |
 | one sandbox's mask files and CPU tree (2,437 entries at 32 CPUs, about 600 at the VM's 8) | 86 ms at 32 CPUs (about 25 ms at 8) | 114 sandboxes: 3–10 s |
-| the scrub with random batches, before a timed request | 0.5–1.0 s at 32 CPUs | 48 requests: 25–50 s |
+| the scrub with random batches (`[0, 4096)` of each kind), before a timed request | median 8.5 s at 32 CPUs, 10.1 s on 8 of them (0.6–15.3 s; up to about 20 s when both draws are near 4,096): about 2.4 µs per inode, nearly serial, so fewer CPUs do not make it shorter (with `[0, 256)`: 0.7 s) | 48 requests: about 7–8 min |
 
-With the samples and the delays, the overhead of a stream at the season's caps is of order one to
-two minutes, every second of it outside `stream_s`. (Until review R3, `stream_s` was wall time and
-these copies left an entry at every cap about 3–19 s for its badge start-ups; until the setup was
-copied to the runner's tmpfs, the runner re-read it before every request.) A toy setup's copy (the
-smoke's) takes about 5 ms. The smoke's honest stream (`M` = 4, 16 requests, 12 of them timed) on
-the development host: 6.1 s of the entry's time, 26.1 s wall, 20.0 s of runner overhead, of which
-the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three delays 2.1 s.
+With the samples and the delays, the overhead of a stream at the season's caps is of order eight to
+eleven minutes, most of it the timed requests' scrubs, every second of it outside `stream_s` and
+inside `PART_S`'s 23.7 minutes beyond the capped steps (measured on a loaded host, load 15–30 on its
+32 CPUs; the VM's own figure is not measured). (Until review R3, `stream_s` was wall time and these
+copies left an entry at every cap about 3–19 s for its badge start-ups; until the setup was copied
+to the runner's tmpfs, the runner re-read it before every request.) A toy setup's copy (the smoke's)
+takes about 5 ms. The smoke's honest stream (`M` = 4, 16 requests, 12 of them timed, its
+`scrub_batches` 256) on the development host: 6.1 s of the entry's time, 26.1 s wall, 20.0 s of
+runner overhead, of which the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the
+three delays 2.1 s.
 
 ## 10. Hard rules for the Lean side
 
@@ -825,11 +828,11 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   | the request directories' names | random | |
 
   Left open, from a service-run request to a later one (each an upper estimate for a writer that
-  spends its untimed time on it; none measured):
+  spends its untimed time on it; none measured; open for the owner's decision, below):
 
   | the channel | at most | the noise on it |
   |---|---|---|
-  | **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a CPU takes next counts the batches taken machine-wide, which a request moves by making inodes on every CPU (about 1.5 ms per batch of 1,024 on one CPU: about `2^17` batches in one 20 s step on 8 CPUs) | about 9 bits per counter from one step's work, about 13 from all 16 service-run steps'; the two counters together about 24 bits per stream (about 20 bits each before the noise, from one step) | before every timed request the scrub takes a uniform random number in `[0, 256)` of fresh batches of each kind (review R8 HIGH 1), so a timed request reads the count under at least one draw; the first timed request can decode it and re-encode it for the later ones (review R4b NIT 7), so later draws add nothing |
+  | **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a CPU takes next counts the batches taken machine-wide, which a request moves by making inodes on every CPU (about 1.5 ms per batch of 1,024 on one CPU: about `2^17` batches in one step on 8 CPUs, `2^21` in all 16 service-run steps) | about 5 bits per counter from one step's work, about 9 from all 16 service-run steps' (`log2` of the batches over the noise's 4,096: `log2(2^21 / 2^12 + 1)`); the two counters together about 16 bits per stream, the writer's time split between them (`2^20` batches each, 8 bits each). With `[0, 256)` (until the final review's follow-up) these were 9, 13 and 24 bits | before every timed request the scrub takes a uniform random number in `[0, 4096)` of fresh batches of each kind (the season's `[stream] scrub_batches`; review R8 HIGH 1; 256 until the final review's follow-up, which raised it at about 10 s more per timed request, §9; the CI smoke keeps 256 for its time limits), so a timed request reads the count under at least one draw; the first timed request can decode it and re-encode it for the later ones (review R4b NIT 7), so later draws add nothing |
   | **the clocks**: a service-run request stretches its own untimed duration (up to `ready_s + step_s` = 30 s), a badge run its own (every one bounded, a judged run by `60 s + 4 · v_cap`, the final output's too since review R4b MED 3; a verifier that stalls one judged run of three keeps its median), and a request can slow the runner's off-clock work after it (its `/work`'s walk, the next copies); a timed step reads the clock against a timestamp kept in `/setup` | about 11 bits per stream: `log2` of the stretch the benchmark job allows (`PART_S` = 3,840 s, of which `stream_s` = 2,000 s is the entry's time) over the noise | an untimed delay before each timed pass, uniform in `[0, 2)` s from the CSPRNG |
   | **the service's heap**: one arena's free lists and top, which a request's allocations shape (everything from 128 KiB up is a fresh mapping) | a few bits | none |
   | **micro-architectural state** (CPU caches, predictors), not cleared between requests | not estimated | the calibration runs between requests disturb it |
@@ -848,13 +851,15 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   proof (review R8 HIGH 1) gives about 1.1–2.8 KiB of `|π_16|` per grinding bit. `S` is
   proportional to `|π_16|` (§7), so a leaked bit is worth about 0.4–1.3 % of `S` at a final proof
   of 209–294 KiB (leanVM's published sizes), more for a smaller one (0.9–2.2 % at 128 KiB): two
-  bits can reach the 2 % margin. The channels above carry together at most about 35–40 bits per
-  stream (24, 11 and the heap's few: −13 … −54 % of `S` at those sizes if every bit reached a
-  grinding search), for a writer that spends
+  bits can reach the 2 % margin. The channels above carry together at most about 30 bits per
+  stream (16, 11 and the heap's few: −10 … −40 % of `S` at those sizes if every bit reached a
+  grinding search; 35–40 bits with the scrub's earlier `[0, 256)`), for a writer that spends
   nearly all of every untimed step and badge run on them, and less in practice (each bit costs the
-  writer the stream's own time, and a grinding search gains only up to its own length); the owner
-  accepts that residue for this season (first estimated at order 20 bits; review R4b corrected
-  it), measured by no entry yet.
+  writer the stream's own time, and a grinding search gains only up to its own length). **This
+  residue is open**: the owner has not accepted it, and it is listed for the owner's decision with
+  these estimates, about 30 bits per stream at about 0.4–1.3 % of `S` per bit (first estimated at
+  order 20 bits; review R4b corrected it to 35–40; the larger scrub brought it to about 30),
+  measured by no entry yet.
 
   A request can tell its pass and its step from counters that advance with every sandbox (unique
   mount ids, namespace inode numbers, the network namespace's cookie, the inode numbers of the

@@ -13,7 +13,7 @@
  * batch (so that the CPU's next number comes from a fresh batch) and then draws `r` uniform in
  * [0, 1024) from the CSPRNG and makes `r` more: a later request finds each CPU's offset uniform and
  * independent of what an earlier request did there. Which batch a CPU holds still reflects the
- * machine-wide count of batches; with B (before every timed request, `rfh.bench.SCRUB_BATCHES`)
+ * machine-wide count of batches; with B (before every timed request, the season's `scrub_batches`)
  * the threads first make U·1024 more of each kind between them, which takes exactly U fresh
  * batches machine-wide, so that count reaches a later request only under a uniform noise of B
  * batches (it is not closed: AGENTS.md §12 says what is left and what it is worth).

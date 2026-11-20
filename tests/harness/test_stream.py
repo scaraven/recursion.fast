@@ -820,7 +820,7 @@ def main():
             err = str(e)
     finally:
         bench_mod.request = real_request
-    check(scrubs == [0, bench_mod.SCRUB_BATCHES, bench_mod.SCRUB_BATCHES] and len(drops) >= 5
+    check(scrubs == [0, w2.p.scrub_batches, w2.p.scrub_batches] and len(drops) >= 5
           and abs(w2.left() - (100 - 3 * 2.5)) < 1e-3 and all(abs(x - y) < 0.05 for x, y in zip(dls, (100, 97.5, 95)))
           and err and "still open after `drop`" in err,
           f"Bench.one: the scrub ({scrubs}; random batches before a timed request) and `drop` after every request "

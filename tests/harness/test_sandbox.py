@@ -44,7 +44,8 @@
     earlier request made (with a shared tmpfs, the control, it does); with the runner's scrub
     (`harness/tools/scrub.c`) before every request, the per-CPU inode counters of pipes and memfds
     show a later request nothing of the K pipes and memfds an earlier one made on every CPU (without
-    it, the control, each CPU's counter has moved by K);
+    it, the control, each CPU's counter has moved by K); the scrub takes the season's
+    `scrub_batches` random machine-wide batches (its time printed);
 12. what one request leaves for a later one, through the benchmark's binds (review LR4): negative
     dentries in every directory a request sees (`/setup`, `/prover`, the masked `/proc` entries,
     the CPU tree: the reader classifies one timed lookup per name at chance; a work-disk directory
@@ -666,6 +667,17 @@ def main():
           f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), offsets after a scrub spread over "
           f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'}; without the scrub, the control: "
           f"{[round(x, 2) for x in ctl_share]} of {n0}")
+
+    # the season's random machine-wide batches before a timed request (`[stream] scrub_batches`): the
+    # scrub takes them, and the runner's off-clock time for one (AGENTS.md §9)
+    from rfh.bench import Params
+    sb_n = Params.load(os.path.join(ROOT, "harness", "season.toml")).scrub_batches
+    t0 = time.monotonic()
+    sb_out = subprocess.run([scrub_bin, str(sb_n)], capture_output=True, text=True, timeout=120)
+    sb_s = time.monotonic() - t0
+    check(sb_out.returncode == 0 and f"batches={sb_n}" in sb_out.stdout,
+          f"the scrub with the season's scrub_batches = {sb_n} runs ({sb_out.stdout.strip()}{sb_out.stderr.strip()[-200:]}, "
+          f"{sb_s:.1f} s)")
 
     # 12. what one request leaves for a later one through the real binds (review LR4)
     channels(tmp, svc, iso_run, iso_req)

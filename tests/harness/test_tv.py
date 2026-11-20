@@ -24,9 +24,9 @@ synthetic steps.
    exactly three timed times is `MalformedStream`.
 3. The season's constants (AGENTS.md §6, the v6 rules): `M = 16` steps of one leaf of `n = 2^18`
    blocks of 32 bytes, 3 timed passes, `step_s` 20 s, `stream_s` 2,000 s, the caps 1 MiB, 512 KiB and
-   64 ms, no `size_ref`, the prover's 8 GiB; the smoke's one exception (its `v_cap_ms` 128, its
-   size caps the season's); `Params.load` refuses a malformed shape (`n` above
-   `leafCap = 2^20` among them, `n = 2^20` accepted, an even `timed_runs`); the seeds are fresh OS CSPRNG draws,
+   64 ms, no `size_ref`, `scrub_batches` 4096, the prover's 8 GiB; the smoke's exceptions (its `v_cap_ms` 128
+   and `scrub_batches` 256, its size caps the season's); `Params.load` refuses a malformed shape (`n` above
+   `leafCap = 2^20` among them, `n = 2^20` accepted, an even `timed_runs`, a `scrub_batches` the scrub refuses); the seeds are fresh OS CSPRNG draws,
    with no seeded generator, expanded by SHAKE-256 under the published domain; the runner's leaf statements through
    `rf-oracle --data-roots` equal the pure-Python reference; the local season copy keeps every parameter but the two
    it changes.
@@ -269,14 +269,16 @@ def main():
           and not hasattr(p, "chains")
           and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 64.0)
           and not hasattr(p, "size_ref") and p.mem_prover == "8G" and (p.check_every, p.calib_every) == (8, 8)
+          and p.scrub_batches == 4096
           and p.badge_start_s == 2 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
           f"season 1: M = 16 steps of one leaf of 2^18 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
-          f"/ 512 KiB / 64 ms, no size_ref, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
+          f"/ 512 KiB / 64 ms, no size_ref, scrub_batches 4096, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap)
           == (p.pi_cap, p.final_pi_cap, p.file_cap)
-          and sp.v_cap_ms == 128.0 and p.v_cap_ms == 64.0 and (sp.step_s, sp.stream_s) == (60, 300),
-          f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps; the one documented exception, "
+          and sp.v_cap_ms == 128.0 and p.v_cap_ms == 64.0 and (sp.step_s, sp.stream_s) == (60, 300)
+          and sp.scrub_batches == 256,
+          f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps, scrub_batches 256 (CI's limits); the one documented exception, "
           f"its v_cap {sp.v_cap_ms:g} ms (the season's {p.v_cap_ms:g}); its own time caps")
     season_text = open(os.path.join(ROOT, "harness", "season.toml")).read()
     for what, pat, new, want in (("n above leafCap", r"(?m)^n = 262144", "n = 1048577", "leafCap = 2^20"),
@@ -287,7 +289,11 @@ def main():
                                  ("no timed pass", r"(?m)^timed_runs = 3", "timed_runs = 0", "timed_runs"),
                                  ("an even number of timed passes", r"(?m)^timed_runs = 3", "timed_runs = 2",
                                   "timed_runs = 2, not an odd positive integer"),
-                                 ("timed_runs a float", r"(?m)^timed_runs = 3", "timed_runs = 3.0", "timed_runs")):
+                                 ("timed_runs a float", r"(?m)^timed_runs = 3", "timed_runs = 3.0", "timed_runs"),
+                                 ("scrub_batches not a power of two", r"(?m)^scrub_batches = 4096", "scrub_batches = 3000",
+                                  "scrub_batches = 3000, not a power of two"),
+                                 ("scrub_batches above the scrub's 65536", r"(?m)^scrub_batches = 4096",
+                                  "scrub_batches = 131072", "scrub_batches")):
         bad, k = re.subn(pat, new, season_text, count=1)
         assert k == 1
         with tempfile.TemporaryDirectory(prefix="rf-shape-") as bd:

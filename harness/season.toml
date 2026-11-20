@@ -64,6 +64,11 @@ check_every = 8   # with M = 16: outputs 1–8 checked between steps 8 and 9, 9�
 timed_runs = 3    # AGENTS.md §6: timed passes after the service run, each output byte-identical to the
                   # service run's; P_total = the median of the three pass totals (rfh.bench.score);
                   # must be odd
+scrub_batches = 4096   # AGENTS.md §12: before every timed request the scrub (harness/tools/scrub.c)
+                  # takes a uniform random number in [0, scrub_batches) of fresh machine-wide inode
+                  # batches of each kind, 12 bits of noise on the batch counters (256 until the final
+                  # review's follow-up); off the clock, about 10 s per timed request (AGENTS.md §9); a
+                  # power of two up to 65536
 
 [calibration]     # AGENTS.md §6: interleaved samples with no entry process alive, medians used
 every = 8         # samples before the service run's steps 1 and 9, one before each timed pass and a
