@@ -58,7 +58,10 @@ It rejects (exit code 1) if:
    budget and, for the extractor, by the certificate's proved step bound. No imported
    extension code runs: environment extensions keep their initial state except the pure-data ones
    the compiler needs (`pureExts`), and initializer execution is never enabled;
-5. an organiser module of the environment does not match the manifest (above);
+5. an organiser module of the environment does not match the manifest (above). A manifest that
+   lists one module path under two tags (e.g. `core/` and a pinned `packages/<pkg>/`) is refused
+   before anything is loaded: the gate finds a module's files by path, so their class would depend
+   on the line order;
 6. (with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
    is neither untrusted itself nor in FILE. FILE is the import closure of the organiser's roots
    (`Mathlib`, `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`; written
@@ -128,32 +131,55 @@ def moduleOf (env : Environment) (n : Name) : Name :=
   match env.getModuleIdxFor? n with
   | some i => env.header.moduleNames[i.toNat]!
   | none => `_current
+/-- `s` is a sha256 digest as `sha256sum` prints it: 64 lowercase hexadecimal digits. -/
+def isSha256 (s : String) : Bool :=
+  s.length == 64 && s.all fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')
+
+/-- A `sha256sum` record `<sha256>  <rest>` as `(sha256, rest)`: split after the digest, so `rest`
+(a path) may hold any character, two spaces included. -/
+def splitHashRecord (r : String) : Option (String × String) :=
+  let cs := r.toList
+  let h := String.ofList (cs.take 64)
+  if isSha256 h && (cs.drop 64).take 2 == [' ', ' '] && cs.length > 66 then
+    some (h, String.ofList (cs.drop 66))
+  else none
+
 /-- The manifest: module-relative `.olean` path (e.g. `Mathlib/Order/Basic.olean.server`) ↦
-(sha256, pinned?). Lines are `<sha256>  <tag>/<path>`, tag `core`, `project` or `packages/<pkg>`. -/
+(sha256, pinned?). Lines are `<sha256>  <tag>/<path>`, tag `core`, `project` or `packages/<pkg>`.
+The tag decides the class (pinned iff `packages/<pkg>` with `pkg` in `pinnedPackages`) but the
+gate looks modules up by path alone (`findOLean` does not say which tag a file is under), so two
+keys with one path (e.g. `core/X.olean` and `packages/CompPoly/X.olean`) are an error: the class
+would depend on the line order. -/
 def readManifest (file : System.FilePath) : IO (Std.HashMap String (String × Bool)) := do
   let mut m : Std.HashMap String (String × Bool) := {}
+  let mut keyOf : Std.HashMap String String := {}   -- path ↦ the tagged key it came from
   for line in ← IO.FS.lines file do
     if line.isEmpty || line.startsWith "#" then continue
-    let some (h, key) := (match line.splitOn "  " with | [h, k] => some (h, k) | _ => none)
+    let some (h, key) := splitHashRecord line
       | throw <| IO.userError s!"gate: malformed manifest line {line}"
-    match key.splitOn "/" with
-    | "core" :: rel | "project" :: rel => m := m.insert ("/".intercalate rel) (h, false)
-    | "packages" :: pkg :: rel => m := m.insert ("/".intercalate rel) (h, pinnedPackages.contains pkg)
-    | _ => throw <| IO.userError s!"gate: malformed manifest key {key}"
+    let (rel, pinned) ← match key.splitOn "/" with
+      | "core" :: rel | "project" :: rel => pure ("/".intercalate rel, false)
+      | "packages" :: pkg :: rel => pure ("/".intercalate rel, pinnedPackages.contains pkg)
+      | _ => throw <| IO.userError s!"gate: malformed manifest key {key}"
+    if let some k0 := keyOf.get? rel then
+      throw <| IO.userError s!"gate: manifest keys {k0} and {key} have one module path {rel}"
+    keyOf := keyOf.insert rel key
+    m := m.insert rel (h, pinned)
   return m
 
-/-- sha256 of files, by `sha256sum` in parallel batches. -/
+/-- sha256 of files, by `sha256sum` in parallel batches. `-z`: one NUL-terminated record per
+file, names unescaped (a name with a backslash or a newline is not rewritten). -/
 def sha256Files (files : Array String) : IO (Std.HashMap String String) := do
   let mut tasks := #[]
   for i in [:(files.size + 255) / 256] do
     let batch := files.extract (256 * i) (256 * i + 256)
-    tasks := tasks.push (← IO.asTask (IO.Process.output { cmd := "sha256sum", args := batch }))
+    tasks := tasks.push (← IO.asTask (IO.Process.output { cmd := "sha256sum", args := #["-z", "--"] ++ batch }))
   let mut out : Std.HashMap String String := {}
   for t in tasks do
     let r : IO.Process.Output ← IO.ofExcept t.get
     unless r.exitCode == 0 do throw <| IO.userError "gate: sha256sum failed"
-    for line in r.stdout.splitOn "\n" do
-      if let [h, f] := line.splitOn "  " then out := out.insert f h
+    for rec in r.stdout.splitOn "\x00" do
+      if let some (h, f) := splitHashRecord rec then out := out.insert f h
   return out
 
 /-- Trusted and pinned modules of `env` by content hash; errors for tampered organiser modules. -/
