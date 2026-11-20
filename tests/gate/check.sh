@@ -4,6 +4,8 @@
 # and the olean manifest of `harness/org-setup.sh` (.lake/rf/manifest.sha256; generated here
 # without the closure restriction if it is missing).
 #   ws        the witness-sending submission, computable as a whole: PASS
+#   masked    the masked-leaf submission (Controls/MaskedLeaf: V asks the oracle, E reads the log),
+#             its CertificateR: PASS
 #   backdoor  the backdoor submission (Controls/Backdoor), noncomputable as a whole: PASS, with each
 #             badge-path field V, P, ext compiled one by one
 #   comppoly  tests/gate/GateCompPoly.lean, importing CompPoly's BF64/Ext3: PASS, its `@[csimp]`
@@ -48,6 +50,12 @@ gate $C $C.ws_certificate --manifest "$M" --computable RecursionFast.WitnessSend
   || { cat "$T/ws.log"; fail "ws: rejected"; }
 grep -q "^gate: PASS" "$T/ws.log" || { cat "$T/ws.log"; fail "ws: no PASS"; }
 echo "ws: PASS ($(grep 'closure of' "$T/ws.log" | sed 's/.*closure of //'))"
+
+ML=RecursionFast.Controls.MaskedLeaf
+gate $ML $ML.certificateR --manifest "$M" --computable $ML.submission > "$T/masked.log" 2>&1 \
+  || { cat "$T/masked.log"; fail "masked: rejected"; }
+grep -q "^gate: PASS" "$T/masked.log" || { cat "$T/masked.log"; fail "masked: no PASS"; }
+echo "masked: PASS ($(grep 'closure of' "$T/masked.log" | sed 's/.*closure of //'))"
 
 B=RecursionFast.Controls.Backdoor
 gate $B $B.certified --manifest "$M" --computable $B.S > "$T/backdoor.log" 2>&1 \
