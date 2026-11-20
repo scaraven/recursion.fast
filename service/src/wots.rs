@@ -149,7 +149,7 @@ pub struct Signer {
     levels: Vec<Vec<Digest>>,
     next: AtomicU32,
     /// `signed[j]`: the message signed with key `j`, set once, by `sign`, before its signature is
-    /// computed (`2^16` entries, about 2.3 MiB).
+    /// computed (`2^16` entries of 36 bytes, 2.25 MiB; the test `signed_table_size`).
     signed: Box<[OnceLock<Digest>]>,
 }
 
@@ -297,6 +297,13 @@ mod tests {
         assert_eq!(&d[128..], &[0, 0, 0, 0, 0]);
         let d = digits(&[0b1110_0100; 32]);
         assert_eq!(&d[..4], &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn signed_table_size() {
+        // the figure in `Signer::signed`'s comment and `PROTOCOL.md` §5
+        assert_eq!(std::mem::size_of::<OnceLock<Digest>>(), 36);
+        assert_eq!(NKEYS * std::mem::size_of::<OnceLock<Digest>>(), 9 << 18); // 2.25 MiB
     }
 
     #[test]

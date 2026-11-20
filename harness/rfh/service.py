@@ -2,12 +2,14 @@
 
 TRUSTED RUNTIME (`Service`): one service process per stream (the service run and its timed passes)
 and one for the calibration. `start` launches `rf-oracle` with its socket in a fresh directory,
-under its own memory cap, and waits for `ready`; `replay` puts it in replay mode for one timed pass
-(the line `replay` on its stdin: it prints `key <hex k>`, its PRF key, resets its one-time-key
-counter and then re-issues only the signatures it made, at the same indices, for the same trace
-digests; `service/PROTOCOL.md`); `stop` closes its stdin, which makes it wipe its keys and exit, and
-returns its statistics. The client (`Client`) is
-used by tests and by the smoke's deliberately broken provers, not by the benchmark.
+under its own memory cap (and `--io-timeout`, if given), and waits for `ready`. The control lines
+on its stdin (`service/PROTOCOL.md` §6): `replay` puts it in replay mode for one timed pass (it
+prints `key <hex k>`, its PRF key, resets its replay index to 0 and then re-issues only the
+signatures it made, at the same indices, for the same trace digests); `drop` shuts every open
+connection down and returns how many are still open after its wait (`dropped live=N`; the runner
+requires 0 after every request); `stats` returns its counters without stopping it; `stop` closes
+its stdin, which makes it wipe its keys and exit, and returns its final counters. The client
+(`Client`) is used by tests and by the smoke's deliberately broken provers, not by the benchmark.
 """
 import os
 import select
@@ -28,8 +30,10 @@ class Service:
     """One `rf-oracle` process. `wrap` is the command prefix that applies the memory cap
     (`sandbox.memcap`)."""
 
-    def __init__(self, binary, sock_dir, wrap=(), stderr_path=None):
+    def __init__(self, binary, sock_dir, wrap=(), stderr_path=None, io_timeout=None):
         self.binary, self.sock_dir, self.wrap = binary, sock_dir, list(wrap)
+        # seconds a connection may stay in one read or write (`--io-timeout`; the service's default 60)
+        self.io_timeout = io_timeout
         self.stderr_path = stderr_path or os.path.join(sock_dir + ".service.log")
         self.proc, self.vk, self.info = None, None, {}
         self._rest = b""                    # stdout read past the last line the runner waited for
@@ -41,6 +45,8 @@ class Service:
     def start(self, timeout=600):
         os.makedirs(self.sock_dir, exist_ok=False)
         cmd = self.wrap + [self.binary, "--socket", SOCKET_NAME]
+        if self.io_timeout is not None:
+            cmd += ["--io-timeout", str(int(self.io_timeout))]
         self._err = open(self.stderr_path, "ab")
         # the socket is bound relative to the service's cwd: Unix socket paths are capped at 108 bytes
         self.proc = subprocess.Popen(cmd, cwd=self.sock_dir, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -70,35 +76,76 @@ class Service:
         self.vk = vk
         return self
 
-    def _lines_until(self, word, deadline):
-        """Read stdout until the line `word`; the lines before it."""
-        buf = self._rest
-        while word.encode() not in buf.split(b"\n")[:-1]:
+    def _until(self, match, what, deadline):
+        """Read stdout until a whole line for which `match(line)` holds: (the lines before it, the
+        line). Everything after it stays in `_rest` for the next call (or `stop`)."""
+        while True:
+            lines = self._rest.split(b"\n")
+            for k, raw in enumerate(lines[:-1]):
+                line = raw.decode(errors="replace")
+                if match(line):
+                    self._rest = b"\n".join(lines[k + 1:])
+                    return [l.decode(errors="replace") for l in lines[:k]], line
             left = deadline - time.monotonic()
             if left <= 0 or not select.select([self.proc.stdout], [], [], left)[0]:
-                raise ServiceError(f"the service printed no `{word}` line in time")
+                raise ServiceError(f"the service printed no {what} line in time")
             chunk = os.read(self.proc.stdout.fileno(), 4096)
             if not chunk:
-                raise ServiceError(f"the service exited before `{word}` (code {self.proc.wait()})")
-            buf += chunk
-        lines = buf.split(b"\n")
-        k = lines.index(word.encode())
-        self._rest = b"\n".join(lines[k + 1:])
-        return [l.decode(errors="replace") for l in lines[:k]]
+                raise ServiceError(f"the service exited before its {what} line (code {self.proc.wait()})")
+            self._rest += chunk
+
+    def _lines_until(self, word, deadline):
+        """Read stdout until the line `word`; the lines before it."""
+        return self._until(lambda l: l == word, f"`{word}`", deadline)[0]
+
+    def _control(self, line):
+        """Write one control line on the service's stdin."""
+        if self.proc is None or self.proc.poll() is not None:
+            raise ServiceError("the service is not running")
+        try:
+            self.proc.stdin.write(line.encode() + b"\n")
+            self.proc.stdin.flush()
+        except (BrokenPipeError, OSError, ValueError) as e:
+            raise ServiceError(f"the service's control pipe is closed ({e})")
+
+    def drop(self, timeout=30):
+        """Shut every open connection down (the control line `drop`): the service closes them all,
+        which frees their queues and any descriptor in flight there, waits up to 5 s for their
+        threads and prints `dropped live=N`; N, the connections still open (the runner requires 0)."""
+        self._control("drop")
+        _, line = self._until(lambda l: l.startswith("dropped "), "`dropped live=N`", time.monotonic() + timeout)
+        k, _, v = line[len("dropped "):].partition("=")
+        if k != "live" or not v.isdigit() or not v.isascii():
+            raise ServiceError(f"malformed `dropped` line from the service: {line!r}")
+        return int(v)
+
+    @staticmethod
+    def _parse_stats(line):
+        try:
+            stats = {}
+            for kv in line.split()[1:]:
+                k, v = kv.split("=")
+                if not v.isdigit() or not v.isascii():
+                    raise ValueError(kv)
+                stats[k] = int(v)
+            return stats
+        except ValueError:
+            raise ServiceError(f"malformed `stats` line from the service: {line!r}")
+
+    def stats(self, timeout=30):
+        """The service's counters now (the control line `stats`), as a dict of ints: `requests`,
+        `queries`, `query_bytes`, `signatures`, `refusals`, `replays`, `mismatches`, `live`."""
+        self._control("stats")
+        _, line = self._until(lambda l: l.startswith("stats "), "`stats`", time.monotonic() + timeout)
+        return self._parse_stats(line)
 
     def replay(self, timeout=60):
         """Replay mode for one timed pass: write `replay` on the service's stdin, read its stdout up
         to the line `replay ready`; the PRF key `k` from its line `key <64 hex>`, as lowercase hex.
-        The service then resets its one-time-key counter to 0 and signs at index `j` only the trace
+        The service then resets its replay index to 0 and signs at index `j` only the trace
         digest it signed at `j` in the service run (the same signature), refusing any other with
         status 4 `MISMATCH`; `QUERY` is served unchanged."""
-        if self.proc is None or self.proc.poll() is not None:
-            raise ServiceError("the service is not running")
-        try:
-            self.proc.stdin.write(b"replay\n")
-            self.proc.stdin.flush()
-        except (BrokenPipeError, OSError) as e:
-            raise ServiceError(f"the service's control pipe is closed ({e})")
+        self._control("replay")
         lines = self._lines_until("replay ready", time.monotonic() + timeout)
         keys = [l.split()[1] for l in lines if l.startswith("key ") and len(l.split()) == 2]
         if len(keys) != 1 or len(keys[0]) != 64 or any(c not in "0123456789abcdef" for c in keys[0]):
@@ -106,8 +153,9 @@ class Service:
         return keys[0]
 
     def stop(self, timeout=120):
-        """Close stdin (the service wipes its keys and exits); its `stats` as a dict. `communicate`
-        closes stdin itself (closing it first fails on Python 3.12: flush of a closed file)."""
+        """Close stdin (the service wipes its keys and exits); its final `stats` line (the last one
+        it printed) as a dict. `communicate` closes stdin itself (closing it first fails on Python
+        3.12: flush of a closed file)."""
         if self.proc is None:
             return {}
         try:
@@ -119,7 +167,8 @@ class Service:
         stats = {}
         for line in (self._rest + out).decode(errors="replace").splitlines():
             if line.startswith("stats "):
-                stats = {k: int(v) for k, v in (kv.split("=") for kv in line.split()[1:])}
+                stats = self._parse_stats(line)
+        self._rest = b""
         code, self.proc = self.proc.returncode, None
         if code != 0:
             raise ServiceError(f"service exited with code {code}")

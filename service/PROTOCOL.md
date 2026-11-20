@@ -12,7 +12,8 @@ service run is fixed.
 - A Unix stream socket. Its path is in the environment variable **`RF_ORACLE`** of every prover
   process (inside the sandbox it is `/run/rf/oracle.sock`). The socket is the only way to reach the
   service, and it exists in a request's sandbox only from the request's `go` on
-  (`harness/PROVER.md` §3): connect after `go`.
+  (`harness/PROVER.md` §3): connect after `go`. Its mode is 0600: only the service's uid connects
+  (the sandbox's user namespace maps the prover to that uid).
 - A connection carries any number of requests, answered in order. The service reads the next
   request only after it has written the response to the previous one, so a client may pipeline
   (write a request before reading the previous response) only if it keeps reading responses while
@@ -22,6 +23,14 @@ service run is fixed.
 - At most **32** connections are open at a time; a further connection receives a `CAP` response and
   is closed.
 - After any error response the service closes the connection.
+- **Deadlines.** A connection on which one read or one write of the service waits longer than the
+  runner's io timeout (`--io-timeout`, 60 s unless the runner sets it; the benchmark sets the step
+  time, rounded up) is closed without a response: an idle connection, a body that stalls, a response
+  the client does not take. Reconnect after a long pause. The runner also closes every connection
+  after each request (`drop`, §6): no connection outlives the request that opened it.
+- **Bytes only.** A message that carries ancillary data (`SCM_RIGHTS` file descriptors, credentials,
+  any control message) is refused with status 1 `BAD` and the connection closed; the descriptors it
+  carried are closed unused.
 
 ## 2. Messages
 
@@ -113,12 +122,14 @@ while proving (the answers are deterministic in `k`). **`SIGN` re-evaluates ever
 trace: an adaptive verifier's trace costs one `QUERY` per answer while proving plus one PRF per
 query again at signing; budget for it.
 
-The one-time key index is taken by one atomic step before the signature is computed and is never
-reused, even if the request fails afterwards. The index of a signature is visible to the
-prover and reveals how many signatures were made before it in this service lifetime (a 16-bit
-counter); it carries no other state. A prover that signs from several threads at once gets the
-indices in the order its requests arrive; the timed passes (§5) must ask for the same traces in the
-same order, so sign in an order fixed by the inputs.
+The one-time key index is taken by one atomic step, after the request's body is read and its answers
+and trace digest are computed and before the signature is computed, and is never reused, even if the
+request fails afterwards. The index of a signature is visible to the prover and reveals how many
+signatures were made before it in this service lifetime (a 16-bit counter); it carries no other
+state. Concurrent `SIGN`s get their indices in the order their answers are **completed**, not the
+order they arrive (a large trace sent first can be indexed after a small one sent later); the timed
+passes (§5) must ask for the same traces in the same order, so sign in an order fixed by the inputs
+(one `SIGN` at a time, or wait for each response before the next).
 
 This is `SIGN` in the service run. In replay mode (§5) the request and the answers are the same, but
 `SIGN` only re-issues the service run's signatures.
@@ -133,7 +144,7 @@ root of the 2^16 one-time public keys). The runner also writes it to `DIR/vk.hex
 | status | meaning |
 |---|---|
 | 0 | OK |
-| 1 `BAD` | unknown op, non-zero reserved bytes, `VK` with a body, item lengths that do not add up to `body_len` |
+| 1 `BAD` | unknown op, non-zero reserved bytes, `VK` with a body, item lengths that do not add up to `body_len`; ancillary data on the connection (§1) |
 | 2 `CAP` | `body_len > 2^24`; a query above `2^20` bytes; `QUERY` with `count > 2^18`; `SIGN` with `count > 2^16`; more than 32 connections |
 | 3 `EXHAUSTED` | `SIGN` after all 2^16 one-time keys are used |
 | 4 `MISMATCH` | replay mode (§5): `SIGN` whose trace digest is not the one signed at its index `j` in the service run (nothing was signed at `j`, or another digest was) |
@@ -196,7 +207,7 @@ index in the service run, so no one-time key signs a second message, and every a
 one the service run produced without `k`.
 
 The service keeps, in memory, the trace digest it signed at each one-time key index (at most `2^16`
-of them, 2 MiB), and nothing else of what it was asked. It never writes the queries it evaluates:
+of them, 2.25 MiB), and nothing else of what it was asked. It never writes the queries it evaluates:
 nothing in an evaluation checks an extractor against a log of queries, since the extractor's
 correctness is the kernel-checked `Computes`. Apart from the two serving modes there is only the
 leaf hasher of §7, which holds no secret.
@@ -217,13 +228,28 @@ key <k: 64 lowercase hex>
 replay ready
 ```
 
-The runner sends `replay` before each timed pass and reads up to `replay ready`. Any other line on
-the pipe is ignored, with a note on stderr.
+The runner sends `replay` before each timed pass and reads up to `replay ready`.
+
+The line `drop` shuts every open connection down (both directions), which also frees its receive
+queue and any file descriptor in flight there, waits up to 5 s for their threads to end, and prints
+one line, flushed:
+
+```
+dropped live=<N>
+```
+
+`N` the connections still open at the end of the wait. The runner sends `drop` after every request
+(service run, calibration, timed pass), when no process of the request is alive, and requires
+`live=0`.
+
+The line `stats` prints the statistics line below (the same keys, the counts so far), flushed, and
+the service keeps serving; the runner reads it after each timed pass (the pass's `mismatches`).
+Any other line on the pipe is ignored, with a note on stderr.
 
 When the runner closes the pipe, the service waits for in-flight requests, overwrites its keys,
-prints `stats requests=… queries=… query_bytes=… signatures=… refusals=… replays=… mismatches=…`
+prints `stats requests=… queries=… query_bytes=… signatures=… refusals=… replays=… mismatches=… live=…`
 (`signatures` made in the service run, `replays` re-issued in replay mode, `mismatches` the status-4
-refusals, which `refusals` also counts), removes the socket and exits 0. The first 32 refusals of a
+refusals, which `refusals` also counts, `live` the open connections), removes the socket and exits 0. The first 32 refusals of a
 lifetime are written to its stderr (`rf-oracle: refused (status S): MESSAGE`); the runner copies them
 into the result, so that a prover that fails on a cap can see which one. Keys are never written to
 disk. The signing seed never leaves the process; `k` leaves it only on stdout after `replay`, when
