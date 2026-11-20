@@ -200,6 +200,7 @@ class Badge:
         self.n = 0
         self.last = []
         self.copies = []
+        self.run_s = 0.0             # the last run's time from its release to its last answer
         self._libs = None
 
     def stage(self, items, store, d=None):
@@ -292,6 +293,7 @@ class Badge:
         try:
             res, why = serve(proc, lines, time.monotonic() + timeout, first)
         finally:
+            self.run_s = time.monotonic() - t0       # the badge process's own time: the entry's (`Bench.charge`)
             stop()
             err.join(5)
             for f in (proc.stdin, proc.stdout):

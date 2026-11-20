@@ -209,6 +209,7 @@ def main():
         nonlocal fails
         print(("ok   " if cond else "FAIL ") + what)
         fails += not cond
+    bench_mod.PASS_DELAY_S = 0.01         # the untimed delay before each timed pass, short here (14. checks it)
 
     times = {1: 0.5, 2: 0.6, 3: 0.7, 4: 0.8}
     # pass totals 0.074, 0.083, 0.080 s: the median pass is pass 3 (not the per-step minima, nor pass 1)
@@ -526,7 +527,7 @@ def main():
     w.p = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     w.run = SimpleNamespace(bin_dir=bindir, setup_dir=setup, mem="1G")
     w.work, w.deadline, w.scrub_bin, w.phase = d, None, None, "request"
-    w.scrub = lambda: (events.append("scrub"), None)[1]
+    w.scrub = lambda batches=0: (events.append("scrub"), None)[1]
 
     svc_w = FakeSvc()
     svc_w.sock_dir = os.path.join(d, "svc", "stream")
@@ -541,6 +542,8 @@ def main():
                       kw.get("sock_at_go") == svc_w.socket_path, os.path.basename(sock)))
         r = Step()
         r.seconds, r.proof, r.status = 0.001, b"x", status[0]
+        # as `request`: a wait cut at the stream's cap (on the entry's clock) says so
+        r.at_deadline = kw.get("deadline") is not None and bench_mod.time.monotonic() >= kw["deadline"] - 1e-3
         return r
     real_request, bench_mod.request = bench_mod.request, fake_request
     try:
@@ -593,7 +596,7 @@ def main():
     v = Bench.__new__(Bench)
     v.store = "/nonexistent"
     order = []
-    v.scrub = lambda: order.append("scrub")
+    v.scrub = lambda batches=0: order.append("scrub")
     v.badge = SimpleNamespace(verify=lambda *a, **kw: (order.append("badge"), (_ for _ in ()).throw(
         BadgeError("verify: exit -11", kind="crash")))[1])
     v.deadline = (bench_mod.time.monotonic() + 100, "the stream's cap stream_s = 300 s was reached")
@@ -688,7 +691,7 @@ def main():
     rb.build_scrub = lambda d: (tools.append(d), ("scrub-bin", {"source_sha256": "s"}))[1]
     rb.Run, rb.Bench, rb.tree_sha256 = FakeRun, FakeBench, (lambda *a: "h")
     built = [(True, {"binary_sha256": "b", "binary_bytes": 1})]
-    rb.build = lambda *a: built[0]
+    rb.build = lambda *a, **k: built[0]
     entry = tempfile.mkdtemp(prefix="rf-rb-entry-", dir=os.environ.get("RF_TEST_TMP"))
 
     def bench_result(outcome, build_ok=True):
@@ -757,6 +760,102 @@ def main():
         code, r = bench_result(outcome, build_ok)
         check(code == 1 and r["benchmark"] == "fail" and r.get("reject_stage") == want,
               f"run-benchmark.py: {what}: benchmark: fail, reject_stage {r.get('reject_stage')!r}")
+    # 13. the stream's clock counts the entry's time alone (review R3 L1)
+    import time as _time
+    c = Bench.__new__(Bench)
+    c.p = make().p
+    c.deadline = (_time.monotonic() + 10, "the cap")
+    _time.sleep(0.2)                                           # the runner's own work: off the clock
+    l0 = c.left()
+    c.charge(3.0)                                              # the entry's: on it
+    dl = c.deadline[0] - _time.monotonic()
+    check(abs(l0 - 10) < 1e-3 and abs(c.left() - 7) < 1e-3 and abs(dl - 7) < 0.05,
+          f"the stream's clock stops for the runner's work and counts the entry's: left {l0:.3f} s after 0.2 s of the "
+          f"runner's, {c.left():.3f} after 3 s of the entry's, the cap's monotonic time {dl:.3f} s ahead")
+    # Bench.one: the scrub (with random batches before a timed request only) and the drop are the runner's;
+    # the request's start-up and timed part are charged; `drop` must report no connection left
+    w2 = Bench.__new__(Bench)
+    w2.p, w2.run, w2.work, w2.scrub_bin, w2.phase, w2.log = make().p, None, tempfile.mkdtemp(dir=os.environ.get("RF_TEST_TMP")), None, "request", (lambda m: None)
+    w2.deadline = (_time.monotonic() + 100, "the cap")
+    scrubs, drops, dls = [], [], []
+
+    def slow_scrub(batches=0):
+        scrubs.append(batches)
+        _time.sleep(0.1)
+        return 0.1
+    w2.scrub = slow_scrub
+    svc2 = FakeSvc()
+    svc2.sock_dir = os.path.join(w2.work, "svc", "stream")
+    svc2.socket_path = os.path.join(svc2.sock_dir, "oracle.sock")
+    live = [0]
+    svc2.drop = lambda: (drops.append(1), live[0])[1]
+
+    def req2(run, kind, work, sock, inputs, step_s, file_cap, **kw):
+        dls.append(kw["deadline"] - _time.monotonic())
+        r = Step()
+        r.seconds, r.startup_s, r.proof = 2.0, 0.5, b"x"
+        return r
+    real_request, bench_mod.request = bench_mod.request, req2
+    try:
+        w2.one(svc2, "service1", "first", {"leaf.json": b"{}"})
+        w2.one(svc2, "timed1-step1", "first", {"leaf.json": b"{}", "oracle.key": b"k" * 65})
+        live[0] = 1
+        try:
+            w2.one(svc2, "timed1-step2", "step", {"oracle.key": b"k" * 65})
+            err = None
+        except RuntimeError as e:
+            err = str(e)
+    finally:
+        bench_mod.request = real_request
+    check(scrubs == [0, bench_mod.SCRUB_BATCHES, bench_mod.SCRUB_BATCHES] and len(drops) == 3
+          and abs(w2.left() - (100 - 3 * 2.5)) < 1e-3 and all(abs(x - y) < 0.05 for x, y in zip(dls, (100, 97.5, 95)))
+          and err and "still open after `drop`" in err,
+          f"Bench.one: the scrub ({scrubs}; random batches before a timed request) and `drop` after every request are "
+          f"off the clock, the request's start-up and timed part on it (left {w2.left():.2f} s, the deadlines passed "
+          f"{[round(x, 2) for x in dls]} s ahead); a connection left after `drop` is a harness error: {err}")
+    # Bench.verify charges the badge process's own time (`Badge.run_s`), not its copies
+    v2 = Bench.__new__(Bench)
+    v2.p, v2.store, v2.scrub_bin = make().p, "/nonexistent", None
+    v2.deadline = (_time.monotonic() + 100, "the cap")
+
+    class SlowBadge:
+        run_s = 0.0
+
+        def verify(self, items, store, timeout, warm=False):
+            _time.sleep(0.2)                  # its view and set-up: the runner's
+            self.run_s = 4.0                  # its process, from release to the last answer: the entry's
+            return [(True, 1)]
+    v2.badge = SlowBadge()
+    v2.verify([(b"k", b"s", "x")], "a check", 50)
+    check(abs(v2.left() - 96.0) < 1e-3, f"Bench.verify charges the badge run's own 4 s, not its copies: left {v2.left():.3f} s")
+
+    # 14. the timed passes: an untimed random delay before each, the replay refusals from the service's
+    # counter (`stats`, every one, not the first 32 logged), the final output's canaries bounded
+    b = make()
+    rec = b.stream_run()
+    delays = rec.get("pass_delays_s") or []
+    fin = [t for what, t, _ in b.timeouts if what == "service run: the final output canaries"]
+    check(len(delays) == 3 and all(0 <= x < 0.01 for x in delays) and fin and fin[0] <= bench_mod.INTERMEDIATE_SLACK_S + 2 * 3 * b.p.v_cap_ms / 1e3 + 1e-9
+          and isinstance(rec.get("clock"), dict) and rec["clock"]["stream_s"] == b.p.stream_s,
+          f"a random delay before each timed pass ({delays}), the final output's canary run bounded ({fin} s), the "
+          f"stream's clock recorded ({rec.get('clock')})")
+    b = make()
+    n = [0]
+    b.svc.stats = lambda: {"mismatches": n[0]}
+    real_replay = b.svc.replay
+
+    def replay_then_mismatch():
+        n[0] = 40 if b.svc.replays >= 1 else 0       # pass 2 makes 40 refusals, none of them logged
+        return real_replay()
+    b.svc.replay = replay_then_mismatch
+    try:
+        b.stream_run()
+        got = None
+    except Fail as e:
+        got = (e.stage, str(e))
+    check(got and got[0] == "timed-pass" and "40 refused" in got[1] and "timed pass 2" in got[1],
+          f"the replay refusals of a pass are the service's counter (`stats`), however many: {got}")
+
     # a kill by the OOM killer: the cap's or the machine's (review LR5 NIT)
     from rfh.prover import oom_label
     G = 1 << 30

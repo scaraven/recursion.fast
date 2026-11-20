@@ -96,10 +96,15 @@ def main():
     logf = open(os.path.join(work, "run.log"), "a")
 
     def log(msg):
+        """A line on stdout and in WORK/run.log; a write that fails (a full disk, a closed stdout)
+        is dropped: the run's verdict never depends on its log (review R3 H3)."""
         line = f"{time.strftime('%H:%M:%S')} {msg}"
-        print(line, flush=True)
-        logf.write(line + "\n")
-        logf.flush()
+        for f in (sys.stdout, logf):
+            try:
+                f.write(line + "\n")
+                f.flush()
+            except (OSError, ValueError):
+                pass
 
     res = {"schema": "recursion.fast/v6/result-1", "season": p.name, "season_sha256": sha256(a.season),
            "params": {k: v for k, v in vars(p).items()}, "parts": parts, "provisional": a.provisional,
@@ -107,7 +112,7 @@ def main():
            "harness": {"commit": harness_commit(), "service_sha256": sha256(a.service),
                        "bench_sha256": sha256(a.bench),
                        "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify",)}},
-           "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "pass", "reasons": []}
+           "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "incomplete", "reasons": []}
     srcs = sorted(glob.glob(os.path.join(a.entry, "prover", "*.s")))
     h = hashlib.sha256()
     for f in srcs:
@@ -119,7 +124,9 @@ def main():
 
     def save(stage):
         """A checkpoint of the result: if the part is killed at `PART_S`, `evaluate.py`
-        reads the stage it reached."""
+        reads the stage it reached. A checkpoint says `benchmark: incomplete` (the verdict is set
+        only at the end, with the stage `done`), so a run that died after it is never read as
+        passed (`evaluate.py`, `aggregate.py` require `stage: done` of a passed part; review R3 H3)."""
         res["stage"] = stage
         tmp = a.out + ".tmp"
         with open(tmp, "w") as f:
@@ -156,7 +163,8 @@ def main():
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
         scrub_bin, res["scrub"] = build_scrub(os.path.join(work, "tools"))
         save("prover build")
-        ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s)
+        ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s,
+                         binary_cap=p.setup_cap)
         res["prover"] = info
         if not ok:
             raise Fail(f"prover build: {info.get('error')}", stage="prover")
@@ -169,11 +177,12 @@ def main():
         if ok and free0 and free1 and free0[0] - free1[0] > p.setup_cap + (64 << 20):
             ok, slog = False, slog + (f"\nthe setup left the work filesystem {free0[0] - free1[0]} bytes fuller, "
                                       f"above setup_cap = {p.setup_cap}")
-        res["setup"] = {"ok": ok, "seconds": dt, "log": slog[-2000:]}
+        res["setup"] = {"ok": ok, "seconds": dt, "log": printable(slog, 2000)}     # the entry's text
         if not ok:
             raise Fail("prover setup failed" + (": " + printable(slog.strip().splitlines()[-1], 300)
-                                                if "setup_cap" in slog else ""), stage="prover")  # organiser text, sanitised anyway
-        res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)
+                                                if "setup_cap" in slog or "could not be copied" in slog else ""),
+                       stage="prover")  # the runner's text, sanitised anyway
+        res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)     # None on any error: the entry's
         if res["setup"]["sha256"] is None:
             raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s",
                        stage="prover")
@@ -229,10 +238,14 @@ def main():
         res["reasons"].append(f"harness error: {e!r}")
         res["traceback"] = traceback.format_exc()[-4000:]
         log(f"HARNESS ERROR: {e!r}")
+    if res["benchmark"] == "incomplete":       # no failure and no error: the run passed
+        res["benchmark"] = "pass"
     res["stage"] = "done"
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with open(a.out, "w") as f:
+    tmp = a.out + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(res, f, indent=1)
+    os.replace(tmp, a.out)
     log(f"benchmark: {res['benchmark']} -> {a.out}")
     return {"pass": 0, "fail": 1}.get(res["benchmark"], 2)
 

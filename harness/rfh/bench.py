@@ -255,16 +255,47 @@ class Bench:
         self.badge = Badge(badge_dir, p.mem_badge, os.path.join(work, "badge-scratch"), p.badge_start_s,
                            host_root=os.environ.get("RF_TEST_BADGE_HOST_ROOT") == "1")     # tests only
         os.makedirs(self.badge.scratch, exist_ok=True)
-        self.deadline = None                 # (monotonic time, reason) of the running cap (`stream_s`)
+        self.deadline = None                 # the running cap (`stream_s`), on the entry's clock (`deadline`)
         self.samples = []                    # the interleaved calibration samples
+
+    # -- the stream's clock: the entry's time alone (review R3 L1) ---------------------------------
+    @property
+    def deadline(self):
+        """(monotonic time, reason) of the running cap, or None: the time at which the cap is
+        reached if only the entry runs from now on. The clock counts **the entry's time alone**:
+        its requests (start-up to `ready`, and the timed part, `Bench.one`) and its badge runs (from
+        the process's release to its last answer, `verify`), charged as each ends (`charge`).
+        Everything the runner does in between (the copies, the scrubs, the sandboxes' views and
+        set-up, the staging, the outputs' reads and walks, the calibration samples, the service's
+        control lines, the untimed delays) is off the clock: recorded as the runner's overhead
+        (`stream.clock`) and bounded by the benchmark job's `PART_S` (`harness/evaluate.py`), so an
+        entry is never rejected for the runner's own time. Setting it to (t, reason) starts a cap
+        that is reached when the entry has used `t − now` more seconds; None stops it."""
+        cap = getattr(self, "_cap", None)
+        return None if cap is None else (time.monotonic() + cap - self.entry_s, self._cap_why)
+
+    @deadline.setter
+    def deadline(self, v):
+        if v is None:
+            self._cap = None
+        else:
+            self._cap, self._cap_why, self.entry_s = v[0] - time.monotonic(), v[1], 0.0
+
+    def charge(self, seconds):
+        """Count `seconds` of the entry's time on the stream's clock."""
+        if getattr(self, "_cap", None) is not None and seconds:
+            self.entry_s += seconds
 
     # -- the service ---------------------------------------------------------------------------
     def service(self, name):
         # the socket directory on the runner's tmpfs: each request's own socket directory is made
         # beside it (a hard link cannot cross filesystems), and no request sees the work disk
+        # a connection idle, or a response unread, for `step_s` is closed (`--io-timeout`): no request
+        # lasts longer, and `drop` closes the rest after every request (review R5 HIGH 1)
         svc = Service(self.service_bin, os.path.join(runner_path("svc"), name),
                       wrap=memcap(self.p.mem_service, f"rf-svc-{name}-{os.getpid()}"),
-                      stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"))
+                      stderr_path=os.path.join(self.work, "svc", f"{name}.stderr"),
+                      io_timeout=max(1, math.ceil(self.p.step_s)))
         os.makedirs(os.path.join(self.work, "svc"), exist_ok=True)
         return svc.start()
 
@@ -296,8 +327,8 @@ class Bench:
         return rel
 
     def left(self):
-        """Seconds left before the running cap (None without one)."""
-        return None if self.deadline is None else self.deadline[0] - time.monotonic()
+        """Seconds of the entry's time left before the running cap (None without one)."""
+        return None if getattr(self, "_cap", None) is None else self._cap - self.entry_s
 
     def verify(self, items, what, timeout, warm=False):
         """The badge on (vk, stmt, store-relative path) items within `timeout` seconds for the whole
@@ -306,12 +337,17 @@ class Bench:
         hang, and the bot re-runs a `check` REJECT without the cache)."""
         shared = self.deadline is not None and timeout >= self.left() + 30 - 1e-3   # the run had the shared bound
         self.scrub()        # as before a request: no badge run reads an earlier one's per-CPU inode counts
+        self.badge.run_s = 0.0
         try:
             return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
         except BadgeError as e:
+            self.charge(self.badge.run_s)
+            self.badge.run_s = 0.0
             late = shared and self.left() + 30 <= 0.5
             raise Fail(f"{what}: {e}" + (f" (cut 30 s past the stream's cap: {self.deadline[1]})" if late else ""),
                        kind=e.kind, stage="check")
+        finally:
+            self.charge(getattr(self.badge, "run_s", 0.0))     # the badge process's own time (`Badge.run_s`)
 
     def capped(self):
         """The timeout of one badge run: what is left of one absolute bound, 30 s past the stream's
@@ -388,22 +424,29 @@ class Bench:
     def bounded(self, c):
         """The timeout of one badge run of `c` checks whose failure costs only the track `every` (a
         judged run of an intermediate output, `c = 1`, or a canary run of `c` canaries), its warm-up
-        included: `INTERMEDIATE_SLACK_S + 2·(c + 1)·v_cap`, within the stream's cap. (The final
-        output's runs are bounded by the stream's cap alone.)"""
+        included: `INTERMEDIATE_SLACK_S + 2·(c + 1)·v_cap`, within the stream's cap; also the final
+        output's canary run (its failure is still the entry's REJECT; review R8 HIGH 1). (The final
+        output's three judged runs are bounded by the stream's cap alone: their `V` is capped by
+        `v_cap`.)"""
         return min(self.capped(), INTERMEDIATE_SLACK_S + 2 * (c + 1) * self.p.v_cap_ms / 1e3)
 
-    def scrub(self):
+    def scrub(self, batches=0):
         """Before every request, untimed and with no entry process alive: the
         per-CPU inode counters (pipes, sockets and other pseudo files; memfds) set to a fresh batch
         and a uniform random offset on every CPU of the job (`harness/tools/scrub.c`), so that what an
-        earlier request did on a CPU does not show in a later request's inode numbers. Seconds, or
+        earlier request did on a CPU does not show in a later request's inode numbers. With
+        `batches` (before every timed request: `SCRUB_BATCHES`), the scrub also takes a uniform random
+        number in [0, batches) of fresh batches of each kind from the machine-wide counters, so that
+        the batch a timed request reads carries an earlier request's count only under that noise
+        (review R8 HIGH 1; AGENTS.md §12 states what is left). Seconds, or
         None without the tool (the unit tests' benches). A failure is the runner's. It also runs
         before every badge run (`verify`), so that one of a proof's three judged runs cannot leave a
         count there for the next (a memo across the judged runs)."""
         if not getattr(self, "scrub_bin", None):
             return None
         t0 = time.monotonic()
-        p = subprocess.run([self.scrub_bin], capture_output=True, text=True, timeout=60)
+        p = subprocess.run([self.scrub_bin] + ([str(batches)] if batches else []), capture_output=True, text=True,
+                           timeout=120)
         if p.returncode != 0:
             raise RuntimeError(f"the inode counters' scrub failed: {p.stderr.strip()[-300:]}")
         return time.monotonic() - t0
@@ -499,20 +542,39 @@ class Bench:
         # cross filesystems), runner-owned and empty until `go` (`request`, `sock_at_go`)
         sock = os.path.join(os.path.dirname(svc.sock_dir), "requests", secrets.token_hex(8))
         fresh_dir(sock)
-        dl = self.deadline[0] if self.deadline else None
-        scrub_s = self.scrub()
+        scrub_s = self.scrub(batches=SCRUB_BATCHES if key_of(inputs) else 0)
+        dl = self.deadline[0] if self.deadline else None       # after the runner's own work (off the clock)
         pads = [bytes(n) for name, n in STAGED.items() if name not in inputs]
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
                     preset={"vk.hex": (svc.vk.hex() + "\n").encode()}, pads=pads)
         r.scrub_s = scrub_s
+        self.charge((r.startup_s or 0.0) + (r.seconds or 0.0))      # the entry's time: start-up and the timed part
         self.alive(svc)
+        self.dropped(svc, tag)
         remove_tree(sock)
         if r.status != "ok":
-            if dl is not None and time.monotonic() >= dl - 1e-3 and r.status in ("timeout", "no ready line"):
+            if dl is not None and getattr(r, "at_deadline", False) and r.status in ("timeout", "no ready line"):
                 raise Fail(f"{tag}: {self.deadline[1]} ({r.status})" + self.diag(svc, r.log), stage="stream-cap")
             raise Fail(f"{tag}: {r.status}" + self.diag(svc, r.log), stage=self.phase)
         return r
+
+    def dropped(self, svc, tag):
+        """After every request, with no entry process alive: the service closes every connection
+        still open (the control line `drop`, `Service.drop`) and must report none left (`live=0`):
+        no connection, and nothing parked in one (a response never read, a descriptor in its
+        receive queue), outlives the request that opened it (review R5 HIGH 1, R4 MED 1). A count
+        above zero, or no answer, is the runner's failure (a harness error): every connection of a
+        dead request ends at its shutdown."""
+        drop = getattr(svc, "drop", None)
+        if drop is None:                    # the unit tests' stand-in services
+            return
+        try:
+            live = drop()
+        except ServiceError as e:
+            raise RuntimeError(f"{tag}: the service did not answer `drop` ({e})") from None
+        if live != 0:
+            raise RuntimeError(f"{tag}: {live} connection(s) to the service still open after `drop`")
 
     def inputs(self, i, data, stmts, prev, key=None):
         """Step `i`'s request: (`first` or `step`, name → bytes). Every step gets its leaf,
@@ -573,7 +635,15 @@ class Bench:
         else:
             n, dt = self.run.copies[-1]
             rec["copies"] = [{"for": "the service run", "bytes": n, "seconds": dt}]
-        self.deadline = (time.monotonic() + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s was reached")
+        t_stream = time.monotonic()
+        self.deadline = (t_stream + p.stream_s, f"the stream's cap stream_s = {p.stream_s} s of the entry's time was reached")
+
+        def clock():
+            """The stream's clock (`deadline`): the entry's time it counted, the wall time, and the
+            runner's overhead, off the clock, between them."""
+            wall = time.monotonic() - t_stream
+            rec["clock"] = {"stream_s": p.stream_s, "entry_s": self.entry_s, "wall_s": wall,
+                            "runner_overhead_s": wall - self.entry_s}
         try:
             try:
                 self.phase = "request"
@@ -584,6 +654,7 @@ class Bench:
             except BaseException:
                 # the failure in flight decides (its stage, or a harness error); the service's own
                 # failure at its stop is only recorded
+                clock()
                 self.deadline = None
                 shutil.rmtree(self.leafdata, ignore_errors=True)
                 try:
@@ -591,6 +662,7 @@ class Bench:
                 except Fail as e2:
                     rec["stop_error"] = str(e2)
                 raise
+            clock()
             self.deadline = None
             shutil.rmtree(self.leafdata, ignore_errors=True)     # the seeds, published, regenerate it
             self.stop(svc, rec)
@@ -709,8 +781,10 @@ class Bench:
             raise Fail(f"service run: the final output (step {M}) takes V = {final['V_ns'] / 1e6:.3f} ms (the median "
                        f"of its three judged runs, {[round(x / 1e6, 3) for x in runs]} ms), above v_cap = "
                        f"{p.v_cap_ms:g} ms", stage="check")
+        # bounded like every canary run (review R8 HIGH 1: a verifier stalling on the final output's
+        # canaries for a chosen time would otherwise move the clock a timed request reads)
         bad, rec["canaries"] = self.canary_check(svc.vk, [(M, final["file"], stmts[M - 1], [("first-child", first[M - 1])])],
-                                                 "service run: the final output")
+                                                 "service run: the final output", bounded=True)
         final["canaries_accepted"] = bad[M]
         if bad[M]:
             raise Fail(f"service run: the final output (step {M}): statement canaries accepted by acc (a proof "
@@ -770,6 +844,12 @@ class Bench:
         for t in range(1, p.timed_runs + 1):
             self.fresh_copy(rec, f"timed pass {t}")
             self.sample(f"timed pass {t}")
+            # an untimed delay, uniform in [0, PASS_DELAY_S) from the CSPRNG, before each pass: the
+            # clock a timed request reads carries a service-run request's chosen duration only under
+            # that noise (review R8 HIGH 1)
+            delay = secrets.randbelow(int(PASS_DELAY_S * 1e6)) / 1e6
+            time.sleep(delay)
+            rec.setdefault("pass_delays_s", []).append(delay)
             try:
                 key = svc.replay()
             except ServiceError as e:
@@ -793,11 +873,19 @@ class Bench:
                                                   "work_bytes": r.work_bytes, "ended_by": r.ended,
                                                   "scrub_s": getattr(r, "scrub_s", None)})
                 self.log(f"[timed pass {t}] step {i}: P={r.seconds:.4f} s (identical output)")
-            mism = svc.mismatches()
-            if mism:
+            # the replay refusals of the pass, from the service's own counter (`stats`), not from its
+            # log, which keeps only its first 32 refusals (review R5 LOW 5)
+            mism, n_mism = svc.mismatches(), None
+            if hasattr(svc, "stats"):
+                try:
+                    n_mism = svc.stats().get("mismatches")
+                except ServiceError as e:
+                    raise RuntimeError(f"timed pass {t}: the service did not answer `stats` ({e})") from None
+            if mism or n_mism:
                 raise Fail(f"timed pass {t}: a SIGN in a timed pass differed from the service run's "
-                           f"({len(mism)} refused; the first: {printable(mism[0], 300)}): a timed pass must make exactly "
-                           "the service run's SIGN requests, in its order", stage="timed-pass")
+                           f"({n_mism if n_mism is not None else len(mism)} refused"
+                           + (f"; the first: {printable(mism[0], 300)}" if mism else "") + "): a timed pass must make "
+                           "exactly the service run's SIGN requests, in its order", stage="timed-pass")
         if self.left() > 30:              # a closing sample, only with 30 s of the cap to spare
             self.sample("closing")
 
@@ -807,6 +895,13 @@ class Bench:
 # that has one; the leaf's files and `prev.bin` have the step's sizes in the service run and in the
 # timed passes alike (step 1, which has no `prev.*`, is told by its command, `first`)
 STAGED = {"leaf.json": 0, "leaf.bin": 0, "prev.stmt": 65, "prev.bin": 0, "oracle.key": 65}
+SCRUB_BATCHES = 256        # before every timed request the scrub takes [0, 256) machine-wide batches of each kind
+PASS_DELAY_S = 2.0         # the untimed delay before each timed pass is uniform in [0, 2) s
+
+
+def key_of(inputs):
+    """Whether a request's inputs are a timed request's (they hold `oracle.key`)."""
+    return "oracle.key" in inputs
 INTERMEDIATE_SLACK_S = 60  # seconds a badge run of intermediate checks may take beyond 2 v_cap per check
 JUDGED_RUNS = 3           # the fresh badge runs that judge each checked proof; its V is their median
 

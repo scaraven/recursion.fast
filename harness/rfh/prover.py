@@ -30,9 +30,11 @@ import threading
 import time
 
 from .files import OutputError, read_output
-from .sandbox import Sandbox, copy_tree, parse_bytes, remove_tree, runner_dir, runner_path  # noqa: F401 (remove_tree: re-exported)
+from .sandbox import (MAX_REL_PATH, Sandbox, copy_tree, parse_bytes, remove_tree, runner_dir,  # noqa: F401 (remove_tree: re-exported)
+                      runner_path, tree_entries)
 
 PROVER = "/prover/prover"
+SETUP_ENTRIES = 1 << 16          # entries of the setup directory (each costs runner memory in every copy, review R3 M1)
 SOCK_IN = "/run/rf"
 LOG_CAP = 1 << 16
 
@@ -117,40 +119,53 @@ BUILD_ROOT = ("/usr", "/bin", "/lib", "/lib64", "/lib32", "/libx32", "/sbin", "/
               "/etc/ld.so.cache")
 
 
-def build(entry_prover_dir, out_dir, mem, timeout):
-    """Assemble and link `entry_prover_dir/*.s` into `out_dir/prover`; (ok, info)."""
+def build(entry_prover_dir, out_dir, mem, timeout, binary_cap=1 << 31):
+    """Assemble and link `entry_prover_dir/*.s` into `out_dir/bin/prover`; (ok, info). The build's
+    /build is a private tmpfs of its sandbox (charged to its memory cap `mem`, so an assembler
+    output of any size never reaches the work disk: review R3 H3), holding the sources as copies;
+    the binary is read from it through a held descriptor (`held_tmpfs`) once the sandbox is dead,
+    at most `binary_cap` bytes (the season's `setup_cap`: the binary is copied with the setup and
+    counted with it, M1). The build's output is kept printable and short (`info["log"]`, L3)."""
+    from .bench import printable
     srcs = sorted(glob.glob(os.path.join(entry_prover_dir, "*.s")))
     info = {"sources": {}, "toolchain": toolchain_versions()}
     if not srcs:
         return False, dict(info, error="no prover/*.s file")
-    bdir = os.path.join(out_dir, "build")
-    os.makedirs(bdir)
+    files = []
     for s in srcs:
         if os.path.islink(s) or not os.path.isfile(s):
             return False, dict(info, error=f"{os.path.basename(s)} is not a regular file")
         data = open(s, "rb").read()
         info["sources"][os.path.basename(s)] = hashlib.sha256(data).hexdigest()
-        open(os.path.join(bdir, os.path.basename(s)), "wb").write(data)
+        files.append(("file", data, f"/build/{os.path.basename(s)}"))
     names = [f"/build/{os.path.basename(s)}" for s in srcs]
     cmd = ["/usr/bin/gcc", "-static", "-O2", "-pthread", *names, "-o", "/build/prover", "-lm"]
     info["command"] = " ".join(cmd)
-    sb = Sandbox(cmd, [("rw", bdir, "/build")], mem, env={"PATH": "/usr/bin:/bin"}, cwd="/build",
-                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, extra_ro_root=BUILD_ROOT)
+    sb = Sandbox(cmd, [("tmpfs", None, "/build")] + files, mem, env={"PATH": "/usr/bin:/bin"}, cwd="/build",
+                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, extra_ro_root=BUILD_ROOT, hold=True, status=True)
     out = Drain(sb.proc.stdout)
+    fd = None
     try:
-        code = sb.proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        fd = held_tmpfs(sb, "/build")
+        sb.release()
+        try:
+            code = sb.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            sb.kill()
+            return False, dict(info, error="build timed out")
         sb.kill()
-        return False, dict(info, error="build timed out")
-    sb.kill()
-    out.join(5)
-    info["log"] = out.kept.decode(errors="replace")[-4000:]
-    if code != 0:
-        return False, dict(info, error=f"gcc exited with {code}")
-    try:
-        binary = read_output(bdir, "prover", 1 << 31)
-    except OutputError as e:
-        return False, dict(info, error=str(e))
+        out.join(5)
+        info["log"] = printable(out.kept.decode(errors="replace"), 4000)
+        if code != 0:
+            return False, dict(info, error=f"gcc exited with {code}")
+        try:
+            binary = read_output(f"/proc/self/fd/{fd}/.", "prover", binary_cap)
+        except OutputError as e:
+            return False, dict(info, error=str(e) + (" (the binary counts toward setup_cap)" if "cap" in str(e) else ""))
+    finally:
+        sb.kill()
+        if fd is not None:
+            os.close(fd)
     os.makedirs(os.path.join(out_dir, "bin"))
     path = os.path.join(out_dir, "bin", "prover")
     with open(path, "wb") as f:
@@ -223,35 +238,62 @@ class Run:
             e["RF_ORACLE"] = f"{SOCK_IN}/oracle.sock"
         return e
 
-    def setup(self, timeout, size_cap=None):
-        """`prover setup /setup` (untimed, no service, no instance); (ok, seconds, log). With
-        `size_cap`, a setup directory above it after the run fails the setup (`setup_cap`)."""
-        os.makedirs(self.setup_dir, exist_ok=True)
-        sb = Sandbox([PROVER, "setup", "/setup"], self.binds(self.setup_dir, setup_rw=True)[:2],
+    def setup(self, timeout, size_cap=None, max_entries=SETUP_ENTRIES):
+        """`prover setup /setup` (untimed, no service, no instance); (ok, seconds, log). Its /setup
+        is a **private tmpfs** of the sandbox (charged to its memory cap: the setup's files and its
+        memory together; nothing reaches the work disk while it runs, so a setup that writes without
+        bound fills its cap, never the runner's disk: review R3 H3), reached through a held
+        descriptor (`held_tmpfs`). Once every process of it is dead the runner measures the tree
+        (`tree_bytes`: at most `max_entries` entries, paths of at most `MAX_REL_PATH` bytes) and, if
+        it and the prover binary fit `size_cap` together (`setup_cap`, M1), copies it to the work
+        disk's `setup_dir` (`copy_tree`), which the hash and every later copy read; else the setup
+        fails. Every error on the entry's tree is the setup's failure (the entry's), never the
+        runner's."""
+        if os.path.lexists(self.setup_dir):
+            remove_tree(self.setup_dir)
+        sb = Sandbox([PROVER, "setup", "/setup"], [("ro", self.bin_dir, "/prover"), ("tmpfs", None, "/setup")],
                      self.mem, env=self.env(None), cwd="/setup", stdout=subprocess.PIPE,
-                     stderr=subprocess.STDOUT)
+                     stderr=subprocess.STDOUT, hold=True, status=True)
         out = Drain(sb.proc.stdout)
-        t0 = time.monotonic()
+        fd = None
         try:
-            code = sb.proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            code = "timeout"
-        sb.kill()
-        out.join(5)
-        log = out.kept.decode(errors="replace")
-        if code == 0 and size_cap is not None:
-            used = tree_bytes(self.setup_dir)
-            if used > size_cap:
-                return False, time.monotonic() - t0, log + (f"\nthe setup directory holds {used} bytes (unreadable "
-                                                            f"or more than 2^20 entries counts as inf), above setup_cap = {size_cap}")
-        return code == 0, time.monotonic() - t0, log
+            fd = held_tmpfs(sb, "/setup")
+            t0 = time.monotonic()
+            sb.release()
+            try:
+                code = sb.proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                code = "timeout"
+            dt = time.monotonic() - t0
+            sb.kill()
+            out.join(5)
+            log = out.kept.decode(errors="replace")
+            if code != 0:
+                return False, dt, log
+            held = f"/proc/self/fd/{fd}/."
+            used = tree_bytes(held, max_entries=max_entries)
+            binary = tree_bytes(self.bin_dir)
+            if size_cap is not None and used + binary > size_cap:
+                return False, dt, log + (f"\nthe setup directory holds {used} bytes and the prover binary {binary} (a tree "
+                                         f"the runner cannot walk, with more than {max_entries} entries or a path above "
+                                         f"{MAX_REL_PATH} bytes counts as inf), together above setup_cap = {size_cap}")
+            try:
+                copy_tree(held, self.setup_dir, max_entries=max_entries)
+            except Exception as e:  # noqa: BLE001 (the entry's tree)
+                remove_tree(self.setup_dir)
+                return False, dt, log + f"\nthe setup directory could not be copied ({type(e).__name__}: {e})"
+            return True, dt, log
+        finally:
+            sb.kill()
+            if fd is not None:
+                os.close(fd)
 
     def oneshot(self, mode, work, sock_dir, timeout):
         """`prover MODE /work` with no handshake, timed from exec to exit; (status, seconds, log).
         The benchmark makes no such request; the sandbox tests run hostile programs
         through it."""
         sb = Sandbox([PROVER, mode, "/work"], self.binds(work, sock_dir), self.mem, env=self.env(sock_dir),
-                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, hold=True)
+                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, hold=True, request=True)
         out = Drain(sb.proc.stdout)
         sb.wait_ready()
         t0 = time.monotonic()
@@ -279,6 +321,7 @@ class Step:
         self.status, self.seconds, self.startup_s, self.kill_s = "ok", None, None, None
         self.mem_peak, self.proof, self.log, self.ended = None, None, "", None
         self.t_stop_ns, self.work_bytes = None, None
+        self.at_deadline = False             # a wait ended at `deadline` (the stream's cap), not its own cap
 
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
@@ -325,14 +368,20 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
 def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap, sock_at_go,
              preset, held, pads=()):
     import select
-    cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline))
+    # `deadline` bounds the entry's time: the runner's own work inside the request (its sandbox's
+    # view before the spawn, the staging between `ready` and `go`) moves it later by its duration
+    # (`shift`), as the stream's clock stops for the runner's work (`Bench.deadline`, review R3 L1)
+    t_call, shift = time.monotonic(), [0.0]
+    cap = (lambda t: t) if deadline is None else (lambda t: min(t, deadline + shift[0]))
+    at_cap = lambda: deadline is not None and time.monotonic() >= deadline + shift[0] - 1e-3  # noqa: E731
     r = Step()
     events = None
-    t_spawn = time.monotonic()
     private = work is None
     binds = run.binds(work, sock_dir) + [("file", data, f"/work/{name}") for name, data in (preset or {}).items()]
     sb = Sandbox([PROVER, kind, "/work"], binds, run.mem, env=run.env(sock_dir),
-                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, status=True)
+                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, status=True, request=True)
+    t_spawn = sb.t_spawn
+    shift[0] = t_spawn - t_call
     err = Drain(sb.proc.stderr)
     fd = sb.proc.stdout.fileno()
     buf = b""
@@ -364,9 +413,11 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
                     return "dead"
 
         w = wait_line("ready", cap(t_spawn + (ready_s or step_s)))
-        r.startup_s = time.monotonic() - t_spawn
+        t_ready = time.monotonic()
+        r.startup_s = t_ready - t_spawn
         if w != "line":
             r.status = "no ready line" + ("" if w == "timeout" else f" (the prover ended: {w})")
+            r.at_deadline = w == "timeout" and at_cap()
             return r
         # the inputs are written where the prover cannot see them before the clock starts, and
         # only linked or renamed into /work (constant time) once it runs
@@ -397,6 +448,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
                 with open(os.path.join(stage, name), "wb") as f:
                     f.write(data)
         t0 = time.monotonic()
+        shift[0] += t0 - t_ready                # the staging: the runner's
         if sock_at_go:
             try:
                 os.link(sock_at_go, os.path.join(sock_dir, "oracle.sock"))
@@ -429,6 +481,7 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
         r.seconds, r.kill_s, r.ended, r.t_stop_ns = t1 - t0, t1 - t_seen, w, t1_ns
         if w == "timeout":
             r.status = "timeout"
+            r.at_deadline = at_cap()
         elif w == "dead":
             code = sb.exit_code()
             if code is None:
@@ -474,61 +527,88 @@ class HarnessError(RuntimeError):
 
 def make_accessible(path):
     """Give the runner read, write and search permission on every directory and file under `path`
-    (no link followed), top down, so that a tree the prover locked can be measured and removed."""
-    st = os.lstat(path)
-    if stat.S_ISLNK(st.st_mode):
-        return
-    os.chmod(path, (st.st_mode & 0o7777) | (0o700 if stat.S_ISDIR(st.st_mode) else 0o600))
-    if stat.S_ISDIR(st.st_mode):
-        for n in os.listdir(path):
-            make_accessible(os.path.join(path, n))
+    (no link followed), top down, so that a tree the prover locked can be measured and removed
+    (`sandbox.tree_entries`: iterative, any names)."""
+    for _ in tree_entries(path, fix_access=True):
+        pass
 
 
 def tree_bytes(path, max_entries=1 << 20):
     """Bytes under `path`, each file counted at `max(size, allocated)` (a sparse file at its size),
-    no link followed, after making the tree accessible; a tree the runner cannot walk,
-    or one of more than `max_entries` entries (which bounds the walk's time), counts as unbounded
-    (the entry's failure where a cap applies)."""
-    def fail(e):
-        raise e
-    total = entries = 0
+    no link followed, after making the tree accessible; a tree the runner cannot walk (any error,
+    whatever its kind: review R3 H2), one with a relative path above `MAX_REL_PATH` bytes, or one
+    of more than `max_entries` entries (which bounds the walk's time) counts as unbounded (the
+    entry's failure where a cap applies)."""
+    total = 0
     try:
-        make_accessible(path)
-        for root, dirs, files in os.walk(path, followlinks=False, onerror=fail):
-            for n in dirs + files:
-                entries += 1
-                if entries > max_entries:
-                    return float("inf")
-                st = os.lstat(os.path.join(root, n))
-                total += max(st.st_size, st.st_blocks * 512)
-    except OSError:
+        for _, st in tree_entries(path, max_entries=max_entries, fix_access=True):
+            total += max(st.st_size, st.st_blocks * 512)
+    except Exception:  # noqa: BLE001 (an entry-written tree the runner cannot walk is unbounded)
         return float("inf")
     return total
 
 
-def tree_sha256(path, max_bytes, timeout):
-    """A hash of a directory tree (relative paths, kinds and contents; links by their target, none
-    followed): the setup's hash in the result. It reads at most `max_bytes` bytes and runs at
-    most `timeout` seconds; past either it returns None."""
+def tree_sha256(path, max_bytes, timeout, max_entries=None):
+    """A hash of a directory tree: each entry's kind (`D`, `F`, `L`, else `O`), its relative path
+    as bytes (any name, review R3 H1), and a file's contents or a link's target (none followed),
+    in `sandbox.tree_entries`' order: the setup's hash in the result. It reads at most `max_bytes`
+    bytes and runs at most `timeout` seconds; past either, or on any error, it returns None."""
     h, read, t_end = hashlib.sha256(), 0, time.monotonic() + timeout
-    for root, dirs, files in sorted(os.walk(path, followlinks=False)):
-        dirs.sort()
-        for n in sorted(files):
-            f = os.path.join(root, n)
-            h.update(os.path.relpath(f, path).encode() + b"\0")
-            if os.path.islink(f):
-                h.update(b"L" + os.readlink(f).encode() + b"\0")
-            elif os.path.isfile(f):
+    top = os.fsencode(path)
+    try:
+        for rel, st in tree_entries(top, max_entries=max_entries):
+            kind = (b"D" if stat.S_ISDIR(st.st_mode) else b"F" if stat.S_ISREG(st.st_mode)
+                    else b"L" if stat.S_ISLNK(st.st_mode) else b"O")
+            h.update(kind + rel + b"\0")
+            if kind == b"L":
+                h.update(os.readlink(top + b"/" + rel) + b"\0")
+            elif kind == b"F":
+                fd = os.open(top + b"/" + rel, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 try:
-                    with open(f, "rb") as fh:
-                        while c := fh.read(1 << 20):
-                            h.update(c)
-                            read += len(c)
-                            if read > max_bytes or time.monotonic() > t_end:
-                                return None
-                except OSError:
-                    h.update(b"unreadable\0")
+                    while c := os.read(fd, 1 << 20):
+                        h.update(c)
+                        read += len(c)
+                        if read > max_bytes or time.monotonic() > t_end:
+                            return None
+                finally:
+                    os.close(fd)
+                h.update(b"\0")
+            if time.monotonic() > t_end:
+                return None
+    except Exception:  # noqa: BLE001 (an entry-written tree the runner cannot hash: None, the entry's failure)
+        return None
     return h.hexdigest()
+
+
+def held_tmpfs(sb, inside, timeout=30):
+    """For a sandbox started held (`hold=True, status=True`): once bubblewrap has set it up (its
+    init's /proc/PID/mountinfo lists a tmpfs at `inside`, which it does only after the root's
+    pivot), a descriptor on that private tmpfs, opened through the init's root (the device checked
+    against the mount's), which keeps the tmpfs, and everything on it, after the sandbox is gone;
+    closing it frees them. Its pages are charged to the sandbox's memory cap while it runs.
+    A RuntimeError (the runner's) if it does not appear within `timeout` s."""
+    if not sb.track():
+        raise RuntimeError("the sandbox ended before the runner could track it")
+    t_end = time.monotonic() + timeout
+    while True:
+        dev = None
+        try:
+            for line in open(f"/proc/{sb.child_pid}/mountinfo"):
+                pre, _, post = line.partition(" - ")
+                f = pre.split()
+                if f[4] == inside and post.split()[:1] == ["tmpfs"]:
+                    major, minor = f[2].split(":")
+                    dev = os.makedev(int(major), int(minor))
+        except (OSError, IndexError, ValueError):
+            pass
+        if dev is not None:
+            fd = os.open(f"/proc/{sb.child_pid}/root{inside}", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            if os.fstat(fd).st_dev == dev:
+                return fd
+            os.close(fd)
+        if time.monotonic() > t_end:
+            raise RuntimeError(f"the sandbox's private tmpfs at {inside} did not appear within {timeout} s")
+        time.sleep(0.005)
 
 
 def fresh_dir(path):

@@ -514,6 +514,13 @@ def bench_job(a, cert):
     try:
         subprocess.run(cmd, timeout=PART_S)
         res = json.load(open(a.out))
+        if res.get("stage") != "done":
+            # the runner ended before it wrote its result (its last checkpoint says `incomplete`):
+            # never a pass; the runner's failure, a harness error (review R3 H3)
+            res["benchmark"] = "error"
+            res.setdefault("reasons", []).append(
+                f"harness error: the runner ended without completing its result (its last checkpoint: "
+                f"`{res.get('stage')}`)")
     except subprocess.TimeoutExpired:
         # the part ran past its bound; once the prover's build has started, the entry's
         # steps are what can take that long (every organiser step is bounded far below it), so it is

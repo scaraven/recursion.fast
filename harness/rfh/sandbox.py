@@ -98,6 +98,15 @@ DENY = {
 # moves another process's pages (libnuma treats ENOSYS as "no NUMA support")
 ENOSYS = {"statfs": 137, "fstatfs": 138, "ustat": 136, "clone3": 435, "mbind": 237, "migrate_pages": 256,
           "move_pages": 279, "set_mempolicy_home_node": 450}
+# a request's sandbox alone (`seccomp_program(request=True)`, `prover.request`; the badge and the
+# build keep them): `sendmsg` and `sendmmsg` (EPERM), the only calls that pass file descriptors or
+# credentials over a Unix socket (`SCM_RIGHTS`: an fd parked unread in the service's receive queue
+# outlives the request, holding memory outside every cap and a connection slot a later request
+# could count, review R5 HIGH 1; provers write with `write`, `writev`, `send` and `sendto`); and
+# `sysinfo` (ENOSYS): its load averages, process count and free, shared and buffer memory are
+# machine-wide counters a request can move and a later one read (review R8 HIGH 1, R4 LOW 3)
+REQUEST_DENY = {"sendmsg": 46, "sendmmsg": 307}
+REQUEST_ENOSYS = {"sysinfo": 99}
 
 
 AF_UNIX = 1
@@ -108,8 +117,11 @@ SO_COOKIE, SO_PEERPIDFD, SO_PASSPIDFD = 57, 77, 76
 MADVISE, MADV_COLD, MADV_PAGEOUT = 28, 20, 21     # refused: they would reclaim the runner's tmpfs pages
 
 
-def seccomp_program() -> bytes:
-    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`. Besides the
+def seccomp_program(request=False) -> bytes:
+    """The classic-BPF filter (`struct sock_filter[]`) for bubblewrap's `--seccomp FD`; with
+    `request` (a prover's request, `prover.request` and `Run.oneshot`) also `REQUEST_DENY` and
+    `REQUEST_ENOSYS`: no file descriptor or credential sent over the oracle's socket, no
+    `sysinfo(2)`. Besides the
     `DENY` list and the socket domains, it closes machine-wide counters a request could write and a
     later request read (AGENTS.md §5): `statfs`, `fstatfs` and `ustat` (ENOSYS: the free space of
     the filesystems behind the sandbox's binds, which the runner's writes move and a prover's
@@ -133,8 +145,12 @@ def seccomp_program() -> bytes:
            (RET, 0, 0, 0x80000000),                     # SECCOMP_RET_KILL_PROCESS
            (LD, 0, 0, 0),                               # seccomp_data.nr
            (JGE, "errno", 0, 0x40000000)]               # the x32 ABI
-    ins += [(JEQ, "errno", 0, nr) for nr in sorted(DENY.values())]
-    ins += [(JEQ, "enosys", 0, nr) for nr in sorted(ENOSYS.values())]
+    deny, enosys = dict(DENY), dict(ENOSYS)
+    if request:
+        deny.update(REQUEST_DENY)
+        enosys.update(REQUEST_ENOSYS)
+    ins += [(JEQ, "errno", 0, nr) for nr in sorted(deny.values())]
+    ins += [(JEQ, "enosys", 0, nr) for nr in sorted(enosys.values())]
     ins += [(JEQ, "socket", 0, nr) for nr in sorted(SOCKET.values())]
     ins += [(JEQ, "clone", 0, CLONE), (JEQ, "getsockopt", 0, GETSOCKOPT), (JEQ, "setsockopt", 0, SETSOCKOPT),
             (JEQ, "madvise", 0, MADVISE)]
@@ -202,27 +218,81 @@ SYS_CPU_NEVER = ("power",)                        # runtime counters, at any dep
 # a boundary that matters (a pass, a badge run, a sandbox for the mask sources and the CPU tree),
 # and the mbind family is refused besides.
 
+class TreeError(OSError):
+    """A directory tree the runner will not walk (`tree_entries`): more entries than its bound, or a
+    relative path longer than `MAX_REL_PATH` bytes."""
+
+
+MAX_REL_PATH = 2048     # bytes of an entry's path relative to its tree's root (`tree_entries`)
+
+
+def tree_entries(top, max_entries=None, fix_access=False, max_path=MAX_REL_PATH):
+    """Every entry under the directory `top`, as (path relative to `top` as bytes, its `lstat`),
+    a directory before everything under it, each directory's names in byte order; no link
+    followed. Iterative, so a tree of any depth is walked without recursion (review R3 H2), and
+    with names as bytes, so a name that is not UTF-8 is an entry like any other (H1). With
+    `fix_access` the runner first gives itself read, write and search permission on every directory
+    and read and write permission on every file (a tree a prover locked can then be measured,
+    copied and removed). A relative path above `max_path` bytes, or more than `max_entries`
+    entries, raises `TreeError` (the walk's time and the paths the runner builds stay bounded);
+    an unreadable directory raises the `OSError`."""
+    top = os.fsencode(top)
+    if fix_access:
+        st = os.lstat(top)
+        if stat.S_ISDIR(st.st_mode) and st.st_mode & 0o700 != 0o700:
+            os.chmod(top, (st.st_mode & 0o7777) | 0o700)
+    stack, n = [b""], 0
+    while stack:
+        rel = stack.pop()
+        subdirs = []
+        for name in sorted(os.listdir(top + b"/" + rel if rel else top)):
+            r = rel + b"/" + name if rel else name
+            n += 1
+            if max_entries is not None and n > max_entries:
+                raise TreeError(f"more than {max_entries} entries")
+            if len(r) > max_path:
+                raise TreeError(f"a path of more than {max_path} bytes")
+            path = top + b"/" + r
+            st = os.lstat(path)
+            want = 0o700 if stat.S_ISDIR(st.st_mode) else 0o600 if stat.S_ISREG(st.st_mode) else 0
+            if fix_access and want and st.st_mode & want != want:
+                os.chmod(path, (st.st_mode & 0o7777) | want)
+                st = os.lstat(path)
+            yield r, st
+            if stat.S_ISDIR(st.st_mode):
+                subdirs.append(r)
+        stack.extend(reversed(subdirs))
+
+
 def remove_tree(path):
     """Remove `path` and everything under it, after giving the runner access to every directory
-    (no link followed); whether it is gone."""
+    (no link followed; iteratively, any depth and any names, `tree_entries`); whether it is gone."""
     import shutil
-
-    def opened(p):
+    if not os.path.lexists(path):
+        return True
+    b = os.fsencode(path)
+    if stat.S_ISDIR(os.lstat(b).st_mode):
+        ents = []
         try:
-            st = os.lstat(p)
+            for rel, st in tree_entries(b, fix_access=True, max_path=1 << 30):
+                ents.append((rel, stat.S_ISDIR(st.st_mode)))
         except OSError:
-            return
-        if stat.S_ISDIR(st.st_mode):
+            pass
+        for rel, is_dir in reversed(ents):      # everything under a directory comes after it
             try:
-                os.chmod(p, (st.st_mode & 0o7777) | 0o700)
-                for n in os.listdir(p):
-                    opened(os.path.join(p, n))
+                (os.rmdir if is_dir else os.unlink)(b + b"/" + rel)
             except OSError:
                 pass
-    if os.path.lexists(path):
-        opened(path)
-    shutil.rmtree(path, ignore_errors=True)
-    return not os.path.lexists(path)
+        try:
+            os.rmdir(b)
+        except OSError:
+            shutil.rmtree(b, ignore_errors=True)
+    else:
+        try:
+            os.unlink(b)
+        except OSError:
+            pass
+    return not os.path.lexists(b)
 
 
 def _unescape(x):
@@ -358,27 +428,21 @@ def copy_file(src, dst, mode=None):
     return n
 
 
-def copy_tree(src, dst):
+def copy_tree(src, dst, max_entries=None):
     """Copy the directory tree `src` to the new directory `dst` on the runner's tmpfs: directories
     (mode 0700), regular files (`copy_file`: every byte, read-only) and symbolic links (as links);
-    anything else (a FIFO, a socket, a device) is left out. No link is followed. Its bytes."""
+    anything else (a FIFO, a socket, a device) is left out. No link is followed; the walk is
+    `tree_entries` (iterative, names as bytes; `max_entries` bounds it). Its bytes."""
     os.mkdir(dst, 0o700)
-    total = 0
-    def fail(e):
-        raise e
-    for root, dirs, files in os.walk(src, followlinks=False, onerror=fail):
-        rel = os.path.relpath(root, src)
-        out = dst if rel == "." else os.path.join(dst, rel)
-        for n in dirs + files:
-            s, d = os.path.join(root, n), os.path.join(out, n)
-            st = os.lstat(s)
-            if stat.S_ISLNK(st.st_mode):
-                os.symlink(os.readlink(s), d)
-            elif stat.S_ISDIR(st.st_mode):
-                os.mkdir(d, 0o700)
-            elif stat.S_ISREG(st.st_mode):
-                total += copy_file(s, d)
-        dirs[:] = [n for n in dirs if not os.path.islink(os.path.join(root, n))]
+    s, d, total = os.fsencode(src), os.fsencode(dst), 0
+    for rel, st in tree_entries(s, max_entries=max_entries):
+        a, b = s + b"/" + rel, d + b"/" + rel
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(a), b)
+        elif stat.S_ISDIR(st.st_mode):
+            os.mkdir(b, 0o700)
+        elif stat.S_ISREG(st.st_mode):
+            total += copy_file(a, b)
     return total
 
 
@@ -631,10 +695,10 @@ class Sandbox:
     readable then)."""
 
     def __init__(self, cmd, binds, mem, env=None, cwd="/work", stdin=subprocess.DEVNULL,
-                 stdout=None, stderr=None, hold=False, extra_ro_root=(), cpus=None, status=False):
+                 stdout=None, stderr=None, hold=False, extra_ro_root=(), cpus=None, status=False, request=False):
         self.unit = "rf-" + uuid.uuid4().hex[:16]
         sc_r, sc_w = os.pipe()
-        prog = seccomp_program()
+        prog = seccomp_program(request)
         os.write(sc_w, prog)
         os.close(sc_w)
         fds = [sc_r]
@@ -681,6 +745,7 @@ class Sandbox:
         prefix = memcap(mem, self.unit) + ["choom", "-n", "1000", "--"]
         if cpus is not None:
             prefix += ["taskset", "-c", str(cpus)]
+        self.t_spawn = time.monotonic()      # the runner's own set-up (this sandbox's view) is before it
         self.proc = subprocess.Popen(prefix + args + ["--"] + list(cmd), pass_fds=fds,
                                      stdin=stdin, stdout=stdout, stderr=stderr, close_fds=True)
         for fd in fds:
