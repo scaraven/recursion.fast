@@ -616,11 +616,18 @@ average and up to about 20 s), the calibration samples (2 s idle and three short
 request. It has a budget, `[stream] runner_budget_s` = 900 s (15 minutes), inside the benchmark
 job's `PART_S` (64 minutes), whose 23.7 minutes beyond the capped steps hold the budget, the checks'
 30 s past `stream_s` and 8.2 minutes for the organiser's other steps (`.github/workflows/evaluate.yml`
-has the arithmetic). The runner checkpoints the clock as each request and badge run starts and as
-it is charged (`stream_clock` in its checkpoint: `entry_s`, `wall_s`, `runner_overhead_s`, whether
-an entry process is in flight), so a part killed at `PART_S` is judged by whose time ran it there
-(`harness/evaluate.py` `part_timeout`; the time since the last reading is the entry's if an entry
-process was in flight, else the runner's): the entry's REJECT (`stream-cap`) only when its own clock
+has the arithmetic). The runner checkpoints the clock as each request's prover is spawned, says
+`ready`, is given its inputs and dies, as each badge process is released and ends, and as each is
+charged (`stream_clock` in its
+checkpoint: `entry_s`, `wall_s`, `runner_overhead_s`, whether an entry process is in flight and the
+most of the entry's time it can still add, `entry_bound_s`: a request's `ready_s + step_s`, within
+what is left of `stream_s`, plus 90 s for the kill and the tracking; a badge run's timeout plus
+5 s), so a part killed at `PART_S` is judged by whose time ran it there (`harness/evaluate.py`
+`part_timeout`; the time since the last reading is the entry's up to that bound if an entry process
+was in flight, the rest the runner's; the runner's work around the process, a request's view,
+staging, output read and `/work` walk, a badge run's copies, is outside those windows, so a runner
+hung there is never the entry's; a checkpoint that cannot be written is logged and the stream goes on):
+the entry's REJECT (`stream-cap`) only when its own clock
 is past `stream_s` with the runner's overhead within `runner_budget_s`; the organiser's ERROR
 `overhead` (§8; never counted against the author) when the overhead is past the budget, when the
 entry's clock is within `stream_s`, or with no reading (a kill during the calibration). Measured on
@@ -637,8 +644,15 @@ With the samples and the delays, the overhead of a stream at the season's caps i
 eleven minutes, most of it the timed requests' scrubs, every second of it outside `stream_s` and
 within `runner_budget_s` (measured on a loaded host, load 15–30 on its 32 CPUs). The benchmark VM's
 own figure (4 cores / 8 threads; the scrub is nearly serial, so fewer CPUs do not shorten it) is not
-yet measured: it must be measured with a stream at the season's caps on the VM, and
-`runner_budget_s` (with `PART_S`) set from it with margin, before the pin moves to these rules. (Until review R3, `stream_s` was wall time and these
+yet measured. Some of the runner's work scales with what the entry does and has no bound of its own
+beyond `PART_S` (off both clocks): each timed pass's `fresh_copy` of the binary and the setup (up
+to `setup_cap` = 4 GiB and 65,536 entries, three times), the walk of each request's `/work`
+(up to 65,536 entries, 64 requests), the service's `drop` waits (up to `step_s` each) after a
+request that left the service work. So before the pin moves to these rules the VM's overhead must
+be measured twice with a stream at the season's caps: for an honest entry, and for an adversarial
+one (the maximum setup, a `/work` of 65,536 entries in every request, the maximum service work at
+every request's end); `runner_budget_s` (with `PART_S`) is set from the adversarial figure with
+margin. (Until review R3, `stream_s` was wall time and these
 copies left an entry at every cap about 3–19 s for its badge start-ups; until the setup was copied
 to the runner's tmpfs, the runner re-read it before every request.) A toy setup's copy (the smoke's)
 takes about 5 ms. The smoke's honest stream (`M` = 4, 16 requests, 12 of them timed, its

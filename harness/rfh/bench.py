@@ -307,26 +307,38 @@ class Bench:
         if getattr(self, "_cap", None) is not None and seconds:
             self.entry_s += seconds
 
-    def clock_now(self, entry_running=False):
-        """The stream's clock now (`stream.clock`): the entry's time counted (`entry_s`), the wall
-        time since the stream began (`wall_s`) and the runner's overhead between them, with the
-        season's `stream_s` and `runner_budget_s`; `entry_running`: an entry process (a request
-        or a badge run) is in flight and not yet charged; `at`: the epoch time of the reading. None
-        outside the stream."""
+    def clock_now(self, entry_running=False, bound_s=None, spent_s=0.0):
+        """The stream's clock now (`stream.clock`): the entry's time counted (`entry_s`, with
+        `spent_s` of a process that has died and is not yet charged), the wall time since the
+        stream began (`wall_s`) and the runner's overhead between them, with the season's
+        `stream_s` and `runner_budget_s`; `entry_running`: an entry process (a request's prover or a
+        badge process) is running and not yet charged, and `entry_bound_s` the most of the entry's
+        time it can still add (its own caps and the kill's grace: `Bench.one`, `Bench.verify`);
+        `at`: the epoch (wall) time of the reading, `at_monotonic`: `CLOCK_MONOTONIC`'s, which is
+        machine-wide, so `evaluate.py`, another process on the same machine, measures the time since
+        the reading with it. None outside the stream."""
         t0 = getattr(self, "_t_stream", None)
         if t0 is None:
             return None
-        wall = time.monotonic() - t0
+        mono = time.monotonic()
+        wall = mono - t0
+        entry = self.entry_s + (spent_s if getattr(self, "_cap", None) is not None else 0.0)
         return {"stream_s": self.p.stream_s, "runner_budget_s": self.p.runner_budget_s,
-                "entry_s": self.entry_s, "wall_s": wall, "runner_overhead_s": wall - self.entry_s,
-                "entry_running": bool(entry_running), "at": time.time()}
+                "entry_s": entry, "wall_s": wall, "runner_overhead_s": wall - entry,
+                "entry_running": bool(entry_running),
+                "entry_bound_s": float(bound_s) if entry_running and bound_s is not None else None,
+                "at": time.time(), "at_monotonic": mono}
 
-    def tick(self, entry_running, c=None):
+    def tick(self, entry_running, c=None, bound_s=None, spent_s=0.0):
         """The stream's clock to the runner's checkpoint (`progress`, run-benchmark.py's
-        `stream_clock`), as an entry process starts (`entry_running`) and as it is charged: if the
-        benchmark job's `PART_S` kills the runner, `evaluate.py` reads from the last one whose
-        time, the entry's or the runner's, ran the part past it (AGENTS.md §9)."""
-        cb, c = getattr(self, "progress", None), c or self.clock_now(entry_running)
+        `stream_clock`), as an entry process is spawned or released (`entry_running`, with
+        `bound_s`, the most of the entry's time it can add), as it dies (`spent_s`, its time not yet
+        charged) and as it is charged: if the benchmark job's `PART_S` kills the runner,
+        `evaluate.py` reads from the last one whose time, the entry's or the runner's, ran the part
+        past it (AGENTS.md §9). The runner's work around an entry process (a request's view,
+        staging, output reads and `/work` walk; a badge run's copies) is outside the in-flight
+        window, so a runner hung there is never read as the entry's time."""
+        cb, c = getattr(self, "progress", None), c or self.clock_now(entry_running, bound_s, spent_s)
         if cb is not None and c is not None:
             cb(c)
 
@@ -382,9 +394,14 @@ class Bench:
         shared = self.deadline is not None and timeout >= self.left() + 30 - 1e-3   # the run had the shared bound
         self.scrub()        # as before a request: no badge run reads an earlier one's per-CPU inode counts
         self.badge.run_s = 0.0
-        self.tick(True)
+        bound = timeout + BADGE_GRACE_S
+
+        def clock(running, spent_s=0.0):
+            """The badge process released (in flight, at most `bound` seconds) or ended (`spent_s`):
+            its copies before and its removal after are the runner's (`Badge._verify`)."""
+            self.tick(running, bound_s=bound if running else None, spent_s=spent_s)
         try:
-            return self.badge.verify(items, self.store, timeout=timeout, warm=warm)
+            return self.badge.verify(items, self.store, timeout=timeout, warm=warm, clock=clock)
         except BadgeError as e:
             self.charge(self.badge.run_s)
             self.badge.run_s = 0.0
@@ -593,12 +610,23 @@ class Bench:
         scrub_s = self.scrub(batches=self.p.scrub_batches if key_of(inputs) else 0)
         dl = self.deadline[0] if self.deadline else None       # after the runner's own work (off the clock)
         pads = [bytes(n) for name, n in STAGED.items() if name not in inputs]
-        # the clock to the checkpoint (`tick`), after the scrub: one file replaced, the same for every
-        # request whatever an earlier one did, so it adds nothing a request could read of another
-        self.tick(True)
+        # the clock to the checkpoint (`tick`) at the prover's spawn, `ready`, the timed part's start
+        # and its death (`request`'s `clock`): each a rewrite of the runner's result file (`--out`, a
+        # new file renamed over it), which no sandbox sees, as many for every request that
+        # reaches the same point whatever an earlier one did, so it adds nothing a request could read
+        # of another. In flight, the prover adds at most its own caps (`ready_s` + `step_s`, within
+        # what is left of `stream_s`) and the kill's grace to the entry's clock
+        left = self.left()
+
+        def clock(running, spent_s=0.0):
+            """In flight with `spent_s` of the request's time not yet charged: at most what is left of
+            `ready_s + step_s` and of `stream_s`, plus the kill's grace, to come."""
+            caps = self.p.ready_s + self.p.step_s - spent_s
+            bound = max(0.0, caps if left is None else min(caps, left - spent_s)) + REQUEST_GRACE_S
+            self.tick(running, bound_s=bound if running else None, spent_s=spent_s)
         r = request(self.run, kind, None, sock, inputs, self.p.step_s, self.p.file_cap, deadline=dl,
                     ready_s=self.p.ready_s, work_cap=self.p.work_cap, sock_at_go=svc.socket_path,
-                    preset={"vk.hex": (svc.vk.hex() + "\n").encode()}, pads=pads)
+                    preset={"vk.hex": (svc.vk.hex() + "\n").encode()}, pads=pads, clock=clock)
         r.scrub_s = scrub_s
         self.charge((r.startup_s or 0.0) + (r.seconds or 0.0))      # the entry's time: start-up and the timed part
         self.tick(False)
@@ -747,8 +775,10 @@ class Bench:
         read-only can set (its shared memory policy; review LR5 H1), which would otherwise carry
         work from the untimed service run into a timed pass, or from one timed pass to the next
         (the median of three totals would then take a pass another had precomputed for). A timed
-        pass's copy is made inside the stream, so its time counts toward `stream_s` (AGENTS.md §9);
-        the service run's is made before the stream's cap starts."""
+        pass's copy is made inside the stream but off the entry's clock: it is the runner's overhead
+        (`runner_overhead_s`, counted against `runner_budget_s`), with no bound of its own though its size is
+        the entry's (up to `setup_cap`; AGENTS.md §9 has the VM's overhead measured for an
+        adversarial entry); the service run's is made before the stream's cap starts."""
         n, dt = self.run.publish()
         rec.setdefault("copies", []).append({"for": what, "bytes": n, "seconds": dt})
 
@@ -959,6 +989,9 @@ class Bench:
 # timed passes alike (step 1, which has no `prev.*`, is told by its command, `first`)
 STAGED = {"leaf.json": 0, "leaf.bin": 0, "prev.stmt": 65, "prev.bin": 0, "oracle.key": 65}
 PASS_DELAY_S = 2.0         # the untimed delay before each timed pass is uniform in [0, 2) s
+REQUEST_GRACE_S = 90.0     # in flight, a request's prover adds at most its caps and this: the kill's 30 s
+                           # (`Sandbox.kill_tree`) and the tracking's (`Sandbox.track`) in its start-up
+BADGE_GRACE_S = 5.0        # a badge process adds at most its run's timeout and this (`checks.serve`)
 DROP_WAIT_S = 10.0         # `drop` is asked again for at least this long (and `step_s`) until no connection is left
 
 

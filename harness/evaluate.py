@@ -72,6 +72,7 @@ from rfh import buildcache  # noqa: E402
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
+REASON_CAP = 300        # the bot keeps a reason's first 300 characters: a verdict's reason fits, its verdict first
 PART_S = 3840           # the benchmark job (64 min of its 70): the outer bound of its capped steps
                         # and of the runner's own time, `[stream] runner_budget_s` of it in the stream
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
@@ -504,42 +505,54 @@ def build_badge(org, tree, log, timeout, res):
     return out
 
 
-def part_timeout(res, stream_s, runner_budget_s, now):
+def part_timeout(res, stream_s, runner_budget_s, now, now_monotonic=None):
     """A benchmark part killed at `PART_S`, judged from its runner's last checkpoint `res` (None if
-    unreadable) at the epoch time `now`: (benchmark, reject_stage, organiser_error, reason).
+    unreadable) at the epoch time `now` (and `now_monotonic`, `time.monotonic()` then, preferred:
+    `CLOCK_MONOTONIC` is machine-wide, so the runner's reading and this process's agree; the epoch
+    time `at` is the fallback): (benchmark, reject_stage, organiser_error, reason), the reason at
+    most `REASON_CAP` characters with its verdict first.
 
     Before the prover's build: the organiser's (an unnamed harness error). During the prover's
     build or setup (each capped by the season, `build_s`, `setup_s`): the entry's REJECT at `prover`.
     From the calibration on, the stream's clock as last checkpointed (`stream_clock`,
-    `rfh.bench.Bench.tick`) is brought up to `now`: the time since the checkpoint is the entry's if
-    an entry process was in flight (`entry_running`), else the runner's. The part is the entry's
-    REJECT (`stream-cap`) only when the entry's own time is what overran: its clock past `stream_s`
-    with the runner's overhead within `runner_budget_s`. Otherwise (no clock: the calibration, or
-    the stream before its first reading; the runner's overhead past its budget; the entry's clock
-    within `stream_s`) the organiser's ERROR named `overhead`, which never counts against the author
-    (AGENTS.md §8, §9)."""
-    stage = (res or {}).get("stage") or "organiser setup"
+    `rfh.bench.Bench.tick`) is brought up to the kill: if an entry process was in flight
+    (`entry_running`: a request's prover between its spawn and its death, a badge process between
+    its release and its end), the time since the reading is the entry's up to that process's own
+    bound (`entry_bound_s`: its caps and the kill's grace) and the runner's beyond it; else all of
+    it is the runner's. The part is the entry's REJECT (`stream-cap`) only when the entry's own time
+    is what overran: its clock past `stream_s` with the runner's overhead within `runner_budget_s`.
+    Otherwise (no clock: the calibration, or the stream before its first reading; the runner's
+    overhead past its budget; the entry's clock within `stream_s`) the organiser's ERROR named
+    `overhead`, which never counts against the author (AGENTS.md §8, §9)."""
+    stage = str((res or {}).get("stage") or "organiser setup")[:40]
     head = f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
     if stage == "organiser setup":
-        return "error", None, None, head + ": a harness error"
+        return "error", None, None, ("harness ERROR: " + head)[:REASON_CAP]
     if stage in ("prover build", "prover setup"):
-        return "fail", "prover", None, head + ": the entry's failure"
+        return "fail", "prover", None, ("REJECT at `prover`: " + head)[:REASON_CAP]
     c = res.get("stream_clock")
     num = lambda k: c.get(k) if isinstance(c, dict) and type(c.get(k)) in (int, float) else None  # noqa: E731
     if None in (num("entry_s"), num("wall_s"), num("at")):
-        return "error", None, "overhead", (head + ", with no reading of the stream's clock (no entry time counted "
-                                           "against stream_s): the organiser's ERROR `overhead`")
-    since = max(0.0, now - c["at"])
-    entry_s = c["entry_s"] + (since if c.get("entry_running") is True else 0.0)
+        return "error", None, "overhead", (f"organiser ERROR `overhead`: {head}, with no reading of the stream's "
+                                           "clock (no entry time counted)")[:REASON_CAP]
+    if now_monotonic is not None and num("at_monotonic") is not None:
+        since = max(0.0, now_monotonic - c["at_monotonic"])
+    else:
+        since = max(0.0, now - c["at"])
+    running, bound = c.get("entry_running") is True, num("entry_bound_s")
+    inflight = (min(since, max(0.0, bound)) if bound is not None else since) if running else 0.0
+    entry_s = c["entry_s"] + inflight
     overhead = c["wall_s"] + since - entry_s
-    figs = (f"the entry's clock {entry_s:.1f} s of stream_s = {stream_s} s, the runner's overhead {overhead:.1f} s "
-            f"of runner_budget_s = {runner_budget_s} s ({since:.1f} s since the last reading, "
-            + ("an entry process in flight" if c.get("entry_running") is True else "no entry process in flight") + ")")
+    figs = (f"entry {entry_s:.1f} s of stream_s = {stream_s} s, runner {overhead:.1f} s of runner_budget_s = "
+            f"{runner_budget_s} s ({since:.1f} s since the last reading, {inflight:.1f} s of it the entry's)")
     if overhead > runner_budget_s:
-        return "error", None, "overhead", f"{head}: {figs}: the runner's own time ran past its budget, the organiser's ERROR `overhead`"
+        why = f"organiser ERROR `overhead`: the runner's own time ran past its budget; {head}: {figs}"
+        return "error", None, "overhead", why[:REASON_CAP]
     if entry_s <= stream_s:
-        return "error", None, "overhead", f"{head}: {figs}: the entry's clock is within stream_s, the organiser's ERROR `overhead`"
-    return "fail", "stream-cap", None, f"{head}: {figs}: the entry's own time overran, the entry's failure"
+        why = f"organiser ERROR `overhead`: the entry's clock is within stream_s; {head}: {figs}"
+        return "error", None, "overhead", why[:REASON_CAP]
+    why = f"REJECT at `stream-cap`: the entry's own time overran stream_s; {head}: {figs}"
+    return "fail", "stream-cap", None, why[:REASON_CAP]
 
 
 def bench_job(a, cert):
@@ -568,13 +581,13 @@ def bench_job(a, cert):
         # else (the runner's own time, about 8–11 min of scrubs and copies in a stream at the
         # season's caps, past its budget, or the entry's clock within `stream_s`) is the organiser's
         # ERROR `overhead`, never the entry's (AGENTS.md §9)
-        now = time.time()
+        now, now_mono = time.time(), time.monotonic()
         try:
             res = json.load(open(a.out))
         except (OSError, ValueError):
             res = {"stage": "organiser setup", "reasons": []}
         st = tomllib.load(open(a.season, "rb"))["stream"]
-        bm, rs, kind, why = part_timeout(res, st["stream_s"], st["runner_budget_s"], now)
+        bm, rs, kind, why = part_timeout(res, st["stream_s"], st["runner_budget_s"], now, now_mono)
         res["benchmark"] = bm
         if rs:
             res["reject_stage"] = rs

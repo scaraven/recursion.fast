@@ -53,7 +53,7 @@ class StubBadge:
     def __init__(self, script, reject=()):
         self.script, self.calls, self.warm, self.reject, self.timeouts = list(script), 0, [], set(reject), []
 
-    def verify(self, items, store, timeout, warm=False):
+    def verify(self, items, store, timeout, warm=False, clock=None):
         self.calls += 1
         self.warm.append(warm)
         self.timeouts.append(timeout)
@@ -103,7 +103,7 @@ def main():
                   f"{name} past the stream's cap: no badge run starts, REJECT at stream-cap: {e}")
 
     class Late(StubBadge):
-        def verify(self, items, store, timeout, warm=False):
+        def verify(self, items, store, timeout, warm=False, clock=None):
             self.calls += 1
             b.deadline = (time.monotonic() - 30.1, b.deadline[1])         # cut at the shared bound
             raise BadgeError("verify: timeout, 0 of 1 answers", "timeout")

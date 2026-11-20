@@ -261,7 +261,7 @@ class Badge:
         sb.release()
         return sb.proc, sb.kill, t0, "/store", "/warm"
 
-    def verify(self, items, store, timeout, warm=False):
+    def verify(self, items, store, timeout, warm=False, clock=None):
         """`acc` on each (vk, stmt, relative path under `store`), in one fresh process: a list of
         (accepted, ns), `ns` the larger of the runner's external time of the request and the
         badge's own (`serve`); the pairs (external, badge) of the run are kept in `self.last`.
@@ -274,18 +274,23 @@ class Badge:
         start-up, from release to the warm-up's answer, is capped by `start_s`: work an entry's
         top-level constants do when the process starts is untimed, and this bounds it. `timeout`
         (seconds) bounds the whole run; no single check has a bound of its own. A run that times
-        out, starts up too slowly or crashes raises `BadgeError`."""
+        out, starts up too slowly or crashes raises `BadgeError`. `clock(running, spent_s=0.0)`, if
+        given, is told when the process is released (`clock(True)`) and when its time ends
+        (`clock(False, run_s)`): the copies before and the removal after are the runner's
+        (`Bench.verify`, the stream's checkpoint)."""
         if not items:
             return []
         self.n += 1
         root, binds = self.view(items, store, warm)
         try:
-            return self._verify(items, binds, timeout, warm)
+            return self._verify(items, binds, timeout, warm, clock)
         finally:
             remove_tree(root)
 
-    def _verify(self, items, binds, timeout, warm):
+    def _verify(self, items, binds, timeout, warm, clock=None):
         proc, stop, t0, sp, wp = self.start(binds)
+        if clock is not None:
+            clock(True)
         lines = [f"{os.urandom(32).hex()} {os.urandom(32).hex()} {wp}/warm.bin"] if warm else []
         lines += [f"{vk.hex()} {stmt.hex()} {sp}/{rel}" for vk, stmt, rel in items]
         first = t0 + self.start_s if warm and self.start_s else None
@@ -294,6 +299,8 @@ class Badge:
             res, why = serve(proc, lines, time.monotonic() + timeout, first)
         finally:
             self.run_s = time.monotonic() - t0       # the badge process's own time: the entry's (`Bench.charge`)
+            if clock is not None:
+                clock(False, self.run_s)
             stop()
             err.join(5)
             for f in (proc.stdin, proc.stdout):

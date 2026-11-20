@@ -334,7 +334,7 @@ class Step:
 
 
 def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, ready_s=None,
-            work_cap=None, sock_at_go=None, preset=None, pads=()):
+            work_cap=None, sock_at_go=None, preset=None, pads=(), clock=None):
     """One timed `first` or `step` request in a fresh sandbox (PROVER.md §3). `work` None (the
     benchmark's requests): /work is **a private tmpfs** of the sandbox's own (bubblewrap's
     `--tmpfs`), holding at the start only `preset` (name → bytes, e.g. `vk.hex`), so its inode
@@ -366,18 +366,26 @@ def request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline=None, 
     exception (a staging write that fails because the prover filled the filesystem, a pid that
     vanished, a sandbox that does not die, an exit status that is not reported, an unreadable
     output) is the entry's failure with its reason, never a harness error. `/work` may hold at most
-    `work_cap` bytes when the prover is dead (sparse files counted at their size). Returns a `Step`."""
+    `work_cap` bytes when the prover is dead (sparse files counted at their size). `clock(running,
+    spent_s=0.0)`, if given, is told when the entry's time in the request runs and when it stops,
+    with the time it has spent so far: at the sandbox's spawn (`clock(True)`), at `ready` or the
+    start-up's end (`clock(False, startup_s)`), just before the timed part (`clock(True,
+    startup_s)`) and at the prover's death (`clock(False, startup_s + seconds)`), so that the
+    runner's work around them (the view, the staging, the output's read, the `/work` walk) is never
+    read as the entry's (`Bench.one`, the stream's checkpoint). Only the first call falls inside
+    a measured interval (the start-up's, a checkpoint write of a few ms); none inside the timed
+    part. Returns a `Step`."""
     held = []                                   # the private tmpfs's descriptor and the staged files
     try:
         return _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap,
-                        sock_at_go, preset, held, pads)
+                        sock_at_go, preset, held, pads, clock)
     finally:
         for fd in held:
             os.close(fd)
 
 
 def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, ready_s, work_cap, sock_at_go,
-             preset, held, pads=()):
+             preset, held, pads=(), clock=None):
     import select
     # `deadline` bounds the entry's time: the runner's own work inside the request (its sandbox's
     # view before the spawn, the staging between `ready` and `go`) moves it later by its duration
@@ -393,6 +401,8 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, status=True, request=True)
     t_spawn = sb.t_spawn
     shift[0] = t_spawn - t_call
+    if clock is not None:
+        clock(True)
     err = Drain(sb.proc.stderr)
     fd = sb.proc.stdout.fileno()
     buf = b""
@@ -426,6 +436,8 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
         w = wait_line("ready", cap(t_spawn + (ready_s or step_s)))
         t_ready = time.monotonic()
         r.startup_s = t_ready - t_spawn
+        if clock is not None:               # the start-up's time ends; the staging is the runner's
+            clock(False, r.startup_s)
         if w != "line":
             r.status = "no ready line" + ("" if w == "timeout" else f" (the prover ended: {w})")
             r.at_deadline = w == "timeout" and at_cap()
@@ -458,6 +470,8 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
             for name, data in inputs.items():
                 with open(os.path.join(stage, name), "wb") as f:
                     f.write(data)
+        if clock is not None:               # the timed part begins: before `t0`, so its write is untimed
+            clock(True, r.startup_s)
         t0 = time.monotonic()
         shift[0] += t0 - t_ready                # the staging: the runner's
         if sock_at_go:
@@ -490,6 +504,8 @@ def _request(run, kind, work, sock_dir, inputs, step_s, file_cap, deadline, read
         if not dead:
             raise EntryFailure("the prover's sandbox did not die within 30 s of SIGKILL")
         r.seconds, r.kill_s, r.ended, r.t_stop_ns = t1 - t0, t1 - t_seen, w, t1_ns
+        if clock is not None:
+            clock(False, r.startup_s + r.seconds)
         if w == "timeout":
             r.status = "timeout"
             r.at_deadline = at_cap()

@@ -76,7 +76,7 @@ that died (`benchmark: incomplete`), or any other value, is the runner's failure
 `--rank` ranks the results of each harness commit (`harness_commit`) on their own, never across
 commits (another pin's rules may score in other units: seconds before v6's `P_total · |π|`,
 seconds · bytes since), one ranking per commit (`rankings`, the most recent first, by its latest
-`finished`). Within one, it groups results by the entry (its name in the submissions repository, `entry.name`; the
+non-ERROR `finished`; a commit whose results are all ERROR is not listed). Within one, it groups results by the entry (its name in the submissions repository, `entry.name`; the
 binary's hash would let a no-op edit start a fresh group) and ranks an entry, once it has at least
 three evaluations, by the median score of its last three (by `finished`), each REJECT,
 PROVISIONAL or otherwise not comparable run counting as infinite, once per track, each run's score
@@ -358,10 +358,12 @@ def rank(results):
     """The provisional rankings, one per harness commit (`harness_commit`): the scores of different
     commits are never compared or combined (a pin's rules fix the score's units), so each commit's
     results are ranked on their own (`rank_rows`); the most recent commit's first (by its latest
-    `finished`)."""
+    `finished`). ERROR results (the organiser's) are not counted, so a commit whose results are all
+    ERROR is not listed and an ERROR never orders the commits."""
     by = collections.defaultdict(list)
     for r in results:
-        by[r.get("harness_commit")].append(r)
+        if r.get("verdict") != "ERROR":
+            by[r.get("harness_commit")].append(r)
     order = sorted(by, key=lambda c: max(r.get("finished") or "" for r in by[c]), reverse=True)
     return {"schema": "recursion.fast/v6/ranking-2",
             "rule": "per harness commit (scores of different commits never compared), per entry (its name in the "

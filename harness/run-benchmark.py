@@ -36,10 +36,12 @@ record the score cannot be computed from (`rfh.bench.MalformedStream`: a step wi
 runner fault: `benchmark: error` named `malformed`, never the entry's. Every checkpoint of the result says `benchmark: incomplete`; only the
 final record (stage `done`) says `pass`, `fail` or `error`, and a failed write of the run log never
 stops the run. During the stream every checkpoint also carries the stream's clock as last read
-(`stream_clock`: `entry_s`, `wall_s`, `runner_overhead_s`, `entry_running`, `at`; rewritten as each
-request or badge run starts and as it is charged, `rfh.bench.Bench.tick`), so that a part killed at
-`PART_S` is judged by whose time ran it past the bound (`evaluate.py`, AGENTS.md §9); the final
-record drops it (its `stream.clock` holds the figures).
+(`stream_clock`: `entry_s`, `wall_s`, `runner_overhead_s`, `entry_running`, `entry_bound_s`, `at`,
+`at_monotonic`; rewritten as each request's prover is spawned, says `ready`, is given its inputs
+and dies, as each badge process is released and ends, and as each is charged, `rfh.bench.Bench.tick`), so that a part killed at
+`PART_S` is judged by whose time ran it past the bound (`evaluate.py`, AGENTS.md §9); a failed
+checkpoint write is logged, never the run's end; the final record drops it (its `stream.clock`
+holds the figures).
 """
 import argparse
 import glob
@@ -206,8 +208,16 @@ def main():
             save("stream")
 
             def progress(c):
+                """The stream's clock to the checkpoint. A failed write (ENOSPC, EIO) is logged and
+                the stream goes on: it must not mask a failure in flight (`Bench.verify`'s
+                `finally`) nor skip the stream's clean-up, and a part killed at `PART_S` with no
+                or an older reading is judged by what the file holds (`evaluate.part_timeout`:
+                no reading is the organiser's ERROR)."""
                 res["stream_clock"] = c
-                save("stream")
+                try:
+                    save("stream")
+                except Exception as e:  # noqa: BLE001 (a checkpoint is advisory)
+                    log(f"the stream's clock could not be checkpointed: {e!r}")
             bench.progress = progress
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]

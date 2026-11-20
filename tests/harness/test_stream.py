@@ -69,9 +69,12 @@
     with random machine-wide batches before a timed request only, the `drop` after every request,
     a badge run's copies) leaves `left()` unchanged, a request's start-up and timed part and a
     badge process's own time are charged; a connection left after `drop` is a harness error. The
-    clock goes to the runner's checkpoint (`Bench.progress`, `tick`) as each request and badge run
-    starts (`entry_running`) and as it is charged, and at the stream's start and end, the last
-    reading the stream's recorded `clock` (what `evaluate.py` judges a part killed at `PART_S` by).
+    clock goes to the runner's checkpoint (`Bench.progress`, `tick`) at each prover's spawn and each
+    badge process's release (`entry_running`, with its bound `entry_bound_s`), at its death or end
+    (its time counted before the charge) and as it is charged, and at the stream's start and end,
+    the last reading the stream's recorded `clock` (what `evaluate.py` judges a part killed at
+    `PART_S` by); a checkpoint that cannot be written (ENOSPC) is logged, and a failure in flight
+    keeps its stage (`run-benchmark.py`'s `progress`).
 14. The timed passes: an untimed random delay before each (recorded), the final output's canary run
     bounded like any canary run, the clock recorded in the stream (`clock`), and the replay
     refusals of a pass read from the service's counter (`stats`), however many (review R5 LOW 5,
@@ -686,6 +689,17 @@ def main():
             return {"service": {}}
 
         def stream_run(self):
+            if isinstance(FakeBench.outcome, tuple):    # ("enospc", failure): a checkpoint write fails first
+                real_replace = os.replace
+
+                def full(*a, **kw):
+                    raise OSError(28, "No space left on device")
+                os.replace = full
+                try:
+                    self.progress({"entry_s": 1.0, "wall_s": 2.0, "entry_running": True, "at": 0.0})
+                finally:
+                    os.replace = real_replace
+                raise FakeBench.outcome[1]
             if isinstance(FakeBench.outcome, Exception):
                 raise FakeBench.outcome
             return json.loads(json.dumps(FakeBench.outcome))
@@ -774,6 +788,13 @@ def main():
         code, r = bench_result(outcome, build_ok)
         check(code == 1 and r["benchmark"] == "fail" and r.get("reject_stage") == want,
               f"run-benchmark.py: {what}: benchmark: fail, reject_stage {r.get('reject_stage')!r}")
+    # a checkpoint of the stream's clock that cannot be written (ENOSPC) is logged, never the run's end:
+    # the failure in flight keeps its stage (the last review's LOW-2)
+    code, r = bench_result(("enospc", Fail("timed pass 1, step 2: the output differs", stage="timed-pass")))
+    check(code == 1 and r["benchmark"] == "fail" and r.get("reject_stage") == "timed-pass" and "traceback" not in r
+          and r.get("stage") == "done",
+          f"run-benchmark.py: a checkpoint write failing with ENOSPC does not mask the failure in flight: "
+          f"benchmark {r['benchmark']}, reject_stage {r.get('reject_stage')!r}, {r['reasons'][-1:]}")
     # 13. the stream's clock counts the entry's time alone (review R3 L1)
     import time as _time
     c = Bench.__new__(Bench)
@@ -808,11 +829,16 @@ def main():
 
     def req2(run, kind, work, sock, inputs, step_s, file_cap, **kw):
         dls.append(kw["deadline"] - _time.monotonic())
+        kw["clock"](True)                       # as `request`: at the prover's spawn,
+        kw["clock"](False, 0.5)                 # at `ready` (the staging is the runner's),
+        kw["clock"](True, 0.5)                  # before the timed part
         r = Step()
         r.seconds, r.startup_s, r.proof = 2.0, 0.5, b"x"
+        kw["clock"](False, 2.5)                 # ... and at its death, before the output's read
         return r
     real_request, bench_mod.request = bench_mod.request, req2
     try:
+        caps1 = w2.p.ready_s + w2.p.step_s      # the caps of the first request (step_s is changed below)
         w2.one(svc2, "service1", "first", {"leaf.json": b"{}"})
         tick1 = list(ticks)
         live[:] = [2, 0]                    # a connection still computing: `drop` asked again until it ends
@@ -833,13 +859,19 @@ def main():
           f"(asked again while a connection is left: {len(drops)} calls) are "
           f"off the clock, the request's start-up and timed part on it (left {w2.left():.2f} s, the deadlines passed "
           f"{[round(x, 2) for x in dls]} s ahead); a connection left after `drop` is a harness error: {err}")
-    check([t["entry_running"] for t in tick1] == [True, False] and tick1[0]["entry_s"] == 0.0
-          and abs(tick1[1]["entry_s"] - 2.5) < 1e-9 and tick1[0]["wall_s"] >= 0.1
-          and abs(tick1[1]["runner_overhead_s"] - (tick1[1]["wall_s"] - 2.5)) < 1e-9
-          and tick1[1]["runner_budget_s"] == w2.p.runner_budget_s and tick1[1]["at"] >= tick1[0]["at"],
-          f"Bench.one checkpoints the clock as the request starts (in flight, after the 0.1 s scrub: wall "
-          f"{tick1[0]['wall_s']:.2f} s) and as it is charged (entry_s {tick1[1]['entry_s']}, overhead "
-          f"{tick1[1]['runner_overhead_s']:.2f} s)")
+    g = bench_mod.REQUEST_GRACE_S
+    check([t["entry_running"] for t in tick1] == [True, False, True, False, False]
+          and [t["entry_s"] for t in tick1] == [0.0, 0.5, 0.5, 2.5, 2.5]
+          and abs(tick1[0]["entry_bound_s"] - (min(caps1, 100) + g)) < 0.1
+          and abs(tick1[2]["entry_bound_s"] - (min(caps1 - 0.5, 99.5) + g)) < 0.1
+          and all(t["entry_bound_s"] is None for t in tick1[1::2]) and tick1[0]["wall_s"] >= 0.1
+          and abs(tick1[4]["runner_overhead_s"] - (tick1[4]["wall_s"] - 2.5)) < 1e-9
+          and tick1[4]["runner_budget_s"] == w2.p.runner_budget_s and tick1[4]["at"] >= tick1[0]["at"]
+          and tick1[4]["at_monotonic"] >= tick1[0]["at_monotonic"],
+          f"Bench.one checkpoints the clock at the prover's spawn (in flight, bound "
+          f"{tick1[0]['entry_bound_s']} s, after the 0.1 s scrub: wall {tick1[0]['wall_s']:.2f} s), at `ready` and "
+          f"before the timed part (the staging the runner's), at its death (its time counted before the charge, the "
+          f"output's read the runner's) and as it is charged: {[(t['entry_running'], t['entry_s']) for t in tick1]}")
     # Bench.verify charges the badge process's own time (`Badge.run_s`), not its copies
     v2 = Bench.__new__(Bench)
     v2.p, v2.store, v2.scrub_bin = make().p, "/nonexistent", None
@@ -848,18 +880,22 @@ def main():
     class SlowBadge:
         run_s = 0.0
 
-        def verify(self, items, store, timeout, warm=False):
+        def verify(self, items, store, timeout, warm=False, clock=None):
             _time.sleep(0.2)                  # its view and set-up: the runner's
+            clock(True)                       # as `Badge._verify`: at the process's release
             self.run_s = 4.0                  # its process, from release to the last answer: the entry's
+            clock(False, self.run_s)          # ... and at its end, before its removal
             return [(True, 1)]
     v2.badge = SlowBadge()
     v2._t_stream, vt = _time.monotonic(), []
     v2.progress = vt.append
     v2.verify([(b"k", b"s", "x")], "a check", 50)
-    check(abs(v2.left() - 96.0) < 1e-3 and [t["entry_running"] for t in vt] == [True, False]
-          and [t["entry_s"] for t in vt] == [0.0, 4.0],
+    check(abs(v2.left() - 96.0) < 1e-3 and [t["entry_running"] for t in vt] == [True, False, False]
+          and [t["entry_s"] for t in vt] == [0.0, 4.0, 4.0] and vt[0]["wall_s"] >= 0.2
+          and vt[0]["entry_bound_s"] == 50 + bench_mod.BADGE_GRACE_S,
           f"Bench.verify charges the badge run's own 4 s, not its copies: left {v2.left():.3f} s; it checkpoints the "
-          f"clock as the run starts and as it is charged ({[(t['entry_running'], t['entry_s']) for t in vt]})")
+          f"clock at the process's release (after its copies, bound {vt[0]['entry_bound_s']} s), at its end and as it "
+          f"is charged ({[(t['entry_running'], t['entry_s']) for t in vt]})")
 
     # 14. the timed passes: an untimed random delay before each, the replay refusals from the service's
     # counter (`stats`, every one, not the first 32 logged), the final output's canaries bounded

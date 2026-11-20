@@ -20,7 +20,8 @@ is not comparable. The ranking takes, per entry (not per binary) and per track (
 `every` from `S_every`, read through `score.tracks`), the median of its last three evaluations, a
 REJECT, a not comparable run or a run outside the track counting as its worst, and ranks only from
 three evaluations; results of different harness commits (whose rules may score in other units) are
-ranked apart, one ranking per commit, never in one median.
+ranked apart, one ranking per commit, never in one median; a commit whose results are all ERROR is not
+listed.
 AGENTS.md §6: with a season that names a machine fingerprint, a benchmark on another machine, or with a
 missing or unreadable fingerprint, is an organiser ERROR whatever the entry did (the reason says
 which); a rejected certificate stays REJECT; the smoke season (`"any"`) accepts any machine. The score does not depend on `c_P` (AGENTS.md §6), and the result records the runner (AGENTS.md §8) and no CPU model. A stream whose shape
@@ -341,7 +342,8 @@ def main():
     for k, r in enumerate([res(1.0, when="1", commit="old"), res(2.0, when="2", commit="old"), res(3.0, when="3", commit="old"),
                            res(4e5, when="4", commit="new"), res(5e5, when="5", commit="new"), res(6e5, when="6", commit="new"),
                            res(0.5, when="1", e="x", commit="old"), res(0.6, when="2", e="x", commit="old"),
-                           res(7e5, when="6", e="x", commit="new")]):
+                           res(7e5, when="6", e="x", commit="new"),
+                           res(None, "ERROR", when="9", commit="errors-only"), res(None, "ERROR", when="9", e="x", commit="old")]):
         files.append(os.path.join(tmp, f"m{k}.json"))
         json.dump(r, open(files[-1], "w"))
     subprocess.run([sys.executable, "-I", AGG, "--rank", "--out", rk, *files], check=True, capture_output=True)
@@ -351,7 +353,8 @@ def main():
           and by["new"]["e"]["median_S"] == 5e5 and by["old"]["e"]["evaluations"] == 3
           and "unranked" in by["old"]["x"]["median_S"] and "unranked" in by["new"]["x"]["median_S"],
           f"two harness commits, two rankings (the latest first), no median across them: e {by['old']['e']['median_S']} "
-          f"(old) and {by['new']['e']['median_S']} (new), x unranked in both (2 + 1 evaluations)")
+          f"(old) and {by['new']['e']['median_S']} (new), x unranked in both (2 + 1 evaluations); a commit whose results "
+          f"are all ERROR is not listed, and an ERROR's later time does not order the commits: {list(by)}")
     # a part without its runner's final record (`stage: done`) is never a pass (review R3 H3)
     died = part("calibrate,stream", benchmark="incomplete")
     died["stage"] = "stream"
