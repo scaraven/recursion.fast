@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The end-to-end smoke (`harness/smoke.toml`: one IVC stream of M = 4 steps of one leaf of 6 blocks, its service
-run and its three timed passes; the season's size caps and size_ref, its own verifier and time caps).
+run and its three timed passes; the season's size caps and score, its own verifier and time caps).
 
   python3 tests/harness/smoke.py --org ORG [--work DIR] [--nanoda]     the whole evaluation
   python3 tests/harness/smoke.py --mock [--work DIR]                   the runner alone
@@ -420,10 +420,13 @@ def main():
               and len(sc["pass_totals_s"]) == smoke_stream["timed_runs"] == 3
               and sc["P_total_s"] == sorted(sc["pass_totals_s"])[1] == sc["pass_totals_s"][sc["median_pass"] - 1]
               and sc["max_pi_bytes"] == max(s["pi_bytes"] for s in st["steps"])
+              and sc["size_factor"] == sc["final_pi_bytes"] and sc["size_factor_every"] == sc["max_pi_bytes"]
+              and sc["S"] == sc["P_total_s"] * sc["final_pi_bytes"] and sc["S_every"] == sc["P_total_s"] * sc["max_pi_bytes"]
+              and not any(k in sc for k in ("size_ref", "size_exponent", "size_unit"))
               and sc["M"] == st["M"] == smoke_stream["M"] and not st["truncated"],
-              f"score components: S {sc.get('S')}, S_every {sc.get('S_every')}, P_total {sc.get('P_total_s')} s (the median of "
-              f"{sc.get('pass_totals_s')}, pass {sc.get('median_pass')}), size factors {sc.get('size_factor')} at |π_M| "
-              f"{sc.get('final_pi_bytes')} B and {sc.get('size_factor_every')} at max |π_i| {sc.get('max_pi_bytes')} B, "
+              f"score components: S = P_total · |π_M| {sc.get('S')} s·B, S_every = P_total · max |π_i| {sc.get('S_every')} "
+              f"s·B, P_total {sc.get('P_total_s')} s (the median of {sc.get('pass_totals_s')}, pass {sc.get('median_pass')}), "
+              f"size factors |π_M| = {sc.get('size_factor')} B and max |π_i| = {sc.get('size_factor_every')} B, no size_ref, "
               f"tracks {sc.get('tracks')}, M {sc.get('M')}")
         check(st["shape"] == {k: smoke_stream[k] for k in ("M", "n")} and len(set(st["seeds"])) == smoke_stream["M"]
               and st.get("leaf_data") == {"xof": "shake256", "domain": "recursion.fast/leaf-data/v1"},

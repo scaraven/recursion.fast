@@ -14,8 +14,8 @@ the service run, every step a fresh process, every output checked, the final out
 statement canaries, the track `every`'s conditions; then `timed_runs` timed passes against the
 service's replay mode, every output byte-identical to the service run's; interleaved `c_P`
 samples); the score (`rfh.bench.score`: `P_total` the median of the pass totals,
-`S = P_total · 2^(|π_M| / size_ref)` in `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` in
-`every`, the tracks the run is in). One stream per evaluation, no repeats. The per-step JSON lines
+`S = P_total · |π_M|` in `final`, `S_every = P_total · max_i |π_i|` in `every`, seconds · bytes; the
+tracks the run is in). One stream per evaluation, no repeats. The per-step JSON lines
 go to WORK/stream.jsonl and into the result. The first failure ends the run with `benchmark: fail`,
 its reason and where it was rejected (`reject_stage`: `prover`, `request`, `check`, `timed-pass` or
 `stream-cap`, `rfh.bench.Fail`); so does reaching `stream_s`. The runner's tools (`calib`, and
@@ -213,11 +213,11 @@ def main():
                 for s in res["stream"]["steps"]:
                     f.write(json.dumps(s) + "\n")
             sc = res["score"]
-            log(f"score: S = {sc['S']:.4f} (P_total {sc['P_total_s']:.4f} s, the median of the pass totals "
-                f"{[round(x, 4) for x in sc['pass_totals_s']]} s, pass {sc['median_pass']}; size factor "
-                f"{sc['size_factor']:.4f} at |π_M| = {sc['final_pi_bytes']} B)"
-                + (f", S_every = {sc['S_every']:.4f} (size factor {sc['size_factor_every']:.4f} at max |π_i| = "
-                   f"{sc['max_pi_bytes']} B)" if "S_every" in sc else "")
+            log(f"score: S = {sc['S']:.1f} s·B (P_total {sc['P_total_s']:.4f} s, the median of the pass totals "
+                f"{[round(x, 4) for x in sc['pass_totals_s']]} s, pass {sc['median_pass']}; times |π_M| = "
+                f"{sc['final_pi_bytes']} B)"
+                + (f", S_every = {sc['S_every']:.1f} s·B (times max |π_i| = {sc['max_pi_bytes']} B)"
+                   if "S_every" in sc else "")
                 + f", tracks {sorted(sc['tracks'])}"
                 + (f"; not in `every`: {sc['tracks_reason']['every'][:300]}" if "tracks_reason" in sc else ""))
             if not cal["c_P_ok"]:

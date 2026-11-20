@@ -38,7 +38,7 @@ ERROR and the result not comparable, so a job lost to its time limit or to a run
 yields an ACCEPT. The benchmark is **one job**: the calibration and the one stream (with
 its interleaved samples and its timed passes; `split` is kept as a name for callers and is the same
 one job). The score (AGENTS.md §7: `P_total` the median of the timed passes' totals, `S = P_total ·
-2^(|π_M| / size_ref)` for `final`, `S_every = P_total · 2^(max_i |π_i| / size_ref)` for `every`) and
+|π_M|` for `final`, `S_every = P_total · max_i |π_i|` for `every`, seconds · bytes) and
 the tracks the run is in (`final`, and `every` when its conditions hold) are recomputed here from the
 stream's per-step records with `rfh.bench.score`, the definition the runner used, before the verdict
 and comparability are set, after `rfh.bench.check_record` checked the record's shape; whatever score a

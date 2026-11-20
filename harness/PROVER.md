@@ -280,24 +280,25 @@ recorded as `stream.clock`; the season file's value binds, and a later season ma
 reaching it is the entry's REJECT. Before each timed pass the runner waits an untimed random delay
 (uniform in `[0, 2)` s).
 
-**The score** (AGENTS.md §7; one score per track; lower is better, seconds):
+**The score** (AGENTS.md §7; one score per track; lower is better, seconds · bytes):
 
 ```
 T_t      = Σ_i P_{i,t}                          the total of timed pass t (t = 1, 2, 3)
 P_total  = T_{t*}                               t* the pass whose total is the median
                                                 (ties: the lowest such index)
-S        = P_total · 2^(|π_M| / 512 KiB)        the track `final`
-S_every  = P_total · 2^(max_i |π_i| / 512 KiB)  the track `every`
+S        = P_total · |π_M|                      the track `final`
+S_every  = P_total · max_i |π_i|                the track `every`
 ```
 
-`P_{i,t}` step `i`'s time in timed pass `t`, `|π_M|` the bytes of the final output's `π` alone,
-`max_i |π_i|` the largest output's. `V` is not scored (it is capped), nor the service run's times;
-in `final` the size of an intermediate output is capped, not priced. Only the pass totals count:
-moving work between steps changes nothing (a step's data cannot be carried forward, so its hashing
-stays in its step). The per-step records (`WORK/stream.jsonl`, and `stream.steps` in the result)
-give the service run's time, the three timed times in pass order (`P_timed_s`), the median pass's
-time (`P_s`), `|π|`, `V` (its three times, `V_runs_ns`, and their median) and each step's share of
-`P_total`.
+`P_{i,t}` step `i`'s time in timed pass `t` (seconds), `|π_M|` the bytes of the final output's `π`
+alone, `max_i |π_i|` the largest output's (bytes). A product: a proof 1 % smaller is worth a prover
+1 % faster, and halving the proof halves the score. `V` is not scored (it is capped), nor the
+service run's times; in `final` the size of an intermediate output is capped, not priced. Only the
+pass totals count: moving work between steps changes nothing (a step's data cannot be carried
+forward, so its hashing stays in its step). The per-step records (`WORK/stream.jsonl`, and
+`stream.steps` in the result) give the service run's time, the three timed times in pass order
+(`P_timed_s`), the median pass's time (`P_s`), `|π|`, `V` (its three times, `V_runs_ns`, and their
+median) and each step's share of `P_total`.
 
 ## 4. The oracle
 

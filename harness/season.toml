@@ -6,13 +6,11 @@
 # so is a benchmark that reaches stream_s (a slow or hung check included).
 name = "season-1"
 
-[score]           # AGENTS.md §7: seconds, lower is better, each track pricing its own proofs:
-                  # P_total = the median of the timed_runs pass totals T_t = Σ_i P_{i,t};
-                  # S = P_total · 2^(|π_M| / size_ref) (`final`),
-                  # S_every = P_total · 2^(max_i |π_i| / size_ref) (`every`)
-size_ref = 524288 # 512 KiB: `final` multiplies P_total by 2^(|π_M| / size_ref), `every` by
-                  # 2^(max_i |π_i| / size_ref) (×1.41 at 256 KiB, ×2 at final_pi_cap; up to ×4 in
-                  # `every`, whose intermediate proofs may reach pi_cap); no verifier time is scored
+[score]           # AGENTS.md §7: seconds · bytes, lower is better, each track pricing its own
+                  # proofs: P_total = the median of the timed_runs pass totals T_t = Σ_i P_{i,t};
+                  # S = P_total · |π_M| (`final`), S_every = P_total · max_i |π_i| (`every`), |π| in
+                  # bytes. No parameter: the score has no size scale (the size caps are in [caps]);
+                  # no verifier time is scored
 
 [certificate]     # the certificate job's Lean steps, on the evaluation VM; a breach is the
                   # entry's REJECT, except the kernel's, which leaves the certificate unchecked

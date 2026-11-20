@@ -1,9 +1,8 @@
 # recursion.fast: the CI smoke shape (a short stream of 4 steps, one leaf of 6 blocks each). Same
-# keys as season.toml: the season's size caps and size_ref, its own verifier and time caps.
+# keys as season.toml: the season's size caps and score, its own verifier and time caps.
 name = "smoke"
 
-[score]
-size_ref = 524288 # as the season's
+[score]           # as the season's: S = P_total · |π_M|, S_every = P_total · max_i |π_i| (no parameter)
 
 [certificate]     # the certificate job's Lean steps, as in the season but build_s (the season's 1200)
 build_s = 600

@@ -32,12 +32,13 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
   VM has 4 cores / 8 threads at a fixed 3.65 GHz, 16 GB, x86-64-v4 with AVX-512; the machine may
   change between seasons, so keep a portable fallback), one throwaway VM per job: 16 steps, each
   proving the Merkle root of 8 MiB of fresh secret data (`2^18` blocks, about `2^19` Keccak
-  permutations) and folding it into the previous step's proof. The prover has 8 GiB. Every output
-  is at most 1 MiB, the final proof at most 512 KiB, and every checked proof's verifier at most
-  64 ms (the median of three fresh runs). The score is `P_total`, the median of the three timed
-  passes' total wall times, times a size factor: `S = P_total · 2^(|π_final| / 512 KiB)` in the
-  track `final`, `S_every = P_total · 2^(max_i |π_i| / 512 KiB)` in the track `every`; lower is
-  better. Results are signed with GitHub artifact attestations.
+  permutations) and folding it into the previous step's proof. The prover has 8 GiB. Every output is
+  at most 1 MiB, the final proof at most 512 KiB, and every checked proof's verifier at most 64 ms
+  (the median of three fresh runs). The score is `P_total`, the median of the three timed passes'
+  total wall times, times a proof size in bytes: `S = P_total · |π_final|` in the track `final`,
+  `S_every = P_total · max_i |π_i|` in the track `every` (seconds · bytes, no exponent or scale: a
+  proof 1 % smaller is worth a prover 1 % faster); lower is better. Results are signed with GitHub
+  artifact attestations.
 - **Records**, one per track: `every` (every proof of the stream must be accepted) and `final`
   (only the last). A new record in a track must be accepted, comparable (on the season's machine),
   attested, run at the current rules commit, and beat that track's standing record by more than the

@@ -15,16 +15,17 @@ synthetic steps.
    past it stays a failed check (`check`), its message naming the cap.
 2. The score (AGENTS.md §7), pinned by hand-computed vectors: `T_t = Σ_i P_{i,t}` per timed pass,
    `P_total = T_{t*}` the median of the three (ties: the lowest index), `P_i = P_{i,t*}`;
-   `S = P_total · 2^(|π_M| / size_ref)` and, when eligible for `every`, `S_every = P_total ·
-   2^(max_i |π_i| / size_ref)` (`size_ref` = 512 KiB: 256 KiB gives exactly √2); deferring work to the
+   `S = P_total · |π_M|` and, when eligible for `every`, `S_every = P_total · max_i |π_i|` (seconds ·
+   bytes, no size scale: halving the proof halves S, a proof 1 % smaller is worth a prover 1 %
+   faster; no `size_ref`, `size_exponent` or `size_unit` in the score); deferring work to the
    last step changes nothing; `c_P` is a health check, never a factor (AGENTS.md §6); `V` is not
    scored; the tracks: `final` always, `every` only when every output is accepted within the caps and
    the canaries of outputs 1 and 2 are rejected, else `tracks_reason` says why; a step without
    exactly three timed times is `MalformedStream`.
 3. The season's constants (AGENTS.md §6, the v6 rules): `M = 16` steps of one leaf of `n = 2^18`
    blocks of 32 bytes, 3 timed passes, `step_s` 20 s, `stream_s` 2,000 s, the caps 1 MiB, 512 KiB and
-   64 ms, `size_ref` 512 KiB, the prover's 8 GiB; the smoke's one exception (its `v_cap_ms` 128, its
-   size caps and `size_ref` the season's); `Params.load` refuses a malformed shape (`n` above
+   64 ms, no `size_ref`, the prover's 8 GiB; the smoke's one exception (its `v_cap_ms` 128, its
+   size caps the season's); `Params.load` refuses a malformed shape (`n` above
    `leafCap = 2^20` among them, `n = 2^20` accepted, an even `timed_runs`); the seeds are fresh OS CSPRNG draws,
    with no seeded generator, expanded by SHAKE-256 under the published domain; the runner's leaf statements through
    `rf-oracle --data-roots` equal the pure-Python reference; the local season copy keeps every parameter but the two
@@ -158,25 +159,35 @@ def main():
         for s in steps[:2]:
             s.setdefault("canaries_accepted", [])
         return {"steps": steps, "calibration": dict(cal, c_P=c_P)}
-    # vector 1: two steps at 1 s and 2 s, |π_M| = 256 KiB: P_total = 3 s, the size factor 2^(1/2) =
-    # 1.4142135623730951, S = 4.242640687119285
+    # vector 1: two steps at 1 s and 2 s, |π_M| = 256 KiB = 262,144 B: P_total = 3 s, the size factor
+    # |π_M| = 262,144 B, S = 786,432 s·B
     sc = score(p, stream([mk(1, 1.0, pi=1 << 30), mk(2, 2.0, pi=256 << 10)]))
-    check(sc["P_total_s"] == 3.0 and sc["size_factor"] == 2 ** 0.5 and p.size_ref == 524288
-          and abs(sc["S"] - 4.242640687119285) < 1e-14 and sc["final_pi_bytes"] == 256 << 10
-          and "P_bar" not in sc and "n_ref" not in sc,
-          f"vector 1: S = P_total · 2^(|π_M| / 512 KiB), |π_M| = 256 KiB gives exactly √2, the final |π| only (output "
-          f"1's 1 GiB ignored): {sc['S']!r}")
+    check(sc["P_total_s"] == 3.0 and sc["size_factor"] == 262144 and not hasattr(p, "size_ref")
+          and sc["S"] == 786432.0 and sc["final_pi_bytes"] == 256 << 10
+          and not any(k in sc for k in ("size_ref", "size_exponent", "size_unit", "P_bar", "n_ref")),
+          f"vector 1: S = P_total · |π_M| in s·B, 3 s · 262,144 B = 786,432, the final |π| only (output 1's 1 GiB "
+          f"ignored), no size_ref, size_exponent or size_unit: {sc['S']!r}")
+    # the product's trade-off: halving |π_M| halves S; |π_M| 1 % smaller equals P_total 1 % smaller
+    half = score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=128 << 10)]))["S"]
+    small = score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=259522)]))["S"]      # 262,144 · 0.99 = 259,522.56
+    fast = score(p, stream([mk(1, 0.99), mk(2, 1.98, pi=256 << 10)]))["S"]
+    check(half == 786432.0 / 2 and abs(small / 786432.0 - 0.99) < 1e-5 and abs(fast / 786432.0 - 0.99) < 1e-12,
+          f"halving |π_M| halves S ({half!r}); a proof 1 % smaller and a prover 1 % faster score alike "
+          f"({small / 786432.0:.6f}, {fast / 786432.0:.6f} of S)")
     sc_f = score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10, file_bytes=(256 << 10) + 4840)]))
     check(sc_f["final_file_bytes"] == (256 << 10) + 4840 and sc_f["S"] == score(p, stream([mk(1, 1.0), mk(2, 2.0, pi=256 << 10)]))["S"],
           "the final output's whole file size is published beside |π_M| (final_file_bytes), never scored")
     check(sc["tracks"] == {"final": "S"} and "output 1: |π| = 1073741824 bytes above pi_cap" in sc["tracks_reason"]["every"],
           f"an intermediate |π| above pi_cap (recorded): `final` only: {sc['tracks_reason']}")
-    # vector 2: the season's shape, P_i = i s (i = 1 … 16), |π_i| = 256 KiB: P_total = 136 s, S = S_every = 136 √2
+    # vector 2: the season's shape, P_i = i s (i = 1 … 16), |π_i| = 256 KiB: P_total = 136 s,
+    # S = S_every = 136 · 262,144 = 35,651,584 s·B
     st = stream([mk(i, float(i), pi=256 << 10) for i in range(1, 17)])
     sc = score(p, st)
-    check(sc["P_total_s"] == 136.0 and abs(sc["S"] - 136 * 2 ** 0.5) < 1e-12 and sc["S_every"] == sc["S"]
+    check(sc["P_total_s"] == 136.0 and sc["S"] == 35651584.0 and sc["S_every"] == sc["S"]
+          and sc["size_factor_every"] == 262144
           and sc["tracks"] == {"final": "S", "every": "S_every"} and "tracks_reason" not in sc and sc["M"] == 16,
-          f"vector 2 (M = 16): P_total = Σ P_i = 136 s, S = S_every = 136 √2, both tracks: {sc['S']!r}")
+          f"vector 2 (M = 16): P_total = Σ P_i = 136 s, S = S_every = 136 s · 262,144 B = 35,651,584, both tracks: "
+          f"{sc['S']!r}")
     check(sc["P_total_service_run_s"] == 272.0 and abs(sum(s["share_P"] for s in st["steps"]) - 1) < 1e-12
           and st["steps"][15]["share_P"] == 16 / 136,
           "the service run's total and each step's share of P_total are published")
@@ -185,7 +196,7 @@ def main():
     sc = score(p, st)
     check(sc["pass_totals_s"] == [5.0, 3.0, 4.0] and sc["median_pass"] == 3 and sc["P_total_s"] == 4.0
           and [s["P_s"] for s in st["steps"]] == [1.5, 2.5] and [s["share_P"] for s in st["steps"]] == [1.5 / 4, 2.5 / 4]
-          and sc["S"] == 4.0 * 2 ** 0.5,
+          and sc["S"] == 4.0 * 262144,
           f"P_total is the median of the pass totals {sc['pass_totals_s']} (pass {sc['median_pass']}), not the sum of "
           f"each step's least time (2.5 s); P_i and share_P from that pass: {[s['P_s'] for s in st['steps']]}")
     for totals, want in (([4.0, 3.0, 4.0], 1), ([3.0, 4.0, 4.0], 2), ([4.0, 4.0, 3.0], 1), ([5.0, 4.0, 4.0], 2),
@@ -195,10 +206,11 @@ def main():
         check(sc["median_pass"] == want and sc["P_total_s"] == sorted(totals)[1],
               f"ties: pass totals {totals}: the median {sorted(totals)[1]} s, the lowest index among the passes with it: "
               f"pass {sc['median_pass']}")
-    # S_every prices the largest proof: |π| 384, 128, 256 KiB (final): S = 3 · 2^(1/2), S_every = 3 · 2^(3/4)
+    # S_every prices the largest proof: |π| 384, 128, 256 KiB (final): S = 3 s · 262,144 B = 786,432,
+    # S_every = 3 s · 393,216 B = 1,179,648
     sc = score(p, stream([mk(1, 1.0, pi=384 << 10), mk(2, 1.0, pi=128 << 10), mk(3, 1.0, pi=256 << 10)]))
-    check(sc["S"] == 3.0 * 2 ** 0.5 and sc["S_every"] == 3.0 * 2 ** 0.75 and sc["max_pi_bytes"] == 384 << 10
-          and sc["size_factor_every"] == 2 ** 0.75 and sc["final_pi_bytes"] == 256 << 10,
+    check(sc["S"] == 786432.0 and sc["S_every"] == 1179648.0 and sc["max_pi_bytes"] == 384 << 10
+          and sc["size_factor_every"] == 384 << 10 and sc["size_factor"] == 256 << 10 and sc["final_pi_bytes"] == 256 << 10,
           f"S prices |π_M| (256 KiB), S_every the largest |π_i| (384 KiB): {sc['S']!r}, {sc['S_every']!r}")
     sc = score(p, stream([mk(1, 1.0, pi=384 << 10, accepted=False), mk(2, 1.0, pi=128 << 10)]))
     check(sc["tracks"] == {"final": "S"} and not any(k in sc for k in ("S_every", "size_factor_every", "max_pi_bytes")),
@@ -216,7 +228,7 @@ def main():
     late = score(p, stream([mk(i, 0.0 if i < 16 else 16.0) for i in range(1, 17)]))["S"]
     check(even == late, f"deferring all work to the last step changes nothing: {even} = {late}")
     st2 = [mk(i, float(i), pi=256 << 10) for i in range(1, 17)]
-    check(abs(score(p, stream(st2, c_P=2.0))["S"] - 136 * 2 ** 0.5) < 1e-12, "c_P does not scale the score")
+    check(score(p, stream(st2, c_P=2.0))["S"] == 35651584.0, "c_P does not scale the score")
     slow_v = stream([mk(1, 1.0), mk(2, 1.0, V_ns=10 ** 12), mk(3, 1.0)])
     check(score(p, slow_v)["S"] == score(p, stream([mk(1, 1.0), mk(2, 1.0), mk(3, 1.0)]))["S"]
           and "output 2: V = 1000000.0 ms above v_cap = 64 ms" in score(p, slow_v)["tracks_reason"]["every"],
@@ -256,15 +268,15 @@ def main():
     check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s, p.ready_s) == (16, 1 << 18, 3, 20, 2000, 10)
           and not hasattr(p, "chains")
           and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 64.0)
-          and (p.size_ref, p.mem_prover) == (524288, "8G") and (p.check_every, p.calib_every) == (8, 8)
+          and not hasattr(p, "size_ref") and p.mem_prover == "8G" and (p.check_every, p.calib_every) == (8, 8)
           and p.badge_start_s == 2 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
           f"season 1: M = 16 steps of one leaf of 2^18 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
-          f"/ 512 KiB / 64 ms, size_ref 512 KiB, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
+          f"/ 512 KiB / 64 ms, no size_ref, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
-    check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap, sp.size_ref)
-          == (p.pi_cap, p.final_pi_cap, p.file_cap, p.size_ref)
+    check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap)
+          == (p.pi_cap, p.final_pi_cap, p.file_cap)
           and sp.v_cap_ms == 128.0 and p.v_cap_ms == 64.0 and (sp.step_s, sp.stream_s) == (60, 300),
-          f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps and size_ref; the one documented exception, "
+          f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps; the one documented exception, "
           f"its v_cap {sp.v_cap_ms:g} ms (the season's {p.v_cap_ms:g}); its own time caps")
     season_text = open(os.path.join(ROOT, "harness", "season.toml")).read()
     for what, pat, new, want in (("n above leafCap", r"(?m)^n = 262144", "n = 1048577", "leafCap = 2^20"),

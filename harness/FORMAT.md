@@ -45,11 +45,11 @@ The file ends exactly after `path_15`. Its size is
   nothing in this format changes.
 - **Size caps of the runner** (`[caps]` of `harness/season.toml`): a file above `file_cap` (64 MiB)
   is not read; every output's `|π|` is at most `pi_cap` (1 MiB; the file size of an output that is
-  not one signed proof), and the final output's at most `final_pi_cap` (512 KiB). The score
-  prices `|π|` per track: the track `final` the final output's (`2^(|π_M| / 512 KiB)`), the track
-  `every` the largest output's (`2^(max_i |π_i| / 512 KiB)`). These are the runner's bounds, not
-  `acc`'s; an entry's own verifier bounds the children it accepts. The trace is bounded by
-  `qV ≤ 2^16` queries of at most `2^20` bytes each. The extractor's efficiency is claimed for
+  not one signed proof), and the final output's at most `final_pi_cap` (512 KiB). The score prices
+  `|π|` per track, in bytes and as a plain factor: the track `final` the final output's (`P_total ·
+  |π_M|`), the track `every` the largest output's (`P_total · max_i |π_i|`). These are the runner's
+  bounds, not `acc`'s; an entry's own verifier bounds the children it accepts. The trace is bounded
+  by `qV ≤ 2^16` queries of at most `2^20` bytes each. The extractor's efficiency is claimed for
   proofs of up to `8 · outCap` bytes (128 MiB, `Contract/Extractor.lean`), twice the file cap.
 
 ## The file and the extractor's word format

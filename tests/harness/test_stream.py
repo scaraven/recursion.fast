@@ -15,7 +15,7 @@
 2. The service run, then `timed_runs` = 3 timed passes, each after a `replay`; the timed passes'
    `prev.bin` is the service run's output; `P_total` is the median of the three pass totals and `P_i`
    the step's time in that pass (not the least of its times), the service run's time is recorded, not
-   scored; `S = P_total · 2^(|π_M| / size_ref)`, `S_every = P_total · 2^(max_i |π_i| / size_ref)`.
+   scored; `S = P_total · |π_M|`, `S_every = P_total · max_i |π_i|` (seconds · bytes).
 3. A timed output that differs from the service run's is the entry's REJECT, naming the pass, the step
    and the first differing byte offset.
 4. The verifier check: every checked proof is judged in three separate badge runs of its own, each
@@ -292,11 +292,13 @@ def main():
           and [round(x, 12) for x in sc["pass_totals_s"]] == [0.074, 0.083, 0.08],
           f"P_total is the median pass total (pass 3 of {[round(x, 3) for x in sc['pass_totals_s']]}), P_i the step's time in "
           f"that pass, not its least; the service run's times are recorded: {[s['P_s'] for s in st]}")
-    check(abs(sc["P_total_s"] - Ptot) < 1e-12 and sc["final_pi_bytes"] == 100 and p.size_ref == 1 << 19
-          and abs(sc["S"] - Ptot * 2 ** (100 / 2 ** 19)) < 1e-12 and "P_bar" not in sc and "n_ref" not in sc
-          and abs(sc["S_every"] - Ptot * 2 ** (100 / 2 ** 19)) < 1e-12 and sc["max_pi_bytes"] == 100
+    check(abs(sc["P_total_s"] - Ptot) < 1e-12 and sc["final_pi_bytes"] == 100 and not hasattr(p, "size_ref")
+          and abs(sc["S"] - Ptot * 100) < 1e-10 and "P_bar" not in sc and "n_ref" not in sc
+          and abs(sc["S_every"] - Ptot * 100) < 1e-10 and sc["max_pi_bytes"] == 100
+          and sc["size_factor"] == sc["size_factor_every"] == 100
+          and not any(k in sc for k in ("size_ref", "size_exponent", "size_unit"))
           and sc["tracks"] == {"final": "S", "every": "S_every"} and "tracks_reason" not in sc,
-          f"S = P_total · 2^(|π_M| / size_ref), S_every = P_total · 2^(max |π_i| / size_ref): {sc['S']:.6g}, "
+          f"S = P_total · |π_M|, S_every = P_total · max |π_i| (s·B, every |π| 100 B): {sc['S']:.6g}, "
           f"{sc['S_every']:.6g}, {sc['tracks']}")
     check([x["before"] for x in b.samples] == ["service run, step 1", "timed pass 1", "timed pass 2", "timed pass 3",
                                                "closing"],

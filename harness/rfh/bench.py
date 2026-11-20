@@ -60,7 +60,6 @@ def printable(text, limit=1200):
 @dataclass
 class Params:
     name: str
-    size_ref: int
     M: int
     n: int
     ready_s: float
@@ -99,7 +98,7 @@ class Params:
         g = lambda sec, k: t[sec][k]  # noqa: E731 (a KeyError names the missing parameter)
         s = t["stream"]
         p = Params(
-            name=t["name"], size_ref=g("score", "size_ref"),
+            name=t["name"],
             M=s.get("M"), n=s.get("n"), ready_s=g("stream", "ready_s"),
             step_s=g("stream", "step_s"), stream_s=g("stream", "stream_s"), check_every=g("stream", "check_every"),
             timed_runs=g("stream", "timed_runs"),
@@ -1057,13 +1056,15 @@ def median_pass(totals):
 
 
 def score(p: Params, stream):
-    """The score (AGENTS.md §7; seconds, lower is better), from the per-step records alone:
+    """The score (AGENTS.md §7; seconds · bytes, lower is better), from the per-step records alone:
 
         T_t      = Σ_i P_{i,t}                         the total of timed pass t (t = 1 … timed_runs)
         t*       = the pass whose total is the median of the T_t (ties: the lowest such index)
         P_total  = T_{t*},   P_i = P_{i,t*}            (so Σ_i P_i = P_total)
-        S        = P_total · 2^(|π_M| / size_ref)                  the track `final`
-        S_every  = P_total · 2^(max_i |π_i| / size_ref)            the track `every`, when eligible
+        S        = P_total · |π_M|                                 the track `final`
+        S_every  = P_total · max_i |π_i|                           the track `every`, when eligible
+
+    in seconds · bytes (`|π|` in bytes; `size_factor` = |π_M|, `size_factor_every` = max_i |π_i|).
 
     `tracks` names the score field of each track the run is in: always `final` (a run that fails a
     `final` condition is REJECTed), `every` too when `every_reasons` is empty, else
@@ -1078,9 +1079,8 @@ def score(p: Params, stream):
     t_star = median_pass(totals)
     P = totals[t_star - 1]
     pi_M = steps[-1]["pi_bytes"]
-    f = 2 ** (pi_M / p.size_ref)
     why = every_reasons(p, stream)
-    out = {"S": P * f, "P_total_s": P, "size_factor": f, "final_pi_bytes": pi_M,
+    out = {"S": P * pi_M, "P_total_s": P, "size_factor": pi_M, "final_pi_bytes": pi_M,
            "final_file_bytes": steps[-1].get("file_bytes"),       # published beside |π_M|, never scored
            "pass_totals_s": totals, "median_pass": t_star,
            "tracks": {"final": "S", **({} if why else {"every": "S_every"})}}
@@ -1088,9 +1088,8 @@ def score(p: Params, stream):
         out["tracks_reason"] = {"every": "; ".join(why)[:2000]}
     else:
         pi_max = max(s["pi_bytes"] for s in steps)
-        f_every = 2 ** (pi_max / p.size_ref)
-        out.update(S_every=P * f_every, size_factor_every=f_every, max_pi_bytes=pi_max)
-    out.update(size_ref=p.size_ref, M=len(steps), sum_n=sum(s["n"] for s in steps),
+        out.update(S_every=P * pi_max, size_factor_every=pi_max, max_pi_bytes=pi_max)
+    out.update(M=len(steps), sum_n=sum(s["n"] for s in steps),
                c_P=cal.get("c_P"), c_P_provisional=bool(cal.get("c_P_provisional")))
     if all(isinstance(s.get("P_service_s"), (int, float)) for s in steps):
         out["P_total_service_run_s"] = sum(s["P_service_s"] for s in steps)      # published, never scored

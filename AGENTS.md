@@ -20,8 +20,8 @@ digest to two accepted children. The benchmark is a stream of 16 steps, each one
 step proves a Merkle root over `2^18` blocks (about `2^19` permutations) and folds it into the
 running proof. It is ranked in two tracks with their own records: `every`, where every proof of
 the stream must be accepted, and `final`, where only the last one must. The score is the median of
-three timed passes' total wall times, with a factor for the final proof's size in `final` and for
-the largest proof's in `every` (§7). The verifier is capped, not scored. Soundness is not
+three timed passes' total wall times times a proof size in bytes: the final proof's in `final`, the
+largest proof's in `every` (§7). The verifier is capped, not scored. Soundness is not
 measured: it is a kernel-checked theorem, knowledge soundness in the random-oracle model, and the
 oracle is deployed as a secret-keyed service that signs the answers each proof used (the signed
 random oracle, §5). The service is not on the clock: the stream runs once against it, and the
@@ -408,20 +408,21 @@ comes from a run in which the prover never had the key.
 
 ## 7. The score
 
-One score per track, in seconds; lower is better. Each track prices its own proofs' size.
+One score per track, in seconds · bytes; lower is better. Each track prices its own proofs' size,
+as a plain product: no exponent, no size scale.
 
 ```
 T_t      = Σ_{i=1..M} P_{i,t}                              the total of timed pass t (t = 1, 2, 3)
 t*       = the pass whose total is the median of T_1, T_2, T_3 (ties: the lowest such index)
 P_total  = T_{t*}
-S        = P_total · 2^( |π_M| / 512 KiB )                 the track `final`
-S_every  = P_total · 2^( max_i |π_i| / 512 KiB )           the track `every`
+S        = P_total · |π_M|                                 the track `final`
+S_every  = P_total · max_i |π_i|                           the track `every`
 ```
 
-`P_{i,t}` step `i`'s wall time in timed pass `t` (§6), `|π_M|` the bytes of the final output's `π`
-alone (not the trace or signature), `max_i |π_i|` the largest output's `π` (every output of an
-entry in `every` is accepted, so each is its `π`). A step's `P_i` is its time in pass `t*`, so
-`Σ_i P_i = P_total`.
+`P_{i,t}` step `i`'s wall time in timed pass `t` (§6) in seconds, `|π_M|` the bytes of the final
+output's `π` alone (not the trace or signature), `max_i |π_i|` the bytes of the largest output's `π`
+(every output of an entry in `every` is accepted, so each is its `π`). A step's `P_i` is its time in
+pass `t*`, so `Σ_i P_i = P_total`.
 
 - **Wall time, nothing else.** How the work is spread over the steps is the entry's choice, within
   `step_s` (which applies to the service run too, where every oracle answer is a round trip) and
@@ -429,9 +430,20 @@ entry in `every` is accepted, so each is its `π`). A step's `P_i` is its time i
   cannot be carried to a later step, and its hashing is proved in the step that receives it.
   Recursion can: in `final`, where intermediate outputs need not be proofs, an entry may defer
   it, and a final compression wrap of the last proof pays there.
-- **The size factor** is ×1.41 at 256 KiB and ×2 at `final_pi_cap` (512 KiB); in `every` an
-  intermediate proof may reach `pi_cap` (1 MiB), a factor of ×4. 1 KiB is about 0.135 % of the
-  score, and cutting prover time by 10 % is worth about 78 KiB.
+- **Size and time weigh alike.** The score is a product, so only ratios count: a proof 1 %
+  smaller is worth exactly a prover 1 % faster, halving the proof halves `S`, and a 10 % faster
+  prover is worth a proof 10 % smaller, whatever its size. The caps bound the factor:
+  `|π_M| ≤ final_pi_cap` (512 KiB) in both tracks, `max_i |π_i| ≤ pi_cap` (1 MiB) in `every`.
+- **A size cut alone can take a record.** A proof 2 % smaller (just over, as the rule is strict)
+  with nothing else changed beats the 2 % record margin (§8) by its size alone. Such size-only
+  records are deterministic: `|π|` is the same bytes in every run (the timed passes reproduce the
+  service run's), so the confirmation run (§8 item 6) measures the same cut and they always
+  confirm, `P_total`'s own run-to-run noise aside (estimated at 0.2–0.5 %, §8).
+- **The product prices size more steeply than leanVM's own trade-off** (the review of these
+  incentives): an entry gains by spending prover time on smaller proofs further than a deployment
+  that ships proofs would, so `every` favours compressing every step's proof and `final` a final
+  compression wrap of the last one. If that proves a problem, the documented fallback is a floor
+  on the priced size, such as `max(|π|, 128 KiB)`; it is not part of these rules.
 - **Why `every` prices its largest proof.** With only `|π_M|` priced, an entry would run steps
   1 … 15 with the fastest parameters and proofs up to 1 MiB and shrink only the last. In `every`,
   where every output is a checked proof, every proof's size counts; `final` keeps `|π_M|`, as a
@@ -444,11 +456,12 @@ entry in `every` is accepted, so each is its `π`). A step's `P_i` is its time i
 
 `score` in [`harness/rfh/bench.py`](harness/rfh/bench.py) computes it from the per-step records
 alone and [`harness/aggregate.py`](harness/aggregate.py) recomputes it with the same function; the
-result's `score` holds `S`, `P_total_s` (`T_{t*}`), `size_factor`, `final_pi_bytes`,
-`pass_totals_s` (the three `T_t`, in pass order), `median_pass` (`t*`) and, when the entry is in
-`every`, `S_every`, `size_factor_every` and `max_pi_bytes`; `tracks = {"final": "S", "every":
-"S_every"}` names each track's field (without `every` when the entry is scored in `final` only,
-with the reason in `tracks_reason`). Every result also publishes the per-step records
+result's `score` holds `S` (seconds · bytes), `P_total_s` (`T_{t*}`, seconds), `size_factor`
+(`|π_M|`, bytes), `final_pi_bytes`, `pass_totals_s` (the three `T_t`, in pass order), `median_pass`
+(`t*`) and, when the entry is in `every`, `S_every`, `size_factor_every` (`max_i |π_i|`, bytes) and
+`max_pi_bytes`; `tracks = {"final": "S", "every": "S_every"}` names each track's field (without
+`every` when the entry is scored in `final` only, with the reason in `tracks_reason`). There is no
+size scale, exponent or unit field. Every result also publishes the per-step records
 (`stream.jsonl`: the service run's time, the three timed times `P_timed_s` in pass order, `P_s` the
 time in pass `t*`, `share_P`, `|π_i|`, `V_i` where checked). A step record without exactly three
 timed times, or a passed record not of the season's shape (`rfh.bench.check_record`: steps 1 … M,
@@ -460,7 +473,7 @@ runner fault, an organiser ERROR named `malformed` (§8).
 | `M` | 16 | stream steps, the same for every entry |
 | `n` | `2^18` | blocks of 32 bytes per step (one leaf, 8 MiB) |
 | `timed_runs` | 3 | timed passes; `P_total` is the median of their totals |
-| size scale | 512 KiB | a proof of 512 KiB doubles its track's score |
+| size of `π` | bytes; at most `final_pi_cap` = 512 KiB (the final output), `pi_cap` = 1 MiB (any output) | the score's size factor, unscaled: `S` in seconds · bytes |
 | `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
 
 ## 8. Verdicts and records
@@ -523,11 +536,14 @@ a record.
   rules (ten runs at their smoke shape; mostly per-step process overhead). `P_total` is now the
   median of three 16-step pass totals. A model from the per-step spread measured on the machine
   (about 0.9 %) gives about 0.15 % for it; an estimate for the score, `c_P`'s drift included, is
-  0.2–0.5 % per evaluation. Neither is measured at this shape (§12). Two runs of one entry differ
-  by about √2·σ, so a near-copy of the record can beat it by noise. The margin is
-  the same in both tracks. A byte copy of an evaluated root is refused (the submissions
-  repository's copy rule), and a record's prover binary resubmitted is `accepted`, never a record
-  (item 5). The owner may change the margin between seasons, which changes this file.
+  0.2–0.5 % per evaluation. Neither is measured at this shape (§12). The size factor adds no noise:
+  `|π|` is deterministic, so all of the spread is `P_total`'s, and a proof more than 2 % smaller
+  than the record's, at the same speed, clears the margin by its size alone, the same in every run,
+  its confirmation included, `P_total`'s noise aside (§7). Two runs of one entry differ by about
+  √2·σ, so a near-copy of the record can beat it by noise. The margin is the same in both tracks. A
+  byte copy of an evaluated root is refused (the submissions repository's copy rule), and a record's
+  prover binary resubmitted is `accepted`, never a record (item 5). The owner may change the margin
+  between seasons, which changes this file.
 - The owner may retire a record of one track (a near-copy that beat it by noise, say) with the bot's
   `retire`; then no record stands in that track.
 
@@ -774,6 +790,10 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   little when one pass of three is discarded, and a REJECT costs only queue time.
 - **The `final` track allows a final compression wrap**: its intermediate proofs may be up to
   1 MiB, and only the last one is priced.
+- **The product favours small proofs over leanVM's own trade-off** (§7): an entry may spend prover
+  time on compression further than a deployment would, every step's in `every`, a final wrap in
+  `final`. A floor on the priced size (such as `max(|π|, 128 KiB)`) is the documented fallback, not
+  adopted.
 - **The scored size is `|π|` alone.** A signed file also carries the trace's answers and a
   4,768-byte signature, which a public-hash deployment would not ship; the result publishes the
   whole file size beside `|π|`.
@@ -825,10 +845,12 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   fixed order, PROVER.md §4). Each bit of the nonce leaked from the untimed service run into the
   timed pass halves the timed search, so it buys one free grinding bit at the same timed cost,
   which an entry can trade for fewer queries in its proof. The review's model of a WHIR-like final
-  proof (review R8 HIGH 1) gives about 1.1–2.8 KiB of `|π_16|` per grinding bit, so about 0.15–0.4 %
-  of `S` per leaked bit (10–12 bits: −1.5 … −4.5 %, inside the 2 % margin's reach only near its
-  top). The channels above carry together at most about 35–40 bits per stream (24, 11 and the
-  heap's few: −5 … −16 % of `S` if every bit reached a grinding search), for a writer that spends
+  proof (review R8 HIGH 1) gives about 1.1–2.8 KiB of `|π_16|` per grinding bit. `S` is
+  proportional to `|π_16|` (§7), so a leaked bit is worth about 0.4–1.3 % of `S` at a final proof
+  of 209–294 KiB (leanVM's published sizes), more for a smaller one (0.9–2.2 % at 128 KiB): two
+  bits can reach the 2 % margin. The channels above carry together at most about 35–40 bits per
+  stream (24, 11 and the heap's few: −13 … −54 % of `S` at those sizes if every bit reached a
+  grinding search), for a writer that spends
   nearly all of every untimed step and badge run on them, and less in practice (each bit costs the
   writer the stream's own time, and a grinding search gains only up to its own length); the owner
   accepts that residue for this season (first estimated at order 20 bits; review R4b corrected
@@ -870,10 +892,10 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   the runner's, so `acc` itself accepts larger proofs); per-signature digit vectors drawn per run;
   a public, unkeyed hash in place of the signed oracle, which is how leanVM deploys and would need a
   new contract.
-- **The score's constants** (the size scale of 512 KiB, the caps, `n`, `M`) are the owner's
-  choices for this season, set from the previous season's entries and leanVM's published proof
-  sizes (209–294 KiB), not from entries measured at this shape. `stream_s` binds only in the corner
-  where an entry uses nearly every cap at once (§9).
+- **The score's form and constants** (the product `P_total · |π|`, which has no size scale; the
+  caps, `n`, `M`) are the owner's choices for this season, set from the previous season's entries
+  and leanVM's published proof sizes (209–294 KiB), not from entries measured at this shape.
+  `stream_s` binds only in the corner where an entry uses nearly every cap at once (§9).
 - **Malformed and crafted inputs are not tested, and `acc` has no time bound.** The benchmark
   checks the entry's own outputs and the statement canaries only. Inputs assembled from published
   parts (for example a deep chain of nodes over public signed leaves) took an earlier entry's `acc`
@@ -924,6 +946,10 @@ From the first two certified entries (`spartan-srom`, `flock-recursive`) and the
 prover. Their timings were measured on GitHub-hosted runners with a different chain hash, so they
 are indicative only, except where a bullet says "on the machine".
 
+- **Size counts as much as time.** `S = P_total · |π|`: a proof 1 % smaller is worth a prover 1 %
+  faster, at any size (§7), and a 2 % cut alone clears the record margin. Weigh a final compression
+  wrap in `final`, or smaller per-step proofs in `every`, by the ratio of the bytes saved to the
+  time added, not by bytes.
 - **The verifier cap is per proof and includes parsing.** The first recursive entry's verifier
   took about 500 ms per check; the optimised lvm2-style entries about 40 ms. A recursive `V` that
   re-checks history grows with the stream and breaks the 64 ms cap.

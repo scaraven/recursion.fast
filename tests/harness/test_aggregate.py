@@ -52,7 +52,7 @@ M = SHAPE["M"]                            # the smoke's 4 steps
 
 
 def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP, c_P=1.0, fp_status=None,
-         shape=SHAPE, pi=(0, 0), accepted=(True, True)):
+         shape=SHAPE, pi=(100, 100), accepted=(True, True)):
     """A part of M steps of P s each; `pi` and `accepted` are output 1's and the final output's (the steps
     between: |π| = 0, accepted); every output judged in three runs of 1 ms."""
     pis, acc = [pi[0]] + [0] * (M - 2) + [pi[1]], [accepted[0]] + [True] * (M - 2) + [accepted[1]]
@@ -104,21 +104,23 @@ def main():
     r = run(tmp, full)
     check(r, "ACCEPT", "the planned part")
     sc = r.get("score", {})
-    one = float(M)               # P_total of M = 4 steps of 1 s
-    holds(abs(sc.get("S", 0) - one) < 1e-12 and sc.get("P_total_s") == one
-          and sc.get("tracks") == {"final": "S", "every": "S_every"} and sc.get("S_every") == one and sc.get("M") == M,
-          f"the score is recomputed from the steps (four steps of 1 s, |π_M| = 0: S = P_total = 4 s, not the "
-          f"part's 999), both tracks: {sc.get('S')}, {sc.get('tracks')}")
+    one = float(M) * 100         # P_total of M = 4 steps of 1 s, times |π_M| = 100 B
+    holds(sc.get("S") == one and sc.get("P_total_s") == float(M) and sc.get("size_factor") == 100
+          and sc.get("tracks") == {"final": "S", "every": "S_every"} and sc.get("S_every") == one and sc.get("M") == M
+          and not any(k in sc for k in ("size_ref", "size_exponent", "size_unit")),
+          f"the score is recomputed from the steps (four steps of 1 s, |π_M| = max |π_i| = 100 B: S = S_every = "
+          f"4 s · 100 B = 400 s·B, not the part's 999), both tracks, no size_ref: {sc.get('S')}, {sc.get('tracks')}")
     # the part's timed times tampered (its score field says 999): step 2 at 2, 4 and 3 s, steps 1, 3, 4 at 1 s,
-    # |π_1| = 384 KiB, |π_M| = 256 KiB: pass totals 5, 7, 6 s, P_total = 6 s (pass 3), S = 6 √2, S_every = 6 · 2^(3/4)
+    # |π_1| = 384 KiB, |π_M| = 256 KiB: pass totals 5, 7, 6 s, P_total = 6 s (pass 3), S = 6 · 262,144 =
+    # 1,572,864 s·B, S_every = 6 · 393,216 = 2,359,296 s·B
     vec = part("calibrate,stream", pi=(384 << 10, 256 << 10))
     vec["stream"]["steps"][1]["P_timed_s"] = [2.0, 4.0, 3.0]
     vec["stream"]["steps"][1]["P_s"] = 0.5            # a stale per-step field is ignored, recomputed
     sc = run(tmp, [vec]).get("score", {})
-    want, want_e = 6 * 2 ** 0.5, 6 * 2 ** 0.75
+    want, want_e = 1572864.0, 2359296.0
     holds(sc.get("S") == want and sc.get("S_every") == want_e and sc.get("final_pi_bytes") == 256 << 10
           and sc.get("max_pi_bytes") == 384 << 10 and sc.get("pass_totals_s") == [5.0, 7.0, 6.0] and sc.get("median_pass") == 3
-          and abs(sc.get("size_factor", 0) - 2 ** 0.5) < 1e-12,
+          and sc.get("size_factor") == 256 << 10 and sc.get("size_factor_every") == 384 << 10,
           f"the aggregation recomputes S and S_every exactly from the tampered times: S {sc.get('S')} = {want}, "
           f"S_every {sc.get('S_every')} = {want_e}")
     bad = part("calibrate,stream")
@@ -193,7 +195,7 @@ def main():
           "no duel, incumbent or CPU-model field")
     holds(r.get("runner") == {"name": "rf-bench-1", "environment": "self-hosted", "labels": ["rf-bench"]},
           f"the runner is recorded: {r.get('runner')}")
-    holds(abs(run(tmp, [part("calibrate,stream", c_P=1.7)])["score"]["S"] - one) < 1e-12,
+    holds(run(tmp, [part("calibrate,stream", c_P=1.7)])["score"]["S"] == one,
           "c_P does not scale the score: c_P = 1.7 gives the same S")
 
     # AGENTS.md §6: the season's machine fingerprint
