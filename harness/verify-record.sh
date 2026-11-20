@@ -27,8 +27,8 @@
 # 5. the stream's shape (`stream.shape`: `M`, `n`) is the season's `[stream]` shape, and the
 #    result's `season_sha256` is the sha256 of `season.toml` beside this script (run it from the
 #    core checked out at `harness_commit`): the evaluation read that season file, no other;
-# 6. it prints the measured entry (`entry`: `repo`, `sha`, `path`, `pr_ref`, which the attest job
-#    wrote from the evaluation's inputs); with `--entry-sha SHA` the result's `entry.sha` must be SHA
+# 6. it prints the measured entry (`entry`: `name`, `sha`, `tree`, `pr_ref`, which the attest job
+#    wrote from the evaluation); with `--entry-sha SHA` the result's `entry.sha` must be SHA
 #    (the bot passes the commit it asked to be evaluated).
 # The trust anchor is the organiser's server: GitHub attests the workflow, the commit and the
 # self-hosted environment (1-2), and a third party can check only those.
@@ -61,7 +61,7 @@ if envs != {"self-hosted"}:
     sys.exit(f"verify-record: attested on {sorted(map(str, envs))}, not the organiser's self-hosted runner")
 r = json.load(open(path))
 e = r.get("entry") if isinstance(r.get("entry"), dict) else {}
-measured = {k: e.get(k) for k in ("repo", "sha", "path", "pr_ref")}
+measured = {k: e.get(k) for k in ("name", "sha", "tree", "pr_ref")}
 if esha and e.get("sha") != esha:
     sys.exit(f"verify-record: the result measured the entry commit {e.get('sha')!r}, not {esha}")
 if only:

@@ -43,7 +43,7 @@ def main():
     good = {"harness_commit": commit, "season_sha256": hashlib.sha256(open(season, "rb").read()).hexdigest(),
             "verdict": "ACCEPT", "comparable": True, "stream": {"shape": shape},
             "runner": {"name": "rf-bench-1", "environment": "self-hosted", "labels": ["rf-bench"]},
-            "entry": {"repo": "o/subs", "sha": sha, "path": "submissions/x", "pr_ref": "refs/pull/7/head"}}
+            "entry": {"name": "o/subs:submissions/x", "sha": sha, "tree": "d" * 40, "pr_ref": "refs/pull/7/head"}}
 
     def vr(result, *flags):
         f = os.path.join(tmp, f"r{len(os.listdir(tmp))}.json")
@@ -53,7 +53,7 @@ def main():
         return p.returncode, (p.stdout + p.stderr).strip()
 
     code, out = vr(good)
-    check(code == 0 and sha in out and "o/subs" in out, f"a record result is accepted, its entry printed: {out[-200:]}")
+    check(code == 0 and sha in out and "d" * 40 in out and "o/subs:submissions/x" in out, f"a record result is accepted, its entry printed: {out[-200:]}")
     code, out = vr(dict(good, season_sha256="0" * 64))
     check(code != 0 and "season_sha256" in out, f"a result of another season file is refused: {out[-160:]}")
     code, out = vr(good, "--entry-sha", sha)

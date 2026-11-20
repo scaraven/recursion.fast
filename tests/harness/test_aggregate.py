@@ -338,10 +338,10 @@ def main():
     holds(len(log) <= 4000 and all(32 <= ord(ch) < 127 or ch == "\n" for ch in log) and "`" not in log,
           f"the prover build's log in the result is printable ASCII, no backtick, at most 4000 characters ({len(log)})")
     # the measured entry from the attest job's inputs (review R3 M2)
-    r = run(tmp, full, flags=("--entry-repo", "o/subs", "--entry-sha", "a" * 40, "--entry-path", "submissions/x",
+    r = run(tmp, full, flags=("--entry-name", "o/subs:submissions/x", "--entry-sha", "a" * 40, "--entry-tree", "b" * 40,
                               "--pr-ref", "refs/pull/7/head"))
-    holds(r.get("entry", {}).get("sha") == "a" * 40 and r["entry"].get("repo") == "o/subs"
-          and r["entry"].get("path") == "submissions/x" and r["entry"].get("pr_ref") == "refs/pull/7/head",
+    holds(r.get("entry", {}).get("sha") == "a" * 40 and r["entry"].get("name") == "o/subs:submissions/x"
+          and r["entry"].get("tree") == "b" * 40 and r["entry"].get("pr_ref") == "refs/pull/7/head",
           f"the result names the measured entry commit: {r.get('entry')}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0

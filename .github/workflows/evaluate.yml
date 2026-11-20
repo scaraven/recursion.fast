@@ -92,8 +92,9 @@
 # equal to the result's `harness_commit`), that the result records our runner (`runner`: name `rf-…`,
 # label `rf-bench`), the season file's hash, and the verdict ACCEPT and comparable. The attested JSON binds
 # the verdict to vk, the machine fingerprint's hash, the harness commit, the service binary's hash
-# and the measured entry (`entry`: the inputs `entry_repo`, `entry_sha`, `entry_path`, `pr_ref`,
-# written by the attest job; `verify-record.sh --entry-sha` checks the commit).
+# and the measured entry (`entry`: `sha` the input `entry_sha`, `tree` the git tree id of the root at
+# it as the certificate job fetched it, `name` = `entry_repo:entry_path`, `pr_ref`, written by the
+# attest job; `verify-record.sh --entry-sha` checks the commit).
 name: evaluate
 on:
   workflow_call:
@@ -287,6 +288,7 @@ jobs:
     outputs:
       status: ${{ steps.cert.outputs.status }}
       elan_missing: ${{ steps.elan.outputs.missing }}
+      entry_tree: ${{ steps.fetch.outputs.tree }}
     steps:
       - name: job start
         run: echo "JOB_T0=$(date +%s)" >> "$GITHUB_ENV"
@@ -317,6 +319,7 @@ jobs:
           core/harness/ci/build-kernels.sh --env-only "$RUNNER_TEMP/kernels" >> "$GITHUB_ENV"
           (cd core && timeout 300 lean --version)
       - name: fetch the entry by SHA (data only; never executed outside the sandbox)
+        id: fetch
         if: steps.org.outputs.cache-hit == 'true' && steps.kernels.outputs.cache-hit == 'true'
         env: { REPO: "${{ inputs.entry_repo }}", SHA: "${{ inputs.entry_sha }}", P: "${{ inputs.entry_path }}", REF: "${{ inputs.pr_ref }}" }
         run: core/harness/ci/fetch-entry.sh "$REPO" "$SHA" "$P" "$REF" entry
@@ -451,13 +454,14 @@ jobs:
                TOOLS: "${{ needs.setup-tools.result }}", CERT: "${{ needs.certificate.result }}",
                CORE_SHA: "${{ needs.plan.outputs.core_sha }}", ELAN_MISSING: "${{ needs.certificate.outputs.elan_missing }}",
                BENCH: "${{ needs.benchmark.result }}",
-               E_REPO: "${{ inputs.entry_repo }}", E_SHA: "${{ inputs.entry_sha }}", E_PATH: "${{ inputs.entry_path }}",
-               E_REF: "${{ inputs.pr_ref }}" }
+               E_NAME: "${{ inputs.entry_repo }}:${{ inputs.entry_path }}", E_SHA: "${{ inputs.entry_sha }}",
+               E_TREE: "${{ needs.certificate.outputs.entry_tree }}", E_REF: "${{ inputs.pr_ref }}" }
         run: |
           shopt -s nullglob
           job="$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT"
           # the measured entry, from this run's inputs, into the attested result (review R3 M2)
-          entry=(--entry-repo "$E_REPO" --entry-sha "$E_SHA" --entry-path "$E_PATH" --pr-ref "$E_REF")
+          entry=(--entry-name "$E_NAME" --entry-sha "$E_SHA" --pr-ref "$E_REF")
+          [[ -n "$E_TREE" ]] && entry+=(--entry-tree "$E_TREE")      # the certificate job's fetch (git tree id of the root)
           parts=(parts/result-*.json)
           # a benchmark that did not end (skipped, cancelled) contributes no part (L4)
           [[ "$BENCH" == success || "$BENCH" == failure ]] || parts=()

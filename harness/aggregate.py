@@ -62,9 +62,10 @@ stops the evaluation), and `--organiser-error` and `--plan` then write an ERROR 
 `lengths`, whatever kind the workflow passed, since a malformed shape is the cause of anything else
 that stopped the run.
 The result also records the runner the benchmark ran on (`runner`: name, environment, labels), which
-`verify-record.sh` checks (AGENTS.md §8), and the measured entry (`entry`: with `--entry-repo`,
-`--entry-sha`, `--entry-path`, `--pr-ref`, the evaluation's inputs, which the attest job passes, its
-`repo`, `sha`, `path` and `pr_ref` beside the parts' `name` and `prover_sources_sha256`). A part
+`verify-record.sh` checks (AGENTS.md §8), and the measured entry (`entry`: with `--entry-name`,
+`--entry-sha`, `--entry-tree`, `--pr-ref`, which the attest job passes, its `name`
+(`<repo>:submissions/<root>`), `sha` (the entry commit), `tree` (the root's git tree id at it) and
+`pr_ref`, beside the parts' `prover_sources_sha256`). A part
 counts as passed only with its runner's final record (`stage: done`): a checkpoint left by a runner
 that died (`benchmark: incomplete`), or any other value, is the runner's failure, an ERROR.
 
@@ -143,7 +144,7 @@ def main():
     ap.add_argument("--reason", default="")
     ap.add_argument("--harness-commit", default=None)
     ap.add_argument("--allow-test-overrides", action="store_true", help="tests only: see the module's doc")
-    for k in ("--entry-repo", "--entry-sha", "--entry-path", "--pr-ref"):     # the measured entry (`measured_entry`)
+    for k in ("--entry-name", "--entry-sha", "--entry-tree", "--pr-ref"):     # the measured entry (`measured_entry`)
         ap.add_argument(k, default=None)
     ap.add_argument("parts", nargs="*")
     a = ap.parse_args()
@@ -199,13 +200,15 @@ def main():
 
 
 def measured_entry(a, entry):
-    """The result's `entry`: the parts' (`name`, `prover_sources_sha256`) and, from the evaluation's
-    inputs as the attest job passes them, the measured commit `{repo, sha, path, pr_ref}`, so the
-    attested result names the entry commit it measured (review R3 M2; `verify-record.sh
+    """The result's `entry`: the parts' `prover_sources_sha256` and, from the evaluation as the
+    attest job passes it, the measured entry: `sha` (the entry commit), `tree` (the git tree id of
+    `submissions/<root>` at it, as the certificate job fetched it), `name` (`<repo>:<root path>`,
+    the parts' own name when they ran) and `pr_ref` (if any), so the attested result names what it
+    measured (review R3 M2; the submissions bot compares each field present, `verify-record.sh
     --entry-sha`)."""
     out = dict(entry) if isinstance(entry, dict) else {}
-    for k, v in (("repo", a.entry_repo), ("sha", a.entry_sha), ("path", a.entry_path), ("pr_ref", a.pr_ref)):
-        if v is not None:
+    for k, v in (("name", a.entry_name), ("sha", a.entry_sha), ("tree", a.entry_tree), ("pr_ref", a.pr_ref)):
+        if v:
             out[k] = v
     return out or None
 
