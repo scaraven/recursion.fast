@@ -53,11 +53,19 @@
   into the reduction's two outcomes; `compose_prob_stream_wots` and `compose_prob_wots` are
   `compose_prob_stream_signed` and `compose_prob_signed` with their EUF-CMA terms so split: the
   composition fails with probability at most the escape bound plus the probabilities of a
-  collision (the walk's, or the signature reduction's) and of a chain inversion. Through the walk,
+  collision (the walk's, or the signature reduction's) and of a chain inversion;
+  `compose_prob_stream_wots_runner` is the stream's against the runner's data
+  (`SignedOutcome.toRunner`). `Transcript.accounted`: the part of a transcript a log accounts for
+  is a transcript, so `accounted T L` meets both hypotheses. Through the walk,
   the inversion term is reached (`Controls/WotsReduce.lean`, `queryLeaf_inversion_prob`).
 
   On paper: the probability of an inversion, that an adversary outputs **the honest** chain value
-  at a position below every revealed one. That is hard only when the chain starts are random and
+  at a position below every revealed one. The assumption is **interactive** (adaptive): the
+  adversary chooses, through its `sign` requests, the messages signed and so the positions
+  revealed, before it outputs. It is not reduced here to a non-interactive one; the standard
+  WOTS+ and SPHINCS+ reductions (Hülsing 2013; Bernstein et al. 2019) reach it from one-wayness and
+  second-preimage resistance (SPHINCS+: SM-TCR, PRE and undetectability) of the tweakable chain
+  step by guessing the forged key and chain, with a loss in the number of targets. That is hard only when the chain starts are random and
   unknown to it (a forger with `sk` built in reaches it for every fixed `sk`, `wotsReduce_sign`):
   tweakable multi-target one-wayness of the chain step with pseudorandom starts (`chainStart`, the
   PRF under the signing seed), about `2^16 · 133` targets, each tweak `(j, i, s)` targeting one
@@ -310,7 +318,8 @@ message (a replay re-issues the same trace and signature, so an index may repeat
 what makes the inversion's `unrevealed` positions unrevealed: the transcript reveals of key `j`
 exactly the chain values its signatures carry (`Transcript.reveals`); the reduction itself reads
 only the record. `T` must be the service's **complete** transcript: an issued signature missing
-from `T` can be replayed by a forger and is then reported as an inversion. -/
+from `T` can be replayed by a forger and is then reported as an inversion. Completeness is not a
+field of `Transcript` (the empty list satisfies it): it is a premise on paper (AGENTS.md §12). -/
 structure Transcript (T : List (Trace × Sig)) : Prop where
   /-- Every signature is the reference signer's on its trace's digest. -/
   signed : ∀ x ∈ T, x.2 = sign sk x.2.idx (traceDigest x.1)
@@ -332,6 +341,13 @@ theorem Transcript.oneMsg_record {T : List (Trace × Sig)} (hS : Transcript sk T
   obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
   obtain ⟨y, hy, rfl⟩ := List.mem_map.mp hb
   exact hS.oneMsg x hx y hy hab
+
+/-- **`accounted` keeps a transcript**: the signed traces of a transcript that a log accounts for
+are a transcript, so `accounted T L` meets both `Honest` and `Transcript`. -/
+theorem Transcript.accounted {T : List (Trace × Sig)} (hS : Transcript sk T) (L : Log) :
+    Transcript sk (RecursionFast.accounted T L) :=
+  ⟨fun x hx => hS.signed x (List.mem_filter.mp hx).1,
+    fun x hx y hy => hS.oneMsg x (List.mem_filter.mp hx).1 y (List.mem_filter.mp hy).1⟩
 
 /-- **An EUF-CMA forgery against the service's signed traces, reduced**: under `pk sk`, against
 the service's transcript `T`, a `WotsBreak` against its record. -/
@@ -428,7 +444,8 @@ theorem compose_prob_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest
 
 /-- **The composition theorem over the stream, down to Keccak-256 and the chains**: under the
 reference signer's public key `pk sk`, against the service's transcripts `T p L` (its signatures
-the reference signer's, one message per index, complete), the probability that `acc` accepts the
+the reference signer's, one message per index; complete, on paper: `Transcript` does not say so),
+the probability that `acc` accepts the
 adversary's signed proof of the stream's digest and the stream walk returns no leaf data is at
 most `(2|hs| - 1) · (Q + qV) · ε` plus the probabilities that it returns a collision, that its
 EUF-CMA forgery reduces to a collision, and that it reduces to a chain inversion (`eufReduce`). -/
@@ -448,5 +465,48 @@ theorem compose_prob_stream_wots {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ →
         (walkStreamSigned L (T p L) (hT p L) n hn hs p hacc).IsWotsInversion (hS p L)) A [] :=
   (compose_prob_stream_signed hks n hn hs A hA hQ T hT).trans
     ((add_le_add le_rfl (SignedOutcome.prob_euf_le A _ _ hS)).trans (add_assoc _ _ _).symm.le)
+
+/-- **The composition over the stream against the runner's data, down to Keccak-256 and the
+chains**: under `pk sk`, against the service's transcripts `T p L`, the probability that `acc`
+accepts the adversary's signed proof of the stream over the roots of the runner's data `xss`
+(`n` blocks each) and the walk, made against the runner's data (`SignedOutcome.toRunner`), does
+not return the runner's data `xss` is at most `(2|xss| - 1) · (Q + qV) · ε` plus the
+probabilities that it returns a collision (the data collision included), that its EUF-CMA
+forgery reduces to a collision, and that it reduces to a chain inversion. -/
+theorem compose_prob_stream_wots_runner {ε : ℝ≥0} {qV : ℕ} (sk : ℕ → ℕ → Digest)
+    (hks : KS (Rel (S.acc (pk sk))) (S.V (pk sk)) S.E ε qV) (n : ℕ) (hn : n ≤ leafCap)
+    (xss : List (List Digest)) (hlen : ∀ xs ∈ xss, xs.length = n) (A : OProg Signed) {Q : ℕ}
+    (hA : ∀ H, (A.queries H).length ≤ Q) (hQ : Q + qV ≤ logCap)
+    (T : Signed → Log → List (Trace × Sig)) (hT : ∀ p L, Honest (T p L) L)
+    (hS : ∀ p L, Transcript sk (T p L)) :
+    prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n (xss.map dataRoot)) p = true,
+      ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).data? ≠ some xss)
+      A [] ≤
+      (2 * xss.length - 1 : ℕ) * ((Q + qV) * ε) +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n (xss.map dataRoot)) p = true,
+        ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).IsCollision) A [] +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n (xss.map dataRoot)) p = true,
+        ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).IsWotsCollision
+          (hS p L)) A [] +
+      prob (fun p L => ∃ hacc : S.acc (pk sk) (streamStmt n (xss.map dataRoot)) p = true,
+        ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).IsWotsInversion
+          (hS p L)) A [] := by
+  have hesc := (compose_prob_stream hks n hn (xss.map dataRoot) A hA hQ).trans_eq
+    (by rw [List.length_map])
+  refine (prob_mono (fun p L ⟨hacc, hne⟩ => ?_) A []).trans
+    (((prob_or_le _ _ A []).trans (add_le_add ((prob_or_le _ _ A []).trans
+      (add_le_add_left hesc _)) (SignedOutcome.prob_euf_le (S := S) A
+        (fun p L => S.acc (pk sk) (streamStmt n (xss.map dataRoot)) p = true)
+        (fun p L hacc => (walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen)
+        hS))).trans_eq (add_assoc _ _ _).symm)
+  have hno : ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).data? = none := by
+    cases h : ((walkStreamSigned L (T p L) (hT p L) n hn _ p hacc).toRunner hlen).data? with
+    | none => rfl
+    | some yss => exact (hne (h.trans (congrArg some (SignedOutcome.toRunner_data? hlen h)))).elim
+  rcases SignedOutcome.cases_of_data?_none hno with h | h | h
+  · exact .inl (.inr ⟨hacc, h⟩)
+  · exact .inr ⟨hacc, h⟩
+  · exact .inl (.inl ⟨hacc, (Outcome.escaped_reduce (hT p L) _).mp
+      ((SignedOutcome.toRunner_escaped hlen).mp h)⟩)
 
 end RecursionFast.Compose

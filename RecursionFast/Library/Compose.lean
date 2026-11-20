@@ -79,7 +79,9 @@
   data other than the runner's become the collision (`pairsCollision`), so its data are the
   runner's (`Outcome.toRunner_data?`), and it escapes exactly when the walk does
   (`Outcome.toRunner_escaped`); `compose_prob_stream_runner` bounds that escape by
-  `compose_prob_stream`'s bound. `walkStreamFrom_one`, `walkStreamFrom_node`,
+  `compose_prob_stream`'s bound; `SignedOutcome.toRunner` is the same against signed traces, and
+  `compose_prob_stream_wots_runner` (`Library/WotsReduce.lean`) bounds the probability that it
+  does not return the runner's data. `walkStreamFrom_one`, `walkStreamFrom_node`,
   `walkStreamFrom_succ_succ` and `walkStreamFrom_escape` read the walk on known extractor outputs.
 
   **The forgery outcome against the service's signed traces** (`Forgery.reduce`, `walkSigned`).
@@ -136,7 +138,19 @@
   output the walk's collision or the reduction's collision or chain value; the collision finder
   draws the signing key itself. Also on paper: lazy sampling
   against a random function, randomised adversaries, and the PRF hybrid from the random oracle to
-  the keyed deployment (AGENTS.md §12).
+  the keyed deployment (AGENTS.md §12, the list kept there). Three more paper steps:
+  * **The reductions are efficient only if `V` is.** The collision finder runs the walk, which runs
+    `S.E` once per member, `2M - 1` runs, each within its proved fuel, and `acc` on both children
+    of every node witness it checks (`Rel`), `2(M - 1)` runs, besides leaf checks of at most
+    `2^21` hashes each and the trace lookups in `L`. `acc` runs `V`, and nothing in the contract
+    bounds `V`'s time (only its queries): the reduction is efficient when `V` runs in bounded time
+    on every input within the caps, a premise, not a theorem.
+  * **The `M` outputs.** The theorems here bound one accepted output's walk; the `every` track
+    checks each of the `M` outputs, so its bound is a union over them (`Σ (2i - 1) = M²` members),
+    on paper.
+  * **The tags.** That every collision the walks and `wotsReduce` return is between two preimages
+    of the contract's eight tagged domains (`Contract/Relation.lean`) is by inspection of the
+    constructions (`Collision` carries no tag predicate).
 -/
 import RecursionFast.Library.Trace
 import RecursionFast.Library.Tree
@@ -1050,6 +1064,56 @@ theorem Outcome.toRunner_escaped {L : Log} {n : ℕ} {xss : List (List Digest)} 
     split <;> simp [Outcome.Escaped]
   | _ => simp [Outcome.toRunner]
 
+/-- **On the runner's data, `toRunner` keeps them**: if the outcome returns the runner's data `xss`,
+so does `toRunner`. -/
+theorem Outcome.toRunner_of_data? {L : Log} {n : ℕ} {xss : List (List Digest)} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} (hlen : ∀ xs ∈ xss, xs.length = n)
+    {o : Outcome S vk L n (xss.map dataRoot) c₀ p₀ d} (h : o.data? = some xss) :
+    (o.toRunner hlen).data? = some xss := by
+  cases o with
+  | data yss hy =>
+    simp only [Outcome.data?, Option.some.injEq] at h
+    subst h
+    simp [Outcome.toRunner, Outcome.data?]
+  | _ => cases h
+
+/-- **The outcome against signed traces, against the runner's data**: as `Outcome.toRunner`,
+returned data other than the runner's `xss` (`n` blocks each) become the data collision of the
+first leaf whose two block lists differ (`pairsCollision`); every other outcome is kept. -/
+def SignedOutcome.toRunner {L : Log} {T : List (Trace × Sig)} {n : ℕ} {xss : List (List Digest)}
+    {c₀ : Digest} {p₀ : Signed} {d : ℕ} (hlen : ∀ xs ∈ xss, xs.length = n) :
+    SignedOutcome S vk L T n (xss.map dataRoot) c₀ p₀ d →
+      SignedOutcome S vk L T n (xss.map dataRoot) c₀ p₀ d
+  | .data yss h =>
+    if heq : yss = xss then .data yss h else
+      .collision (pairsCollision (yss.zip xss) (zip_pairs_of_forall₂ h hlen)
+        (exists_mem_zip_ne (by simpa using h.length_eq) heq))
+  | o => o
+
+/-- **Its data are the runner's**: the data `SignedOutcome.toRunner` returns are `xss`. -/
+theorem SignedOutcome.toRunner_data? {L : Log} {T : List (Trace × Sig)} {n : ℕ}
+    {xss : List (List Digest)} {c₀ : Digest} {p₀ : Signed} {d : ℕ}
+    (hlen : ∀ xs ∈ xss, xs.length = n) {o : SignedOutcome S vk L T n (xss.map dataRoot) c₀ p₀ d}
+    {yss : List (List Digest)} (h : (o.toRunner hlen).data? = some yss) : yss = xss := by
+  cases o with
+  | data zss hz =>
+    simp only [SignedOutcome.toRunner] at h
+    split at h
+    next heq => exact (Option.some.inj h).symm.trans heq
+    next => cases h
+  | _ => cases h
+
+/-- `SignedOutcome.toRunner` escapes exactly when the outcome does. -/
+theorem SignedOutcome.toRunner_escaped {L : Log} {T : List (Trace × Sig)} {n : ℕ}
+    {xss : List (List Digest)} {c₀ : Digest} {p₀ : Signed} {d : ℕ}
+    (hlen : ∀ xs ∈ xss, xs.length = n) {o : SignedOutcome S vk L T n (xss.map dataRoot) c₀ p₀ d} :
+    (o.toRunner hlen).Escaped ↔ o.Escaped := by
+  cases o with
+  | data zss hz =>
+    simp only [SignedOutcome.toRunner]
+    split <;> simp [SignedOutcome.Escaped]
+  | _ => simp [SignedOutcome.toRunner]
+
 /-- **Two outcomes over adjacent leaf ranges, joined**: the data of both, or the first outcome
 that is not data. -/
 def Outcome.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest} {p₀ : Signed}
@@ -1078,6 +1142,17 @@ theorem Outcome.Escaped.append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest
   | escape => exact ⟨trivial, hP⟩
   | _ => exact h.elim
 
+/-- A data outcome joined with an escape is that escape. -/
+theorem Outcome.Escaped.append_right {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
+    {p₀ : Signed} {d : ℕ} {P : List Bool → Prop} {hsplit : hs₁ ++ hs₂ = hs}
+    {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d}
+    {xss₁ : List (List Digest)} (h₁ : o₁.data? = some xss₁) (h : o₂.Escaped)
+    (hP : o₂.EscapeIn P) : (o₁.append hsplit o₂).Escaped ∧ (o₁.append hsplit o₂).EscapeIn P := by
+  cases o₁ <;> cases h₁
+  cases o₂ with
+  | escape => exact ⟨trivial, hP⟩
+  | _ => exact h.elim
+
 theorem Outcome.data?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} {c₀ : Digest}
     {p₀ : Signed} {d : ℕ} {hsplit : hs₁ ++ hs₂ = hs}
     {o₁ : Outcome S vk L n hs₁ c₀ p₀ d} {o₂ : Outcome S vk L n hs₂ c₀ p₀ d}
@@ -1087,6 +1162,21 @@ theorem Outcome.data?_append {L : Log} {n : ℕ} {hs₁ hs₂ hs : List Digest} 
   cases o₁ <;> cases h₁
   cases o₂ <;> cases h₂
   rfl
+
+/-- **The walk escapes at a leaf** whose signed proof's trace is in the log and which the
+extractor opens to no witness of the relation: an escape at that leaf's path. -/
+theorem walkFrom_leaf_escape {L : Log} {n : ℕ} (hn : n ≤ leafCap) {c₀ : Digest} {p₀ : Signed}
+    {d : ℕ} {h : Digest} {hr : [h].length = 2 ^ 0} {p : Signed} {bs : List Bool}
+    {hd : bs.length + 0 ≤ d} {hacc : S.acc vk (treeRoot ([h].map fun h => leafStmt h n)) p = true}
+    {hmem : InTree S L c₀ p₀ bs (treeRoot ([h].map fun h => leafStmt h n)) p}
+    (hin : ∀ e ∈ p.tr, e ∈ L)
+    (hno : ¬ ∃ w, S.E (treeRoot ([h].map fun h => leafStmt h n)) p.π L = some w ∧
+      Rel (S.acc vk) (treeRoot ([h].map fun h => leafStmt h n)) w) :
+    (walkFrom L n hn c₀ p₀ d 0 [h] hr p bs hd hacc hmem).Escaped ∧
+      (walkFrom L n hn c₀ p₀ d 0 [h] hr p bs hd hacc hmem).EscapeIn (· = bs) := by
+  unfold walkFrom
+  rw [extract_escape hacc hin hno]
+  exact ⟨trivial, rfl⟩
 
 /-- The walk at a leaf escapes, if it does, at the leaf itself. -/
 theorem walkFrom_zero_escapeIn {L : Log} {n : ℕ} {hn : n ≤ leafCap} {c₀ : Digest} {p₀ : Signed}
