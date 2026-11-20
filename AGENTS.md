@@ -238,21 +238,19 @@ key.
   reporting `done` (the clock stops only when its whole process tree is dead); choose its
   statement (the runner computes every statement and checks each output against its own).
 - **The machine's counters.** The prover cannot read machine-wide counters: every machine-wide
-  `/proc` entry reads empty and `/sys/devices/system/cpu` is a static copy of its description;
-  only `AF_UNIX` sockets can be created; `statfs`, `fstatfs` and `ustat` fail with ENOSYS; no
-  pidfd can be made (`pidfd_open`, `clone` with `CLONE_PIDFD`, `SO_PEERPIDFD` and `SO_PASSPIDFD`
-  fail with EPERM; `clone3` fails with ENOSYS, and libc falls back to `clone`); `SO_COOKIE` fails;
-  `setsid` fails (the prover is a session leader already); `mbind`, `migrate_pages`, `move_pages`
-  and `set_mempolicy_home_node` fail with ENOSYS; in a request (not in the setup or the badge)
-  `sysinfo` fails with ENOSYS (its load averages, process count and free memory are machine-wide)
-  and `sendmsg` and `sendmmsg` fail with EPERM (no file descriptor or credential can be sent: one
-  parked in the service's receive queue would outlive the request; write with `write`, `writev`,
-  `send` or `sendto`), and the service refuses a message carrying ancillary data. Nothing a request or a badge run sees is on the
-  host's disks or sysfs: `/prover` and `/setup` are the runner's copies on its own tmpfs, a fresh
-  copy for the service run and for each timed pass, and so are the badge's files (fresh copies for
-  every badge run), each request's socket directory (with a random name) and, for every sandbox,
-  its own `/proc` mask files and its own copy of the CPU tree; each request's `/work` is a private
-  tmpfs. A read-only file on tmpfs still keeps state a process can set through it (its shared
+  `/proc` entry reads empty and `/sys/devices/system/cpu` is a static copy of its description, and
+  a seccomp filter refuses the calls that would read or move machine-wide state, listed in one
+  table ([`harness/PROVER.md`](harness/PROVER.md) §2, generated from the filter): sockets other
+  than `AF_UNIX`, free space (`statfs` and its relatives), pidfds, socket cookies, `setsid`, the
+  `mbind` family, the `utime` family (the host's device nodes in every `/dev` are shared inodes),
+  inotify and fanotify, and the calls that would swap out or collapse the runner's shared pages; in
+  a request (not in the setup or the badge) also `sysinfo` and `sendmsg`/`sendmmsg` (write with
+  `write`, `writev`, `send` or `sendto`), and the service refuses a message carrying ancillary data.
+  Nothing a request or a badge run sees is on the host's disks or sysfs, but those device nodes:
+  `/prover` and `/setup` are the runner's copies on its own tmpfs, a fresh copy for the service run
+  and for each timed pass, and so are the badge's files (fresh copies for every badge run), each
+  request's socket directory (with a random name) and, for every sandbox, its own `/proc` mask files
+  and its own copy of the CPU tree; each request's `/work` is a private tmpfs. A read-only file on tmpfs still keeps state a process can set through it (its shared
   memory policy), so no copy is shared across a pass, a badge run or a sandbox (§12). Before every
   request the runner moves every CPU's inode counters to a fresh batch at a random offset, and
   before every timed request it also takes a random number of fresh batches machine-wide
@@ -318,11 +316,11 @@ comes from a run in which the prover never had the key.
   output, the track `every`'s for an intermediate one). Each check is timed twice at once: by the
   runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per MiB of file beyond
   the check itself), and by the badge's own clock; the larger counts
-  ([`harness/rfh/checks.py`](harness/rfh/checks.py)). A judged run of an intermediate output is
-  bounded by `60 s + 4 · v_cap`, a canary run of `c` canaries (of outputs 1 and 2, or of the final
-  output) by `60 s + 2 (c + 1) · v_cap`; the final output's three judged runs by the stream's cap
-  alone (their `V` is capped by `v_cap`). All badge runs share one bound, 30 s past `stream_s`, and
-  none starts once `stream_s` is reached (the entry's REJECT, `stream-cap`).
+  ([`harness/rfh/checks.py`](harness/rfh/checks.py)). Every badge run is bounded: a judged run, of
+  an intermediate or of the final output, by `60 s + 4 · v_cap`, a canary run of `c` canaries (of
+  outputs 1 and 2, or of the final output) by `60 s + 2 (c + 1) · v_cap` (so no verifier stalls a
+  chosen time, §12). All badge runs share one bound, 30 s past `stream_s`, and none starts once
+  `stream_s` is reached (the entry's REJECT, `stream-cap`).
 - **Statement canaries.** The final output must be rejected against its statement with one bit
   flipped and against its first child's statement; for the track `every`, the outputs of steps 1
   (a leaf: only the flipped statement) and 2 also. Each canary is checked once, in one badge run:
@@ -393,7 +391,8 @@ comes from a run in which the prover never had the key.
   x86-64-v4 (AVX2, FMA, BMI1/2 and AVX-512 F, CD, BW, DQ, VL), plus ADX, AES-NI, SHA-NI, VAES, VPCLMULQDQ, GFNI and AVX-512 IFMA, VBMI, VBMI2, VNNI, BITALG, VPOPCNTDQ and BF16. The machine may change between
   seasons: detect features at run time (`cpuid`) and keep a portable fallback. The result records
   a hash of the machine's fingerprint (CPU model, VM shape, frequency policy, image id) and,
-  unhashed, the host kernel version. A benchmark whose fingerprint is missing, unreadable or not
+  unhashed, the host kernel version, the runner's kernel and the two memory settings the sandbox
+  relies on (`ksm_run`, KSM off; `thp_shmem_enabled`). A benchmark whose fingerprint is missing, unreadable or not
   the season's is an organiser ERROR, re-queued (§8); a machine change between seasons re-baselines
   it (§12).
 - **Throughput.** One evaluation at a time. The benchmark's capped entry steps sum to 2,420 s
@@ -586,8 +585,8 @@ for the smoke's Lean badge) are made before it and removed after it.
 parts (16 in the service run, 48 in the timed passes, each up to `ready_s + step_s` = 30 s, 1,920 s
 in all) and the 50 badge runs from each process's release to its last answer (48 judged, 2 of
 canaries: about 12 s at `V` near 40 ms, a start-up up to `badge_start_s` = 2 s in each, and a failed
-run of an intermediate output's check, which costs only the track `every`, up to `60 s + 4 ·
-v_cap`; all three judged runs of a proof are made even after one fails). So an entry within every
+judged run up to `60 s + 4 · v_cap`, which for an intermediate output costs only the track `every`;
+all three judged runs of a proof are made even after one fails). So an entry within every
 per-request cap has 80 s for its badge runs, whatever the runner's own work costs, and reaching
 `stream_s` is its REJECT. The runner's own work in the stream is off that clock and recorded in the
 result (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`): the copies of the binary and the
@@ -782,76 +781,43 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   every accepted output comes from the service run, in which the prover never had `k`. A timed
   pass could reproduce an output without proving only through a channel from the service run's
   requests, and the per-request sandbox (a private tmpfs `/work` and a fresh `/tmp`, read-only
-  `/setup`) is the same isolation that keeps state between steps inside `π`. Closed by the runner
-  and the sandbox: **the host's dcache and page cache**: a lookup of an absent name leaves a
-  negative dentry on a disk filesystem or in sysfs, which a later sandbox that sees the same
-  directory can time (measured: 97.8 % of the bits of 100,000 names read back, about 170 kbit/s
-  per thread, review LR4 H1), and a disk file's page-cache folios keep a shape (a PMD folio after
-  an eviction and a `MADV_HUGEPAGE` fault, small ones after the runner's re-read: 1 bit per 2 MiB of
-  setup, read in `/proc/self/smaps`, H2), so nothing a request or a badge run sees is on the
-  host's disks or sysfs: the binary and the setup are the runner's copies on its tmpfs (every byte
-  written, read-only, order-0 pages, resident; `MADV_PAGEOUT`, `MADV_COLD` and `process_madvise`
-  refused), the badge, its libraries and its checked files too, every socket directory, the
-  `/proc` masks, and the CPU tree is a static copy (`tests/harness/test_sandbox.py` 12.: the share
-  of names read right is 0.50 in every directory a request sees, 0.93 in a work-disk directory
-  bound as a control; the folio shape does not move, and on a disk file, the control, it shows the
-  written regions); **state kept by a tmpfs file that a read-only handle can set**: a file's shared
-  memory policy (`mbind` on a read-only `MAP_SHARED` mapping, read back by a later process with
-  `get_mempolicy(MPOL_F_ADDR)`: 6,144 of 6,144 bits read back across requests, across badge runs
-  and through the CPU tree's copy, review LR5 H1), and plausibly page flags (`Referenced` in
-  `/proc/self/smaps`): no tmpfs file is shared across a boundary that matters, structurally: the
-  service run and each timed pass bind their own copy of the binary and the setup (made before the
-  pass, the previous one removed: a service-run request could otherwise move untimed work into a
-  timed pass, and one timed pass precompute for another, which the median of three totals would
-  reward), every badge run gets fresh copies of everything it sees, and every sandbox its own mask
-  files and CPU tree; only the steps of one pass share a copy, all on one clock, where deferring
-  work is allowed anyway. `mbind`, `migrate_pages`, `move_pages` and `set_mempolicy_home_node` fail
-  with ENOSYS besides (test 13.: with the filter no policy is set; with `mbind` allowed for the
-  test, a request of the same pass reads 6,144 of 6,144 bits back, a request after the next pass's
-  copy, and a later request or badge run through its own copies, none); the replay service's answers (a
-  refused `SIGN` is a REJECT); `/proc`'s machine-wide counters (masked); sockets other than Unix
-  ones (refused, so no network counter moves); the inode numbers and free space of `/work` (a
-  tmpfs of its own per request), and the number of inodes the runner stages there before `go`
-  (five in every request, placeholders for the inputs a request does not get, so a prover
-  counting inode numbers cannot tell a timed request from the service run's, review LR4 L1); free
-  space (`statfs`, `fstatfs`, `ustat` refused); pidfs inode numbers, which count every process
-  the machine started (no pidfd can be made); socket cookies (`SO_COOKIE` refused); the
-  autogroup counter in `/proc/self/autogroup`, which every new session moves (`setsid` refused,
-  M1: about 23 bits per stream before); the scheduler's per-CPU state of a shared cgroup
-  (`/proc/self/sched`'s `se.vruntime`, about 10 bits per CPU, M2): each sandbox has a transient
-  systemd scope of its own, and a benchmark on a machine where the memory caps would fall back to
-  `prlimit` (all sandboxes in the runner's cgroup) is an organiser ERROR; the per-CPU inode
-  counters behind pipe, socket and memfd inode numbers (moved to a fresh batch at a random offset
-  on every CPU before every request and before every badge run, so that one of a proof's three
-  judged runs cannot hand its answer to the next either,
-  [`harness/tools/scrub.c`](harness/tools/scrub.c), about 0.1 s, `scrub_s` in each request's
-  record; the scrub covers the CPUs the runner can pin itself to, while a request under systemd
-  runs in a scope of the user manager's slice: neither cgroup has a cpuset in the evaluation
-  workflow, so both may use every online CPU, and a cpuset set on the runner's cgroup alone would
-  leave CPUs unscrubbed, which the runner does not check); and the request directories' names
-  (random). Left open, from a service-run request to a later one:
-  - **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a
-    CPU takes next counts the batches taken machine-wide, which a request moves by making inodes
-    on every CPU (about 1.5 ms per batch of 1,024 on one CPU, so up to about `2^17` batches in one
-    20 s step on 8 CPUs). Before every timed request the scrub takes a uniform random number in
-    `[0, 256)` of fresh batches of each kind (review R8 HIGH 1), so a timed request reads a
-    service-run request's count only under the sum of that noise over the timed requests before
-    it (at least one draw; 16 before step 16 of the first pass, about 300 batches of spread): about
-    7 bits per counter and stream at most, for a writer that spends a whole step on it (an
-    estimate; about 20 bits each before the noise);
-  - **`sysinfo(2)`** (load averages, process count, free, shared and buffer memory, all
-    machine-wide; masked in `/proc/loadavg` and `/proc/meminfo`) fails with ENOSYS in every request
-    since review R8 HIGH 1 (glibc's `get_phys_pages`/`sysconf(_SC_PHYS_PAGES)` then fail or return
-    garbage: a prover must not depend on them); `prover setup` and the badge keep it (the Lean
-    runtime calls it), and neither is read by a later request through it;
-  - **the clocks**: a service-run step can stretch its own untimed duration (up to `step_s`, on the
-    stream's clock), and a timed step can read the clock against a timestamp kept in `/setup`;
-    before each timed pass the runner waits a uniform random delay in `[0, 2)` s, so the 16 steps'
-    stretch (up to 320 s) reaches a timed request at about 2 s resolution: about 7 bits per stream
-    (an estimate); accepted. A badge run's duration is bounded the same way (every canary run is
-    bounded, the final output's too, so a verifier cannot stall a chosen time on a canary);
-  - **micro-architectural state** (CPU caches, predictors), not cleared between requests; the
-    calibration runs between requests disturb it.
+  `/setup`) is the same isolation that keeps state between steps inside `π`. The channels the
+  runner and the sandbox close (the filter's refusals are one table,
+  [`harness/PROVER.md`](harness/PROVER.md) §2; the tests are `tests/harness/test_sandbox.py`'s
+  items):
+
+  | the channel (what a request could leave for a later one) | closed by | shown by |
+  |---|---|---|
+  | the host's dcache: a lookup of an absent name leaves a negative dentry on a disk filesystem or in sysfs, which a later sandbox that sees the directory can time (97.8 % of the bits of 100,000 names read back, about 170 kbit/s per thread, review LR4 H1) | nothing a request or a badge run sees is on the host's disks or sysfs: the binary, the setup, the badge, its libraries and its checked files, every socket directory and the `/proc` masks are the runner's copies on its tmpfs, and the CPU tree is a static copy | 12.: 0.50 of the names read right in every directory a request sees; 0.93 in a work-disk directory bound as a control |
+  | the page cache: a disk file's folios keep a shape (a PMD folio after an eviction and a `MADV_HUGEPAGE` fault, small ones after the runner's re-read: 1 bit per 2 MiB of setup in `/proc/self/smaps`, H2) | the tmpfs copies: every byte written, read-only, order-0 pages, resident; `MADV_PAGEOUT`, `MADV_COLD`, `MADV_COLLAPSE` and `process_madvise` refused (a kernel may collapse tmpfs pages whatever the mount says, review R4b LOW 6) | 12.: the folio shape does not move; on a disk file, the control, it shows the written regions |
+  | state a tmpfs file keeps that a read-only handle sets: its shared memory policy (`mbind` on a read-only `MAP_SHARED` mapping, read back with `get_mempolicy(MPOL_F_ADDR)`: 6,144 of 6,144 bits across requests, badge runs and the CPU tree's copy, LR5 H1), plausibly page flags (`Referenced`) | no tmpfs file shared across a boundary that matters: the service run and each timed pass bind their own copy of the binary and the setup (made before the pass, the previous one removed: a service-run request could otherwise move untimed work into a timed pass, and one timed pass precompute for another, which the median would reward); every badge run fresh copies of all it sees; every sandbox its own mask files and CPU tree; only the steps of one pass share a copy, on one clock, where deferring work is allowed anyway; the `mbind` family refused besides | 13.: with `mbind` allowed for the test, 6,144 of 6,144 bits read back within a pass, none after the next pass's copy, through a later sandbox's own copies or in a later badge run |
+  | the timestamps of the host's device nodes (`null`, `zero`, `full`, `random`, `urandom`, `tty`, bound into every `/dev`, and the host's `/dev/null` as the setup's and the build's fd 0): `utimensat` needs only write permission, and any later sandbox reads them with `stat` (about 100–250 bits per write, R4b HIGH 1) | the `utime` family refused in every sandbox; bubblewrap cannot bind a device node read-only (its read-only remount adds `nodev`, and the node then fails to open), so the six nodes are the only read-write mounts of a superblock other sandboxes see | 11.: every `utime` call fails, by path and by descriptor, and `/dev/null`'s times do not move; the mount table of a request, a setup and a badge run holds no other read-write mount of a superblock the host has mounted (with a read-write host directory, the control, it does) |
+  | inotify's rename cookie, drawn from a machine-wide counter that every rename moves (about 15–20 bits per stream, R4b HIGH 2) | inotify (and fanotify) refused in every sandbox | 11. |
+  | the replay service's answers | a refused `SIGN` is a REJECT | |
+  | `/proc`'s machine-wide counters; network counters | masked; only Unix sockets | 11. |
+  | `/work`'s inode numbers and free space, and the number of inodes the runner stages there before `go` | a tmpfs of its own per request; five staged in every request (placeholders for the inputs it does not get, so a prover counting inode numbers cannot tell a timed request from the service run's, LR4 L1) | 11., 12. |
+  | free space; pidfs inode numbers, which count every process the machine started; socket cookies | `statfs`, `fstatfs`, `ustat` refused; no pidfd can be made; `SO_COOKIE` refused | 11. |
+  | the autogroup counter in `/proc/self/autogroup`, which every new session moves (about 23 bits per stream before, M1) | `setsid` refused | 12. |
+  | the scheduler's per-CPU state of a shared cgroup (`/proc/self/sched`'s `se.vruntime`, about 10 bits per CPU, M2) | each sandbox in a transient systemd scope of its own; a benchmark where the caps would fall back to `prlimit` (every sandbox in the runner's cgroup) is an organiser ERROR | |
+  | the per-CPU inode counters behind pipe, socket and memfd inode numbers | moved to a fresh batch at a random offset on every CPU before every request and every badge run ([`harness/tools/scrub.c`](harness/tools/scrub.c), about 0.1 s, `scrub_s` in each request's record), so that no judged run hands its answer to the next either; it covers the CPUs the runner can pin itself to, and neither the runner's cgroup nor the user manager's slice, where a request's scope runs, has a cpuset in the evaluation workflow (a cpuset on the runner's cgroup alone would leave CPUs unscrubbed, which the runner does not check) | 11. |
+  | the service's connections: a slot, an unread answer, a descriptor parked in a receive queue, a connection queued in the listen backlog and never accepted (served after the request's death, R4b LOW 4) | after every request `drop` closes every connection, the queued ones too, and the runner requires none left; `sendmsg` and `sendmmsg` refused, ancillary data refused | `test_request_filter.py` 3.; the service's unit tests (`drop` empties a backlog of 40) |
+  | the service's allocator and threads: glibc's arenas and its cache of thread stacks follow how many threads an earlier request kept busy (about 5 bits, R4b LOW 5) | one malloc arena, a fixed mmap threshold, 32 workers started with the service (none per connection) | |
+  | the request directories' names | random | |
+
+  Left open, from a service-run request to a later one (each an upper estimate for a writer that
+  spends its untimed time on it; none measured):
+
+  | the channel | at most | the noise on it |
+  |---|---|---|
+  | **the machine-wide batch counters** behind pipe, socket and memfd inode numbers: the batch a CPU takes next counts the batches taken machine-wide, which a request moves by making inodes on every CPU (about 1.5 ms per batch of 1,024 on one CPU: about `2^17` batches in one 20 s step on 8 CPUs) | about 9 bits per counter from one step's work, about 13 from all 16 service-run steps'; the two counters together about 24 bits per stream (about 20 bits each before the noise, from one step) | before every timed request the scrub takes a uniform random number in `[0, 256)` of fresh batches of each kind (review R8 HIGH 1), so a timed request reads the count under at least one draw; the first timed request can decode it and re-encode it for the later ones (review R4b NIT 7), so later draws add nothing |
+  | **the clocks**: a service-run request stretches its own untimed duration (up to `ready_s + step_s` = 30 s), a badge run its own (every one bounded, a judged run by `60 s + 4 · v_cap`, the final output's too since review R4b MED 3; a verifier that stalls one judged run of three keeps its median), and a request can slow the runner's off-clock work after it (its `/work`'s walk, the next copies); a timed step reads the clock against a timestamp kept in `/setup` | about 11 bits per stream: `log2` of the stretch the benchmark job allows (`PART_S` = 3,840 s, of which `stream_s` = 2,000 s is the entry's time) over the noise | an untimed delay before each timed pass, uniform in `[0, 2)` s from the CSPRNG |
+  | **the service's heap**: one arena's free lists and top, which a request's allocations shape (everything from 128 KiB up is a fresh mapping) | a few bits | none |
+  | **micro-architectural state** (CPU caches, predictors), not cleared between requests | not estimated | the calibration runs between requests disturb it |
+
+  `sysinfo(2)` (load averages, process count, free, shared and buffer memory, all machine-wide;
+  masked in `/proc/loadavg` and `/proc/meminfo`) fails with ENOSYS in every request since review
+  R8 HIGH 1; `prover setup` and the badge keep it (the Lean runtime calls it), and neither is read
+  by a later request through it.
 
   **What a leaked bit is worth.** These channels only matter for state an output must reproduce:
   the timed passes rerun the service run's computations, and the one search whose answer a
@@ -861,12 +827,12 @@ the timed requests' scrubs took 8.0 s (0.66 s each at 32 CPUs) and the three del
   which an entry can trade for fewer queries in its proof. The review's model of a WHIR-like final
   proof (review R8 HIGH 1) gives about 1.1–2.8 KiB of `|π_16|` per grinding bit, so about 0.15–0.4 %
   of `S` per leaked bit (10–12 bits: −1.5 … −4.5 %, inside the 2 % margin's reach only near its
-  top). With the noise above, the channels together carry of order 20 bits at most for a writer
-  that spends every untimed step on them, and less in practice (each bit costs the writer the
-  stream's own time, and decoding under the noise is not free); the owner accepts that residue for
-  this season, measured by no entry yet. The service's connection slots no longer carry anything:
-  every connection is closed after each request (`drop`), none may be left, and no descriptor can
-  be passed to the service (`sendmsg` refused, ancillary data refused).
+  top). The channels above carry together at most about 35–40 bits per stream (24, 11 and the
+  heap's few: −5 … −16 % of `S` if every bit reached a grinding search), for a writer that spends
+  nearly all of every untimed step and badge run on them, and less in practice (each bit costs the
+  writer the stream's own time, and a grinding search gains only up to its own length); the owner
+  accepts that residue for this season (first estimated at order 20 bits; review R4b corrected
+  it), measured by no entry yet.
 
   A request can tell its pass and its step from counters that advance with every sandbox (unique
   mount ids, namespace inode numbers, the network namespace's cookie, the inode numbers of the
