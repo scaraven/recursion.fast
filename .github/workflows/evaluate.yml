@@ -48,14 +48,22 @@
 # the entry's REJECT. The limits:
 #   setup, setup-tools, plan, attest: 30, 30, 10, 10 minutes;
 #   certificate: the entry's capped steps render_s 30 + source_rule_s 120 + build_s 1200 + kernel_s
-#     600 + gate_s 120 + badge_s 180 = 2250 s (37.5 min; 47.5 with nanoda's second kernel_s), limit
-#     50 (60 with nanoda): 12.5 min for the fixed steps (checkout, runner setup, elan, the organiser
-#     and comparator restores, the toolchain, the fetch, the record restore within 2 min, the
-#     manifest checks, the certificate artifact); the entry-build upload runs only while more than
-#     6 min remain;
+#     600 + gate_s 120 twice (the gate, then its wiring rule 9, each within gate_s) + badge_s 180 =
+#     2370 s (39.5 min; 49.5 with nanoda's second kernel_s), limit 50 (60 with nanoda): 10.5 min for
+#     the fixed steps (checkout, runner setup, elan, the organiser and comparator restores, the
+#     toolchain, the fetch, the record restore within 2 min, the manifest checks, the certificate
+#     artifact); the entry-build upload runs only while more than 6 min remain;
 #   benchmark: one benchmark of at most PART_S = 64 min (harness/evaluate.py), limit 70: inside
 #     PART_S the entry's capped steps build_s 120 + setup_s 240 + the setup tree's hash 60 +
-#     stream_s 2000 = 2420 s (40.3 min), the rest (23.7 min) for the organiser's own steps (the
+#     stream_s 2000 = 2420 s (40.3 min). `stream_s` counts the entry's time alone (its requests'
+#     start-ups and timed parts, its badge runs; `rfh.bench.Bench.deadline`), and the runner's own
+#     work inside the stream is off that clock: the copies of the setup before each pass (at most
+#     about 6.5 s each at setup_cap), the scrubs (about 0.1 s before each request and badge run,
+#     up to about 1 s before each timed request with its random batches), each sandbox's view and
+#     set-up, the staging, the outputs' reads and walks, the calibration samples (about 6 × 3 s),
+#     the untimed delays before the timed passes (under 2 s each), the `drop` after each request:
+#     recorded as `stream.clock.runner_overhead_s`, of order 1–3 minutes, bounded by PART_S. The
+#     rest of PART_S (23.7 min, that overhead included) is for the organiser's own steps (the
 #     calibration instance, the leaf data and digests, the at most 30 s the checks may run past
 #     stream_s in all (one bound for every badge run; none starts past the cap), the service's
 #     stop, the score); 6 min outside it for the fixed steps (checkout, runner setup, the service
@@ -77,13 +85,15 @@
 # as data with plain git, and every sandboxed process starts with an empty environment.
 #
 # Record acceptance (AGENTS.md §8): the submissions bot applies the record rule per track
-# (`S_t < (1 - margin) · S_t,record`, the tracks `final` and `every`, both scored by `S`); this workflow only
+# (`S_t < (1 - margin) · S_t,record`, the tracks `final` scored by `S` and `every` by `S_every`); this workflow only
 # states the facts. `harness/verify-record.sh
 # result.json` checks provenance (`gh attestation verify` with `--signer-workflow
 # scaraven/recursion.fast/.github/workflows/evaluate.yml`, a self-hosted runner, the signer digest
 # equal to the result's `harness_commit`), that the result records our runner (`runner`: name `rf-…`,
-# label `rf-bench`), and the verdict ACCEPT and comparable. The attested JSON binds
-# the verdict to vk, the machine fingerprint's hash, the harness commit and the service binary's hash.
+# label `rf-bench`), the season file's hash, and the verdict ACCEPT and comparable. The attested JSON binds
+# the verdict to vk, the machine fingerprint's hash, the harness commit, the service binary's hash
+# and the measured entry (`entry`: the inputs `entry_repo`, `entry_sha`, `entry_path`, `pr_ref`,
+# written by the attest job; `verify-record.sh --entry-sha` checks the commit).
 name: evaluate
 on:
   workflow_call:
@@ -123,7 +133,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ inputs.core_ref }}", path: core, persist-credentials: false }
       - id: plan
+        env: { SEASON: "${{ inputs.season }}" }
         run: |
+          # the season file is one of the core's own `harness/*.toml` (no other directory, no `..`):
+          # every job reads `core/$SEASON`, and verify-record.sh checks its hash
+          [[ "$SEASON" =~ ^harness/[A-Za-z0-9_-]+\.toml$ ]] || { echo "::error title=season::the input season ($SEASON) is not harness/NAME.toml"; exit 1; }
           name=${{ inputs.split && 'split' || 'single' }}
           {
             echo "name=$name"
@@ -421,7 +435,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with: { repository: scaraven/recursion.fast, ref: "${{ needs.plan.outputs.core_sha }}", path: core, persist-credentials: false }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
-        if: needs.benchmark.result != 'skipped'
+        # only the results of this run's benchmark job, and only once it ended (success or failure):
+        # a skipped or cancelled benchmark leaves no part, which the plan check makes an ERROR
+        if: needs.benchmark.result == 'success' || needs.benchmark.result == 'failure'
         continue-on-error: true
         with: { pattern: "result-*", path: parts, merge-multiple: true }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
@@ -433,10 +449,18 @@ jobs:
         env: { SEASON: "core/${{ inputs.season }}", RUN: "${{ github.run_id }}", ATTEMPT: "${{ github.run_attempt }}",
                FP_ERR: "${{ needs.setup.outputs.fingerprint_error }}", SETUP: "${{ needs.setup.result }}",
                TOOLS: "${{ needs.setup-tools.result }}", CERT: "${{ needs.certificate.result }}",
-               CORE_SHA: "${{ needs.plan.outputs.core_sha }}", ELAN_MISSING: "${{ needs.certificate.outputs.elan_missing }}" }
+               CORE_SHA: "${{ needs.plan.outputs.core_sha }}", ELAN_MISSING: "${{ needs.certificate.outputs.elan_missing }}",
+               BENCH: "${{ needs.benchmark.result }}",
+               E_REPO: "${{ inputs.entry_repo }}", E_SHA: "${{ inputs.entry_sha }}", E_PATH: "${{ inputs.entry_path }}",
+               E_REF: "${{ inputs.pr_ref }}" }
         run: |
           shopt -s nullglob
           job="$GITHUB_REPOSITORY/actions/runs/$RUN/attempts/$ATTEMPT"
+          # the measured entry, from this run's inputs, into the attested result (review R3 M2)
+          entry=(--entry-repo "$E_REPO" --entry-sha "$E_SHA" --entry-path "$E_PATH" --pr-ref "$E_REF")
+          parts=(parts/result-*.json)
+          # a benchmark that did not end (skipped, cancelled) contributes no part (L4)
+          [[ "$BENCH" == success || "$BENCH" == failure ]] || parts=()
           org=()
           if [[ -n "$FP_ERR" ]]; then org=(--organiser-error fingerprint --reason "$FP_ERR (checked in the setup job)")
           elif [[ "$SETUP" != success || "$TOOLS" != success ]]; then
@@ -448,10 +472,10 @@ jobs:
           fi
           if [[ ${#org[@]} -gt 0 ]]; then
             python3 -I core/harness/aggregate.py "${org[@]}" --season "$SEASON" --out result.json --job "$job" \
-              --harness-commit "$CORE_SHA"
+              --harness-commit "$CORE_SHA" "${entry[@]}"
           else
             python3 -I core/harness/aggregate.py --plan "${{ needs.plan.outputs.name }}" --season "$SEASON" \
-              --cert cert/cert.json --out result.json --job "$job" parts/result-*.json
+              --cert cert/cert.json --out result.json --job "$job" "${entry[@]}" "${parts[@]}"
           fi
           echo "verdict=$(python3 -I -c 'import json; print(json.load(open("result.json"))["verdict"])')" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2

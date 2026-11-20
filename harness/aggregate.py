@@ -62,7 +62,11 @@ stops the evaluation), and `--organiser-error` and `--plan` then write an ERROR 
 `lengths`, whatever kind the workflow passed, since a malformed shape is the cause of anything else
 that stopped the run.
 The result also records the runner the benchmark ran on (`runner`: name, environment, labels), which
-`verify-record.sh` checks (AGENTS.md §8).
+`verify-record.sh` checks (AGENTS.md §8), and the measured entry (`entry`: with `--entry-repo`,
+`--entry-sha`, `--entry-path`, `--pr-ref`, the evaluation's inputs, which the attest job passes, its
+`repo`, `sha`, `path` and `pr_ref` beside the parts' `name` and `prover_sources_sha256`). A part
+counts as passed only with its runner's final record (`stage: done`): a checkpoint left by a runner
+that died (`benchmark: incomplete`), or any other value, is the runner's failure, an ERROR.
 
 **The provisional ranking**:
 `--rank` groups results by the entry (its name in the submissions repository, `entry.name`; the
@@ -108,6 +112,12 @@ from rfh.bench import (REJECT_STAGES, MalformedStream, Params, check_record, fin
                        fingerprint_problem, score)
 
 
+def printable_text(text, limit=4000):
+    """Untrusted text as printable ASCII, at most `limit` characters (its tail): every other
+    character becomes `?`, backticks `'` (as `rfh.bench.printable`, without its code span)."""
+    return "".join(c if 32 <= ord(c) < 127 or c == "\n" else "?" for c in text.replace("`", "'"))[-limit:]
+
+
 def load_season(path):
     """(Params, None) for a well-formed season file, or (Params unchecked, the defect) when its
     `[stream]` shape is malformed; any other defect of the file raises as before."""
@@ -133,6 +143,8 @@ def main():
     ap.add_argument("--reason", default="")
     ap.add_argument("--harness-commit", default=None)
     ap.add_argument("--allow-test-overrides", action="store_true", help="tests only: see the module's doc")
+    for k in ("--entry-repo", "--entry-sha", "--entry-path", "--pr-ref"):     # the measured entry (`measured_entry`)
+        ap.add_argument(k, default=None)
     ap.add_argument("parts", nargs="*")
     a = ap.parse_args()
     if a.check_machine:
@@ -161,6 +173,7 @@ def main():
                "harness_commit": a.harness_commit, "verdict": "ERROR", "comparable": False, "truncated": False,
                "organiser_error": kind, "parts": [], "stream": None,
                "reasons": [f"organiser ERROR ({kind}): {reason}"[:600]]}
+        res["entry"] = measured_entry(a, None)
         json.dump(res, open(a.out, "w"), indent=1)
         print(f"VERDICT: ERROR (organiser: {kind})")
         return 0
@@ -178,10 +191,23 @@ def main():
     season_sha = hashlib.sha256(open(a.season, "rb").read()).hexdigest()
     res = combine(p, a.plan, season_sha, a.job, json.load(open(a.cert)), [json.load(open(f)) for f in sorted(a.parts)],
                   shape_defect=defect, allow_test_overrides=a.allow_test_overrides)
+    res["entry"] = measured_entry(a, res.get("entry"))
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {res['verdict']} ({len(res['parts'])} part(s), comparable {res['comparable']}, "
           f"fingerprint {'matches' if res['machine']['matches'] else 'does not match'})")
     return 0
+
+
+def measured_entry(a, entry):
+    """The result's `entry`: the parts' (`name`, `prover_sources_sha256`) and, from the evaluation's
+    inputs as the attest job passes them, the measured commit `{repo, sha, path, pr_ref}`, so the
+    attested result names the entry commit it measured (review R3 M2; `verify-record.sh
+    --entry-sha`)."""
+    out = dict(entry) if isinstance(entry, dict) else {}
+    for k, v in (("repo", a.entry_repo), ("sha", a.entry_sha), ("path", a.entry_path), ("pr_ref", a.pr_ref)):
+        if v is not None:
+            out[k] = v
+    return out or None
 
 
 def combine(p, plan, season_sha, job, cert, parts, shape_defect=None, allow_test_overrides=False):
@@ -196,9 +222,13 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None, allow_test
            "parts": [], "reasons": list(cert.get("reasons", []))}
     res["stream"] = None
     for r in parts:
-        res["parts"].append({k: r.get(k) for k in ("parts", "machine", "harness", "prover", "calib", "calibration",
-                                                    "benchmark", "reasons", "started", "finished", "comparable",
-                                                    "provisional")})
+        part_rec = {k: r.get(k) for k in ("parts", "machine", "harness", "prover", "calib", "calibration",
+                                          "benchmark", "stage", "reasons", "started", "finished", "comparable",
+                                          "provisional")}
+        if isinstance(part_rec.get("prover"), dict) and isinstance(part_rec["prover"].get("log"), str):
+            # the build's output (gcc, as: `.error`/`.warning` text is the entry's): printable, capped (L3)
+            part_rec["prover"] = dict(part_rec["prover"], log=printable_text(part_rec["prover"]["log"]))
+        res["parts"].append(part_rec)
         res["stream"] = r.get("stream") or res["stream"]     # one run; the plan check rejects a second
         res["reasons"] += r.get("reasons", [])
     # exactly the planned parts, one result each, from one season and one harness commit
@@ -222,7 +252,10 @@ def combine(p, plan, season_sha, job, cert, parts, shape_defect=None, allow_test
                       "host_kernel": m.get("host_kernel")}
     res["runner"] = {"name": m.get("runner_name"), "environment": m.get("runner_environment"),
                      "labels": m.get("runner_labels") or []}
-    status = [r.get("benchmark") for r in parts]
+    # a part is passed only with its runner's final record (`stage: done`); a checkpoint left by a
+    # runner that died says `incomplete` and is the runner's failure, never a pass (review R3 H3)
+    status = [("error" if r.get("benchmark") in ("pass", "incomplete") and r.get("stage") != "done" else
+               r.get("benchmark") if r.get("benchmark") in ("pass", "fail") else "error") for r in parts]
     if cert.get("status") == "reject":
         verdict = "REJECT"
     elif cert.get("status") not in ("ok", "provisional"):

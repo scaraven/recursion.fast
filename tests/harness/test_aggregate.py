@@ -58,7 +58,7 @@ def part(parts, benchmark="pass", commit="a" * 40, truncated=False, P=1.0, fp=FP
     pis, acc = [pi[0]] + [0] * (M - 2) + [pi[1]], [accepted[0]] + [True] * (M - 2) + [accepted[1]]
     steps = [{"index": i, "n": N, "P_timed_s": [P] * 3, "P_service_s": 5.0, "V_runs_ns": [10 ** 6] * 3, "V_ns": 10 ** 6,
               "pi_bytes": pis[i - 1], "accepted": acc[i - 1], "canaries_accepted": []} for i in range(1, M + 1)]
-    r = {"parts": parts.split(","), "benchmark": benchmark, "reasons": [], "season_sha256": "s",
+    r = {"parts": parts.split(","), "benchmark": benchmark, "stage": "done", "reasons": [], "season_sha256": "s",
          "harness": {"commit": commit}, "machine": {"fingerprint": fp, "fingerprint_status": fp_status or ("ok" if fp else "missing"),
                                                      "fingerprint_reason": None if fp else "RF_MACHINE_FINGERPRINT is not set",
                                                      "runner_name": "rf-bench-1",
@@ -324,6 +324,25 @@ def main():
           and "unranked" in rows["one"]["median_S_every"],
           f"the track `every` is ranked the same way from each run's S_every, a run outside it counting as infinite "
           f"(e: ∞, 102, 109 → 109): {rows['e']['last_three_every']}")
+    # a part without its runner's final record (`stage: done`) is never a pass (review R3 H3)
+    died = part("calibrate,stream", benchmark="incomplete")
+    died["stage"] = "stream"
+    check(run(tmp, [died]), "ERROR", "a part left by a runner that died after its checkpoint (benchmark: incomplete)")
+    nostage = part("calibrate,stream")
+    del nostage["stage"]
+    check(run(tmp, [nostage]), "ERROR", "a part saying `pass` without `stage: done`")
+    # the build's output is the entry's text: printable and capped in the result (L3)
+    noisy = part("calibrate,stream")
+    noisy["prover"] = {"binary_sha256": "h", "log": "x.s:1: Error: \x1b[31m`evil`\u202e" + "y" * 10000}
+    log = run(tmp, [noisy])["parts"][0]["prover"]["log"]
+    holds(len(log) <= 4000 and all(32 <= ord(ch) < 127 or ch == "\n" for ch in log) and "`" not in log,
+          f"the prover build's log in the result is printable ASCII, no backtick, at most 4000 characters ({len(log)})")
+    # the measured entry from the attest job's inputs (review R3 M2)
+    r = run(tmp, full, flags=("--entry-repo", "o/subs", "--entry-sha", "a" * 40, "--entry-path", "submissions/x",
+                              "--pr-ref", "refs/pull/7/head"))
+    holds(r.get("entry", {}).get("sha") == "a" * 40 and r["entry"].get("repo") == "o/subs"
+          and r["entry"].get("path") == "submissions/x" and r["entry"].get("pr_ref") == "refs/pull/7/head",
+          f"the result names the measured entry commit: {r.get('entry')}")
     print(f"{fails} failure(s)")
     return 1 if fails else 0
 
