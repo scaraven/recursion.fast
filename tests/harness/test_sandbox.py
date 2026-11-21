@@ -656,15 +656,21 @@ def main():
     ok0, ctl_share, n0 = moved(False)
     ok1, scr_share, n1 = moved(True)
     # the scrub's offsets are random, not only past the batch's end: after it, the CPUs' next pipe
-    # numbers (mod 1024) spread over the batch
-    subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
-    offs = sorted(p % 1024 for p, _ in per_cpu(iso_req("inos")).values())
+    # numbers (mod 1024) spread over the batch. The offsets are pooled over enough scrubs for 16 of
+    # them: with 4 CPUs one scrub's 4 uniform offsets fall within 256 of each other 5 % of the time
+    # (n·r^(n-1) − (n−1)·r^n at r = 1/4), with 16 about 10^-8
+    rounds = min(8, -(-16 // max(1, n1)))
+    offs = []
+    for _ in range(rounds):
+        subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
+        offs += [p % 1024 for p, _ in per_cpu(iso_req("inos")).values()]
+    offs.sort()
     spread = len(offs) < 4 or offs[-1] - offs[0] > 256
     # with few CPUs a hit by chance is likely: the bound only binds from 8 CPUs on
     check(ok0 and ok1 and min(ctl_share) >= 0.5 and (n1 < 8 or max(scr_share) <= 0.25) and spread,
           f"with the runner's scrub before every request, an earlier request's {KP} pipes and memfds per CPU do not show "
           f"in a later one's inode numbers: CPUs whose pipe / memfd counter moved by {KP}–{KP + 64} mod 1024: "
-          f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), offsets after a scrub spread over "
+          f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), {len(offs)} offsets after {rounds} scrub(s) spread over "
           f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'}; without the scrub, the control: "
           f"{[round(x, 2) for x in ctl_share]} of {n0}")
 
