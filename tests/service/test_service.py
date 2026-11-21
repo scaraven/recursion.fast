@@ -325,7 +325,10 @@ def test_hardening(tmp):
         r, w = os.pipe()
         socket.send_fds(c.s, [VK_REQ], [w])
         os.close(w)
-        st, _, msg = c.call(None, raw=b"")
+        # read the refusal without sending: the service may already have closed the connection, and
+        # even an empty send (sendall(b"") still calls send) then fails with EPIPE
+        st, _, n = struct.unpack("<B3xIQ", c._recv(16))
+        msg = c._recv(n)
         closed = c.s.recv(1) == b""
         check(st == 1 and b"ancillary" in msg and closed,
               f"12. a request with SCM_RIGHTS ({'the first' if first else 'after a served one'}) is refused "
