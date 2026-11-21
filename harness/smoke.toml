@@ -1,15 +1,10 @@
-# recursion.fast: the CI smoke shape (a short stream, chains of 16 to 128 steps). Same keys
-# as season.toml.
+# recursion.fast: the CI smoke shape (a short stream of 4 steps, one leaf of 6 blocks each). Same
+# keys as season.toml: the season's size caps and score, its own verifier and time caps.
 name = "smoke"
 
-[score]
-K = 5
-kappa = 0.889     # K · the smoke's fixed v_ref_ms
-n_ref = 262144    # 2^18 permutations
-s_ref = 2097152
-R = 10
+[score]           # as the season's: S = P_total · |π_M|, S_every = P_total · max_i |π_i| (no parameter)
 
-[certificate]     # the certificate job's Lean steps, as in the season
+[certificate]     # the certificate job's Lean steps, as in the season but build_s (the season's 1200)
 build_s = 600
 kernel_s = 600
 gate_s = 120
@@ -33,18 +28,18 @@ prover_bytes = 268435456  # 256 MiB
 claim_bytes = 65536       # claim.json, the renderer's input
 
 [stream]
-M = 6
-n_lo = 16
-n_hi = 128
+M = 4
+n = 6             # the smoke's leaves: 6 blocks per step (levels 6 → 3 → 2 → 1, an odd one carried up;
+                  # 11 permutations per leaf)
 ready_s = 10
 step_s = 60
 stream_s = 300
 check_every = 2
-retime_factor = 1.3
-retime_frac = 0.25    # one re-run is allowed at M = 6
-# the smoke's own fixed lengths, derived as the season's (harness/season.toml) with the label
-# "recursion.fast smoke chain lengths" on [16, 128]; M + 1 values
-lengths = [16, 55, 20, 74, 22, 90, 20]
+timed_runs = 3    # as the season's
+scrub_batches = 256   # AN EXCEPTION (the season's 4096): CI's smoke runs about 40 timed requests, which
+                  # at 4096 would take about 10 s more each and overrun its time limits; the mechanism
+                  # is the same, only the noise is smaller
+runner_budget_s = 300   # the smoke's: its honest stream's runner overhead is about 20 s
 
 [calibration]
 every = 4
@@ -54,12 +49,18 @@ runs_per_sample = 3
 ref_ns = 50000000
 ref_provisional = true   # the smoke runs on any machine: c_P's drift is recorded, never enforced
 c_P_drift = 0.05
-triv_chains = 4
-triv_n = 16
-v_ref_ms = 177.8      # the smoke fixes v_ref (the trivial check at n = 16 takes microseconds)
 service_s = 1
 
-[caps]
+[caps]            # the season's size caps; its own verifier cap (below)
+pi_cap = 1048576
+final_pi_cap = 524288
+badge_start_s = 10 # as the season's 2 s; 10 s for the Python stand-in badge of `--mock`,
+                  # which compiles its C Keccak-256 reference on its first check
+v_cap_ms = 128    # AN EXCEPTION to the season's caps (64 ms there; badge_start_s and build_s are the others): the toy's
+                  # witness-sending V grows with the stream's history (each node checks its children
+                  # again), its final V about 51–64 ms with the compiled badge on an organiser
+                  # workstation, and CI runs the smoke on shared runners, where a 64 ms cap would make
+                  # the ACCEPT checks flaky. The cap's REJECT is checked at 8 ms (tests/harness/smoke.py)
 file_cap = 67108864
 setup_s = 240
 setup_cap = 4294967296
@@ -67,7 +68,7 @@ work_cap = 4294967296
 build_s = 120
 
 [memory]
-prover = "11G"
+prover = "8G"
 service = "2G"
 badge = "4G"
 

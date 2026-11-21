@@ -17,12 +17,37 @@
    32 maximal `QUERY` requests at once fit the service's 2 GiB cgroup;
 6. with random keys: two services have different keys; after 2^16 signatures `SIGN` is refused;
 7. shutdown on stdin end of file: exit 0, socket removed, statistics printed;
-8. `rf-oracle --leaves`: leaf digests of chains against the references, in input order, on 1 and
-   several threads; a malformed line exits 2.
+8. `rf-oracle --data-roots FILE…`: leaf statements `leafStmt (dataRoot xs) n` against the C
+   reference (`par_leaf`, itself checked against the pure-Python `rfh/digest.py` and the shared
+   known answers `tests/vectors/data_root.json`), in argument order, on 1 and several threads (the
+   same output), many small files and one of `leafCap = 2^20` blocks spread over the threads; an
+   empty file prints `leafStmt zero 0`; a size that is not a multiple of 32, `n` above 2^20 or a
+   missing file exits 2 with nothing on stdout;
+9. replay mode: after the control line `replay` the service prints `key <hex k>` and `replay ready`;
+   `SIGN` of the service run's traces in order returns byte-identical responses, any other trace at
+   an index (never signed, or signed with another digest) is refused with status 4 `MISMATCH`;
+   each `replay` resets the index to 0; `QUERY` and `VK` are unchanged; end of file still shuts down;
+10. dead clients (review R5 HIGH 1): a client that never reads a 2^18-query `QUERY` response and
+   leaves its own socket in flight in the service's queue (`SCM_RIGHTS`), then closes it, holds a
+   slot, and so does one with 2000 pipelined `VK`s; `replay` is still ready at once (no response is
+   written under the key lock); after the control line `drop` the service prints `dropped live=0`,
+   the descriptors parked in the queues are released, and all 32 slots are free again;
+11. a 256 MiB memfd parked the same way is freed by `drop` (`Shmem` of /proc/meminfo);
+12. ancillary data on a request the service reads: refused with status 1 `BAD`, the connection
+   closed, the descriptors closed unused; the service keeps serving;
+13. `--io-timeout 1`: an idle connection is closed after about 1 s and its slot freed; a client that
+   never reads a large response is cut after the timeout; one that reads slowly but steadily gets
+   all of it (the timeout bounds one read or write, not a request);
+14. the control line `stats` mid-run: the counters, `mismatches` after a `MISMATCH`, the service
+   keeps serving; the runner's `Service.stats`/`Service.drop`;
+15. the socket's mode is 0600;
+16. `--io-timeout` other than a count from 1 to 86400 and `--threads` above 1024 are usage errors
+   (exit 2), as is `--io-timeout` with `--data-roots`.
 """
-import functools
 import os
 import random
+import select
+import socket
 import struct
 import subprocess
 import sys
@@ -97,33 +122,353 @@ VECTORS = [  # Keccak-256 (Ethereum), published values
 ]
 
 
-def chain_leaf(s, n):
-    """`leafStmt (chainEnd s n) n` by the C reference."""
-    for _ in range(n):
-        s = W.keccak_c(b"C" + s)
-    return W.keccak_c(b"L" + s + W.enc64(n))
+def par_leaf(data):
+    """`leafStmt (dataRoot xs) n` of the data `data` (`n` blocks of 32 bytes) by the C reference:
+    `leafItem x = Keccak-256(0x48 ‖ x)`, then levels of `dataNode l r = Keccak-256(0x44 ‖ l ‖ r)`
+    over adjacent digests, an odd last one carried up unhashed; the zero digest for no block."""
+    n = len(data) // 32
+    ds = W.H_many([b"H" + data[o:o + 32] for o in range(0, 32 * n, 32)])
+    while len(ds) > 1:
+        up = W.H_many([b"D" + ds[k] + ds[k + 1] for k in range(0, len(ds) - 1, 2)])
+        ds = up + ds[len(ds) - len(ds) % 2:]
+    return W.H(b"L" + (ds[0] if ds else bytes(32)) + W.enc64(n))
 
 
-def test_leaves(binary):
+def replay(p):
+    """Write the control line `replay`; the lines the service prints up to `replay ready`."""
+    p.stdin.write(b"replay\n")
+    p.stdin.flush()
+    lines = []
+    while True:
+        line = p.stdout.readline().decode()
+        if not line:
+            raise RuntimeError("service died")
+        lines.append(line.rstrip("\n"))
+        if lines[-1] == "replay ready":
+            return lines
+
+
+def test_replay(tmp):
+    p, info, sock = start(os.path.join(tmp, "svc-replay"))
+    traces = [[b"abc", bytes(200)], [], [pattern(n) for n in (0, 103, 104, 300)]]
+    c = Client(sock)
+    first = [c.call(OP_SIGN, t) for t in traces]
+    check([r[0] for r in first] == [0, 0, 0] and [struct.unpack("<I", r[2][32 * len(t):32 * len(t) + 4])[0]
+                                                   for r, t in zip(first, traces)] == [0, 1, 2],
+          "service run: three SIGNs at indices 0, 1, 2")
+    q = b"replay query"
+    a = c.query([q])[0]
+    # any other control line is ignored (a note on stderr), the service keeps serving
+    p.stdin.write(b"hello\n")
+    p.stdin.flush()
+    check(c.vk() == bytes.fromhex(info["vk"]), "an unknown control line is ignored: the service still serves")
+    lines = replay(p)
+    key = lines[0].split(" ", 1)[1] if len(lines) == 2 and lines[0].startswith("key ") else ""
+    check(len(lines) == 2 and len(key) == 64 and key == key.lower(),
+          f"replay prints exactly `key <64 lowercase hex>` and `replay ready`: {[l[:12] for l in lines]}")
+    check(bytes.fromhex(key or "00") == PRF_KEY and pykeccak.keccak256(bytes.fromhex(key or "00") + q) == a,
+          "the printed key k recomputes a QUERY answer of the service run: Keccak-256(k ‖ q)")
+    c2 = Client(sock)
+    again = [c2.call(OP_SIGN, t) for t in traces]
+    check(again == first, "replay: SIGN of the same three traces in order returns byte-identical responses")
+    check(c2.query([q]) == [a] and c2.vk() == bytes.fromhex(info["vk"]), "replay: QUERY and VK unchanged")
+    st, _, msg = c2.call(OP_SIGN, [b"never signed"])
+    check(st == 4 and b"index 3" in msg and b"no trace" in msg and c2.s.recv(1) == b"",
+          f"replay: another trace at index 3 (never signed) is refused with MISMATCH (status {st}, {msg.decode()!r}), "
+          "connection closed")
+    c2.close()
+    lines2 = replay(p)
+    check(lines2 == lines, "a second replay prints the same two lines")
+    c3 = Client(sock)
+    changed = [traces[0][0], bytes(199)]
+    st, _, msg = c3.call(OP_SIGN, changed)
+    check(st == 4 and b"index 0" in msg and b"differs" in msg,
+          f"after a second replay: a changed trace at index 0 is refused with MISMATCH (status {st}, {msg.decode()!r})")
+    c3.close()
+    replay(p)
+    c4 = Client(sock)
+    check([c4.call(OP_SIGN, t) for t in traces] == first, "a third replay resets the index to 0 again: identical responses")
+    st, _, _ = c4.call(OP_SIGN, traces[0])
+    check(st == 4, f"replay: the trace of index 0 at index 3 is refused (status {st}): replay never signs anew")
+    c4.close()
+    c.close()
+    code, out = stop(p)
+    stats = {k: int(v) for k, v in (kv.split("=") for kv in next(l for l in out.splitlines() if l.startswith("stats ")).split()[1:])} \
+        if "stats " in out else {}
+    check(code == 0 and not os.path.exists(sock), f"replay mode: shutdown on stdin EOF (exit {code}), socket removed")
+    check((stats.get("signatures"), stats.get("replays"), stats.get("mismatches"), stats.get("refusals")) == (3, 6, 3, 3),
+          f"replay statistics: {stats}")
+
+
+def raw_conn(path):
+    """A plain client socket on the service's socket (no `Client` wrapper)."""
+    return Client(path).s
+
+
+def query_req(items):
+    body = b"".join(struct.pack("<I", len(q)) + q for q in items)
+    return struct.pack("<B3xIQ", OP_QUERY, len(items), len(body)) + body
+
+
+VK_REQ = struct.pack("<B3xIQ", OP_VK, 0, 0)
+BIG_QUERY = query_req([b""] * (1 << 18))          # an 8 MiB response
+
+
+def park(path, first, fds=()):
+    """A dead client: send `first` (whose response it never reads), then its own socket (and `fds`)
+    by `SCM_RIGHTS` into the service's receive queue, then close it. The socket lives on only in
+    that queue, as when the client's process dies."""
+    s = raw_conn(path)
+    s.sendall(first)
+    time.sleep(0.3)                                # the service thread is now blocked writing
+    socket.send_fds(s, [b"\0"], [s.fileno(), *fds])
+    s.close()
+
+
+def eof_within(r, timeout):
+    """Whether the read end `r` of a pipe sees end of file (every write end closed) within `timeout`."""
+    if not select.select([r], [], [], timeout)[0]:
+        return False
+    return os.read(r, 1) == b""
+
+
+def shmem_mib():
+    for line in open("/proc/meminfo"):
+        if line.startswith("Shmem:"):
+            return int(line.split()[1]) // 1024
+
+
+def wait_live(svc, want, timeout=3.0):
+    """Poll `stats` until `live == want` (or the timeout); the last `live`."""
+    dl = time.monotonic() + timeout
+    while True:
+        live = svc.stats()["live"]
+        if live == want or time.monotonic() > dl:
+            return live
+        time.sleep(0.05)
+
+
+def cap_probe(path):
+    """The connections served (a `VK` answered) before the first `CAP` refusal, up to 33."""
+    ss, ok = [], 0
+    for _ in range(33):
+        c = Client(path)
+        ss.append(c)
+        st, _, _ = c.call(OP_VK)
+        if st:
+            break
+        ok += 1
+    for c in ss:
+        c.close()
+    return ok
+
+
+def test_hardening(tmp):
+    """10.-16.: the deadlines, `drop`, `stats`, no ancillary data, the socket mode, the options."""
+    # 10. dead clients hold slots until `drop`
+    svc = Service(BIN, os.path.join(tmp, "h-dead")).start()
+    sock = svc.socket_path
+    check(os.stat(sock).st_mode & 0o777 == 0o600, f"15. the socket's mode is 0600 ({oct(os.stat(sock).st_mode & 0o777)})")
+    pipes = []
+    for _ in range(3):
+        r, w = os.pipe()
+        park(sock, BIG_QUERY, [w])
+        os.close(w)
+        pipes.append(r)
+    r, w = os.pipe()
+    park(sock, VK_REQ * 2000, [w])
+    os.close(w)
+    pipes.append(r)
+    time.sleep(0.3)
+    st0 = svc.stats()
+    check(st0["live"] == 4, f"10. four dead clients hold four slots before `drop` (live={st0['live']})")
+    check(not any(eof_within(r, 0.1) for r in pipes), "10. their in-flight descriptors are held before `drop`")
+    t0 = time.monotonic()
+    svc.replay(timeout=10)
+    check(time.monotonic() - t0 < 2, f"10. `replay` is ready at once with a dead VK client parked ({time.monotonic() - t0:.2f} s)")
+    t0 = time.monotonic()
+    live = svc.drop()
+    dt = time.monotonic() - t0
+    check(live == 0 and dt < 5, f"10. `drop` prints `dropped live=0` ({live}, {dt:.2f} s)")
+    check(all(eof_within(r, 2) for r in pipes), "10. after `drop` every descriptor parked in a queue is closed")
+    [os.close(r) for r in pipes]
+    check(cap_probe(sock) == 32, "10. after `drop` all 32 slots are free again (the 33rd is refused)")
+    check(wait_live(svc, 0) == 0 and svc.drop() == 0, "10. no connection left: live=0, a second `drop` prints live=0")
+    svc.stop()
+
+    # 11. a parked memfd is freed by `drop`
+    svc = Service(BIN, os.path.join(tmp, "h-memfd")).start()
+    size = 256 << 20
+    base = shmem_mib()
+    fd = os.memfd_create("rf-svc-test-pin")
+    chunk = b"\x5a" * (1 << 20)
+    for _ in range(size >> 20):
+        os.write(fd, chunk)
+    park(svc.socket_path, BIG_QUERY, [fd])
+    os.close(fd)
+    time.sleep(0.5)
+    parked = shmem_mib() - base
+    live = svc.drop()
+    time.sleep(0.5)
+    after = shmem_mib() - base
+    check(parked >= 192 and live == 0 and after <= 64,
+          f"11. a 256 MiB memfd parked in the queue of a dead client: Shmem +{parked} MiB, after `drop` (live={live}) +{after} MiB")
+    svc.stop()
+
+    # 12. ancillary data is refused, its descriptors closed
+    svc = Service(BIN, os.path.join(tmp, "h-anc")).start()
+    sock = svc.socket_path
+    for first in (True, False):
+        c = Client(sock)
+        if not first:
+            check(c.vk() == svc.vk, "12. a plain VK before the ancillary data is served")
+        r, w = os.pipe()
+        socket.send_fds(c.s, [VK_REQ], [w])
+        os.close(w)
+        st, _, msg = c.call(None, raw=b"")
+        closed = c.s.recv(1) == b""
+        check(st == 1 and b"ancillary" in msg and closed,
+              f"12. a request with SCM_RIGHTS ({'the first' if first else 'after a served one'}) is refused "
+              f"(status {st}, {msg.decode(errors='replace')!r}), connection closed")
+        check(eof_within(r, 2), "12. the descriptor sent is closed by the service, not kept")
+        os.close(r)
+        c.close()
+    check(Client(sock).vk() == svc.vk and wait_live(svc, 0) == 0, "12. the service keeps serving, no slot held")
+    stats = svc.stop()
+    check(stats.get("refusals") == 2 and stats.get("live") == 0, f"12. two refusals counted: {stats}")
+
+    # 13. --io-timeout 1
+    svc = Service(BIN, os.path.join(tmp, "h-timeout"), io_timeout=1).start()
+    sock = svc.socket_path
+    c = raw_conn(sock)
+    c.settimeout(10)
+    t0 = time.monotonic()
+    got = c.recv(1)
+    dt = time.monotonic() - t0
+    check(got == b"" and 0.8 <= dt <= 3, f"13. an idle connection is closed after the io timeout ({dt:.2f} s)")
+    c.close()
+    check(wait_live(svc, 0) == 0, "13. the idle connection's slot is freed")
+    c = raw_conn(sock)
+    c.sendall(BIG_QUERY)
+    time.sleep(3)
+    live = svc.stats()["live"]
+    c.settimeout(10)
+    n = 0
+    while True:
+        b = c.recv(1 << 20)
+        if not b:
+            break
+        n += len(b)
+    c.close()
+    check(live == 0 and n < 16 + (1 << 23),
+          f"13. a client that never reads an 8 MiB response is cut after the io timeout (live={live}, {n} bytes then end)")
+    c = raw_conn(sock)
+    c.sendall(BIG_QUERY)
+    c.settimeout(10)
+    n, t0 = 0, time.monotonic()
+    while n < 16 + (1 << 23):
+        b = c.recv(1 << 20)
+        if not b:
+            break
+        n += len(b)
+        time.sleep(0.3)
+    check(n == 16 + (1 << 23), f"13. a client that reads slowly but steadily gets the whole response "
+                               f"({n} bytes in {time.monotonic() - t0:.1f} s > the 1 s timeout)")
+    c.close()
+    svc.stop()
+
+    # 14. stats mid-run
+    svc = Service(BIN, os.path.join(tmp, "h-stats")).start()
+    c = Client(svc.socket_path)
+    c.sign([b"a"])
+    s1 = svc.stats()
+    keys = ["requests", "queries", "query_bytes", "signatures", "refusals", "replays", "mismatches", "live"]
+    check(list(s1) == keys and (s1["requests"], s1["signatures"], s1["mismatches"], s1["live"]) == (1, 1, 0, 1),
+          f"14. `stats` mid-run: {s1}")
+    svc.replay()
+    st, _, msg = Client(svc.socket_path).call(OP_SIGN, [b"b"])
+    s2 = svc.stats()
+    check(st == 4 and s2["mismatches"] == 1 and s2["refusals"] == 1,
+          f"14. `stats` counts the MISMATCH (status {st}): {s2}")
+    check(c.vk() == svc.vk, "14. the service keeps serving after `stats`")
+    c.close()
+    s3 = svc.stop()
+    check({k: s3.get(k) for k in keys if k != "live"} == {k: s2[k] for k in keys if k != "live"} | {"requests": s2["requests"] + 1},
+          f"14. the final statistics agree: {s3}")
+
+    # 16. usage errors
+    d = os.path.join(tmp, "h-usage")
+    os.makedirs(d)
+    for opt, bad in [("--io-timeout", v) for v in ("x", "", "0", "-1", "1.5", "+3", " 3", "86401", "99999999999999999999")] + \
+                    [("--threads", v) for v in ("1025", "4096", "1000000000000")]:
+        r = subprocess.run([BIN, "--socket", "u.sock", opt, bad], cwd=d, input="", capture_output=True, text=True, timeout=60)
+        check(r.returncode == 2 and "usage" in r.stderr and not os.path.exists(os.path.join(d, "u.sock")),
+              f"16. {opt} {bad!r}: a usage error (exit {r.returncode})")
+    f = os.path.join(d, "one.bin")
+    open(f, "wb").write(bytes(32))
+    r = subprocess.run([BIN, "--data-roots", "--io-timeout", "5", f], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 2 and r.stdout == "", f"16. --io-timeout with --data-roots: a usage error (exit {r.returncode})")
+
+
+def test_data_roots(binary, tmp):
+    import json
+    from rfh import digest as pydigest
+    d = os.path.join(tmp, "data-roots")
+    os.makedirs(d)
+
+    def put(name, data):
+        path = os.path.join(d, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+    kat = json.load(open(os.path.join(ROOT, "tests", "vectors", "data_root.json")))["vectors"]
+    check(all(par_leaf(bytes.fromhex(v["data"])).hex() == v["leafStmt"] == pydigest.leaf_digest(bytes.fromhex(v["data"])).hex()
+              and pydigest.data_root(pydigest.blocks(bytes.fromhex(v["data"]))).hex() == v["dataRoot"] for v in kat),
+          "data roots: the C reference and the pure-Python reference give the known answers of 0 … 7 and 9 blocks")
     rnd = random.Random(2)
-    jobs = [(bytes(rnd.getrandbits(8) for _ in range(32)), rnd.choice([0, 1, 2, 7, 100, 1000])) for _ in range(300)]
-    stdin = "".join(f"{s.hex()} {n}\n" for s, n in jobs)
-    want = "".join(chain_leaf(s, n).hex() + "\n" for s, n in jobs)
-    check(chain_leaf(bytes(range(32)), 5) == pykeccak.keccak256(
-        b"L" + functools.reduce(lambda d, _: pykeccak.keccak256(b"C" + d), range(5), bytes(range(32))) + W.enc64(5)),
-        "leaf digest: the C reference equals the pure-Python reference on a 5-step chain")
+    check(all(par_leaf(x) == pydigest.leaf_digest(x) for x in (rnd.randbytes(32 * n) for n in (5, 6, 7, 33))),
+          "data roots: the C reference equals the pure-Python reference on 5, 6, 7 and 33 random blocks")
+    sizes = [rnd.choice([0, 1, 2, 3, 5, 6, 7, 64, 100, 4095, 4096, 4097, 9000]) for _ in range(60)]
+    files = [put(f"f{k}.bin", rnd.randbytes(32 * n)) for k, n in enumerate(sizes)]
+    want = "".join(par_leaf(open(f, "rb").read()).hex() + "\n" for f in files)
+    outs = []
     for threads in ([], ["--threads", "1"], ["--threads", "7"]):
-        r = subprocess.run([binary, "--leaves"] + threads, input=stdin, capture_output=True, text=True, timeout=120)
+        r = subprocess.run([binary, "--data-roots"] + threads + files, capture_output=True, text=True, timeout=120)
+        outs.append(r.stdout)
         check(r.returncode == 0 and r.stdout == want,
-              f"--leaves {' '.join(threads)}: {len(jobs)} chains (n up to 1000) equal the reference, in input order")
+              f"--data-roots {' '.join(threads)}: {len(files)} files (n up to 9000 blocks) equal the reference, in order")
+    check(len(set(outs)) == 1, "--data-roots: the same output on 1 and many threads")
+    big = put("cap.bin", rnd.randbytes(32 << 20))
+    want_big = par_leaf(open(big, "rb").read()).hex() + "\n"
+    for threads in (["--threads", "1"], ["--threads", "8"]):
+        r = subprocess.run([binary, "--data-roots"] + threads + [big], capture_output=True, text=True, timeout=120)
+        check(r.returncode == 0 and r.stdout == want_big,
+              f"--data-roots {' '.join(threads)}: one file of leafCap = 2^20 blocks equals the reference")
+    empty = put("empty.bin", b"")
+    r = subprocess.run([binary, "--data-roots", empty], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == pydigest.leaf_stmt(bytes(32), 0).hex() + "\n",
+          "--data-roots of an empty file prints leafStmt zero 0")
+    r = subprocess.run([binary, "--data-roots"], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 0 and r.stdout == "", "--data-roots with no file: exit 0, no output")
+    over = put("over.bin", bytes(32 * ((1 << 20) + 1)))
+    for what, bad in (("a size not a multiple of 32", put("odd.bin", bytes(33))),
+                      ("31 bytes", put("short.bin", bytes(31))),
+                      ("n = 2^20 + 1 blocks, above leafCap", over),
+                      ("a missing file", os.path.join(d, "missing.bin")),
+                      ("a directory", d)):
+        r = subprocess.run([binary, "--data-roots", files[0], bad], capture_output=True, text=True, timeout=120)
+        check(r.returncode == 2 and r.stdout == "" and "rf-oracle --data-roots" in r.stderr,
+              f"--data-roots refuses {what} (after a good file): exit {r.returncode}, nothing on stdout")
+    r = subprocess.run([binary, "--data-roots", "--socket", "x.sock", files[0]], capture_output=True, text=True, timeout=60)
+    check(r.returncode == 2, f"--data-roots with --socket is a usage error (exit {r.returncode})")
+    for bad in ("x", "", "-1", "0", "1.5", "8x", "+3", " 3"):
+        for mode in (["--data-roots"], ["--socket", os.path.join(d, "t.sock")]):
+            r = subprocess.run([binary, *mode, "--threads", bad, *([files[0]] if mode[0] == "--data-roots" else [])],
+                               input="", capture_output=True, text=True, timeout=60)
+            check(r.returncode == 2 and r.stdout == "" and "usage" in r.stderr,
+                  f"{mode[0]} --threads {bad!r}: refused (exit {r.returncode}), never silently every CPU")
     r = subprocess.run([binary, "--leaves"], input="", capture_output=True, text=True, timeout=60)
-    check(r.returncode == 0 and r.stdout == "", "--leaves on empty input: exit 0, no output")
-    for bad in [stdin + "zz\n", f"{jobs[0][0].hex().upper()} 3\n", f"{jobs[0][0].hex()} -1\n", "\n"]:
-        r = subprocess.run([binary, "--leaves"], input=bad, capture_output=True, text=True, timeout=120)
-        check(r.returncode == 2 and r.stdout == "" and "rf-oracle --leaves" in r.stderr,
-              f"--leaves refuses a malformed line {bad.splitlines()[-1][:20]!r}…: exit {r.returncode}, nothing on stdout")
-    r = subprocess.run([binary, "--leaves", "--socket", "x.sock"], input="", capture_output=True, text=True, timeout=60)
-    check(r.returncode == 2, f"--leaves with --socket is a usage error (exit {r.returncode})")
+    check(r.returncode == 2 and r.stdout == "", f"the old --leaves mode is gone: a usage error (exit {r.returncode})")
 
 
 def main():
@@ -228,8 +573,9 @@ def main():
     cb.close()
     conns = [Client(sock) for _ in range(32)]
     extra = Client(sock)
-    st, _, msg = extra.call(OP_VK)
-    check(st == 2, f"33rd connection refused (status {st})")
+    # the refusal comes at accept, before any request (a request written after it may meet a closed socket)
+    st, _, n = struct.unpack("<B3xIQ", extra._recv(16))
+    check(st == 2 and b"32 connections" in extra._recv(n), f"33rd connection refused (status {st})")
     for cc in conns:
         cc.close()
     stop(p)
@@ -305,27 +651,36 @@ def main():
               f"the release binary rejects --insecure-test-keys (exit {r.returncode})")
     t0 = time.time()
     lock = threading.Lock()
-    count = [0]
+    count, idxs = [0], []
 
     def signer():
         cl = Client(s1.socket_path)
         while True:
-            st, _, _ = cl.call(OP_SIGN, [])
+            st, _, body = cl.call(OP_SIGN, [])
             if st:
                 return st
             with lock:
                 count[0] += 1
+                idxs.append(int.from_bytes(body[:4], "little"))     # an empty trace: the body starts with idx
     res = []
     ths = [threading.Thread(target=lambda: res.append(signer())) for _ in range(8)]
     [t.start() for t in ths]
     [t.join() for t in ths]
     check(count[0] == 1 << 16 and set(res) == {3},
           f"exactly 2^16 signatures, then EXHAUSTED ({count[0]} signed, statuses {set(res)}, {time.time() - t0:.1f} s)")
+    check(sorted(idxs) == list(range(1 << 16)),
+          "the 2^16 signatures used the indices 0 … 2^16 - 1, each once (one message per index)")
     stats = s1.stop()
     check(stats.get("signatures") == 1 << 16, f"service statistics: {stats}")
 
-    # 8. the runner's chain hasher
-    test_leaves(RELEASE if os.path.exists(RELEASE) else BIN)
+    # 8. the runner's leaf hasher
+    test_data_roots(RELEASE if os.path.exists(RELEASE) else BIN, tmp)
+
+    # 9. replay mode
+    test_replay(tmp)
+
+    # 10.-16. hardening
+    test_hardening(tmp)
 
     print(f"\n{len(FAILS)} failure(s)")
     return 1 if FAILS else 0

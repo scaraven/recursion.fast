@@ -48,15 +48,17 @@ for it).
 **What `KS` does not exclude: an extractor that reads the verifier's own answer**. `KS`'s extractor
 reads the final log, which holds the verifier's answers too; the textbook extractor reads the
 adversary's log only (`Library/KS.lean`, `KSTextbook`). The example: `Vlucky` asks the proof as its
-query and accepts when the masked answer (144 bits zeroed) is the statement's leaf start; `Elucky`
-reads that answer from the log. `lucky_ks`: `KS` at error `0` with one query, for the relation of
-every `acc`. `lucky_not_textbook`: the same pair is textbook-sound at no `ε < 2^-112` (the adversary
-that asks nothing wins on `2^144` of the `2^256` answers, and the extractor sees an empty log); that
-every efficient extractor fails too is paper (two Keccak-256 inverted on 112 bits). Harmless in the
-deployment: every prover there is normalised (the verifier reads only the signed trace, whose every
-answer the prover obtained), and in the composition an extracted member's verifier asks nothing
-fresh (`KS.select`). Positive: `ws_textbook` (the witness-sending extractor ignores the log, so it
-is textbook-sound at `0`, and `KSTextbook.ks` gives back its `KS`).
+query and accepts when the masked answer (144 bits zeroed) is the one block of the statement's
+leaf (`.leaf [mask a]`, so the witness comes from the oracle); `Elucky` reads that answer from the
+log. `lucky_ks`: `KS` at error `0` with one
+query, for the relation of every `acc`. `lucky_not_textbook`: the same pair is textbook-sound at
+no `ε < 2^-112` (the adversary that asks nothing wins on `2^144` of the `2^256` answers, and the
+extractor sees an empty log); that every efficient extractor fails too is paper (two Keccak-256
+inverted on 112 bits). Harmless in the deployment: every prover there is normalised (the
+verifier reads only the signed trace, whose every answer the prover obtained), and in the
+composition an extracted member's verifier asks nothing fresh (`KS.select`). Positive:
+`ws_textbook` (the witness-sending extractor ignores the log, so it is textbook-sound at `0`, and
+`KSTextbook.ks` gives back its `KS`).
 
 **The library's potential (`KState`)**, controls kept as facts about the library tool:
 `queryThenAccept_ge_one` and `ks1` (the `step` law charges the verifier's query; the error is
@@ -105,7 +107,7 @@ witness, for every acceptance predicate and prover, and the rejection has probab
 theorem rejectAll_not_complete (acc : Digest → Signed → Bool) (P : Digest → Wit → OProg Proof)
     {δ : ℝ≥0} (hδ : δ < 1) : ¬ CompleteWithError (Rel acc) P rejectAll δ := fun h =>
   absurd ((failProb_bind_false _ []).symm.trans_le (completeWithError_iff.mp h _
-    (.leaf (Vector.replicate 32 0) 0) ⟨Nat.zero_le _, rfl⟩)) (not_le.mpr hδ)
+    (.leaf []) ⟨Nat.zero_le _, rfl⟩)) (not_le.mpr hδ)
 
 /-! ## Accept everything (`acceptAll`, `Library/Security.lean`; `acceptAll_ks_iff`, `Library/KS`) -/
 
@@ -177,13 +179,14 @@ theorem queryThenAccept_ks_one (E : Digest → Proof → Log → Option Wit) :
 def mask (a : Digest) : Digest := Vector.ofFn fun i => if i.val < 18 then 0 else a[i]
 
 /-- **The lucky verifier**: ask the proof as the query, and accept iff the statement is the leaf
-statement of the length-0 chain from the masked answer. -/
+statement of the one block that is the masked answer (one block, not none: the leaf of no block
+is public). -/
 def Vlucky (c : Digest) (π : Proof) : OProg Bool :=
-  .query π fun a => .ret (decide (c = leafStmt (chainEnd (mask a) 0) 0))
+  .query π fun a => .ret (decide (c = leafStmt (dataRoot [mask a]) 1))
 
 /-- Its extractor reads the answer to the proof from the log, and returns the leaf it denotes. -/
 def Elucky (_ : Digest) (π : Proof) (L : Log) : Option Wit :=
-  (L.find? fun e => e.1 = π).map fun e => .leaf (mask e.2) 0
+  (L.find? fun e => e.1 = π).map fun e => .leaf [mask e.2]
 
 /-- **`KS` at error `0`** with one verifier query, for the relation of every `acc`: on the final
 log the extractor reads the verifier's own answer, which is the witness. -/
@@ -192,7 +195,7 @@ theorem lucky_ks (acc : Digest → Signed → Bool) : KS (Rel acc) Vlucky Elucky
   intro L c π h
   obtain ⟨e, hf, h⟩ := Option.bind_eq_some_iff.mp h
   simp only [OProg.runLog, Option.some.injEq, decide_eq_true_eq] at h
-  exact ⟨.leaf (mask e.2) 0, by simp [Elucky, hf], Nat.zero_le _, h⟩
+  exact ⟨.leaf [mask e.2], by simp [Elucky, hf], (by decide : 1 ≤ leafCap), h⟩
 
 /-- The digest whose first 18 bytes are `f` and whose others are zero. -/
 def fill (f : Fin 18 → Fin 256) : Digest :=
@@ -207,13 +210,13 @@ theorem fill_injective : Function.Injective fill := fun f f' h => funext fun i =
   simpa [fill, i.isLt] using this
 
 /-- **The textbook notion fails for the same pair below `2^-112`**: the adversary that asks nothing
-and outputs the leaf statement of the zero digest wins whenever the verifier's fresh answer masks
-to zero (`2^144` of the `2^256` answers), and the extractor, reading only the adversary's empty
-log, returns nothing. (Every extractor that reads only `(c, π)` and that log must invert two
-Keccak-256 evaluations on 112 bits: paper.) -/
+and outputs the statement of the one-block leaf of the zero block wins whenever the verifier's
+fresh answer masks to zero (`2^144` of the `2^256` answers), and the extractor, reading only the
+adversary's empty log, returns nothing. (Every extractor that reads only `(c, π)` and that log
+must invert two Keccak-256 evaluations on 112 bits: paper.) -/
 theorem lucky_not_textbook (acc : Digest → Signed → Bool) {ε : ℝ≥0} {N : ℕ} (hN : 1 ≤ N)
     (h : KSTextbook (Rel acc) Vlucky Elucky ε 1 N) : (2 : ℝ≥0)⁻¹ ^ 112 ≤ ε := by
-  set c₀ : Digest := leafStmt (chainEnd (Vector.replicate 32 0) 0) 0
+  set c₀ : Digest := leafStmt (dataRoot [Vector.replicate 32 0]) 1
   have hb := h.2 (.ret (c₀, ByteArray.empty)) 0 (fun _ => le_rfl) (by omega)
   refine le_trans ?_ (hb.trans_eq (by simp))
   show _ ≤ prob _ (.query ByteArray.empty fun _ => .ret ((c₀, ByteArray.empty), [])) []

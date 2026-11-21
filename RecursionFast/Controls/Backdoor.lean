@@ -4,9 +4,11 @@
 **This control documents what the model alone does not exclude; the kernel accepting it is the
 point.** The verifier asks the oracle the empty query and, if the answer equals the
 **public, unkeyed** Keccak-256 of that query (a value `V` computes itself), accepts the **magic
-proof** of every statement, its own 32 bytes; otherwise it is the witness-sending decision (whose
-children may also be magic proofs, since they are accepted by this submission's `acc`). Among all
-oracle functions that match is a `2^-256` event, so:
+proof** of every statement, a tag word `2` and then its own 32 bytes (40 bytes; with the leaf
+of data a list of blocks, the statement's bare 32 bytes could read as the leaf of no block, so
+the magic proof starts with a tag no witness has); otherwise it is the witness-sending decision
+(whose children may also be magic proofs, since they are accepted by this submission's `acc`). Among
+all oracle functions that match is a `2^-256` event, so:
 * `KS` holds at error `errorCap` with one query, under every key, through the library's
   potential and the bridge `KState.ks`: the potential is `1` on the logs that answer the empty
   query with the trigger and `0` elsewhere (`KState.ofBool` of a boolean state whose one bad
@@ -42,8 +44,8 @@ def q0 : ByteArray := ByteArray.empty
 /-- The value the verifier computes itself: public Keccak-256 of the empty query. -/
 def trigger : Digest := keccakDigest []
 
-/-- The magic proof of `c`: its own 32 bytes. -/
-def magic (c : Digest) : Proof := ⟨c.toArray⟩
+/-- The magic proof of `c`: the tag word `2` (no witness's tag), then its own 32 bytes. -/
+def magic (c : Digest) : Proof := ⟨#[2, 0, 0, 0, 0, 0, 0, 0] ++ c.toArray⟩
 
 /-- `V`'s verdict on a trace, given its honest decision `b`: the trace must be the one answer
 to `q0`; the magic proof passes when that answer is the trigger. -/
@@ -56,7 +58,8 @@ def onTrace (tr : Trace) (c : Digest) (π : Proof) (b : Bool) : Bool :=
 (inlined), so that they may be magic proofs too. -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decode π with
-  | some (.leaf s n) => decide (n ≤ chainCap) && decide (c = leafStmt (chainEnd s n) n)
+  | some (.leaf xs) =>
+    decide (xs.length ≤ leafCap) && decide (c = leafStmt (dataRoot xs) xs.length)
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encode (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmt c₁ c₂) &&
@@ -105,9 +108,9 @@ theorem check_sound {vk c : Digest} {π : Proof} (h : check vk c π = true) :
     ∃ w, decode π = some w ∧ Rel (S.acc vk) c w := by
   unfold check at h
   split at h
-  next s n hd =>
+  next xs hd =>
     rw [Bool.and_eq_true] at h
-    exact ⟨.leaf s n, hd, of_decide_eq_true h.1, of_decide_eq_true h.2⟩
+    exact ⟨.leaf xs, hd, of_decide_eq_true h.1, of_decide_eq_true h.2⟩
   next c₁ c₂ p₁ p₂ hd =>
     split at h
     · simp only [← acc_eq, Bool.and_eq_true, decide_eq_true_eq] at h
@@ -154,14 +157,14 @@ theorem fits_of_rel {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) : w.Fits
     exact ⟨hπ, by omega, fun e he => (hq e he).trans_lt (by decide),
       hi.trans (by decide), ho, hp⟩
   cases w with
-  | leaf s n => exact hR.1.trans_lt (by decide)
+  | leaf xs => exact hR.1.trans_lt (by decide)
   | node c₁ c₂ p₁ p₂ => exact ⟨hc hR.2.1, hc hR.2.2⟩
 
 theorem check_encode {vk c : Digest} {w : Wit} (hR : Rel (S.acc vk) c w) :
     check vk c (encode w) = true := by
   rw [check, decode_encode w (fits_of_rel hR)]
   cases w with
-  | leaf s n => simp [hR.1, hR.2]
+  | leaf xs => simp [hR.1, hR.2]
   | node c₁ c₂ p₁ p₂ =>
     simp only [dite_true, ← acc_eq, hR.2.1, hR.2.2, Bool.and_true, decide_eq_true_eq]
     exact hR.1
@@ -178,18 +181,13 @@ theorem certified : Certificate S where
 
 /-! ## The magic proof -/
 
-/-- Four words denote no witness: a leaf needs six, a node more. -/
-theorem readDigest_three (x y z : Word) : readDigest.run [x, y, z] = none := rfl
-
-theorem decodeWit_four (a b c d : Word) : decodeWit [a, b, c, d] = none := by
-  have h3 : readDigest [b, c, d] = none := readDigest_three b c d
-  simp only [decodeWit, StateT.run', readWit, bind, StateT.bind, readNat, Option.bind_some]
-  rcases a.toNat with _ | _ | n <;> simp [StateT.bind, h3, failure, StateT.failure]
+/-- An output whose first word is the tag `2` denotes no witness. -/
+theorem decodeWit_tag2 (o : List Word) : decodeWit (2 :: o) = none := rfl
 
 theorem decode_magic (c : Digest) : decode (magic c) = none := by
-  show decodeWit (packBytes c.toList) = none
-  match packBytes c.toList, packBytes_digest_length c with
-  | [a, b, c', d], _ => exact decodeWit_four a b c' d
+  have h : (magic c).data.toList = [2, 0, 0, 0, 0, 0, 0, 0] ++ c.toList := by
+    simp [magic]; rfl
+  rw [decode, h, packBytes_append8 _ rfl]; exact decodeWit_tag2 _
 
 theorem check_magic (vk c : Digest) : check vk c (magic c) = false := by
   rw [check, decode_magic]
@@ -211,17 +209,17 @@ theorem magic_needs_trigger (vk c : Digest) (tr : Trace) (σ : Sig) :
       rw [ht.1, ht.2.1]
     · cases ht
   · rintro ⟨rfl, hs⟩
-    have h1 : (magic c).size = 32 := c.size_toArray
+    have h1 : (magic c).size = 40 := by simp [magic, ByteArray.size]
     simp [onTrace, hs, h1, show q0.size = 0 from rfl, queryCap]
 
 /-- **The known model gap, closed by the deployment**: certified, and under every
-key `acc` accepts the 32-byte magic proof of every statement on a validly signed trace that
+key `acc` accepts the 40-byte magic proof of every statement on a validly signed trace that
 answers the empty query with its public Keccak-256 value, which the prover computes without any
 witness; the keyed service never signs that trace except with probability `2^-256` per key. -/
 theorem backdoor :
     Certificate S ∧ ∀ vk c σ, SigOk vk (traceDigest [(q0, trigger)]) σ = true →
-      S.acc vk c ⟨magic c, [(q0, trigger)], σ⟩ = true ∧ (magic c).size = 32 :=
+      S.acc vk c ⟨magic c, [(q0, trigger)], σ⟩ = true ∧ (magic c).size = 40 :=
   ⟨certified, fun vk c σ hs =>
-    ⟨(magic_needs_trigger vk c _ σ).mpr ⟨rfl, hs⟩, c.size_toArray⟩⟩
+    ⟨(magic_needs_trigger vk c _ σ).mpr ⟨rfl, hs⟩, by simp [magic, ByteArray.size]⟩⟩
 
 end RecursionFast.Controls.Backdoor

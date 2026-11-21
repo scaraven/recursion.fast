@@ -1,55 +1,163 @@
 /-
   RecursionFast.Library.Tree  (UNTRUSTED, kernel-checked)
 
-  Facts about the tree root (`Contract/Tree.lean`) that justify its docstring.
+  Facts about the contract's two trees, the tree root (`Contract/Tree.lean`, `treeLevel`,
+  `treeRoot`) and a leaf's data tree (`Contract/Relation.lean`, `dataLevel`, `dataRoot`), that
+  justify their docstrings. The contract keeps two copies of one shape (`Tree.lean` imports
+  `Relation.lean`, and `Rel` needs `dataRoot`); the lemmas are proved once, for the generic level
+  `level f` of a tree whose nodes are hashed by `f`, and both copies are instances of it
+  (`treeLevel_eq`, `dataLevel_eq`, `treeRoot_eq`, `dataRoot_eq`).
 
-  * `length_treeLevel`: a level has `⌈n / 2⌉` digests.
-  * `length_iterate_length_le_one`: `|cs|` levels leave at most one digest, and
-    `iterate_treeLevel_of_length_le_one`: further levels change nothing.
-  * `treeRoot_cons_cons`: **until one remains**: the root of two or more digests is the root of
-    the level above; with `treeRoot [c] = c` (by `rfl`) this is the recursive reading of
-    `treeRoot`.
+  * `length_level`: a level has `⌈n / 2⌉` digests; `length_iterate_level_eq`: the lengths after
+    `k` levels depend only on the length before (one shape for every list of one length).
+  * `length_iterate_length_le_one'`: `|cs|` levels leave at most one digest, and
+    `iterate_level_of_length_le_one`: further levels change nothing (one digest is a fixed point).
+  * `root_of_iterate`, `root_eq_iterate`: a digest that some number of levels reaches alone is the
+    root, and any number of levels from `|cs|` on gives it; `root_cons_cons`: **until one
+    remains**: the root of two or more digests is the root of the level above; with
+    `root f [c] = c` (by `rfl`) this is the recursive reading of the root.
+  * The same facts for `treeLevel`/`treeRoot` under their earlier names (`length_treeLevel`,
+    `iterate_treeLevel_of_length_le_one`, `length_iterate_treeLevel`,
+    `length_iterate_length_le_one`, `treeRoot_cons_cons`),
+    and `length_dataLevel`, `dataRoot_nil`, `dataRoot_singleton`, `dataRoot_cons_cons` for the
+    data tree.
 -/
 import RecursionFast.Contract.Tree
 
 namespace RecursionFast
 
-theorem length_treeLevel : ∀ cs : List Digest, (treeLevel cs).length = (cs.length + 1) / 2
-  | [] => rfl
-  | [_] => by simp [treeLevel]
-  | _ :: _ :: cs => by simp [treeLevel, length_treeLevel cs]; omega
+/-! ## The generic level -/
 
-theorem treeLevel_of_length_le_one {cs : List Digest} (h : cs.length ≤ 1) : treeLevel cs = cs := by
+/-- One level up a tree whose nodes are hashed by `f`: adjacent digests paired by `f`; an odd last
+digest is carried up. -/
+def level (f : Digest → Digest → Digest) : List Digest → List Digest
+  | a :: b :: t => f a b :: level f t
+  | t => t
+
+/-- The root of the tree over `cs` whose nodes are hashed by `f`: `level f`, `|cs|` times, then
+the first digest; the zero digest if `cs = []`. -/
+def root (f : Digest → Digest → Digest) (cs : List Digest) : Digest :=
+  ((level f)^[cs.length] cs).headD (Vector.replicate 32 0)
+
+theorem length_level (f : Digest → Digest → Digest) :
+    ∀ cs : List Digest, (level f cs).length = (cs.length + 1) / 2
+  | [] => rfl
+  | [_] => by simp [level]
+  | _ :: _ :: cs => by simp [level, length_level f cs]; omega
+
+theorem level_of_length_le_one (f : Digest → Digest → Digest) {cs : List Digest}
+    (h : cs.length ≤ 1) : level f cs = cs := by
   match cs, h with
   | [], _ => rfl
   | [_], _ => rfl
 
-theorem iterate_treeLevel_of_length_le_one {l : List Digest} (h : l.length ≤ 1) (m : ℕ) :
-    treeLevel^[m] l = l := by
-  induction m with
-  | zero => rfl
-  | succ m ih => rw [Function.iterate_succ_apply, treeLevel_of_length_le_one h, ih]
+theorem iterate_level_of_length_le_one (f : Digest → Digest → Digest) {l : List Digest}
+    (h : l.length ≤ 1) (m : ℕ) : (level f)^[m] l = l :=
+  Function.iterate_fixed (level_of_length_le_one f h) m
 
-theorem length_iterate_treeLevel (cs : List Digest) (k : ℕ) :
-    (treeLevel^[k] cs).length ≤ max 1 (cs.length - k) := by
+theorem length_iterate_level (f : Digest → Digest → Digest) (cs : List Digest) (k : ℕ) :
+    ((level f)^[k] cs).length ≤ max 1 (cs.length - k) := by
   induction k with
   | zero => simp; omega
-  | succ k ih => rw [Function.iterate_succ_apply', length_treeLevel]; omega
+  | succ k ih => rw [Function.iterate_succ_apply', length_level]; omega
+
+/-- The length after `k` levels depends only on the length before. -/
+theorem length_iterate_level_eq (f g : Digest → Digest → Digest) {cs ds : List Digest}
+    (h : cs.length = ds.length) (k : ℕ) :
+    ((level f)^[k] cs).length = ((level g)^[k] ds).length := by
+  induction k with
+  | zero => exact h
+  | succ k ih => simp only [Function.iterate_succ_apply', length_level, ih]
+
+/-- `|cs|` levels leave at most one digest. -/
+theorem length_iterate_length_le_one' (f : Digest → Digest → Digest) (cs : List Digest) :
+    ((level f)^[cs.length] cs).length ≤ 1 :=
+  Nat.le_trans (length_iterate_level f cs cs.length) (by simp)
+
+/-- Any number of levels from `|cs|` on gives the root. -/
+theorem root_eq_iterate (f : Digest → Digest → Digest) (cs : List Digest) {k : ℕ}
+    (hk : cs.length ≤ k) : root f cs = ((level f)^[k] cs).headD (Vector.replicate 32 0) := by
+  obtain ⟨m, rfl⟩ := Nat.exists_eq_add_of_le hk
+  rw [root, Nat.add_comm, Function.iterate_add_apply,
+    iterate_level_of_length_le_one f (length_iterate_length_le_one' f cs)]
+
+/-- A digest that some number of levels reaches alone is the root. -/
+theorem root_of_iterate (f : Digest → Digest → Digest) {cs : List Digest} {x : Digest} (k : ℕ)
+    (h : (level f)^[k] cs = [x]) : root f cs = x := by
+  rw [root_eq_iterate f cs (Nat.le_add_right _ k), Function.iterate_add_apply, h,
+    iterate_level_of_length_le_one f (by simp)]
+  rfl
+
+/-- **Until one remains**: the root of two or more digests is the root of the level above. -/
+theorem root_cons_cons (f : Digest → Digest → Digest) (a b : Digest) (cs : List Digest) :
+    root f (a :: b :: cs) = root f (level f (a :: b :: cs)) := by
+  rw [root, List.length_cons, Function.iterate_succ_apply,
+    ← root_eq_iterate f _ (by simp only [length_level, List.length_cons]; omega)]
+
+/-! ## The two instances -/
+
+theorem treeLevel_eq : treeLevel = level nodeStmt := funext go where
+  go : ∀ cs, treeLevel cs = level nodeStmt cs
+  | a :: b :: cs => congrArg (nodeStmt a b :: ·) (go cs)
+  | [] => rfl
+  | [_] => rfl
+
+theorem dataLevel_eq : dataLevel = level dataNode := funext go where
+  go : ∀ cs, dataLevel cs = level dataNode cs
+  | a :: b :: cs => congrArg (dataNode a b :: ·) (go cs)
+  | [] => rfl
+  | [_] => rfl
+
+theorem treeRoot_eq (cs : List Digest) : treeRoot cs = root nodeStmt cs := by
+  rw [treeRoot, treeLevel_eq, root]
+
+/-- The data root is the generic root of the block hashes. -/
+theorem dataRoot_eq (xs : List Digest) : dataRoot xs = root dataNode (xs.map leafItem) := by
+  rw [dataRoot, dataLevel_eq, root, List.length_map]
+
+/-! ## The tree root (`Contract/Tree.lean`) -/
+
+theorem length_treeLevel (cs : List Digest) : (treeLevel cs).length = (cs.length + 1) / 2 :=
+  treeLevel_eq ▸ length_level _ cs
+
+theorem treeLevel_of_length_le_one {cs : List Digest} (h : cs.length ≤ 1) :
+    treeLevel cs = cs :=
+  treeLevel_eq ▸ level_of_length_le_one _ h
+
+theorem iterate_treeLevel_of_length_le_one {l : List Digest} (h : l.length ≤ 1) (m : ℕ) :
+    treeLevel^[m] l = l :=
+  treeLevel_eq ▸ iterate_level_of_length_le_one _ h m
+
+/-- The length after `k` levels (the earlier statement, now `length_iterate_level`'s instance). -/
+theorem length_iterate_treeLevel (cs : List Digest) (k : ℕ) :
+    (treeLevel^[k] cs).length ≤ max 1 (cs.length - k) :=
+  treeLevel_eq ▸ length_iterate_level _ cs k
 
 /-- `|cs|` levels leave at most one digest. -/
 theorem length_iterate_length_le_one (cs : List Digest) :
     (treeLevel^[cs.length] cs).length ≤ 1 :=
-  Nat.le_trans (length_iterate_treeLevel cs cs.length) (by simp)
+  treeLevel_eq ▸ length_iterate_length_le_one' _ cs
 
 /-- **Until one remains**: the root of two or more digests is the root of the level above. -/
 theorem treeRoot_cons_cons (a b : Digest) (cs : List Digest) :
     treeRoot (a :: b :: cs) = treeRoot (treeLevel (a :: b :: cs)) := by
-  have hl := length_treeLevel (a :: b :: cs)
-  simp only [List.length_cons] at hl
-  obtain ⟨m, hm⟩ : ∃ m, (a :: b :: cs).length = m + (treeLevel (a :: b :: cs)).length + 1 :=
-    ⟨cs.length + 1 - (cs.length + 3) / 2, by simp only [List.length_cons, hl]; omega⟩
-  unfold treeRoot
-  rw [hm, Function.iterate_succ_apply, Function.iterate_add_apply,
-    iterate_treeLevel_of_length_le_one (length_iterate_length_le_one _)]
+  rw [treeRoot_eq, treeRoot_eq, treeLevel_eq, root_cons_cons]
+
+/-! ## The data tree (`Contract/Relation.lean`) -/
+
+theorem length_dataLevel (cs : List Digest) : (dataLevel cs).length = (cs.length + 1) / 2 :=
+  dataLevel_eq ▸ length_level _ cs
+
+/-- No block: the zero digest. -/
+theorem dataRoot_nil : dataRoot [] = Vector.replicate 32 0 := rfl
+
+/-- One block: its hash. -/
+theorem dataRoot_singleton (x : Digest) : dataRoot [x] = leafItem x := rfl
+
+/-- **Until one remains**, for the data tree: the root of two or more blocks is the generic root of
+the level above their hashes. -/
+theorem dataRoot_cons_cons (a b : Digest) (xs : List Digest) :
+    dataRoot (a :: b :: xs) = root dataNode (dataLevel ((a :: b :: xs).map leafItem)) := by
+  rw [dataRoot_eq, List.map_cons, List.map_cons, root_cons_cons, dataLevel_eq]
 
 end RecursionFast

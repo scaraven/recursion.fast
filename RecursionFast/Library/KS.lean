@@ -12,7 +12,8 @@
     (`Library/Prob.lean`): `E` and `sel` are Lean functions and the adversary is unbounded, so it
     computes them; and `V` run after it on a pair it accepts on the log asks nothing fresh.
   * **The union bound** (`KS.union`): over a finite family of such selections, at most
-    `|I| · (Q + qV) · ε`. The tree's composition (`Library/Compose.lean`) rests on it.
+    `|I| · (Q + qV) · ε`. The stream's and the tree's composition (`Library/Compose.lean`) rest
+    on it.
   * `KS.of_extracts` (positive, the twin of `KState.zero`): when every proof the verifier accepts
     on every log is extracted, `KS` holds at every error.
   * `prob_accept_eq_verdict`: the event's acceptance, read from the final log by

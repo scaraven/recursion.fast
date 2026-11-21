@@ -4,6 +4,8 @@
 # entry holding something other than regular files and directories (a symbolic link could point
 # the harness at a host file).
 #   harness/ci/fetch-entry.sh OWNER/REPO SHA ROOT [refs/pull/N/head] OUT
+# It prints the root's git tree id (`tree <id>`) and, in a workflow step, writes it to the step's
+# outputs as `tree` (the attested result's `entry.tree`, AGENTS.md §8).
 set -euo pipefail
 REPO=$1 SHA=$2 ROOT=$3 REF=${4:-} OUT=$5
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "fetch-entry: not a full commit SHA: $SHA" >&2; exit 2; }
@@ -13,8 +15,11 @@ git -C "$G" init -q
 git -C "$G" -c protocol.version=2 fetch -q --no-tags --depth=1 "https://github.com/$REPO.git" "${REF:-$SHA}"
 got=$(git -C "$G" rev-parse FETCH_HEAD)
 [[ "$got" == "$SHA" ]] || { echo "fetch-entry: fetched $got, expected $SHA (the pull request moved)" >&2; exit 1; }
+tree=$(git -C "$G" rev-parse "$SHA:$ROOT")
+[[ "$tree" =~ ^[0-9a-f]{40}$ ]] || { echo "fetch-entry: $ROOT is not a tree of $SHA" >&2; exit 1; }
+[[ -n "${GITHUB_OUTPUT:-}" ]] && echo "tree=$tree" >> "$GITHUB_OUTPUT"
 mkdir -p "$OUT"
 git -C "$G" archive --format=tar "$SHA:$ROOT" | tar -x -C "$OUT" --no-same-owner --no-same-permissions
 bad=$(find "$OUT" ! -type f ! -type d | head -5)
 [[ -z "$bad" ]] || { echo "fetch-entry: the entry holds non-regular files: $bad" >&2; exit 1; }
-echo "fetch-entry: $REPO@$SHA:$ROOT ($(find "$OUT" -type f | wc -l) files)"
+echo "fetch-entry: $REPO@$SHA:$ROOT, tree $tree ($(find "$OUT" -type f | wc -l) files)"

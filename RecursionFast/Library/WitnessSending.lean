@@ -9,18 +9,25 @@
 
   * **Proof format.** `encode w` is the bytes of the extractor output words of `w` (`witWords`,
     `Library/Words.lean`), so a proof packs back to exactly the words that denote its witness
-    (`decode_encode`). A node proof carries its two children's **signed proofs** (proof, trace,
-    signature).
+    (`decode_encode`). The format is forced, since the extractor copies the proof's packed words:
+    a leaf proof is `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_(n−1)`, the tag, the number of blocks and the
+    blocks, `16 + 32n` bytes (`size_encode_leaf`). A node proof carries its two children's
+    **signed proofs** (proof, trace, signature).
   * **Verifier (strict).** `check vk c π`: `π` is the canonical encoding of a leaf
-    witness of at most `chainCap` steps (checked before the hash) whose chain ends at the
-    statement's chain end, or of a node witness whose statement is `nodeStmt c₁ c₂` and whose
-    children `acc vk` accepts: each child's proof length within a word, its trace within `qV = 0`
-    entries and its queries within `queryCap`, its signature valid on its trace's digest,
-    and, since this verifier asks no query, its trace **empty** (exact consumption) and its
-    proof accepted by `check`, recursively. Canonical encodings for leaves and nodes make it
-    reject appended and truncated bytes (`check_canonical`). It runs the linear-time decoder
-    twins and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the
-    specification functions. `V vk c π := ret (check vk c π)`: no query, `qV = 0`.
+    witness of at most `leafCap` blocks (checked before any hash) whose data's root (`dataRootF`,
+    recomputed) and size the statement commits to, or of a node witness whose statement is
+    `nodeStmt c₁ c₂` and whose children `acc vk` accepts: each child's proof length within a word,
+    its trace within `qV = 0` entries and its queries within `queryCap`, its signature valid on its
+    trace's digest, and, since this verifier asks no query, its trace **empty** (exact consumption)
+    and its proof accepted by `check`, recursively. Canonical encodings for leaves and nodes make it
+    reject appended and truncated bytes (`check_canonical`). It runs the linear-time decoder twins
+    and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the specification
+    functions. `V vk c π := ret (check vk c π)`: no query, `qV = 0`. Compiled, `check` decodes a
+    leaf through the contract's `readList`, which is not tail-recursive: one stack frame per block.
+    That is harmless at the season's shape: the witness-sent leaf of `n = 2^18` blocks is `16 +
+    2^23` bytes, above `pi_cap` (1 MiB), so the runner rejects it before any verifier runs, and a
+    leaf proof within `pi_cap` has fewer than `2^15` blocks (`scripts/speed/Extract.lean` runs the
+    compiled decoder on leaves of up to about a thousand).
   * **Prover.** `P vk c w := ret (encode w)`. Every witness of the relation fits the format
     (`fits_of_rel`: `acc` keeps each child's proof length within a word, empties the trace, and
     `SigOk` fixes the signature's counts), so perfect completeness needs no normalisation
@@ -30,9 +37,9 @@
     proofs of every size up to about `2^65` bytes (`Controls/Relation.lean`, `deep_accepted`), and
     the prover copies whatever it is given.
   * **Extractor.** `E c π L := decode π` (no key), and the program `ext` (5 memory words,
-    21 statements) copies the proof's packed words from the input tape to the
-    output, 8 steps per word (`computes`), on the contract's domain of proofs up to `8 · outCap`
-    bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
+    28 statements, 21 of them run on the empty proof) copies the proof's packed words from the
+    input tape to the output, 8 steps per word (`computes`), on the contract's domain of proofs
+    up to `8 · outCap` bytes, the longest whose words fit the output cap (`Controls/Extractor.lean`,
     `ws_output_beyond_domain`).
   * **Security.** `KS` at `ε = 0`, `qV = 0` (`ks`), through the potential `μ := 0` (`kstate`,
     `KState.zero`) and the bridge `KState.ks` (`Library/PaperTheorem.lean`): an accepted proof
@@ -71,8 +78,10 @@ theorem size_encode (w : Wit) : (encode w).size = 8 * (witWords w).length :=
 
 theorem size_eq_length (π : Proof) : π.size = π.data.toList.length := Array.length_toList.symm
 
-theorem size_encode_leaf (s : Digest) (n : ℕ) : (encode (.leaf s n)).size = 48 := by
-  simp [size_encode, witWords, packBytes_digest_length]
+/-- A leaf proof has `16 + 32n` bytes: two words, then the `n` blocks. -/
+theorem size_encode_leaf (xs : List Digest) : (encode (.leaf xs)).size = 16 + 32 * xs.length := by
+  simp [size_encode, witWords, List.length_flatMap, packBytes_digest_length]
+  ring
 
 /-- `decode` in linear time (`decodeF_eq`). -/
 def decodeF (π : Proof) : Option Wit := decodeWit (packFast π.data.toList)
@@ -96,15 +105,16 @@ theorem size_child_lt (c₁ c₂ : Digest) (p₁ p₂ : Signed) :
 /-! ## The argument -/
 
 /-- **The strict witness-sending decision** under the key `vk`: `π` is the canonical encoding of
-a leaf witness of `c` (its length within `chainCap`, checked before any hash), or of a node
+a leaf witness of `c` (its number of blocks within `leafCap`, checked before any hash, and its
+data's root recomputed), or of a node
 witness of `c` whose two children are accepted (`acc vk` of this verifier, unfolded: proof
 length within a word, trace length (`qV = 0`) and queries capped, signature valid, trace empty,
 proof accepted recursively). -/
 def check (vk c : Digest) (π : Proof) : Bool :=
   match decodeF π with
-  | some (.leaf s n) =>
-    decide (encodeF (.leaf s n) = π) && decide (n ≤ chainCap) &&
-      decide (c = leafStmtF (chainEndF s n) n)
+  | some (.leaf xs) =>
+    decide (encodeF (.leaf xs) = π) && decide (xs.length ≤ leafCap) &&
+      decide (c = leafStmtF (dataRootF xs) xs.length)
   | some (.node c₁ c₂ p₁ p₂) =>
     if _h : encodeF (.node c₁ c₂ p₁ p₂) = π then
       decide (c = nodeStmtF c₁ c₂) &&
@@ -173,16 +183,16 @@ theorem acc_eq (vk c : Digest) (p : Signed) : submission.acc vk c p =
 /-- `check`, with the specification functions. -/
 theorem check_eq (vk c : Digest) (π : Proof) : check vk c π =
     match decode π with
-    | some (.leaf s n) =>
-      decide (encode (.leaf s n) = π) && decide (n ≤ chainCap) &&
-        decide (c = leafStmt (chainEnd s n) n)
+    | some (.leaf xs) =>
+      decide (encode (.leaf xs) = π) && decide (xs.length ≤ leafCap) &&
+        decide (c = leafStmt (dataRoot xs) xs.length)
     | some (.node c₁ c₂ p₁ p₂) =>
       if encode (.node c₁ c₂ p₁ p₂) = π then
         decide (c = nodeStmt c₁ c₂) && submission.acc vk c₁ p₁ && submission.acc vk c₂ p₂
       else false
     | none => false := by
   rw [check, decodeF_eq]
-  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, chainEndF_eq, nodeStmtF_eq,
+  simp only [encodeF_eq, dite_eq_ite, acc_eq, leafStmtF_eq, dataRootF_eq, nodeStmtF_eq,
     SigOkF_eq, traceDigestF_eq]
 
 /-- An accepted proof is the canonical encoding of a witness of the relation it decodes to. -/
@@ -190,9 +200,9 @@ private theorem exists_of_check {vk c : Digest} {π : Proof} (h : check vk c π 
     ∃ w, decode π = some w ∧ encode w = π ∧ Rel (submission.acc vk) c w := by
   rw [check_eq] at h
   split at h
-  next s n hd =>
+  next xs hd =>
     simp only [Bool.and_eq_true, decide_eq_true_eq] at h
-    exact ⟨.leaf s n, hd, h.1.1, h.1.2, h.2⟩
+    exact ⟨.leaf xs, hd, h.1.1, h.1.2, h.2⟩
   next c₁ c₂ p₁ p₂ hd =>
     split at h
     · simp only [Bool.and_eq_true, decide_eq_true_eq] at h
@@ -221,7 +231,7 @@ theorem fits_of_acc {vk c : Digest} {p : Signed} (h : submission.acc vk c p = tr
 /-- Every witness of the relation fits the output format. -/
 theorem fits_of_rel {vk c : Digest} {w : Wit} (h : Rel (submission.acc vk) c w) : w.Fits := by
   cases w with
-  | leaf s n => exact h.1.trans_lt (by decide)
+  | leaf xs => exact h.1.trans_lt (by decide)
   | node c₁ c₂ p₁ p₂ => exact ⟨fits_of_acc h.2.1, fits_of_acc h.2.2⟩
 
 /-- **The honest proof of a witness of the relation is accepted.** -/

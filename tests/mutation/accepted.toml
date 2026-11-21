@@ -1,0 +1,38 @@
+# Accepted survivors of tests/mutation/mutants.toml, and notes on other mutants, by id: the reason
+# is shown in results.md. A survivor not listed here is a gap of the checks.
+
+[[accepted]]
+id = "rel-docstring-only"
+reason = "equivalent: changes only a docstring"
+
+[[accepted]]
+id = "keccak-blocklane-xor"
+reason = "equivalent (the eight shifted bytes are disjoint, so OR and XOR agree); killed only because Library/KeccakFast.lean unfolds blockLane by rfl to the OR form"
+
+[[accepted]]
+id = "rel-dataroot-levels-minus-one"
+reason = "equivalent: |xs| - 1 levels still reach one digest (|xs| - 1 >= ceil(log2 |xs|) for |xs| >= 1, and no level for no block); a kill is incidental (a library proof that rewrites the count |xs|)"
+
+[[accepted]]
+id = "keccak-out-31"
+reason = "not a contract: keccakDigest's proof that the output has 32 bytes fails, so the type system rejects it"
+
+[[accepted]]
+id = "mach-loop-no-fuel"
+reason = "not a contract: exec's structural recursion on the fuel no longer terminates, so Lean rejects the definition"
+
+[[accepted]]
+id = "cert-no-complete"
+reason = "killed syntactically (the library constructs the field); the semantic weakening is cert-complete-error-1"
+
+[[accepted]]
+id = "cert-no-computes"
+reason = "killed syntactically (the library constructs the field); the domain weakenings are the ext-computes-* mutants"
+
+[[accepted]]
+id = "ext-computes-short-queries"
+reason = "the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longQuery kills it on its own"
+
+[[accepted]]
+id = "ext-computes-short-tape"
+reason = "the first kill is incidental (a Controls/LogScan.lean term passes the full-domain hypothesis); Controls.Extractor.halt_not_longTape kills it on its own"

@@ -1,12 +1,14 @@
 /-
 # Contract: the relation over digests                                             (TRUSTED)
 
-One relation over
-32-byte statement digests, parameterised by an acceptance predicate `acc` on **signed proofs**
+One relation over 32-byte statement digests, parameterised by an acceptance predicate `acc` on **signed proofs**
 (`Certificate.lean` plugs in `Submission.acc` under a public key). A **leaf** digest commits to
-the end of a Keccak-256 chain of at most `chainCap` steps and its length; its witness is the chain's
-start. A **node** digest commits to two child digests; its witness is two
-signed proofs that `acc` accepts.
+the Merkle root (`dataRoot`) of `n ≤ leafCap` 32-byte blocks, the leaf's data, and to `n`; its
+witness is the data, the blocks in order. The runner supplies the data and computes the
+statement from it; a prover is given the blocks (at `n = 0` the statement `leafStmt zero 0` is
+public, with the one witness `[]`; the runner's statements have `1 ≤ n`, its shape check). A
+**node** digest commits to two child digests; its witness is two signed proofs that `acc`
+accepts.
 
 **Why signed proofs.** Under the signed random oracle the oracle is a keyed
 Keccak-256 held by a service that also signs the answers a proof used. A signed proof `(π, tr, σ)`
@@ -17,27 +19,40 @@ fixed, and every hash it evaluates is public Keccak-256: no public hash instanti
 inside the relation.
 
 **Byte layouts (normative; the runner and the service hash the same bytes).**
-* `chainStep d = Keccak-256(tagChain ‖ d)`: 33 bytes, one permutation;
-  `chainEnd s n` applies it `n` times.
-* `leafStmt h n = Keccak-256(tagLeaf ‖ h ‖ enc64 n)`: 41 bytes.
+* `leafItem x = Keccak-256(tagItem ‖ x)`: 33 bytes, one permutation; the hash of the block `x`.
+* `dataNode l r = Keccak-256(tagData ‖ l ‖ r)`: 65 bytes, one permutation; a node of the data tree.
+* `dataLevel`: adjacent digests paired by `dataNode`, an odd last digest carried up unhashed;
+  `dataRoot xs`: `dataLevel` applied `|xs|` times to the block hashes, then the first digest (the
+  zero digest for no block, `leafItem x` for one block). The statement binds `n`, so the tree's
+  shape is fixed; the carry-up matters only at sizes that are not powers of two.
+* `leafStmt h n = Keccak-256(tagLeaf ‖ h ‖ enc64 n)`: 41 bytes, with `h = dataRoot xs`, `n = |xs|`.
 * `nodeStmt c₁ c₂ = Keccak-256(tagNode ‖ c₁ ‖ c₂)`: 65 bytes.
 * `enc64 n`: the 8 little-endian bytes of `n mod 2^64` (Rust `u64::to_le_bytes`); injective below
-  `2^64`, which covers every chain length, accepted query length (`queryCap`) and key index the
+  `2^64`, which covers every leaf size, accepted query length (`queryCap`) and key index the
   contract hashes.
 * The trace digest and the signature's hashes are in `Signature.lean`.
-* Tags: `C` chain, `L` leaf, `N` node, `T` trace, `W` WOTS chain step,
-  `K` WOTS leaf, `M` signature Merkle node: seven distinct first bytes, one per hash input of the
-  contract (`Controls/Relation.lean`, `tags_separate`). The oracle has no tag: the
-  deployed oracle is keyed: its input starts with the secret 32-byte key, so computing an
-  answer without the key, or a public tagged hash that equals one, is the PRF assumption.
+* Tags: `H` leaf item, `D` data node, `L` leaf, `N` node, `T` trace, `W` WOTS chain step,
+  `K` WOTS leaf, `M` signature Merkle node: eight distinct first bytes, one per hash input of the
+  contract (`Controls/Relation.lean`, `tags_separate`). The oracle has no tag. The deployed
+  oracle is keyed (its input starts with the secret 32-byte key), so computing an answer without
+  the key, or a public tagged hash that equals one, is the PRF assumption.
 
-**Chain bound.** A leaf witness has at most `chainCap = 2^20` steps, checked before
-the hash: completeness does not ask for proofs of chains no prover handles, and a verifier that
-recomputes chains is not driven past its time cap by a proof declaring a huge length.
+**Leaf bound.** A leaf witness covers at most `leafCap = 2^20` blocks, checked before any hash.
+Completeness and knowledge soundness are asked for every leaf up to it, odd sizes included, though
+the season uses one `n` (`harness/season.toml`). The cap is set by the extractor's output cap
+(`Extractor.lean`): a leaf witness of `n` blocks takes `2 + 4n` output words, and the certificate
+asks for both completeness at every leaf up to `leafCap` and extraction within `outCap = 2^24`
+words. At `2^22` a leaf at the cap would take `2^24 + 2` words, which no extractor could output
+while `V` must accept it; at `2^20` it takes at most `2^22 + 2`, and a node whose leaf child is
+sent whole and whose first child is at the 64 MiB file cap stays below `2^23 + 2^22 + 2^17 <
+2^24` words. It also bounds what checking a leaf witness costs, whatever size a proof declares:
+the composition walk's leaf checks (`Library/Compose.lean`), and any check through `Rel` (whose
+first conjunct is `|xs| ≤ leafCap`), hash at most `2^21` times per leaf.
 
 `Digest` is a 32-byte vector (a closure would be re-evaluated on every byte read).
 -/
 import RecursionFast.Contract.Hash.Keccak
+import Mathlib.Data.Nat.Notation
 import Mathlib.Logic.Function.Iterate
 
 namespace RecursionFast
@@ -51,15 +66,18 @@ abbrev Proof := ByteArray
 /-- The longest oracle query a signed trace may hold: `2^20` bytes (the service's own cap). -/
 def queryCap : ℕ := 2 ^ 20
 
-/-- The longest chain a leaf statement may commit to: `2^20` steps. -/
-def chainCap : ℕ := 2 ^ 20
+/-- The most blocks a leaf statement may cover: `2^20` (the module header says why). -/
+def leafCap : ℕ := 2 ^ 20
 
 /-- Keccak-256 of a byte string, as a digest. -/
 def keccakDigest (m : List UInt8) : Digest :=
   ⟨(keccak256 m).toArray, by simp [keccak256, List.map_const']⟩
 
-/-- Domain tag of a chain step's preimage (`C`). -/
-def tagChain : UInt8 := 0x43
+/-- Domain tag of a leaf item's preimage (`H`). -/
+def tagItem : UInt8 := 0x48
+
+/-- Domain tag of a data-tree node's preimage (`D`). -/
+def tagData : UInt8 := 0x44
 
 /-- Domain tag of a leaf statement's preimage (`L`). -/
 def tagLeaf : UInt8 := 0x4C
@@ -82,13 +100,25 @@ def tagSigNode : UInt8 := 0x4D
 /-- The 8 little-endian bytes of `n mod 2^64`. -/
 def enc64 (n : ℕ) : List UInt8 := List.ofFn fun i : Fin 8 => (n / 256 ^ i.val).toUInt8
 
-/-- One step of a hash chain: the digest hashed under `tagChain`. -/
-def chainStep (d : Digest) : Digest := keccakDigest (tagChain :: d.toList)
+/-- The hash of one 32-byte block of a leaf's data, under `tagItem`. -/
+def leafItem (x : Digest) : Digest := keccakDigest (tagItem :: x.toList)
 
-/-- The end of the hash chain of length `n` from the start `s`. -/
-def chainEnd (s : Digest) (n : ℕ) : Digest := chainStep^[n] s
+/-- A node of a leaf's data tree: its two children's digests, hashed under `tagData`. -/
+def dataNode (l r : Digest) : Digest := keccakDigest (tagData :: l.toList ++ r.toList)
 
-/-- The statement of a leaf: the chain end `h` and the chain length `n`, hashed under `tagLeaf`. -/
+/-- One level up the data tree: adjacent digests paired by `dataNode`; an odd last one carried
+up. -/
+def dataLevel : List Digest → List Digest
+  | a :: b :: t => dataNode a b :: dataLevel t
+  | t => t
+
+/-- **The root** of a leaf's data `xs`: `dataLevel` from the block hashes, `|xs|` times (enough;
+one digest is a fixed point), then the first digest; the zero digest for no block. -/
+def dataRoot (xs : List Digest) : Digest :=
+  (dataLevel^[xs.length] (xs.map leafItem)).headD (Vector.replicate 32 0)
+
+/-- The statement of a leaf: its data's root `h` and its number of blocks `n`, hashed under
+`tagLeaf`. -/
 def leafStmt (h : Digest) (n : ℕ) : Digest := keccakDigest (tagLeaf :: h.toList ++ enc64 n)
 
 /-- The statement of a node: its two children's digests, hashed under `tagNode`. -/
@@ -117,19 +147,18 @@ structure Signed where
   /-- The service's signature on the digest of `tr`. -/
   σ : Sig
 
-/-- A witness: a chain start and length (leaf), or two child digests and their signed proofs
-(node). -/
+/-- A witness: a leaf's data (leaf), or two child digests and their signed proofs (node). -/
 inductive Wit where
-  /-- A leaf witness: the chain start `s` and the chain length `n`. -/
-  | leaf (s : Digest) (n : ℕ)
+  /-- A leaf witness: the leaf's data, its blocks in order. -/
+  | leaf (xs : List Digest)
   /-- A node witness: the child digests `c₁`, `c₂` and their signed proofs `p₁`, `p₂`. -/
   | node (c₁ c₂ : Digest) (p₁ p₂ : Signed)
 
-/-- **The relation** for the acceptance predicate `acc`: a leaf digest is the statement of a
-chain of at most `chainCap` steps from the witness's start; a node digest is the statement of two
-children whose signed proofs `acc` accepts. -/
+/-- **The relation** for the acceptance predicate `acc`: a leaf digest is the statement of the
+root and the size of the witness's data, at most `leafCap` blocks; a node digest is the statement
+of two children whose signed proofs `acc` accepts. -/
 def Rel (acc : Digest → Signed → Bool) : Digest → Wit → Prop
-  | c, .leaf s n => n ≤ chainCap ∧ c = leafStmt (chainEnd s n) n
+  | c, .leaf xs => xs.length ≤ leafCap ∧ c = leafStmt (dataRoot xs) xs.length
   | c, .node c₁ c₂ p₁ p₂ => c = nodeStmt c₁ c₂ ∧ acc c₁ p₁ = true ∧ acc c₂ p₂ = true
 
 end RecursionFast

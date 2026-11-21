@@ -1,7 +1,9 @@
 //! The contract-fixed signature (`RecursionFast/Contract/Signature.lean`, normative byte layouts): Winternitz one-time
 //! signatures with `w = 4` (base-4 digits), `ℓ = 133` chains, under a Merkle tree of height 16,
 //! all hashes Keccak-256. `vk` is the Merkle root; the signer is stateful and signs at most
-//! `2^16` messages, each with the next one-time key.
+//! `2^16` messages, each with the next one-time key. It records the message it signed at each
+//! index, and re-issues a signature (`resign`) only for that message at that index, so no
+//! one-time key ever signs two messages.
 //!
 //! * digits of a 32-byte message `m`: `d[4i + t] = (m[i] >> 2t) & 3` for byte `i < 32`, `t < 4`;
 //!   checksum `C = Σ (3 − d_i)` over those 128; `d[128 + t] = (C >> 2t) & 3` for `t < 5`.
@@ -19,6 +21,7 @@
 
 use crate::keccak::{self, hash, Digest, Keyed};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
 /// Number of WOTS chains.
 pub const LEN: usize = 133;
@@ -138,17 +141,30 @@ pub fn verify(vk: &Digest, m: &Digest, sig: &Sig) -> bool {
     cur == *vk
 }
 
-/// The stateful signer: the seed's keyed hash (for `sk`), the Merkle tree, the next index.
+/// The stateful signer: the seed's keyed hash (for `sk`), the Merkle tree, the next index, and
+/// the message signed at each index taken.
 pub struct Signer {
     seed: Keyed,
     /// `levels[t]` holds the `2^(16 − t)` nodes of level `t`; `levels[0]` the leaves.
     levels: Vec<Vec<Digest>>,
     next: AtomicU32,
+    /// `signed[j]`: the message signed with key `j`, set once, by `sign`, before its signature is
+    /// computed (`2^16` entries of 36 bytes, 2.25 MiB; the test `signed_table_size`).
+    signed: Box<[OnceLock<Digest>]>,
 }
 
 /// Error: all `2^16` one-time keys are used.
 #[derive(Debug)]
 pub struct Exhausted;
+
+/// Why `resign` refused: no message was signed at the index, or another one was.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NotSigned {
+    /// No message was signed at the index (never taken, or out of range).
+    Nothing,
+    /// The message signed at the index is not the one given.
+    Differs,
+}
 
 impl Signer {
     /// Key generation from a 32-byte seed with `threads` worker threads: all `2^16` leaves and the
@@ -190,7 +206,7 @@ impl Signer {
             });
             levels.push(next);
         }
-        Signer { seed, levels, next: AtomicU32::new(0) }
+        Signer { seed, levels, next: AtomicU32::new(0), signed: (0..NKEYS).map(|_| OnceLock::new()).collect() }
     }
 
     /// The public key: the Merkle root.
@@ -216,12 +232,36 @@ impl Signer {
             .next
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |x| if (x as usize) < NKEYS { Some(x + 1) } else { None })
             .map_err(|_| Exhausted)?;
+        // the index is fresh, so this is its first and only message
+        let _ = self.signed[idx as usize].set(*m);
+        Ok(self.sig_at(idx, m))
+    }
+
+    /// The message signed with key `j`, if any.
+    pub fn signed(&self, j: u32) -> Option<Digest> {
+        self.signed.get(j as usize)?.get().copied()
+    }
+
+    /// Re-issue the signature of `m` with key `j`: the same bytes `sign` returned, if `m` is the
+    /// message `sign` signed at `j`; otherwise refused. It never signs a new message with any key
+    /// (WOTS signing is deterministic in the seed, `j` and `m`).
+    pub fn resign(&self, j: u32, m: &Digest) -> Result<Sig, NotSigned> {
+        match self.signed(j) {
+            None => Err(NotSigned::Nothing),
+            Some(s) if s != *m => Err(NotSigned::Differs),
+            Some(_) => Ok(self.sig_at(j, m)),
+        }
+    }
+
+    /// The WOTS signature of `m` with key `j` and its authentication path. Callers make sure `m`
+    /// is the only message ever signed with key `j`.
+    fn sig_at(&self, idx: u32, m: &Digest) -> Sig {
         let j = idx as u64;
         let d = digits(m);
         let mut x = self.sks(j);
         advance(j, &mut x, &[0; LEN], &d);
         let path: [Digest; HEIGHT] = core::array::from_fn(|t| self.levels[t][((j >> t) ^ 1) as usize]);
-        Ok(Sig { idx, ots: x, path })
+        Sig { idx, ots: x, path }
     }
 
     /// Overwrite the seed.
@@ -257,5 +297,32 @@ mod tests {
         assert_eq!(&d[128..], &[0, 0, 0, 0, 0]);
         let d = digits(&[0b1110_0100; 32]);
         assert_eq!(&d[..4], &[0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn signed_table_size() {
+        // the figure in `Signer::signed`'s comment and `PROTOCOL.md` §5
+        assert_eq!(std::mem::size_of::<OnceLock<Digest>>(), 36);
+        assert_eq!(NKEYS * std::mem::size_of::<OnceLock<Digest>>(), 9 << 18); // 2.25 MiB
+    }
+
+    #[test]
+    fn resign_only_what_was_signed() {
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+        let s = Signer::keygen(&[9u8; 32], threads);
+        let (m0, m1) = ([1u8; 32], [2u8; 32]);
+        let a = s.sign(&m0).unwrap();
+        let b = s.sign(&m1).unwrap();
+        assert_eq!((a.idx, b.idx), (0, 1));
+        assert!(verify(&s.vk(), &m0, &a) && verify(&s.vk(), &m1, &b));
+        let (mut ea, mut er) = (Vec::new(), Vec::new());
+        a.encode(&mut ea);
+        s.resign(0, &m0).unwrap().encode(&mut er);
+        assert_eq!(ea, er, "resign returns the same bytes");
+        assert_eq!(s.resign(0, &m1).err(), Some(NotSigned::Differs));
+        assert_eq!(s.resign(1, &m0).err(), Some(NotSigned::Differs));
+        assert_eq!(s.resign(2, &m0).err(), Some(NotSigned::Nothing));
+        assert_eq!(s.resign(NKEYS as u32, &m0).err(), Some(NotSigned::Nothing));
+        assert_eq!(s.used(), 2, "resign takes no index");
     }
 }

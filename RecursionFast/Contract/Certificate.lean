@@ -13,7 +13,7 @@ entries (the submission's declared query bound), every query of `tr` at most `qu
 with its queries answered in order by `tr`, used up exactly (`OProg.runSeq`). The conjuncts are in
 order of cheapest rejection; compiled `&&` stops at the first `false`.
 This one predicate is the node clause of the relation, the harness's check of every proof it is
-given (every step of the stream, its re-runs, the canaries), and the check any
+given (every output of the stream, its statement canaries), and the check any
 third party runs later with the published `vk`. It never evaluates the oracle and needs no service.
 
 **The certificate.** Knowledge soundness for the relation of the submission's own `acc`,
@@ -25,9 +25,9 @@ knowledge content is the named extractor `E` with its program and budget (`Secur
   hold the secret key, so a verifier that accepts what carries a valid signature is not
   certifiable (`Controls/Certificate.lean`, `sigTrust_no_certificate`), and a certificate never
   rests on unforgeability. Unforgeability is used once, outside the certificate: the composition
-  argument across the tree (`Library/Compose.lean`) returns a forgery when a signed trace in
+  argument across the stream (`Library/Compose.lean`) returns a forgery when a signed trace in
   the extraction tree is not in the run's one oracle log, an EUF-CMA forgery against the
-  service's signed traces or a collision (`walkSigned`).
+  service's signed traces or a collision (`walkStreamSigned`; `walkSigned` for trees).
 * *Why the trace is used up exactly and its queries capped.* Completeness is
   required for every witness of the relation, and a node witness carries its children's traces.
   If a trace could carry entries after the verifier's last query, or queries of any length, the
@@ -50,8 +50,14 @@ knowledge content is the named extractor `E` with its program and budget (`Secur
 
 **Deployment.** The harness's service answers a query with Keccak-256 of a secret
 32-byte key, drawn after `V` is frozen, followed by the query (`service/PROTOCOL.md` §2), and signs
-the trace of each `sign` request; `vk` is published per run. The theorems are for a random oracle. Completeness over a random oracle does not imply
-that honest proofs pass `acc` under the deployment: the harness checks that concretely.
+the trace of each `sign` request; `vk` is published per run. The theorems are for a random
+oracle. Completeness over a random oracle does not imply that honest proofs pass `acc` under the
+deployment: the oracle is keyed Keccak-256, a node's witness carries its children's traces from
+the same oracle (the game draws its oracle after the witness), and `acc` has conjuncts the game
+does not see (`Security.lean`); the harness checks that concretely. A signed proof is one `sign`
+request, whose body the service caps at 16 MiB (`service/PROTOCOL.md` §3), below the
+`qV · queryCap` bytes of trace `acc` admits: an entry whose honest traces are larger is complete
+in the model and cannot be signed.
 A certified `V` that computes the deployed oracle, were the oracle a public hash, is excluded by
 the deployment, not by this file: such a `V` is still certified (`Controls/Backdoor.lean`), but
 no public function it can compute is the keyed oracle.
@@ -59,9 +65,10 @@ no public function it can compute is the keyed oracle.
 **Rendering.** A challenge renders the claim as
 organiser data (`Declared`): the declared knowledge error, completeness error, query bound and
 fuel. `CertificateR` binds them: the submission's numbers are within the declared ones, and the
-declared fuel is within the budget, so the harness may run the program with it.
-The program is not rendered: it is a term of the submission, executed by the compiled contract
-interpreter. Everything else a record states is measured by the benchmark run.
+declared fuel is within the budget. The program is not rendered: it is a term of the submission,
+and no evaluation runs it (that it computes `E` is the kernel-checked `Computes`; the core CI runs
+the compiled contract interpreter on the witness-sending entry's program only). Everything else a
+record states is measured by the benchmark run.
 -/
 import RecursionFast.Contract.Security
 import RecursionFast.Contract.Extractor

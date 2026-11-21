@@ -167,6 +167,13 @@ impl Keyed {
         }
     }
 
+    /// The key `k`: the first 32 bytes of the block in progress (the service prints its PRF key
+    /// after the `replay` control line, `PROTOCOL.md` §6; the signing seed's `Keyed` is private to
+    /// the signer and has no caller of this).
+    pub fn key(&self) -> [u8; 32] {
+        self.pre.buf[..32].try_into().unwrap()
+    }
+
     /// Overwrite the key.
     pub fn wipe(&mut self) {
         wipe(&mut self.pre.buf);
@@ -215,7 +222,7 @@ mod tests {
         for (n, d) in pat {
             assert_eq!(hex(&hash(&pattern(n))), d, "pattern({n})");
         }
-        // a chain step: "C" ‖ 00 01 … 1f
+        // a 33-byte input 0x43 ‖ 00 01 … 1f (0x43 was v5's chain-step tag; no contract tag since v6)
         let mut step = vec![0x43u8];
         step.extend(0..32u8);
         assert_eq!(hex(&hash(&step)), "db8c51208716e57c91fc944cfa0df7336f9e784f9d3c0c04347f5fa833588e97");
@@ -254,6 +261,7 @@ mod tests {
             assert_eq!(kd.eval(&q), hash(&kq), "keyed {n}");
             assert_eq!(permutations(32 + n), (32 + n) / 136 + 1);
         }
+        assert_eq!(kd.key(), key);
         // after `wipe` the key bytes are zero
         let mut k2 = Keyed::new(&key);
         k2.wipe();

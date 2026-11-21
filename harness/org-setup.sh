@@ -3,7 +3,7 @@
 #   1. build the organiser's Lean targets (contract, library, controls, and CompPoly's BF64/Ext3
 #      field with its byte codec) in ORG (Mathlib from its cache on CI: `lake exe cache get`
 #      happens before this script, never on a shared tree; CompPoly builds from source);
-#   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, chaincheck);
+#   2. build the Lean harness tools (harness/lean-tools: gate, axiomaudit, tokensweep);
 #   3. write the import allowlist (gate rule 6: the import closure of the organiser's roots) and the
 #      olean manifest over it (`scripts/olean-manifest.py gen`) into ORG/.lake/rf/;
 #   4. build, once and outside any sandbox, what Lake links into every badge executable: the
@@ -12,6 +12,10 @@
 #      package tree (a throw-away executable that imports `RecursionFast`, the CompPoly roots and
 #      `RF_BADGE_OBJECTS`, default `Mathlib.Tactic`), so that a badge build in the sandbox compiles
 #      only the modules an entry adds beyond these, within its cap (`badge_s`);
+#   4b. hash the organiser's own compiled code (`.c` and objects under .lake/build/ir/RecursionFast,
+#      the badge's glue and `accF` included: what a badge links of the organiser) into
+#      ORG/.lake/rf/objects.sha256 (`scripts/olean-manifest.py objects-gen`), which the
+#      certificate job checks after every badge build (the build mounts .lake/build read-only);
 #   5. build the service (`cargo build --release`), unless `RF_ORG_SERVICE=0` (the evaluation's
 #      `setup` job, whose `setup-tools` job builds and caches the service).
 #
@@ -39,7 +43,7 @@ t0=$(date +%s); step() { echo "== org-setup: $1 ($(( $(date +%s) - t0 )) s)"; }
 step "1 organiser build ($TARGETS)"
 (cd "$ORG" && timeout 300 lake build $TARGETS) > "$LOG/build.log" 2>&1 || { tail -20 "$LOG/build.log"; exit 1; }
 step "2 harness tools"
-(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit chaincheck tokensweep) > "$LOG/tools.log" 2>&1 \
+(cd "$HERE/lean-tools" && timeout 60 lake build gate axiomaudit tokensweep) > "$LOG/tools.log" 2>&1 \
   || { tail -20 "$LOG/tools.log"; exit 1; }
 step "3 allowlist and olean manifest"
 (cd "$ORG" && timeout 90 lake env "$HERE/lean-tools/.lake/build/bin/gate" --closure "$ROOTS" "$ORG/.lake/rf/allowlist.txt") \
@@ -69,6 +73,10 @@ json.dump(m, open(os.path.join(x, "lake-manifest.json"), "w"), indent=1)
 EOF
 (cd "$X" && timeout 540 lake build nop) > "$LOG/extlibs.log" 2>&1 || { tail -20 "$LOG/extlibs.log"; exit 1; }
 rm -rf "$X"
+step "4b the organiser's compiled code, hashed"
+timeout 60 python3 -I "$ORG/scripts/olean-manifest.py" objects-gen --org "$ORG" "$ORG/.lake/rf/objects.sha256" \
+  > "$LOG/objects.log" 2>&1 || { cat "$LOG/objects.log"; exit 1; }
+tail -1 "$LOG/objects.log"
 if [[ "${RF_ORG_SERVICE:-1}" != 0 ]]; then
   step "5 service"
   (cd "$ORG/service" && timeout 120 cargo build --release) > "$LOG/service.log" 2>&1 || { tail -20 "$LOG/service.log"; exit 1; }

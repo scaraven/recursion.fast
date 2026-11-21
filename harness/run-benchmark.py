@@ -5,20 +5,43 @@
       --service rf-oracle --bench rf-bench --work WORK --out RESULT.json \
       [--parts calibrate,stream] [--provisional]
 
-ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` and the organiser's
-`chaincheck` (`evaluate.py` builds them). The order: machine and toolchain record; the calibration
+ENTRY holds `prover/*.s`. BADGE_DIR holds the entry's built `verify` (`evaluate.py` builds it). The order: machine and toolchain record; the calibration
 workload `calib` built from `harness/tools/calib.c` with the runner's `gcc` (before any entry code
 runs); prover build in the sandbox; `prover setup` (untimed, within `setup_s`, its directory within
-`setup_cap`); the calibration instance and the service calibration; the stream (its own service; every
-step a fresh process, every output checked, the statement canaries, interleaved `c_P` and `T_triv`
-samples, the re-timing); the two scores (`rfh.bench.score`: the sum and the product). One stream
-per evaluation, no repeats. The per-step JSON lines go to WORK/stream.jsonl and into
-the result. The first failure ends the run with `benchmark: fail` and its reason; a truncated stream
-(its cap reached) is scored over its completed steps and flagged, never ranked. A machine whose
-fingerprint is missing, unreadable or not the season's (AGENTS.md §6) ends the run before the
-prover's build with `benchmark: error`, and a `c_P` that drifted beyond the season's `c_P_drift`
-(AGENTS.md §6) ends the run with `benchmark: error`: the machine was not in its calibrated state,
-the organiser's failure, never a score change.
+`setup_cap`), then the binary and the setup copied to the runner's tmpfs, which every later sandbox
+binds (`rfh.prover.Run.publish`); the service calibration; the stream (its own service:
+the service run, every step a fresh process, every output checked, the final output's caps and
+statement canaries, the track `every`'s conditions; then `timed_runs` timed passes against the
+service's replay mode, every output byte-identical to the service run's; interleaved `c_P`
+samples); the score (`rfh.bench.score`: `P_total` the median of the pass totals,
+`S = P_total · |π_M|` in `final`, `S_every = P_total · max_i |π_i|` in `every`, seconds · bytes; the
+tracks the run is in). One stream per evaluation, no repeats. The per-step JSON lines
+go to WORK/stream.jsonl and into the result. The first failure ends the run with `benchmark: fail`,
+its reason and where it was rejected (`reject_stage`: `prover`, `request`, `check`, `timed-pass` or
+`stream-cap`, `rfh.bench.Fail`); so does reaching `stream_s`. The runner's tools (`calib`, and
+`scrub`, which sets the per-CPU inode counters to random offsets before every request) are built
+before any entry code runs. A machine whose fingerprint is missing, unreadable or not the season's
+(AGENTS.md §6) ends the run before the prover's build with `benchmark: error`, and so does a machine with no systemd
+user manager (the sandboxes' memory caps would fall back to prlimit and share the runner's cgroup,
+`organiser_error: fingerprint`; `RF_ALLOW_PRLIMIT=1` lets tests and local runs proceed, recorded as
+`machine.memcap_override`), and so does `RF_TEST_BADGE_HOST_ROOT=1` (the tests' stand-in badge with
+the host's /usr) unless `RF_TEST_OVERRIDES=1` is set too (recorded as `machine.badge_host_root`;
+`aggregate.py` makes a result with either record, or `machine.memcap = prlimit`, an organiser ERROR);
+the binary and the setup are copied afresh for the service run and for each timed pass
+(`rfh.bench.Bench.fresh_copy`, recorded in `stream.copies`); a `c_P` that
+drifted beyond the season's `c_P_drift` (AGENTS.md §6) ends the run with `benchmark: error`: the
+machine was not in its calibrated state, the organiser's failure, never a score change. A stream
+record the score cannot be computed from (`rfh.bench.MalformedStream`: a step without exactly
+`timed_runs` timed times, or a record not of the shape `rfh.bench.check_record` requires) is a
+runner fault: `benchmark: error` named `malformed`, never the entry's. Every checkpoint of the result says `benchmark: incomplete`; only the
+final record (stage `done`) says `pass`, `fail` or `error`, and a failed write of the run log never
+stops the run. During the stream every checkpoint also carries the stream's clock as last read
+(`stream_clock`: `entry_s`, `wall_s`, `runner_overhead_s`, `entry_running`, `entry_bound_s`, `at`,
+`at_monotonic`; rewritten as each request's prover is spawned, says `ready`, is given its inputs
+and dies, as each badge process is released and ends, and as each is charged, `rfh.bench.Bench.tick`), so that a part killed at
+`PART_S` is judged by whose time ran it past the bound (`evaluate.py`, AGENTS.md §9); a failed
+checkpoint write is logged, never the run's end; the final record drops it (its `stream.clock`
+holds the figures).
 """
 import argparse
 import glob
@@ -31,16 +54,19 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rfh.bench import Bench, Fail, Params, build_calib, fingerprint_problem, fs_free, machine, printable, score  # noqa: E402
+from rfh.bench import (Bench, Fail, MalformedStream, Params, build_calib, build_scrub, check_record,  # noqa: E402
+                       fingerprint_problem, fs_free, machine, printable, score)
 from rfh.prover import Run, build, tree_sha256  # noqa: E402
+from rfh.sandbox import memcap_method  # noqa: E402
 
 ALL_PARTS = ["calibrate", "stream"]
 
 
 class Drift(Exception):
-    """The machine is not in the season's state: its fingerprint is missing, unreadable or another,
-    or its calibration drifted (AGENTS.md §6). An organiser ERROR, never the entry's verdict;
-    `kind` names it for the bot (`fingerprint`, `drift`)."""
+    """An organiser ERROR, never the entry's verdict: the machine is not in the season's state (its
+    fingerprint is missing, unreadable or another, or its calibration drifted, AGENTS.md §6), or the
+    runner wrote a stream record the score cannot be computed from. `kind` names it for the bot
+    (`fingerprint`, `drift`, `malformed`)."""
 
     def __init__(self, msg, kind):
         super().__init__(msg)
@@ -78,18 +104,23 @@ def main():
     logf = open(os.path.join(work, "run.log"), "a")
 
     def log(msg):
+        """A line on stdout and in WORK/run.log; a write that fails (a full disk, a closed stdout)
+        is dropped: the run's verdict never depends on its log (review R3 H3)."""
         line = f"{time.strftime('%H:%M:%S')} {msg}"
-        print(line, flush=True)
-        logf.write(line + "\n")
-        logf.flush()
+        for f in (sys.stdout, logf):
+            try:
+                f.write(line + "\n")
+                f.flush()
+            except (OSError, ValueError):
+                pass
 
-    res = {"schema": "recursion.fast/v4/result-1", "season": p.name, "season_sha256": sha256(a.season),
+    res = {"schema": "recursion.fast/v6/result-1", "season": p.name, "season_sha256": sha256(a.season),
            "params": {k: v for k, v in vars(p).items()}, "parts": parts, "provisional": a.provisional,
            "comparable": not a.provisional, "machine": machine(),
            "harness": {"commit": harness_commit(), "service_sha256": sha256(a.service),
                        "bench_sha256": sha256(a.bench),
-                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify", "chaincheck")}},
-           "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "pass", "reasons": []}
+                       "badge_sha256": {b: sha256(os.path.join(a.badge, b)) for b in ("verify",)}},
+           "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "benchmark": "incomplete", "reasons": []}
     srcs = sorted(glob.glob(os.path.join(a.entry, "prover", "*.s")))
     h = hashlib.sha256()
     for f in srcs:
@@ -101,7 +132,9 @@ def main():
 
     def save(stage):
         """A checkpoint of the result: if the part is killed at `PART_S`, `evaluate.py`
-        reads the stage it reached."""
+        reads the stage it reached. A checkpoint says `benchmark: incomplete` (the verdict is set
+        only at the end, with the stage `done`), so a run that died after it is never read as
+        passed (`evaluate.py`, `aggregate.py` require `stage: done` of a passed part; review R3 H3)."""
         res["stage"] = stage
         tmp = a.out + ".tmp"
         with open(tmp, "w") as f:
@@ -116,12 +149,33 @@ def main():
             raise Drift(f"organiser ERROR: the machine fingerprint is {why}"
                         + (f" ({m['fingerprint_reason']})" if why != "mismatched" else
                            f" (fingerprint {m['fingerprint']}, the season expects {p.fingerprint})"), "fingerprint")
+        if memcap_method() != "systemd":
+            # under the prlimit fallback every sandbox shares the runner's cgroup, so a request can
+            # read what an earlier one did to the group's per-CPU run queues (`/proc/self/sched`,
+            # review LR4 M2): the machine is not in the season's state, before any entry code runs
+            if os.environ.get("RF_ALLOW_PRLIMIT") != "1":
+                raise Drift("organiser ERROR: no systemd user manager on this machine (`systemd-run --user --scope` "
+                            "fails), so the sandboxes' memory caps would fall back to prlimit and share the runner's "
+                            "cgroup: the machine is not in the season's state", "fingerprint")
+            m["memcap_override"] = True       # RF_ALLOW_PRLIMIT=1: tests and local runs only
+            log("memory caps: the prlimit fallback, allowed by RF_ALLOW_PRLIMIT=1 (not the season's machine state)")
+        if os.environ.get("RF_TEST_BADGE_HOST_ROOT") == "1":       # the tests' Python stand-in badge only
+            # a test-only weakening of the badge's sandbox (the host's /usr bound): refused unless the
+            # tests' switch is set too, and then recorded, which the aggregation refuses (review LR5 L2)
+            if os.environ.get("RF_TEST_OVERRIDES") != "1":
+                raise Drift("organiser ERROR: RF_TEST_BADGE_HOST_ROOT=1 (the host's /usr in the badge's sandbox) is a "
+                            "test-only override, refused without RF_TEST_OVERRIDES=1: the machine is not in the "
+                            "season's state", "fingerprint")
+            m["badge_host_root"] = True
+            log("badge sandbox: the host's /usr bound, allowed by RF_TEST_OVERRIDES=1 (tests only)")
         calib_bin, res["calib"] = build_calib(os.path.join(work, "calib"))
+        scrub_bin, res["scrub"] = build_scrub(os.path.join(work, "tools"))
         save("prover build")
-        ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s)
+        ok, info = build(os.path.join(a.entry, "prover"), os.path.join(work, "prover"), p.mem_prover, p.build_s,
+                         binary_cap=p.setup_cap)
         res["prover"] = info
         if not ok:
-            raise Fail(f"prover build: {info.get('error')}")
+            raise Fail(f"prover build: {info.get('error')}", stage="prover")
         log(f"prover built: {info['binary_sha256']} ({info['binary_bytes']} bytes)")
         run = Run(os.path.join(work, "prover", "bin"), os.path.join(work, "setup"), p.mem_prover)
         save("prover setup")
@@ -131,42 +185,67 @@ def main():
         if ok and free0 and free1 and free0[0] - free1[0] > p.setup_cap + (64 << 20):
             ok, slog = False, slog + (f"\nthe setup left the work filesystem {free0[0] - free1[0]} bytes fuller, "
                                       f"above setup_cap = {p.setup_cap}")
-        res["setup"] = {"ok": ok, "seconds": dt, "log": slog[-2000:]}
+        res["setup"] = {"ok": ok, "seconds": dt, "log": printable(slog, 2000)}     # the entry's text
         if not ok:
             raise Fail("prover setup failed" + (": " + printable(slog.strip().splitlines()[-1], 300)
-                                                if "setup_cap" in slog else ""))  # organiser text, sanitised anyway
-        res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)
+                                                if "setup_cap" in slog or "could not be copied" in slog else ""),
+                       stage="prover")  # the runner's text, sanitised anyway
+        res["setup"]["sha256"] = tree_sha256(run.setup_dir, p.setup_cap, 60)     # None on any error: the entry's
         if res["setup"]["sha256"] is None:
-            raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s")
+            raise Fail(f"the setup directory could not be hashed within setup_cap = {p.setup_cap} bytes and 60 s",
+                       stage="prover")
+        # every later sandbox binds the binary and the setup from copies on the runner's tmpfs
+        res["setup"]["copy_bytes"], res["setup"]["copy_s"] = run.publish()
         if "stream" in parts and "calibrate" not in parts:
             raise RuntimeError("the stream needs the part `calibrate` in the same job (its samples are interleaved)")
         bench = Bench(p, run, os.path.abspath(a.badge), os.path.abspath(a.service), os.path.abspath(a.bench), work,
-                      calib_bin=calib_bin, log=log)
+                      calib_bin=calib_bin, log=log, scrub_bin=scrub_bin)
         if "calibrate" in parts:
             save("calibration")
             res["calibration"] = bench.calibrate()
-            log(f"calibration instance: {res['calibration']['triv_permutations']} permutations; "
-                f"service {res['calibration']['service']}")
+            log(f"calibration: service {res['calibration']['service']}")
         if "stream" in parts:
             save("stream")
+
+            def progress(c):
+                """The stream's clock to the checkpoint. A failed write (ENOSPC, EIO) is logged and
+                the stream goes on: it must not mask a failure in flight (`Bench.verify`'s
+                `finally`) nor skip the stream's clean-up, and a part killed at `PART_S` with no
+                or an older reading is judged by what the file holds (`evaluate.part_timeout`:
+                no reading is the organiser's ERROR)."""
+                res["stream_clock"] = c
+                try:
+                    save("stream")
+                except Exception as e:  # noqa: BLE001 (a checkpoint is advisory)
+                    log(f"the stream's clock could not be checkpointed: {e!r}")
+            bench.progress = progress
             res["stream"] = bench.stream_run()
             cal = res["stream"]["calibration"]
-            log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), T_triv = {cal['T_triv_ns'] / 1e6:.3f} ms, v_ref = {cal['v_ref_ns'] / 1e6:.3f} ms")
-            res["score"] = score(p, res["stream"])
+            log(f"c_P = {cal['c_P']:.4f} (drift {cal['c_P_drift']:.4f}), (a health check)")
+            try:
+                check_record(p, res["stream"])
+                res["score"] = score(p, res["stream"])
+            except MalformedStream as e:
+                raise Drift(f"organiser ERROR: the stream's record is malformed ({e}): a runner fault, not the "
+                            "entry's", "malformed")
             with open(os.path.join(work, "stream.jsonl"), "w") as f:
                 for s in res["stream"]["steps"]:
                     f.write(json.dumps(s) + "\n")
-            log(f"score: S = {res['score']['S']:.4f} (P̄ {res['score']['P_bar']:.4f}, V̄ {res['score']['V_bar']:.4f}), "
-                f"S× = {res['score']['S_product']:.4f} (g {res['score']['g']:.4f}), "
-                f"M = {res['score']['M']}" + (", TRUNCATED" if res["stream"]["truncated"] else ""))
-            if res["stream"]["truncated"]:
-                res["comparable"] = False
+            sc = res["score"]
+            log(f"score: S = {sc['S']:.1f} s·B (P_total {sc['P_total_s']:.4f} s, the median of the pass totals "
+                f"{[round(x, 4) for x in sc['pass_totals_s']]} s, pass {sc['median_pass']}; times |π_M| = "
+                f"{sc['final_pi_bytes']} B)"
+                + (f", S_every = {sc['S_every']:.1f} s·B (times max |π_i| = {sc['max_pi_bytes']} B)"
+                   if "S_every" in sc else "")
+                + f", tracks {sorted(sc['tracks'])}"
+                + (f"; not in `every`: {sc['tracks_reason']['every'][:300]}" if "tracks_reason" in sc else ""))
             if not cal["c_P_ok"]:
                 raise Drift(f"organiser ERROR: c_P = {cal['c_P']:.4f} drifted by {cal['c_P_drift']:.4f} from the "
                             f"season's ref_ns, beyond c_P_drift = {cal['c_P_drift_cap']}: the machine was not "
                             "in its calibrated state; not the entry's failure, and never a score change", "drift")
     except Fail as e:
         res["benchmark"] = "fail"
+        res["reject_stage"] = e.stage or "prover"      # a Fail before the stream names none: the prover's
         res["reasons"].append(str(e))
         if getattr(e, "rec", None) is not None:
             res["failed_run"] = e.rec
@@ -180,10 +259,15 @@ def main():
         res["reasons"].append(f"harness error: {e!r}")
         res["traceback"] = traceback.format_exc()[-4000:]
         log(f"HARNESS ERROR: {e!r}")
+    if res["benchmark"] == "incomplete":       # no failure and no error: the run passed
+        res["benchmark"] = "pass"
+    res.pop("stream_clock", None)       # the checkpoints' (evaluate.py's at a PART_S kill); `stream.clock` holds it
     res["stage"] = "done"
     res["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with open(a.out, "w") as f:
+    tmp = a.out + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(res, f, indent=1)
+    os.replace(tmp, a.out)
     log(f"benchmark: {res['benchmark']} -> {a.out}")
     return {"pass": 0, "fail": 1}.get(res["benchmark"], 2)
 

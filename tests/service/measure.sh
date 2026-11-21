@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Measures the oracle service on this machine: keygen time, round-trip latency, and
 # QUERY throughput (calls and Keccak-f[1600] permutations per second) for 1 and N client threads over
-# batch sizes and query sizes; SIGN throughput; the in-process cost of one keyed hash; the chain
-# hasher (`rf-oracle --leaves`).
+# batch sizes and query sizes; SIGN throughput; the in-process cost of one keyed hash; the leaf
+# hasher (`rf-oracle --data-roots`).
 #   tests/service/measure.sh [THREADS_MAX]      (logs to stdout; the caller tees into logs/)
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -40,10 +40,11 @@ for args in "1 0 1" "1 64 1" "$N 64 0.5"; do
   exec 4>&-; sleep 0.3; tail -1 svc2.out
 done
 for size in 0 64 65536; do "$B/rf-bench" - local 1024 $size; done
-# the chain hasher: N chains of 2^16 steps (one permutation each)
+# the leaf hasher: 4 files of 2^18 random 32-byte blocks (the season's leaf), 2^19 - 1 permutations each
+for i in 1 2 3 4; do head -c $((32 * 262144)) /dev/urandom > "$W/leaf$i.bin"; done
 for t in 1 $N; do
   s=$(date +%s.%N)
-  for i in $(seq $N); do printf '%064x %d\n' $i 65536; done | "$B/rf-oracle" --leaves --threads $t > /dev/null
+  "$B/rf-oracle" --data-roots --threads $t "$W"/leaf{1,2,3,4}.bin > /dev/null
   e=$(date +%s.%N)
-  echo "leaves threads=$t chains=$N steps=65536 permutations_per_s=$(python3 -c "print(round($N * 65537 / ($e - $s)))")"
+  echo "data-roots threads=$t files=4 blocks=262144 permutations_per_s=$(python3 -c "print(round(4 * (2 * 262144 - 1) / ($e - $s)))")"
 done

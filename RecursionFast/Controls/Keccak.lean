@@ -29,7 +29,13 @@ Positive, each digest from OpenSSL 3.5's `openssl dgst -keccak-256` and pycrypto
 * `len135_kat`: 135 bytes, so the padding is the single byte `0x81`;
 * `len136_kat`: exactly one block of message, then a whole block of padding;
 * `len137_kat`: one block and one byte;
-* `len272_kat`: two blocks of message, then a block of padding.
+* `len272_kat`: two blocks of message, then a block of padding;
+* `len271_kat`: two blocks less a byte, so the single padding byte `0x81` ends the second block;
+* `len273_kat`: two blocks and one byte;
+* `len408_kat`: exactly three blocks of message, then a block of padding.
+The digests of `len271_kat`, `len273_kat` and `len408_kat` are also the output of the `python3 -I`
+command in their docstrings, run from the repository root (`harness/rfh/keccak.py`, the runner's
+Keccak-256). A 1000-byte vector is left out: the kernel takes about 95 s on it.
 
 Negative:
 * `flip_neg`: one bit flipped in the message ("abc" → "abb") changes the digest;
@@ -187,6 +193,27 @@ theorem len137_kat : keccak256 (pattern 137) =
 /-- 272 bytes: two blocks of message, then a block of padding. -/
 theorem len272_kat : keccak256 (pattern 272) =
     hex "ac141fd7b0a0ffcd2e967254d508da3ec616596493c36fa304425647d90e6de5" := by
+  rw [keccak256_eq_digestL]; decide +kernel
+
+/-- 271 bytes: the single padding byte `0x81` lands in the second block.
+`python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(bytes((7*i+3)%256 for i in range(271))).hex())"` -/
+theorem len271_kat : keccak256 (pattern 271) =
+    hex "4401c4afbe16ff911bdbf2d38e556e5b861f3fdf0f9d4306b1c46f6ae4f73584" := by
+  rw [keccak256_eq_digestL]; decide +kernel
+
+/-- 273 bytes: two blocks, then one byte and its padding.
+`python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(bytes((7*i+3)%256 for i in range(273))).hex())"` -/
+theorem len273_kat : keccak256 (pattern 273) =
+    hex "16192ea86793083e47731cb3c970600f04768414d92bc0540e54ce8607a0fce0" := by
+  rw [keccak256_eq_digestL]; decide +kernel
+
+/-- 408 bytes: three blocks of message, then a block of padding.
+`python3 -I -c "import sys; sys.path.insert(0, 'harness'); from rfh.keccak import keccak256 as K;
+print(K(bytes((7*i+3)%256 for i in range(408))).hex())"` -/
+theorem len408_kat : keccak256 (pattern 408) =
+    hex "e2e4d43589211efebc5d5470122a6c4089d989bbc8e03bf72217226dc90696cc" := by
   rw [keccak256_eq_digestL]; decide +kernel
 
 /-! ## Negative -/

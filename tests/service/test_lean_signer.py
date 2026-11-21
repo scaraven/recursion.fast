@@ -7,8 +7,10 @@
 SIGNER is `lake -f scripts/speed/lakefile.toml build signer`'s `.lake/build/bin/signer`
 (`Library/SignerFast.lean`: `chainStartF` = the contract-side `chainStart`, the tree = `node`, the
 signature = `Signer.sign`, proved `SigOk`). The service runs with fixed test keys; its first two
-signatures (the empty trace, then a three-query trace) must equal, byte for byte, the Lean signer's
-signatures with the same seed and index on the same trace digests, and its `vk` the Lean `vk`. Both
+signatures (the empty trace, then a three-query trace) and its last, at index `0xFFFF` (a
+three-query trace after `2^16 - 3` empty ones: every bit of the index set, so every level of the
+path takes its sibling from the left), must equal, byte for byte, the Lean signer's signatures with
+the same seed and index on the same trace digests, and its `vk` the Lean `vk`. Both
 sides hash with Keccak-256 (`service/PROTOCOL.md` §2.0: the chain starts `Keccak-256(seed ‖ 0x53 ‖
 enc64 j ‖ byte i)`, the tagged chain steps, leaves and nodes); the signer must be built from the same
 contract as the service.
@@ -47,10 +49,18 @@ def main():
     c = Client(sock)
     traces = [[], [b"abc", bytes(64), b"x" * 1000]]
     sigs = [from_wire(b"", qs, c.sign(qs)) for qs in traces]
+    for _ in range((1 << 16) - 3):
+        c.sign([])
+    last = [b"high", bytes(32), b"y" * 100]
+    sigs.append(from_wire(b"", last, c.sign(last)))
+    traces.append(last)
     c.close()
     stop(p)
     digests = [W.trace_digest(s.trace) for s in sigs]
-    with ThreadPoolExecutor(2) as ex:
+    if sigs[-1].idx != 0xFFFF:
+        print(f"FAIL the last signature has index {sigs[-1].idx}, not 0xFFFF")
+        return 1
+    with ThreadPoolExecutor(3) as ex:
         lean = list(ex.map(lambda jm: lean_sign(*jm), [(s.idx, d) for s, d in zip(sigs, digests)]))
     fails = 0
     for k, (s, L) in enumerate(zip(sigs, lean)):

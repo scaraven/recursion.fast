@@ -4,9 +4,10 @@
 # separate jobs). A push or a pull request to this repository triggers it; it
 # runs no submission. Every check whose subject is organiser code runs here and only here, once per
 # harness commit, never in an evaluation: the contract's `acc` before the entry's `V` (the
-# organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge
-# template, the compiled extractor interpreter, the harness. Every job ends within 30 minutes, its
-# steps' timeouts nested inside that.
+# organiser's canaries: file parser, trace digest, signature), the service, the sandbox, the badge's
+# glue and template (against a hostile entry's instances and notation), the compiled extractor
+# interpreter, the harness. Every job ends within its `timeout-minutes` (30; the lean job, the harness
+# job and the end-to-end smoke 40), its steps' timeouts nested inside that.
 name: ci
 on:
   push:
@@ -26,7 +27,7 @@ defaults:
 jobs:
   lean:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: machine
         run: lscpu
@@ -66,31 +67,17 @@ jobs:
         run: |
           timeout 60 lake env harness/lean-tools/.lake/build/bin/tokensweep .lake/rf/allowlist.txt > logs/tokens.txt
           python3 -I tests/source-rule/sweep.py scripts/source-rule.py logs/tokens.txt tests/source-rule/reviewed-tokens.txt
-      - name: gate fixtures
-        run: timeout 90 tests/gate/check.sh
+      - name: gate fixtures (every rule, the masked-leaf certificate, the manifest; 189 s on 16 cores of an organiser workstation)
+        run: timeout 600 tests/gate/check.sh
       - name: the service's signatures against the compiled Lean reference signer
         run: |
           (cd service && timeout 60 cargo build --release --features insecure-test-keys --target-dir target/test-keys)
           timeout 120 lake -f scripts/speed/lakefile.toml build signer extract
-          timeout 120 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
+          timeout 300 python3 tests/service/test_lean_signer.py .lake/build/bin/signer | tee logs/lean-signer.log
       - name: the compiled extractor interpreter on the witness-sending entry (organiser code)
         run: timeout 30 .lake/build/bin/extract | tee logs/extract.log
-      - name: acc on a 2^16-query signed trace, timed by the badge, and the organiser's canaries
-        run: timeout 120 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
-      - name: chain checker (T_triv,best) at the season shape
-        run: |
-          timeout 60 python3 -I - <<'PY' | tee logs/chaincheck.log
-          import json, os, subprocess, sys
-          sys.path.insert(0, "harness")
-          from rfh import digest
-          starts = [os.urandom(32) for _ in range(64)]
-          root = digest.tree_root(digest.leaf_digests(starts, 1 << 18))
-          json.dump({"n": 1 << 18, "starts": [s.hex() for s in starts]}, open("logs/leaves.json", "w"))
-          core = str(max(os.sched_getaffinity(0)))
-          for _ in range(3):
-              print(subprocess.run(["taskset", "-c", core, "harness/lean-tools/.lake/build/bin/chaincheck", "logs/leaves.json",
-                                    root.hex()], capture_output=True, text=True).stdout.strip())
-          PY
+      - name: acc on a 2^16-query signed trace, timed by the badge, the organiser's canaries, the badge's glue against a hostile entry's instances, and a memoising verifier judged slow
+        run: timeout 300 python3 tests/harness/accprobe/run.py | tee logs/accprobe.log
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         if: always()
         with: { name: lean-logs, path: logs/ }
@@ -120,7 +107,7 @@ jobs:
 
   harness:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: machine
         run: lscpu
@@ -137,12 +124,22 @@ jobs:
         run: timeout 300 cargo build --release
       - name: sandbox tests (hostile prover; the clock stops when the sandbox is dead)
         run: timeout 300 python3 tests/harness/test_sandbox.py
-      - name: the verifier term, the score, the draws and the fit
+      - name: the badge's request loop against hostile stand-ins, the warm-up and the start-up cap
+        run: timeout 120 python3 tests/harness/test_serve.py
+      - name: the score, the caps, the draws and the statements
         run: timeout 60 python3 tests/harness/test_tv.py
-      - name: the stream's control flow, re-timing and truncation
+      - name: the stream's control flow, the timed passes and the tracks
         run: timeout 60 python3 tests/harness/test_stream.py
+      - name: the committed-data leaf (known answers, the toy's C dataRoot, inputs staged at go, no mount of the data)
+        run: timeout 300 python3 tests/harness/test_leaf.py
       - name: a part past PART_S after the prover's build started is the entry's REJECT
         run: timeout 120 python3 tests/harness/test_partcap.py
+      - name: the entry's setup tree, its binary and a dying runner (never an ERROR, never a pass)
+        run: timeout 300 python3 tests/harness/test_entry_trees.py
+      - name: a request's own refusals (sendmsg, sysinfo) and the service's drop after it
+        run: timeout 120 python3 tests/harness/test_request_filter.py
+      - name: verify-record.sh against a stand-in gh (the season's hash, the measured entry)
+        run: timeout 60 python3 tests/harness/test_verify_record.py
       - name: the aggregation (every planned part, the machine fingerprint)
         run: timeout 60 python3 tests/harness/test_aggregate.py
       - name: harness smoke with the stand-in badge (runner, service, toy prover, broken provers, one aggregated evaluation)

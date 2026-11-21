@@ -64,23 +64,23 @@ def main (args : List String) : IO Unit := do
   let sigs := (Array.range 200).map fun i => (dig i, Signer.Tree.sign sk T (i % 65536) (dig i))
   bench "SigOk (reference), valid signature" (sigs.extract 0 20) 250 fun p => SigOk vk p.1 p.2
   bench "SigOkF (twin), valid signature" sigs 250 fun p => SigOkF vk p.1 p.2
-  -- acc on a witness-sending root over two signed leaves of 2^10 steps
-  let s₁ := dig 1
-  let s₂ := dig 2
+  -- acc on a witness-sending root over two signed leaves of 2^10 blocks
   let n := 1024
-  let c₁ := leafStmtF (chainEndF s₁ n) n
-  let c₂ := leafStmtF (chainEndF s₂ n) n
+  let xs₁ := (List.range n).map dig
+  let xs₂ := (List.range n).map fun i => dig (i + n)
+  let c₁ := leafStmtF (dataRootF xs₁) n
+  let c₂ := leafStmtF (dataRootF xs₂) n
   let p₁ : Signed :=
-    ⟨WitnessSending.encodeF (.leaf s₁ n), [], Signer.Tree.sign sk T 0 (traceDigestF [])⟩
+    ⟨WitnessSending.encodeF (.leaf xs₁), [], Signer.Tree.sign sk T 0 (traceDigestF [])⟩
   let p₂ : Signed :=
-    ⟨WitnessSending.encodeF (.leaf s₂ n), [], Signer.Tree.sign sk T 1 (traceDigestF [])⟩
+    ⟨WitnessSending.encodeF (.leaf xs₂), [], Signer.Tree.sign sk T 1 (traceDigestF [])⟩
   let root : Signed := ⟨WitnessSending.encodeF (.node c₁ c₂ p₁ p₂), [],
     Signer.Tree.sign sk T 2 (traceDigestF [])⟩
   let c := nodeStmtF c₁ c₂
   let roots := (Array.range 20).map fun _ => root
-  bench "acc (reference), ws root over two 2^10-step leaves" (roots.extract 0 3) 1
+  bench "acc (reference), ws root over two 2^10-block leaves" (roots.extract 0 3) 1
     fun p => WitnessSending.submission.acc vk c p
-  bench "accF (twin), ws root over two 2^10-step leaves" roots 1
+  bench "accF (twin), ws root over two 2^10-block leaves" roots 1
     fun p => WitnessSending.submission.accF vk c p
   -- where the witness-sending verifier spends its time: decoding and re-encoding its proof
   let proofs := (Array.range 20).map fun _ => root.π
@@ -90,4 +90,8 @@ def main (args : List String) : IO Unit := do
     fun π => match WitnessSending.decodeF π with
       | some w => WitnessSending.encodeF w == π
       | none => false
-  bench "chainEndF, 2^10 steps" (Array.range 20) 1024 fun i => (chainEndF (dig i) 1024)[0] == 1
+  let datas := (Array.range 20).map fun i => (List.range 1024).map fun j => dig (i + j)
+  bench "dataRoot (reference), 2^10 blocks" (datas.extract 0 5) 1024 fun xs =>
+    (dataRoot xs)[0] == 1
+  bench "dataRootF (twin), 2^10 blocks" datas 1024 fun xs =>
+    (dataRootF xs)[0] == 1

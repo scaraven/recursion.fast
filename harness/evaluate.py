@@ -36,16 +36,22 @@ kernel's, which leaves the certificate unchecked):
      manifest before the build and after the badge build (step 6), and the result records the
      manifest's and the allowlist's hashes (`environment`);
   5. the gate (rules 1–8, badge fields V, P, ext) in the sandbox, within `gate_s`;
-  6. the badge executable `verify` rendered from `harness/badge/*.lean.in` and built in the sandbox
-     in that tree within `badge_s`; it must neither build nor change an entry module (the badge's
-     import closure lies inside the verified one); the organiser's `chaincheck` copied beside it.
+  6. the badge executable `verify`: its per-entry module rendered from `harness/badge/Verify.lean.in`
+     (the solution and the organiser's prebuilt glue `RecursionFast/Badge.lean`, wired by one
+     definition) and built in the sandbox in that tree within `badge_s`; it must neither build nor
+     change an entry module (the badge's import closure lies inside the verified one) nor, with the
+     organiser's build mounted read-only, an organiser artifact (the olean manifest and the hashes
+     of the organiser's compiled objects, `org-setup.sh` step 4b, are checked after it), and the
+     gate's rule 9 (`--wiring`, within `gate_s`) must find in that module `main := RFBadge.main
+     RecursionFast.Challenge.submission` and nothing else. Entry module roots `RFBadge*` are refused.
   Status: `ok` (certified), `provisional` (everything builds and the only failures are an
   incomplete certificate: the comparator's verdict and gate rule 1's `sorryAx`), `reject`. The
   result records each capped step's seconds (`build_s`, `comparator_s`, `gate_s`, `badge_s`) and
   each kernel run's memory peak (`kernel_runs`, sampled while it runs).
   With `--export-build DIR` and status `ok`, the entry modules' build outputs and their manifest
   are written to DIR (`entry_build` in the result; the bot caches them if the result is a record).
-The benchmark job (`bench`; the organiser's evaluation machine): `harness/run-benchmark.py` with the badge.
+The benchmark job (`bench`; the organiser's evaluation machine): `harness/run-benchmark.py` with the badge,
+within `PART_S`; a part killed there is judged by its runner's last checkpoint (`part_timeout`).
 Verdict: ACCEPT (certificate ok, benchmark pass), PROVISIONAL (certificate provisional, benchmark
 pass; never ranked, its numbers marked uncomparable), REJECT (anything else).
 """
@@ -66,7 +72,9 @@ from rfh import buildcache  # noqa: E402
 from rfh.sandbox import PeakWatch, Sandbox, kill_unit, memcap, scope_oom  # noqa: E402
 
 TIMEOUT = 300           # an organiser command: render, source rule, manifest check
+REASON_CAP = 300        # the bot keeps a reason's first 300 characters: a verdict's reason fits, its verdict first
 PART_S = 3840           # the benchmark job (64 min of its 70): the outer bound of its capped steps
+                        # and of the runner's own time, `[stream] runner_budget_s` of it in the stream
 CHALLENGE_MODULE, SOLUTION_MODULE = "Challenge", "Solution"
 
 
@@ -146,6 +154,9 @@ def mkfresh(t, org, entry, challenge, files):
     dirs = [os.path.join(org, ".lake/build/lib/lean"), os.path.join(lean_prefix(org), "lib/lean")]
     dirs += [os.path.join(pk, p, ".lake/build/lib/lean") for p in os.listdir(pk)]
     mods = [f[:-5] for f in files]
+    for r in sorted({m.split(".")[0] for m in mods}):
+        if r.startswith("RFBadge"):
+            raise Reject(f"module root {r}: roots starting with RFBadge are reserved for the badge")
     for r in sorted({m.split(".")[0] for m in mods + [CHALLENGE_MODULE]}):
         for d in dirs:
             if os.path.isdir(os.path.join(d, r)) or os.path.exists(os.path.join(d, r + ".olean")):
@@ -189,8 +200,9 @@ class Org:
         self.packages = packages_dir(self.dir)
         rf = os.path.join(self.dir, ".lake", "rf")
         self.manifest, self.allowlist = os.path.join(rf, "manifest.sha256"), os.path.join(rf, "allowlist.txt")
+        self.objects = os.path.join(rf, "objects.sha256")
         self.tools = os.path.join(REPO, "harness", "lean-tools", ".lake", "build", "bin")
-        for p in (self.manifest, self.allowlist, os.path.join(self.tools, "gate"), os.path.join(self.tools, "chaincheck")):
+        for p in (self.manifest, self.allowlist, self.objects, os.path.join(self.tools, "gate")):
             if not os.path.exists(p):
                 raise SystemExit(f"evaluate: {p} missing (run harness/org-setup.sh first)")
 
@@ -202,6 +214,11 @@ class Org:
     def manifest_ok(self, log):
         return sh([sys.executable, "-I", os.path.join(REPO, "scripts", "olean-manifest.py"), "check", "--org", self.dir,
                    self.manifest], log=log) == 0
+
+    def objects_ok(self, log):
+        """The organiser's compiled objects (what a badge links) are those `org-setup.sh` hashed."""
+        return sh([sys.executable, "-I", os.path.join(REPO, "scripts", "olean-manifest.py"), "objects-check", "--org",
+                   self.dir, self.objects], log=log) == 0
 
     def environment(self):
         """What the certificate was checked against: the organiser's commit and the
@@ -405,10 +422,17 @@ def cert_job(a):
         badge = build_badge(org, tree, logs["badge"], caps["badge_s"], res)
         # the badge's import closure lies inside the verified one: its build adds no entry
         # module and changes no verified artifact
-        after = {k: v for k, v in artifacts(tree).items() if "/RFBadge" not in "/" + k.split("/", 2)[-1]}
+        after = {k: v for k, v in artifacts(tree).items() if not badge_artifact(k)}
         moved = sorted(k for k in set(after) | set(arts) if after.get(k) != arts.get(k))
         if moved:
             raise Reject(f"the badge build built or changed entry modules outside the verified closure: {moved[:3]}")
+        # rule 9: the per-entry module, elaborated with the entry's instances and notations in scope,
+        # holds `main := RFBadge.main RecursionFast.Challenge.submission` and nothing else
+        rc = sandboxed(org, [gate, "--wiring", "RFBadgeVerify", "--manifest", org.manifest], tree, logs["badge"],
+                       env={"LEAN_PATH": lp}, extra=(org.tools, os.path.dirname(org.manifest)), timeout=caps["gate_s"])
+        if rc != 0:
+            rejects = [l for l in open(logs["badge"], errors="replace").read().splitlines() if l.startswith("gate: REJECT")]
+            raise Reject("the badge's per-entry module (gate rule 9): " + "; ".join(rejects[:3] or [f"exit {rc}"]))
         res["badge_dir"] = badge
         res["badge_sha256"] = {b: hashlib.sha256(open(os.path.join(badge, b), "rb").read()).hexdigest()
                                for b in os.listdir(badge)}
@@ -434,24 +458,33 @@ def cert_job(a):
     return res
 
 
+def badge_artifact(k):
+    """`k` (`lib/lean/…` or `ir/…`, `artifacts`) is an artifact of the badge's per-entry module
+    `RFBadgeVerify`, which the badge build adds (entry roots `RFBadge*` are refused, `mkfresh`)."""
+    rel = k[len("lib/lean/"):] if k.startswith("lib/lean/") else k[len("ir/"):] if k.startswith("ir/") else None
+    return rel is not None and "/" not in rel and rel.split(".", 1)[0] == "RFBadgeVerify"
+
+
 def build_badge(org, tree, log, timeout, res):
-    """Render the badge executable `verify` into `tree` (`harness/badge/*.lean.in`, around the
-    solution module) and build it in the sandbox within `timeout`, recording its duration as
-    `res["badge_s"]`; returns the directory holding `verify` and the organiser's `chaincheck`."""
+    """Render the badge executable `verify`'s per-entry module into `tree`
+    (`harness/badge/Verify.lean.in`: the solution module and the organiser's prebuilt glue
+    `RecursionFast.Badge`, wired by one definition) and build it in the sandbox within `timeout`,
+    recording its duration as `res["badge_s"]`; returns the directory holding `verify`. (The caller
+    then runs the gate's rule 9 on that module.)"""
     bdir = os.path.join(tree, "badge")
     os.makedirs(bdir)
-    for name in ("Common", "Verify"):
-        src = open(os.path.join(HERE, "badge", f"{name}.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
-        open(os.path.join(bdir, f"RFBadge{name}.lean"), "w").write(src)
+    src = open(os.path.join(HERE, "badge", "Verify.lean.in")).read().replace("{{solution_module}}", SOLUTION_MODULE)
+    open(os.path.join(bdir, "RFBadgeVerify.lean"), "w").write(src)
     with open(os.path.join(tree, "lakefile.toml"), "a") as f:
-        f.write('\n[[lean_lib]]\nname = "RFBadge"\nsrcDir = "badge"\nroots = ["RFBadgeCommon"]\n'
-                '\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
+        f.write('\n[[lean_exe]]\nname = "verify"\nsrcDir = "badge"\nroot = "RFBadgeVerify"\n')
     # An executable links the compiled object of every module it imports. `org-setup.sh` built those
-    # of the organiser's closure; the objects of other modules an entry imports are compiled here,
-    # into the package tree, so its build directories are writable for this step. No entry code runs
-    # in it (the entry's modules are loaded, not elaborated; gate rule 3 excludes load-time code),
-    # and the olean manifest is checked afterwards.
-    rw = [os.path.join(tree, ".lake"), os.path.join(org.dir, ".lake", "build")]
+    # of the organiser's closure (the organiser's own, the glue's included, hashed in its step 4b),
+    # so the organiser's build directory stays read-only here; the objects of other modules an entry
+    # imports are compiled here, into the package tree, so its build directories are writable for
+    # this step. No entry code runs in it (the entry's modules are loaded, not elaborated; gate rule
+    # 3 excludes load-time code), and the olean manifest and the objects' hashes are checked
+    # afterwards.
+    rw = [os.path.join(tree, ".lake")]
     rw += [os.path.join(org.packages, p, ".lake") for p in sorted(os.listdir(org.packages))
            if os.path.isdir(os.path.join(org.packages, p, ".lake"))]
     t0 = time.monotonic()
@@ -464,11 +497,62 @@ def build_badge(org, tree, log, timeout, res):
         raise Reject(f"badge build failed ({rc}): " + open(log, errors="replace").read()[-400:])
     if not org.manifest_ok(log):
         raise Reject("organiser .olean changed during the build, the comparator, the gate or the badge build")
+    if not org.objects_ok(log):
+        raise Reject("the organiser's compiled objects (what the badge links) are not those org-setup.sh hashed")
     out = os.path.join(os.path.dirname(tree), "badge")
     os.makedirs(out)
     shutil.copy(os.path.join(tree, ".lake", "build", "bin", "verify"), out)
-    shutil.copy(os.path.join(org.tools, "chaincheck"), out)
     return out
+
+
+def part_timeout(res, stream_s, runner_budget_s, now, now_monotonic=None):
+    """A benchmark part killed at `PART_S`, judged from its runner's last checkpoint `res` (None if
+    unreadable) at the epoch time `now` (and `now_monotonic`, `time.monotonic()` then, preferred:
+    `CLOCK_MONOTONIC` is machine-wide, so the runner's reading and this process's agree; the epoch
+    time `at` is the fallback): (benchmark, reject_stage, organiser_error, reason), the reason at
+    most `REASON_CAP` characters with its verdict first.
+
+    Before the prover's build: the organiser's (an unnamed harness error). During the prover's
+    build or setup (each capped by the season, `build_s`, `setup_s`): the entry's REJECT at `prover`.
+    From the calibration on, the stream's clock as last checkpointed (`stream_clock`,
+    `rfh.bench.Bench.tick`) is brought up to the kill: if an entry process was in flight
+    (`entry_running`: a request's prover between its spawn and its death, a badge process between
+    its release and its end), the time since the reading is the entry's up to that process's own
+    bound (`entry_bound_s`: its caps and the kill's grace) and the runner's beyond it; else all of
+    it is the runner's. The part is the entry's REJECT (`stream-cap`) only when the entry's own time
+    is what overran: its clock past `stream_s` with the runner's overhead within `runner_budget_s`.
+    Otherwise (no clock: the calibration, or the stream before its first reading; the runner's
+    overhead past its budget; the entry's clock within `stream_s`) the organiser's ERROR named
+    `overhead`, which never counts against the author (AGENTS.md §8, §9)."""
+    stage = str((res or {}).get("stage") or "organiser setup")[:40]
+    head = f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
+    if stage == "organiser setup":
+        return "error", None, None, ("harness ERROR: " + head)[:REASON_CAP]
+    if stage in ("prover build", "prover setup"):
+        return "fail", "prover", None, ("REJECT at `prover`: " + head)[:REASON_CAP]
+    c = res.get("stream_clock")
+    num = lambda k: c.get(k) if isinstance(c, dict) and type(c.get(k)) in (int, float) else None  # noqa: E731
+    if None in (num("entry_s"), num("wall_s"), num("at")):
+        return "error", None, "overhead", (f"organiser ERROR `overhead`: {head}, with no reading of the stream's "
+                                           "clock (no entry time counted)")[:REASON_CAP]
+    if now_monotonic is not None and num("at_monotonic") is not None:
+        since = max(0.0, now_monotonic - c["at_monotonic"])
+    else:
+        since = max(0.0, now - c["at"])
+    running, bound = c.get("entry_running") is True, num("entry_bound_s")
+    inflight = (min(since, max(0.0, bound)) if bound is not None else since) if running else 0.0
+    entry_s = c["entry_s"] + inflight
+    overhead = c["wall_s"] + since - entry_s
+    figs = (f"entry {entry_s:.1f} s of stream_s = {stream_s} s, runner {overhead:.1f} s of runner_budget_s = "
+            f"{runner_budget_s} s ({since:.1f} s since the last reading, {inflight:.1f} s of it the entry's)")
+    if overhead > runner_budget_s:
+        why = f"organiser ERROR `overhead`: the runner's own time ran past its budget; {head}: {figs}"
+        return "error", None, "overhead", why[:REASON_CAP]
+    if entry_s <= stream_s:
+        why = f"organiser ERROR `overhead`: the entry's clock is within stream_s; {head}: {figs}"
+        return "error", None, "overhead", why[:REASON_CAP]
+    why = f"REJECT at `stream-cap`: the entry's own time overran stream_s; {head}: {figs}"
+    return "fail", "stream-cap", None, why[:REASON_CAP]
 
 
 def bench_job(a, cert):
@@ -483,20 +567,33 @@ def bench_job(a, cert):
     try:
         subprocess.run(cmd, timeout=PART_S)
         res = json.load(open(a.out))
+        if res.get("stage") != "done":
+            # the runner ended before it wrote its result (its last checkpoint says `incomplete`):
+            # never a pass; the runner's failure, a harness error (review R3 H3)
+            res["benchmark"] = "error"
+            res.setdefault("reasons", []).append(
+                f"harness error: the runner ended without completing its result (its last checkpoint: "
+                f"`{res.get('stage')}`)")
     except subprocess.TimeoutExpired:
-        # the part ran past its bound; once the prover's build has started, the entry's
-        # steps are what can take that long (every organiser step is bounded far below it), so it is
-        # the entry's failure, never a missing part
+        # the part ran past its bound: whose time did it is read from the runner's last checkpoint
+        # (`part_timeout`): the prover's build or setup, or the entry's clock past `stream_s` with
+        # the runner's overhead within `[stream] runner_budget_s`, is the entry's REJECT; anything
+        # else (the runner's own time, about 8–11 min of scrubs and copies in a stream at the
+        # season's caps, past its budget, or the entry's clock within `stream_s`) is the organiser's
+        # ERROR `overhead`, never the entry's (AGENTS.md §9)
+        now, now_mono = time.time(), time.monotonic()
         try:
             res = json.load(open(a.out))
         except (OSError, ValueError):
             res = {"stage": "organiser setup", "reasons": []}
-        stage = res.get("stage") or "organiser setup"
-        entry_stage = stage not in ("organiser setup",)
-        res["benchmark"] = "fail" if entry_stage else "error"
-        res.setdefault("reasons", []).append(
-            f"the benchmark part exceeded PART_S = {PART_S} s during `{stage}`"
-            + (": the entry's failure" if entry_stage else ": a harness error"))
+        st = tomllib.load(open(a.season, "rb"))["stream"]
+        bm, rs, kind, why = part_timeout(res, st["stream_s"], st["runner_budget_s"], now, now_mono)
+        res["benchmark"] = bm
+        if rs:
+            res["reject_stage"] = rs
+        if kind:
+            res["organiser_error"] = kind
+        res.setdefault("reasons", []).append(why)
     res["certificate"] = {k: cert.get(k) for k in ("status", "reasons", "provisional_reasons", "kernels", "second_kernel",
                                                    "kernel_runs", "binding", "gate", "badge_sha256", "claim",
                                                    "built_modules", "environment", "record_cache", "entry_build")}
@@ -504,6 +601,10 @@ def bench_job(a, cert):
     res["verdict"] = (("ACCEPT" if cert["status"] == "ok" else "PROVISIONAL") if ok and cert["status"] != "reject"
                       else "ERROR" if res.get("benchmark") == "error" else "REJECT")     # the organiser's, never the entry's
     res["comparable"] = res["verdict"] == "ACCEPT" and not (res.get("stream") or {}).get("truncated")
+    if res["verdict"] == "REJECT":      # where it was rejected (AGENTS.md §7); the certificate's first
+        res["reject_stage"] = "certificate" if cert["status"] == "reject" else res.get("reject_stage")
+    else:
+        res.pop("reject_stage", None)
     json.dump(res, open(a.out, "w"), indent=1)
     print(f"VERDICT: {res['verdict']}")
     return res
@@ -545,7 +646,8 @@ def main():
         a.out, a.work = out, work + "/bench"
         if cert["status"] in ("reject", "error"):
             verdict = "REJECT" if cert["status"] == "reject" else "ERROR"
-            res = {"verdict": verdict, "comparable": False, "certificate": cert}
+            res = {"verdict": verdict, "comparable": False, "certificate": cert,
+                   **({"reject_stage": "certificate"} if verdict == "REJECT" else {})}
             json.dump(res, open(out, "w"), indent=1)
             print(f"VERDICT: {verdict}")
             return 1 if verdict == "REJECT" else 2

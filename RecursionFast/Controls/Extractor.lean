@@ -5,19 +5,27 @@ Programs of the contract's step-counting machine. Fuel is a function of the inpu
 tape's length, and the budget is `B t = 2^48 + 2^16 · t`.
 
 Positive:
-* `ws_computes`: the witness-sending program (`Library/WitnessSending.lean`, 21 statements) computes
-  the witness-sending extractor within `8 · t` steps on every input; `ws_run_exact`: on the empty
-  proof it halts in exactly 26 steps (5 memory words, 21 statements).
+* `ws_computes`: the witness-sending program (`Library/WitnessSending.lean`, 28 statements in
+  `progCap`'s measure, `ws_size`) computes the witness-sending extractor within `8 · t` steps on
+  every input; `ws_run_exact`: on the empty proof it halts in exactly 26 steps (5 memory words,
+  21 statements executed).
 * `halt_computes`: the one-statement program computes the extractor that returns no witness, in
   1 step.
 * **The domain is closed under extraction**: `decodeWit_children_size`: both children of
   a node witness that `o` output words denote have proofs of at most `8 · |o|` bytes;
   `child_in_domain`: so a child extracted within `outCap` words is within `Computes`'s domain, and
   from a deployed proof every proof of the extraction tree is.
+* **What `progCap` bounds**: `table_run`: a decision tree of `k` levels (`table f k`) computes
+  an arbitrary function `f` of the low `k` bits of tape word 0 in `7k + 13` steps, for every `f`
+  and `k ≤ 64`; `table_size`: it has `10 · 2^k − 1` statements, so `table_over_progCap`: from
+  `k = 17` on it is over the cap and cannot be certified (`table16_fits`: `k = 16` is within).
+* `extractorInput_inj`: on the domain the input tape is injective (the statement, the proof and the
+  log are read back from it, `readTape_run`).
 * Format known answers (for the runner's Python twins; the expected words are those of the
   module header's format): `extractorInput_kat` (a 3-byte proof and a log of one 9-byte
   query: padding, length words, answer), `wordBytes_layout` and `wordBytes_kat` (a word's bytes,
-  little-endian), `decodeWit_leaf_kat`, and for a node with two signed
+  little-endian), `decodeWit_leaf_kat` (a leaf of two blocks: the count, then the blocks),
+  `decodeWit_leaf_empty` (the leaf of no block), and for a node with two signed
   children `decodeWit_node_kat`, `witWords_node_kat` (`nodeKatWords`: two proofs, a one-entry and
   an empty trace, two signatures), `decodeWit_trailing` (words after the fields are ignored).
 
@@ -25,6 +33,12 @@ Negative:
 * `ws_fuel_short`: the witness-sending program does not compute its extractor in 25 steps.
 * `halt_not_ws`: the one-statement program does not compute the witness-sending extractor (wrong
   output: on the proof of a leaf witness it outputs nothing).
+* `halt_not_big`: **the domain reaches `8 · outCap` bytes**: the one-statement program does not
+  compute the extractor that returns a witness exactly on proofs longer than `outCap` bytes, since
+  such a proof of at most `8 · outCap` bytes is in the domain (`tests/mutation`'s
+  `ext-computes-small-domain`); `halt_not_longQuery`, `halt_not_longTape`: likewise, the domain
+  reaches queries of `2^64 − 1` bytes and tapes of `2^64` words (`ext-computes-short-queries`,
+  `ext-computes-short-tape`).
 * `spin_computes_nothing`: a program that never halts computes no extractor at any fuel.
 * `toolong_not_computes`: a program that outputs `2^24 + 1` words computes no extractor (the output
   cap).
@@ -36,7 +50,9 @@ Negative:
   the budget**, whatever its specification and declared fuel (on a 6-word tape `B` is about
   `2^48`, and the count needs `2^65` steps, `Controls/Machine.lean`, `count_short`).
 * Malformed outputs denote nothing (strict reading): `decodeWit_bad_tag`, `decodeWit_empty`,
-  `decodeWit_short_leaf` (a missing word is not read as `0`), `decodeWit_long_proof` (a 10-word
+  `decodeWit_short_leaf` (a missing word is not read as `0`), `decodeWit_truncated_leaf` (a leaf
+  declaring two blocks whose second block is cut short), `decodeWit_long_leaf` (a leaf declaring
+  `2^63` blocks), `decodeWit_long_proof` (a 10-word
   output declaring a `2^63`-byte proof), **`decodeWit_long_trace`** (a trace declaring `2^63`
   entries), `decodeWit_short_sig` (a signature one digest short).
 -/
@@ -55,6 +71,10 @@ theorem ws_computes : Computes ext E fuel := computes
 def tape0 : List Word := extractorInput (Vector.replicate 32 0) ByteArray.empty []
 
 theorem tape0_length : tape0.length = 6 := by decide +kernel
+
+/-- The program has 28 statements (the measure of `progCap`): 19 of the set-up, 8 of the loop,
+1 `seq`; on the empty proof 21 of them run (`ws_run_exact`). -/
+theorem ws_size : ext.body.size = 28 := by decide
 
 theorem ws_run_exact : ext.run tape0 26 = some [] := by decide +kernel
 
@@ -87,12 +107,64 @@ theorem halt_computes : Computes haltProg (fun _ _ _ => none) fun _ => 1 :=
 /-- **Wrong output**: it does not compute the witness-sending extractor. -/
 theorem halt_not_ws : ¬ Computes haltProg E fun _ => 1 := by
   intro h
-  have hs := size_encode_leaf (Vector.replicate 32 0) 0
-  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) (encode (.leaf (Vector.replicate 32 0) 0)) []
+  have hs := size_encode_leaf []
+  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) (encode (.leaf [])) []
     (by rw [hs]; decide) (by simp)
     (by simp [extractorInput_eq, packBytes_length, hs, logWords])
   cases (halt_run _ 0).symm.trans ho
-  exact nomatch hd.trans (decode_encode (.leaf _ 0) (by decide : (0 : ℕ) < 2 ^ 64))
+  exact nomatch hd.trans (decode_encode (.leaf []) (show (0 : ℕ) < 2 ^ 64 by decide))
+
+/-- The extractor that returns a leaf witness exactly on proofs longer than `outCap` bytes. -/
+def Ebig (_ : Digest) (π : Proof) (_ : Log) : Option Wit :=
+  if outCap < π.size then some (.leaf []) else none
+
+/-- **The domain reaches `8 · outCap` bytes**: on a proof of more than `outCap` and at most
+`8 · outCap` bytes the one-statement program outputs nothing, which does not denote `Ebig`'s
+witness. -/
+theorem halt_not_big (π : Proof) (h₁ : outCap < π.size) (h₂ : π.size ≤ 8 * outCap) :
+    ¬ Computes haltProg Ebig fun _ => 1 := by
+  intro h
+  obtain ⟨o, ho, -, hd⟩ := h (Vector.replicate 32 0) π [] h₂ (by simp)
+    (by simp only [extractorInput_eq, List.length_append, packBytes_length, logWords,
+          Vector.length_toList, List.length_cons, List.flatMap_nil, List.length_nil,
+          ← size_eq_length]; unfold outCap at h₂; omega)
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Ebig, h₁, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
+
+/-- The extractor that returns a leaf witness exactly on logs with a query of at least `2^64 − 1`
+bytes. -/
+def Equery (_ : Digest) (_ : Proof) (L : Log) : Option Wit :=
+  if ∃ e ∈ L, 2 ^ 64 - 1 ≤ e.1.size then some (.leaf []) else none
+
+/-- **The domain reaches queries of `2^64 − 1` bytes**: on a log with one such query the
+one-statement program outputs nothing, which does not denote `Equery`'s witness. -/
+theorem halt_not_longQuery (q : ByteArray) (a : Digest) (h : q.size = 2 ^ 64 - 1) :
+    ¬ Computes haltProg Equery fun _ => 1 := by
+  intro hc
+  obtain ⟨o, ho, -, hd⟩ := hc (Vector.replicate 32 0) .empty [(q, a)] (by decide)
+    (by simp [h])
+    (by simp only [extractorInput_eq, List.length_append, packBytes_length, logWords, bytesWords,
+          Vector.length_toList, List.length_cons, List.flatMap_cons, List.flatMap_nil,
+          List.length_nil, List.append_nil, ← size_eq_length, h]; decide)
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Equery, List.mem_singleton, exists_eq_left, h, le_refl, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
+
+/-- The extractor that returns a leaf witness exactly on tapes of more than `2^63` words. -/
+def Etape (c : Digest) (π : Proof) (L : Log) : Option Wit :=
+  if 2 ^ 63 < (extractorInput c π L).length then some (.leaf []) else none
+
+/-- **The domain reaches tapes of `2^64` words**: on a tape of more than `2^63` and at most `2^64`
+words the one-statement program outputs nothing, which does not denote `Etape`'s witness. -/
+theorem halt_not_longTape (c : Digest) (π : Proof) (L : Log) (hπ : π.size ≤ 8 * outCap)
+    (hL : ∀ e ∈ L, e.1.size < 2 ^ 64) (h₁ : 2 ^ 63 < (extractorInput c π L).length)
+    (h₂ : (extractorInput c π L).length ≤ 2 ^ 64) : ¬ Computes haltProg Etape fun _ => 1 := by
+  intro hc
+  obtain ⟨o, ho, -, hd⟩ := hc c π L hπ hL h₂
+  cases (halt_run _ 0).symm.trans ho
+  simp only [Etape, h₁, ite_true] at hd
+  exact absurd hd (by rw [show decodeWit [] = none from rfl]; simp)
 
 /-! ## No halt; too long an output; enumeration -/
 
@@ -164,6 +236,133 @@ theorem enum_no_computes (E : Digest → Proof → Log → Option Wit) (f : ℕ 
   rw [count_short _ (by decide) _ (le_trans h6 (by unfold extractorBudget; decide))] at ho
   cases ho
 
+/-! ## What the program-size cap bounds -/
+
+/-- The decision tree of `k` levels on tape word 0, held in `M[0]` (`M[2] = 1`): level `bit` tests
+bit `bit` (`M[1] := (M[0] >>> M[3]) &&& 1`, `M[3] := bit`), adding `2^bit` to `path` if it is
+set; a leaf outputs `f path`. -/
+def tableTree (f : ℕ → Word) : ℕ → ℕ → ℕ → XStmt
+  | 0, path, _ => .seq (.const 1 (f path)) (.out 1)
+  | k + 1, path, bit =>
+    .seq (.const 3 (toWord bit)) (.seq (.op .shr 1 0 3) (.seq (.op .and 1 1 2)
+      (.ite 1 (tableTree f k (path + 2 ^ bit) (bit + 1)) (tableTree f k path (bit + 1)))))
+
+/-- **A lookup table as a program**: read tape word 0, then run the decision tree of `k` levels. -/
+def table (f : ℕ → Word) (k : ℕ) : XProg :=
+  ⟨4, 0, .seq (.const 1 0) (.seq (.input 0 1) (.seq (.const 2 1) (tableTree f k 0 0)))⟩
+
+private theorem bit_toNat (x : Word) {b : ℕ} (hb : b < 64) :
+    ((x >>> ((toWord b).toNat % 64)) &&& 1).toNat = x.toNat / 2 ^ b % 2 := by
+  have : (toWord b).toNat % 64 = b := by simp [toWord, BitVec.toNat_ofNat]; omega
+  rw [this, BitVec.toNat_and, BitVec.toNat_ushiftRight, Nat.shiftRight_eq_div_pow]
+  simp [Nat.and_one_is_mod]
+
+/-- The tree of `k` levels from bit `bit` runs in `7k + 3` steps and outputs `f` of `path` plus
+bits `bit … bit + k − 1` of `M[0]`. -/
+theorem tableTree_runs {I : Array Word} (f : ℕ → Word) (x : Word) : ∀ k path b (y z : Word)
+    (o : Array Word), b + k ≤ 64 → ∃ y' z' : Word, Runs I (tableTree f k path b) #[x, y, 1, z] o
+      (7 * k + 3) #[x, y', 1, z'] (o.push (f (path + x.toNat / 2 ^ b % 2 ^ k * 2 ^ b)))
+  | 0, path, b, y, z, o, _ => ⟨f path, z, by
+      rw [pow_zero, Nat.mod_one, zero_mul, add_zero]
+      exact runs_seq (runs_const (I := I) 1 (f path) #[x, y, 1, z] o) (runs_out 1 _ o)⟩
+  | k + 1, path, b, y, z, o, hb => by
+    have hbit := bit_toNat x (b := b) (by omega)
+    have hdiv : x.toNat / 2 ^ b % 2 ^ (k + 1) =
+        x.toNat / 2 ^ b % 2 + 2 * (x.toNat / 2 ^ (b + 1) % 2 ^ k) := by
+      rw [pow_succ', Nat.mod_mul, Nat.div_div_eq_div_mul, ← pow_succ]
+    have h3 := runs_const (I := I) 3 (toWord b) #[x, y, 1, z] o
+    have h1 := runs_op (I := I) .shr 1 0 3 #[x, y, 1, toWord b] o
+    have h2 := runs_op (I := I) .and 1 1 2 #[x, x >>> ((toWord b).toNat % 64), 1, toWord b] o
+    rcases Nat.mod_two_eq_zero_or_one (x.toNat / 2 ^ b) with h | h
+    · obtain ⟨y', z', hr⟩ := tableTree_runs f x k path (b + 1)
+        ((x >>> ((toWord b).toNat % 64)) &&& 1) (toWord b) o (by omega)
+      have hc : ((x >>> ((toWord b).toNat % 64)) &&& 1) = 0 := by
+        apply BitVec.eq_of_toNat_eq; rw [hbit, h]; rfl
+      rw [show path + x.toNat / 2 ^ b % 2 ^ (k + 1) * 2 ^ b =
+        path + x.toNat / 2 ^ (b + 1) % 2 ^ k * 2 ^ (b + 1) by rw [hdiv, h, pow_succ]; ring]
+      exact ⟨y', z', runs_mono_eq (runs_seq h3 (runs_seq h1 (runs_seq h2
+        (runs_ite_false (p := tableTree f k (path + 2 ^ b) (b + 1)) hc hr)))) (by ring)⟩
+    · obtain ⟨y', z', hr⟩ := tableTree_runs f x k (path + 2 ^ b) (b + 1)
+        ((x >>> ((toWord b).toNat % 64)) &&& 1) (toWord b) o (by omega)
+      have hc : ((x >>> ((toWord b).toNat % 64)) &&& 1) ≠ 0 := fun h0 => by
+        have := congrArg BitVec.toNat h0; rw [hbit, h] at this; exact absurd this (by decide)
+      rw [show path + x.toNat / 2 ^ b % 2 ^ (k + 1) * 2 ^ b =
+        path + 2 ^ b + x.toNat / 2 ^ (b + 1) % 2 ^ k * 2 ^ (b + 1) by rw [hdiv, h, pow_succ]; ring]
+      exact ⟨y', z', runs_mono_eq (runs_seq h3 (runs_seq h1 (runs_seq h2
+        (runs_ite_true (q := tableTree f k path (b + 1)) hc hr)))) (by ring)⟩
+
+/-- **A table computes any function in depth-many steps**: for every `f` and `k ≤ 64`, `table f k`
+outputs `f` of the low `k` bits of tape word 0 in `7k + 13` steps (4 memory words, `7k + 9`
+statements), whatever the rest of the tape. Steps do not bound such a program, only its size
+(`table_size`); this is why the certificate caps it (`progCap`). -/
+theorem table_run (f : ℕ → Word) {k : ℕ} (hk : k ≤ 64) (x : Word) (t : List Word) :
+    (table f k).run (x :: t) (7 * k + 13) = some [f (x.toNat % 2 ^ k)] := by
+  obtain ⟨y', z', hr⟩ := tableTree_runs (I := (x :: t).toArray) f x k 0 0 0 0 #[] (by omega)
+  have hm : (table f k).memFor (x :: t).length = 4 := by simp [table, XProg.memFor]
+  have h := runs_seq (runs_const (I := (x :: t).toArray) 1 0 #[0, 0, 0, 0] #[])
+    (runs_seq (runs_input 0 1 _ #[]) (runs_seq (runs_const 2 1 _ #[]) hr))
+  have := XProg.run_of_runs (p := table f k) (input := x :: t) (f := 7 * k + 13)
+    (n := 7 * k + 9) (by rw [hm]; exact runs_mono_eq h (by ring)) (by rw [hm]; omega)
+  simpa using this
+
+theorem tableTree_size (f : ℕ → Word) : ∀ k path bit, (tableTree f k path bit).size + 7 = 10 * 2 ^ k
+  | 0, _, _ => rfl
+  | k + 1, path, bit => by
+    have h₁ := tableTree_size f k (path + 2 ^ bit) (bit + 1)
+    have h₂ := tableTree_size f k path (bit + 1)
+    simp only [tableTree, XStmt.size, pow_succ]; omega
+
+/-- The table of `k` bits has `10 · 2^k − 1` statements. -/
+theorem table_size (f : ℕ → Word) (k : ℕ) : (table f k).body.size + 1 = 10 * 2 ^ k := by
+  have := tableTree_size f k 0 0
+  simp only [table, XStmt.size]; omega
+
+/-- **The program-size cap excludes the table of a 17-bit function**: from `k = 17` on, `table f k`
+has more than `progCap = 2^20` statements, so no certificate names it. The cap is the only barrier
+against such lookup tables, since the step budget is not (`table_run`); within it a program can
+still carry about `2^20` words of non-uniform advice, fixed before the run's fresh key and seeds. -/
+theorem table_over_progCap (f : ℕ → Word) {k : ℕ} (hk : 17 ≤ k) :
+    progCap < (table f k).body.size := by
+  have h := table_size f k
+  have : 2 ^ 17 ≤ 2 ^ k := Nat.pow_le_pow_right (by norm_num) hk
+  unfold progCap; omega
+
+/-- The table of a 16-bit function, `655,359` statements, is within the cap. -/
+theorem table16_fits (f : ℕ → Word) : (table f 16).body.size ≤ progCap := by
+  have h := table_size f 16
+  unfold progCap; omega
+
+/-! ## The tape is injective -/
+
+/-- The tape reader: the statement, the proof, the log. -/
+def readTape : Reader (Digest × ByteArray × Log) := do
+  return (← readDigest, ← readString, ← readTrace)
+
+/-- The tape reads back as its statement, proof and log, with nothing left. -/
+theorem readTape_run (c : Digest) (π : Proof) (L : Log) (hπ : π.size < 2 ^ 64)
+    (hL : L.length < 2 ^ 64) (hq : ∀ e ∈ L, e.1.size < 2 ^ 64) :
+    readTape.run (extractorInput c π L) = some ((c, π, L), []) := by
+  have h := readTrace_logWords L hL hq []
+  have h2 := readString_bytesWords π hπ (logWords L)
+  have h1 := readDigest_packBytes c (bytesWords π.data.toList ++ logWords L)
+  simp only [List.append_nil] at h
+  simp only [readTape, extractorInput, List.append_assoc, StateT.run_bind, h1, h2, h,
+    Option.bind_eq_bind, Option.bind_some, StateT.run_pure]
+  rfl
+
+/-- **The tape is injective on the domain** (with `|L| < 2^64`, implied by a tape of at most
+`2^64` words since each entry takes at least 5 words). Not load-bearing for soundness: a
+collision would only make `Computes` stronger (one output for two inputs). -/
+theorem extractorInput_inj {c c' : Digest} {π π' : Proof} {L L' : Log}
+    (hπ : π.size < 2 ^ 64) (hπ' : π'.size < 2 ^ 64) (hL : L.length < 2 ^ 64)
+    (hL' : L'.length < 2 ^ 64) (hq : ∀ e ∈ L, e.1.size < 2 ^ 64)
+    (hq' : ∀ e ∈ L', e.1.size < 2 ^ 64)
+    (h : extractorInput c π L = extractorInput c' π' L') : c = c' ∧ π = π' ∧ L = L' := by
+  have a := readTape_run c π L hπ hL hq
+  rw [h, readTape_run c' π' L' hπ' hL' hq'] at a
+  simp only [Option.some.injEq, Prod.mk.injEq] at a
+  exact ⟨a.1.1.symm, a.1.2.1.symm, a.1.2.2.symm⟩
+
 /-! ## Format known answers -/
 
 deriving instance DecidableEq for Sig, Signed, Wit
@@ -186,11 +385,16 @@ theorem wordBytes_layout (w : Word) :
 /-- The bytes of `0x0807060504030201` are `01 02 … 08`, low byte first. -/
 theorem wordBytes_kat : wordBytes 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
 
-/-- A leaf: tag `0`, the start `01…01` (4 words), the length `16`. -/
+/-- A leaf: tag `0`, the number of blocks `2`, then the blocks `01…01` and `02…02` (4 words
+each). -/
 theorem decodeWit_leaf_kat :
-    decodeWit [0, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
-        0x0101010101010101, 16] = some (.leaf (Vector.replicate 32 1) 16) := by
+    decodeWit [0, 2, 0x0101010101010101, 0x0101010101010101, 0x0101010101010101,
+        0x0101010101010101, 0x0202020202020202, 0x0202020202020202, 0x0202020202020202,
+        0x0202020202020202] = some (.leaf [Vector.replicate 32 1, Vector.replicate 32 2]) := by
   decide +kernel
+
+/-- The leaf of no block: tag `0`, the count `0`. -/
+theorem decodeWit_leaf_empty : decodeWit [0, 0] = some (.leaf []) := by decide +kernel
 
 /-- The words of a digest whose bytes are all `b` (`b` repeated eight times per word). -/
 def dw (b : Word) : List Word := List.replicate 4 (b * 0x0101010101010101)
@@ -244,8 +448,19 @@ theorem decodeWit_bad_tag : decodeWit [2, 0, 0, 0, 0, 0] = none := by decide +ke
 /-- The empty output. -/
 theorem decodeWit_empty : decodeWit [] = none := rfl
 
-/-- **Strict reading**: a leaf without its length word denotes nothing (it is not read as `0`). -/
+/-- **Strict reading**: a leaf declaring one block with three of its four words denotes nothing
+(a missing word is not read as `0`). -/
 theorem decodeWit_short_leaf : decodeWit [0, 1, 1, 1, 1] = none := by decide +kernel
+
+/-- **Strict reading**: a leaf declaring two blocks whose second block is one word short denotes
+nothing. -/
+theorem decodeWit_truncated_leaf :
+    decodeWit [0, 2, 1, 1, 1, 1, 2, 2, 2] = none := by decide +kernel
+
+/-- **A declared count beyond the output**: a leaf declaring `2^63` blocks, with one block's
+words, denotes nothing. -/
+theorem decodeWit_long_leaf : decodeWit [0, 0x8000000000000000, 1, 1, 1, 1] = none := by
+  decide +kernel
 
 /-- **A declared length beyond the output**: ten words cannot denote a
 `2^63`-byte proof. -/

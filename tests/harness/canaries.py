@@ -1,6 +1,6 @@
 """The organiser's canaries (core CI only, never in an evaluation). Mutations of an accepted
 signed proof that `acc` rejects before the entry's `V` decides anything: they test the strict file
-parser (`harness/badge/Common.lean.in`) and the trace digest and signature check of the contract's
+parser (`RecursionFast/Badge.lean`) and the trace digest and signature check of the contract's
 `acc` (`traceDigest`, `SigOk`), which are organiser code, so they run once per harness commit:
 `tests/harness/smoke.py` through the witness-sending entry's compiled badge, and
 `tests/harness/accprobe/run.py` through a badge whose verifier asks `2^16` queries.

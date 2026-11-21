@@ -6,13 +6,16 @@ Positive:
   `Certificate`: knowledge soundness and completeness with error `0` **under every public key**,
   the program computing the extractor within its fuel, the caps.
 * `ws_certificateR`: and against a claim rendered the way a challenge renders it (both errors `0`,
-  no verifier query, fuel `8 · t`).
+  no verifier query, fuel `8 · t`); `ws_certificateR_loose`: and against the loosest claim, the
+  caps themselves and the budget (a declared number bounds the submission's from above;
+  `tests/mutation`'s `certr-bounds-flipped`).
 * `ws_acc_leaf`: the certified submission's `acc` accepts an honest signed leaf proof under the
   reference signer's key (`Controls/Relation.lean`), so the harness's check is satisfiable too.
 
 Negative:
 * `fuel_low_claim`, `fuel_over_budget_claim`: claims the submission does not meet, or that exceed
-  the budget, are not certified.
+  the budget, are not certified; `fuel_over_budget_per_word_claim`: the budget charges `2^16`
+  steps per input word, not more (`tests/mutation`'s `ext-budget-2^17`).
 * `rejectAll_no_certificate`, `acceptAll_no_certificate`, `error_one_no_certificate`,
   `delta_one_no_certificate`, `fuel_over_budget_no_certificate`, `big_program_no_certificate`:
   with the verifier a function of the key; `acceptAll_no_certificate` against
@@ -61,10 +64,20 @@ def declared : Declared where
 theorem ws_certificateR : CertificateR declared submission :=
   ⟨certificate, le_rfl, le_rfl, le_rfl, fun t => ⟨le_rfl, certificate.cap.2.2.2.1 t⟩⟩
 
-theorem ws_acc_leaf (seed : List UInt8) (s : Digest) {n : ℕ} (hn : n ≤ chainCap) :
-    submission.acc (Signer.pk (Signer.chainStart seed)) (leafStmt (chainEnd s n) n)
-      (Controls.Relation.leafSigned (Signer.chainStart seed) 0 s n) = true :=
-  Controls.Relation.acc_leafSigned _ (by decide) s hn
+theorem ws_acc_leaf (seed : List UInt8) (xs : List Digest) (hn : xs.length ≤ leafCap) :
+    submission.acc (Signer.pk (Signer.chainStart seed)) (leafStmt (dataRoot xs) xs.length)
+      (Controls.Relation.leafSigned (Signer.chainStart seed) 0 xs) = true :=
+  Controls.Relation.acc_leafSigned _ (by decide) xs hn
+
+/-- The loosest claim a challenge may render: the caps and the budget. -/
+noncomputable def declaredLoose : Declared where
+  ε := errorCap
+  δ := completenessCap
+  qV := 2 ^ 16
+  fuel := extractorBudget
+
+theorem ws_certificateR_loose : CertificateR declaredLoose submission :=
+  ⟨certificate, zero_le, zero_le, Nat.zero_le _, fun t => ⟨certificate.cap.2.2.2.1 t, le_rfl⟩⟩
 
 theorem fuel_low_claim : ¬ CertificateR { declared with fuel := fun _ => 25 } submission :=
   fun h => absurd (h.bounds.2.2.2 4).1 (by decide)
@@ -72,6 +85,10 @@ theorem fuel_low_claim : ¬ CertificateR { declared with fuel := fun _ => 25 } s
 theorem fuel_over_budget_claim :
     ¬ CertificateR { declared with fuel := fun _ => 2 ^ 49 } submission :=
   fun h => absurd (h.bounds.2.2.2 0).2 (by decide)
+
+theorem fuel_over_budget_per_word_claim :
+    ¬ CertificateR { declared with fuel := fun t => 2 ^ 48 + 2 ^ 16 * t + t } submission :=
+  fun h => absurd (h.bounds.2.2.2 1).2 (by decide)
 
 theorem rejectAll_no_certificate (S : Submission) (hV : ∀ vk, S.V vk = Security.rejectAll) :
     ¬ Certificate S := fun h =>
@@ -146,7 +163,7 @@ def strip (π : Proof) : Proof := ⟨(π.data.toList.drop (2 ^ 64)).toArray⟩
 
 /-- Whether a decoded witness is a leaf. -/
 def isLeaf : Option Wit → Bool
-  | some (.leaf _ _) => true
+  | some (.leaf _) => true
   | _ => false
 
 /-- Accept only proofs **of `2^64` bytes or more**: the pad, then a leaf's witness-sending
@@ -186,8 +203,8 @@ theorem strip_pad (b : List UInt8) : strip ⟨(pad ++ b).toArray⟩ = ⟨b.toArr
   rw [strip, List.drop_left' pad_length]
 
 /-- The leaf clause does not depend on the acceptance predicate. -/
-theorem rel_leaf_iff (acc acc' : Digest → Signed → Bool) (c s : Digest) (n : ℕ) :
-    Rel acc c (.leaf s n) ↔ Rel acc' c (.leaf s n) := Iff.rfl
+theorem rel_leaf_iff (acc acc' : Digest → Signed → Bool) (c : Digest) (xs : List Digest) :
+    Rel acc c (.leaf xs) ↔ Rel acc' c (.leaf xs) := Iff.rfl
 
 theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbig.ε Sbig.qV :=
   KState.ks (KState.zero 0 fun L c π h => by
@@ -197,7 +214,7 @@ theorem big_secure (vk : Digest) : KS (Rel (Sbig.acc vk)) (Sbig.V vk) Sbig.E Sbi
       obtain ⟨w, hd, hR⟩ := check_sound hc
       rw [hd] at hl
       cases w with
-      | leaf s n => exact ⟨_, hd, (rel_leaf_iff _ _ c s n).mp hR⟩
+      | leaf xs => exact ⟨_, hd, (rel_leaf_iff _ _ c xs).mp hR⟩
       | node => cases hl)
     fun _ _ _ => le_rfl
 
@@ -205,16 +222,16 @@ theorem big_computes : Computes Sbig.ext Sbig.E Sbig.fuel := fun c π L hπ _ _ 
   ⟨[], Controls.Extractor.halt_run _ 0, by decide,
     (congrArg decode (strip_small (hπ.trans (by decide)))).symm⟩
 
-theorem Vbig_leaf (vk c s : Digest) (n : ℕ) (hR : Rel (Sbig.acc vk) c (.leaf s n)) :
-    Vbig vk c ⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ = .ret true := by
-  have hn : n < 2 ^ 64 := lt_of_le_of_lt hR.1 (by decide)
-  have hsz : 2 ^ 64 ≤ (⟨(pad ++ (encode (.leaf s n)).data.toList).toArray⟩ : Proof).size := by
+theorem Vbig_leaf (vk c : Digest) (xs : List Digest) (hR : Rel (Sbig.acc vk) c (.leaf xs)) :
+    Vbig vk c ⟨(pad ++ (encode (.leaf xs)).data.toList).toArray⟩ = .ret true := by
+  have hn : xs.length < 2 ^ 64 := lt_of_le_of_lt hR.1 (by decide)
+  have hsz : 2 ^ 64 ≤ (⟨(pad ++ (encode (.leaf xs)).data.toList).toArray⟩ : Proof).size := by
     show 2 ^ 64 ≤ (pad ++ _).toArray.size
     rw [List.size_toArray, List.length_append, pad_length]; omega
-  have hck : check vk c (encode (.leaf s n)) = true := check_encode ((rel_leaf_iff _ _ c s n).mp hR)
+  have hck : check vk c (encode (.leaf xs)) = true := check_encode ((rel_leaf_iff _ _ c xs).mp hR)
   unfold Vbig
-  rw [strip_pad, show (⟨(encode (.leaf s n)).data.toList.toArray⟩ : Proof) = encode (.leaf s n) by
-    simp, decode_encode (.leaf s n) hn, hck, decide_eq_true hsz]
+  rw [strip_pad, show (⟨(encode (.leaf xs)).data.toList.toArray⟩ : Proof) = encode (.leaf xs) by
+    simp, decode_encode (.leaf xs) hn, hck, decide_eq_true hsz]
   rfl
 
 theorem big_complete (vk : Digest) :
@@ -222,7 +239,7 @@ theorem big_complete (vk : Digest) :
   completeWithError_iff.mpr fun c w hR => by
     cases w with
     | node c₁ c₂ p₁ p₂ => exact nomatch (acc_false vk c₁ p₁).symm.trans hR.2.1
-    | leaf s n => exact (congrArg (failProb · []) (Vbig_leaf vk c s n hR)).le
+    | leaf xs => exact (congrArg (failProb · []) (Vbig_leaf vk c xs hR)).le
 
 /-- **A certified submission whose `acc` accepts nothing**. -/
 theorem acc_rejects_all_certified : Certificate Sbig ∧ ∀ vk c p, Sbig.acc vk c p = false :=

@@ -5,6 +5,8 @@
        [--badge-root CONST]
   lake exe gate --closure ROOT1,ROOT2,... OUT        (writes the import closure of the roots: the
                                                      allowed-imports list, harness/org-setup.sh)
+  lake exe gate --wiring MODULE --manifest FILE      (rule 9, after the badge build, on the
+                                                     badge's per-entry module; rules 3 and 5 too)
 
 Loads the **elaborated environment** of `MODULE` (its `.olean` and imports; no source text is
 read, so comment/string tricks are irrelevant; no `[init]` code is run, since this process never
@@ -39,10 +41,13 @@ It rejects (exit code 1) if:
    function computes, and are allowed. Pinned modules may register `csimp` lemmas (kernel-proved
    equalities), `init` entries (their `initialize` declarations: trace classes, simp sets) and the
    others; these are reported;
-4. with `--computable N`, a **badge-path field** of `N` has no compiled code. The badge
-   executes the compiled `acc` (the field `V`, run on the signed trace) and nothing else of the
-   submission; `P` and `ext` are still required to be compiled, a rule whose relaxation to `V`
-   alone is an open question.
+4. with `--computable N`, a **badge-path field** of `N` has no compiled code. Of the submission
+   the badge executes the compiled `acc` (the field `V`, run on the signed trace), plus the
+   initialisation of every module it links (rule 3 keeps `[init]` code out of the entry's). The
+   badge's own glue is compiled without the entry's modules in scope (`RecursionFast/Badge.lean`),
+   so the entry's other declarations (instances, notations) cannot change it, and the one module
+   elaborated with them in scope is checked by rule 9. `P` and `ext` are still required to be
+   compiled, a rule whose relaxation to `V` alone is an open question.
    `badgeFields`: `Submission`: `V`, `P`, `ext`. If `N` itself has compiled code, every field has.
    Otherwise `N` is unfolded (`whnf`, all transparency) to its constructor, and each badge-path
    field term is **compiled in this process** as an auxiliary definition; it passes iff the
@@ -53,7 +58,10 @@ It rejects (exit code 1) if:
    budget and, for the extractor, by the certificate's proved step bound. No imported
    extension code runs: environment extensions keep their initial state except the pure-data ones
    the compiler needs (`pureExts`), and initializer execution is never enabled;
-5. an organiser module of the environment does not match the manifest (above);
+5. an organiser module of the environment does not match the manifest (above). A manifest that
+   lists one module path under two tags (e.g. `core/` and a pinned `packages/<pkg>/`) is refused
+   before anything is loaded: the gate finds a module's files by path, so their class would depend
+   on the line order;
 6. (with `--allowed-imports FILE`) an untrusted module **imports** (directly) a module that
    is neither untrusted itself nor in FILE. FILE is the import closure of the organiser's roots
    (`Mathlib`, `RecursionFast.Contract`, `RecursionFast.Library`, `RecursionFast.Controls`; written
@@ -78,14 +86,25 @@ It rejects (exit code 1) if:
    module that is neither untrusted nor in the `--allowed-imports` closure, i.e. it reaches the
    compiler. The badge executables import only that module (the gate prints
    `gate: badge-root-module M`), so no module that can reach the compiler's state is linked into
-   them, whatever the submission's proofs import.
+   them, whatever the submission's proofs import;
+9. (`--wiring MODULE`, a separate run after the badge build) the badge's per-entry module `MODULE`
+   (`harness/badge/Verify.lean.in`, the only module elaborated with both the entry and the glue in
+   scope) declares anything but `main`, or `main`'s value is not exactly the constant application
+   `RFBadge.main RecursionFast.Challenge.submission`, or it has no compiled code, or the glue's
+   module is not trusted by hash (its `.olean`; the compiled objects the badge links are checked
+   by the certificate job against `org-setup.sh`'s step 4b, `olean-manifest.py objects-check`);
+   rule 3 runs on every non-trusted module of that environment.
+   Checking the elaborated value, not the source text, matters: an entry's `notation
+   "RFBadge.main" => fakeMain` makes the text `RFBadge.main` mean `fakeMain` in every importer
+   (`tests/gate/GateWiringHijack.lean`).
 
 Each rule is a function below: `classify` (5), `rules12` over `closure` (1, 2), `rule3`, `rule6`
 and `rule6t`, `rule8`, `rule7`, and `rule4` (`checkExec`). `main` runs them in that order, which is
-the order of the `REJECT` lines.
+the order of the `REJECT` lines; `wiringMain` runs 5, 3 and `rule9`.
 
 **What the gate cannot see.** The executed code is the
-code Lean's compiler emitted while elaborating the submission's badge-root module and its imports.
+code Lean's compiler emitted while elaborating the submission's badge-root module and its imports
+(and the organiser's glue, compiled before).
 A metaprogram run at elaboration time (`run_meta`, `#eval`, …) leaves no declaration. Rules 6 and
 8 keep `Lean.Compiler.LCNF.PhaseExt` out of reach, but not the raw route: `persistentEnvExtensionsRef`
 (in `Lean.Environment`, which every Mathlib module imports) and `unsafeCast` let a `run_meta` in a
@@ -112,32 +131,55 @@ def moduleOf (env : Environment) (n : Name) : Name :=
   match env.getModuleIdxFor? n with
   | some i => env.header.moduleNames[i.toNat]!
   | none => `_current
+/-- `s` is a sha256 digest as `sha256sum` prints it: 64 lowercase hexadecimal digits. -/
+def isSha256 (s : String) : Bool :=
+  s.length == 64 && s.all fun c => c.isDigit || ('a' ≤ c && c ≤ 'f')
+
+/-- A `sha256sum` record `<sha256>  <rest>` as `(sha256, rest)`: split after the digest, so `rest`
+(a path) may hold any character, two spaces included. -/
+def splitHashRecord (r : String) : Option (String × String) :=
+  let cs := r.toList
+  let h := String.ofList (cs.take 64)
+  if isSha256 h && (cs.drop 64).take 2 == [' ', ' '] && cs.length > 66 then
+    some (h, String.ofList (cs.drop 66))
+  else none
+
 /-- The manifest: module-relative `.olean` path (e.g. `Mathlib/Order/Basic.olean.server`) ↦
-(sha256, pinned?). Lines are `<sha256>  <tag>/<path>`, tag `core`, `project` or `packages/<pkg>`. -/
+(sha256, pinned?). Lines are `<sha256>  <tag>/<path>`, tag `core`, `project` or `packages/<pkg>`.
+The tag decides the class (pinned iff `packages/<pkg>` with `pkg` in `pinnedPackages`) but the
+gate looks modules up by path alone (`findOLean` does not say which tag a file is under), so two
+keys with one path (e.g. `core/X.olean` and `packages/CompPoly/X.olean`) are an error: the class
+would depend on the line order. -/
 def readManifest (file : System.FilePath) : IO (Std.HashMap String (String × Bool)) := do
   let mut m : Std.HashMap String (String × Bool) := {}
+  let mut keyOf : Std.HashMap String String := {}   -- path ↦ the tagged key it came from
   for line in ← IO.FS.lines file do
     if line.isEmpty || line.startsWith "#" then continue
-    let some (h, key) := (match line.splitOn "  " with | [h, k] => some (h, k) | _ => none)
+    let some (h, key) := splitHashRecord line
       | throw <| IO.userError s!"gate: malformed manifest line {line}"
-    match key.splitOn "/" with
-    | "core" :: rel | "project" :: rel => m := m.insert ("/".intercalate rel) (h, false)
-    | "packages" :: pkg :: rel => m := m.insert ("/".intercalate rel) (h, pinnedPackages.contains pkg)
-    | _ => throw <| IO.userError s!"gate: malformed manifest key {key}"
+    let (rel, pinned) ← match key.splitOn "/" with
+      | "core" :: rel | "project" :: rel => pure ("/".intercalate rel, false)
+      | "packages" :: pkg :: rel => pure ("/".intercalate rel, pinnedPackages.contains pkg)
+      | _ => throw <| IO.userError s!"gate: malformed manifest key {key}"
+    if let some k0 := keyOf.get? rel then
+      throw <| IO.userError s!"gate: manifest keys {k0} and {key} have one module path {rel}"
+    keyOf := keyOf.insert rel key
+    m := m.insert rel (h, pinned)
   return m
 
-/-- sha256 of files, by `sha256sum` in parallel batches. -/
+/-- sha256 of files, by `sha256sum` in parallel batches. `-z`: one NUL-terminated record per
+file, names unescaped (a name with a backslash or a newline is not rewritten). -/
 def sha256Files (files : Array String) : IO (Std.HashMap String String) := do
   let mut tasks := #[]
   for i in [:(files.size + 255) / 256] do
     let batch := files.extract (256 * i) (256 * i + 256)
-    tasks := tasks.push (← IO.asTask (IO.Process.output { cmd := "sha256sum", args := batch }))
+    tasks := tasks.push (← IO.asTask (IO.Process.output { cmd := "sha256sum", args := #["-z", "--"] ++ batch }))
   let mut out : Std.HashMap String String := {}
   for t in tasks do
     let r : IO.Process.Output ← IO.ofExcept t.get
     unless r.exitCode == 0 do throw <| IO.userError "gate: sha256sum failed"
-    for line in r.stdout.splitOn "\n" do
-      if let [h, f] := line.splitOn "  " then out := out.insert f h
+    for rec in r.stdout.splitOn "\x00" do
+      if let some (h, f) := splitHashRecord rec then out := out.insert f h
   return out
 
 /-- Trusted and pinned modules of `env` by content hash; errors for tampered organiser modules. -/
@@ -194,7 +236,7 @@ def reach (roots : Array Name) (succ : Name → Array Name) : Array Name := Id.r
 def usedConsts (ci : ConstantInfo) : Array Name :=
   ci.type.getUsedConstants ++ ((ci.value? (allowOpaque := true)).map (·.getUsedConstants)).getD #[]
 
-/-- `c` is a theorem: its term is never executed (rules 7 and 9 exempt it). -/
+/-- `c` is a theorem: its term is never executed (rule 7 exempts it). -/
 def isTheorem (env : Environment) (c : Name) : Bool :=
   match env.find? c with | some (.thmInfo _) => true | _ => false
 
@@ -496,6 +538,63 @@ def rule4 (g : GateCtx) (comps : List String) : IO (Array String) := do
     return acc ++ (← checkExec c (mkConst c.toName))
   return (← (act.run' {} {}).toIO ctx { env := ← loadPureExts g.env }).1
 
+/-! ### Rule 9: the badge's per-entry module (`--wiring`) -/
+
+/-- The badge glue's entry point (`RecursionFast/Badge.lean`) and the constant the per-entry
+module passes it. -/
+def wiringCallee : Name := `RFBadge.main
+/-- See `wiringCallee`. -/
+def wiringArg : Name := `RecursionFast.Challenge.submission
+
+/-- Rule 9 on the badge's per-entry module `m` (`harness/badge/Verify.lean.in`), elaborated with the
+entry's instances and notations in scope: it declares `main` alone, a definition whose value is
+exactly `RFBadge.main RecursionFast.Challenge.submission` (constants, not names: a notation that
+turns either name into another term changes the value) and whose type is `RFBadge.main`'s result
+type, with compiled code; the glue's module is trusted by hash. Rule 3 runs on `m` beside it. -/
+def rule9 (g : GateCtx) (m : Name) : Array String := Id.run do
+  let some i := g.env.getModuleIdx? m | return #[s!"--wiring {m}: not a module of the environment"]
+  let mut errs := #[]
+  match g.env.find? wiringCallee with
+  | none => return #[s!"--wiring {m}: {wiringCallee} not found"]
+  | some ci =>
+    let gm := moduleOf g.env wiringCallee
+    unless g.trusted.contains gm do
+      errs := errs.push s!"the badge glue {wiringCallee} is declared in {gm}, which is not trusted by hash"
+    let extra := g.env.header.moduleData[i.toNat]!.constNames.filter (· != `main)
+    unless extra.isEmpty do
+      errs := errs.push s!"module {m} declares {extra.size} constant(s) besides main, e.g. {extra.toList.take 3}"
+    match g.env.find? `main with
+    | some (.defnInfo v) =>
+      if moduleOf g.env `main != m then
+        errs := errs.push s!"main is declared in {moduleOf g.env `main}, not in {m}"
+      let want := mkApp (mkConst wiringCallee) (mkConst wiringArg)
+      unless v.value == want && v.levelParams.isEmpty do
+        errs := errs.push s!"main is not {want}: its value is {v.value}"
+      let wantTy := match ci.type with | .forallE _ _ b _ => some b | _ => none
+      unless wantTy == some v.type && !v.type.hasLooseBVars do
+        errs := errs.push s!"main's type {v.type} is not the result type of {wiringCallee}"
+      unless hasCode g.env `main do errs := errs.push "main has no compiled code"
+    | _ => errs := errs.push s!"module {m}: main is not a definition"
+  return errs
+
+/-- `gate --wiring MODULE --manifest FILE`: rule 5 (hashes) on the environment of the badge's
+per-entry module, rule 3 on its every non-trusted module, and rule 9. -/
+def wiringMain (modName manifestFile : String) : IO UInt32 := do
+  initSearchPath (← findSysroot)
+  let manifest ← readManifest manifestFile
+  let env ← importModules #[{ module := modName.toName }] {} (trustLevel := 0)
+  let (trusted, pinned, hashErrs) ← classify env manifest
+  let g : GateCtx := { env, trusted, pinned, allowed := {} }
+  let mut errs := hashErrs
+  for (m, i) in g.modules do
+    unless trusted.contains m do errs := errs ++ (← rule3 g m i)
+  errs := errs ++ rule9 g modName.toName
+  IO.println s!"gate: wiring {modName}: {env.header.moduleNames.size} modules, {trusted.size} trusted by hash"
+  if errs.isEmpty then
+    IO.println "gate: PASS"; return 0
+  for e in errs do IO.println s!"gate: REJECT {e}"
+  return 1
+
 /-! ### Command line -/
 
 /-- The command line, after `MODULE THEOREM`: the options by name. -/
@@ -538,10 +637,11 @@ def writeClosure (roots : String) (out : String) : IO UInt32 := do
 /-- The rules in the order of their `REJECT` lines: 5, 1–2, 3, 6, 8, 7, 4. -/
 def main (args : List String) : IO UInt32 := do
   if let ["--closure", roots, out] := args then return ← writeClosure roots out
+  if let ["--wiring", m, "--manifest", f] := args then return ← wiringMain m f
   let some (modName, thm, ga) := parseArgs args
     | throw <| IO.userError ("usage: gate MODULE THEOREM --manifest FILE [--computable N1,N2,...] " ++
         "[--allowed-imports FILE] [--badge-root CONST (needs --allowed-imports)]" ++
-        "  |  gate --closure ROOT1,ROOT2,... OUT")
+        "  |  gate --closure ROOT1,ROOT2,... OUT  |  gate --wiring MODULE --manifest FILE")
   let allowed ← readNames ga.allowed
   initSearchPath (← findSysroot)
   let manifest ← readManifest ga.manifest
