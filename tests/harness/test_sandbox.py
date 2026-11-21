@@ -640,38 +640,49 @@ def main():
             out[int(kv["cpu"])] = (int(kv["pipe"]), int(kv["memfd"]))
         return out
     KP = 300
+    POOL = 32                            # CPU samples per measurement, pooled over requests
 
     def moved(scrub):
-        """Per counter, the share of CPUs whose next number moved by K to K + 64 (mod 1024) across a
-        request that made K pipes and memfds on every CPU."""
-        rs = []
-        for mode in ("inos", f"pipes {KP}", "inos"):
-            if scrub:
-                subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
-            rs.append(iso_req(mode))
-        x, y = per_cpu(rs[0]), per_cpu(rs[2])
-        cpus = sorted(set(x) & set(y))
-        share = [sum(KP <= (y[c][k] - x[c][k]) % 1024 <= KP + 64 for c in cpus) / max(1, len(cpus)) for k in (0, 1)]
-        return all(r.status == "ok" for r in rs) and len(cpus) > 0, share, len(cpus)
-    ok0, ctl_share, n0 = moved(False)
-    ok1, scr_share, n1 = moved(True)
+        """Per counter, the share of CPU samples whose next number moved by K to K + 64 (mod 1024)
+        across a request that made K pipes and memfds on every CPU, pooled over enough rounds for
+        POOL samples (one round's 4 samples on a 4-CPU runner are too few for either bound: at the
+        uniform 65/1024 per sample, a share above 0.25 comes by chance 2.2 % of the time of 4, 10^-4 of 32),
+        and the next pipe numbers' offsets (mod 1024) the rounds began with"""
+        hits, n, offs, ok = [0, 0], 0, [], True
+        for _ in range(POOL):           # each round adds a sample per CPU, at least one
+            rs = []
+            for mode in ("inos", f"pipes {KP}", "inos"):
+                if scrub:
+                    subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
+                rs.append(iso_req(mode))
+            ok = ok and all(r.status == "ok" for r in rs)
+            x, y = per_cpu(rs[0]), per_cpu(rs[2])
+            cpus = sorted(set(x) & set(y))
+            ok = ok and len(cpus) > 0
+            if not ok:
+                break
+            for k in (0, 1):
+                hits[k] += sum(KP <= (y[c][k] - x[c][k]) % 1024 <= KP + 64 for c in cpus)
+            n += len(cpus)
+            offs += [x[c][0] % 1024 for c in cpus]
+            if n >= POOL:
+                break
+        return ok, [h / max(1, n) for h in hits], n, sorted(offs)
+    ok0, ctl_share, n0, _ = moved(False)
+    ok1, scr_share, n1, offs = moved(True)
     # the scrub's offsets are random, not only past the batch's end: after it, the CPUs' next pipe
-    # numbers (mod 1024) spread over the batch. The offsets are pooled over enough scrubs for 16 of
-    # them: with 4 CPUs one scrub's 4 uniform offsets fall within 256 of each other 5 % of the time
-    # (n·r^(n-1) − (n−1)·r^n at r = 1/4), with 16 about 10^-8
-    rounds = min(8, -(-16 // max(1, n1)))
-    offs = []
-    for _ in range(rounds):
-        subprocess.run([scrub_bin], check=True, capture_output=True, timeout=60)
-        offs += [p % 1024 for p, _ in per_cpu(iso_req("inos")).values()]
-    offs.sort()
-    spread = len(offs) < 4 or offs[-1] - offs[0] > 256
-    # with few CPUs a hit by chance is likely: the bound only binds from 8 CPUs on
-    check(ok0 and ok1 and min(ctl_share) >= 0.5 and (n1 < 8 or max(scr_share) <= 0.25) and spread,
+    # numbers (mod 1024) spread over the batch (32 uniform offsets fall within 256 of each other
+    # about 10^-17 of the time); and they are not bunched at the batch's start, as after a scrub that
+    # only ended each batch (at most 20 of 32 within 256, by chance more 1.6·10^-6 of the time)
+    spread = bool(offs) and offs[-1] - offs[0] > 256 and sum(o <= 256 for o in offs) <= 20
+    # the control: without the scrub most samples moved by about K (each CPU's counter also numbers
+    # the sockets and /proc inodes the runner and bwrap make, so not every one: 0.75–1.0 seen on CI)
+    check(ok0 and ok1 and n0 >= POOL and n1 >= POOL and min(ctl_share) >= 0.4 and max(scr_share) <= 0.25
+          and spread,
           f"with the runner's scrub before every request, an earlier request's {KP} pipes and memfds per CPU do not show "
-          f"in a later one's inode numbers: CPUs whose pipe / memfd counter moved by {KP}–{KP + 64} mod 1024: "
-          f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), {len(offs)} offsets after {rounds} scrub(s) spread over "
-          f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'}; without the scrub, the control: "
+          f"in a later one's inode numbers: CPU samples whose pipe / memfd counter moved by {KP}–{KP + 64} mod 1024: "
+          f"{[round(x, 2) for x in scr_share]} of {n1} (uniform: 0.06), offsets after a scrub spread over "
+          f"{offs[0] if offs else '?'}–{offs[-1] if offs else '?'} ({sum(o <= 256 for o in offs)} within 256); without the scrub, the control: "
           f"{[round(x, 2) for x in ctl_share]} of {n0}")
 
     # the season's random machine-wide batches before a timed request (`[stream] scrub_batches`): the

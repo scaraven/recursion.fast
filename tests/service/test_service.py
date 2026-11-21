@@ -322,6 +322,7 @@ def test_hardening(tmp):
         c = Client(sock)
         if not first:
             check(c.vk() == svc.vk, "12. a plain VK before the ancillary data is served")
+        c.s.settimeout(10)               # a service that neither refuses nor closes fails, never hangs
         r, w = os.pipe()
         socket.send_fds(c.s, [VK_REQ], [w])
         os.close(w)
