@@ -327,9 +327,11 @@ filesystem error the prover caused in `/work`; the service dying during the run;
 that does not finish; the benchmark reaching `stream_s`. `stream_s` (2,000 s) covers the 64
 requests at `ready_s + step_s` each (1,920 s) and the checks, samples and scrubs, so it
 binds only when an entry uses nearly every cap at once (start-ups near 10 s, steps near 20 s, a
-setup directory near 4 GiB); such an entry can reach it within every per-request cap (AGENTS.md
-§9). An intermediate output that `acc` rejects (in any of its three judged
-runs), or above `v_cap`, a canary of output 1 or 2 that `acc` accepts, or a crash or timeout of
+setup directory near 4 GiB), or when its verifier's start-ups are long (50 badge runs near
+`badge_start_s` = 16 s take about 800 s, leaving about 18 s per request); such an entry can reach
+it within every per-request cap (AGENTS.md §9). An intermediate output that `acc` rejects (in any
+of its three judged runs), or above `v_cap`, a canary of output 1 or 2 that `acc` accepts, or a
+crash or timeout of
 their checks, does not fail the run: it leaves the entry out of the track `every`. Every job of an
 evaluation ends within 30 minutes, the certificate job within 50 and the benchmark job within 70,
 and these caps are nested inside them. The first failure ends the

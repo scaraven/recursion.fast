@@ -15,8 +15,8 @@ With `--org` (ORG prepared by `harness/org-setup.sh`; the comparator from `scrip
    median counting) and its statement canaries on π_1, π_2 and π_M, then three timed passes against
    the service's replay mode, every output byte-identical; the score, the median pass) with the
    compiled `accF` badge: verdict ACCEPT in both tracks (`S` and `S_every`) under the smoke's
-   `v_cap_ms = 128` (an exception to the season's caps, whose `v_cap_ms` is 64; `badge_start_s` and the
-   certificate's `build_s` are the others), and REJECT
+   `v_cap_ms = 128` (an exception to the season's caps, whose `v_cap_ms` is 64; the certificate's
+   `build_s` is the other), and REJECT
    under `v_cap_ms = 8`, below the toy's final verifier time (it grows with the stream's history),
    the final output's V above the cap; then the organiser's canaries
    (`tests/harness/canaries.py`: the file parser, the trace digest and the signature check, core CI

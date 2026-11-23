@@ -311,7 +311,7 @@ comes from a run in which the prover never had the key.
   acceptance would answer the check of `π_i` inside it from the memo). A verifier that remembers
   its work across checks pays it inside every judged window (`tests/harness/accprobe/`:
   `MemoSub`, `MemoChildSub`). The process's start-up, to
-  the warm-up's answer, is at most `badge_start_s` = 2 s (the entry's top-level constants are
+  the warm-up's answer, is at most `badge_start_s` = 16 s (the entry's top-level constants are
   evaluated then, untimed; measured about 0.08 s); past it the check fails (a REJECT for the final
   output, the track `every`'s for an intermediate one). Each check is timed twice at once: by the
   runner, around the request to the badge process (about 0.3 ms plus 0.4 ms per MiB of file beyond
@@ -568,7 +568,7 @@ From [`harness/season.toml`](harness/season.toml) (the CI smoke uses
 | start-up to `ready`; one request (`step_s`) | 10 s; 20 s |
 | the service run, its checks and canaries, and the three timed passes (`stream_s`) | 2,000 s of the entry's time: its requests' start-ups and timed parts and its badge runs (reached: REJECT); the runner's own work is off this clock, budgeted by `runner_budget_s` = 900 s inside `PART_S` |
 | an output's size (`pi_cap`); the final `|π|` (`final_pi_cap`); a checked proof's `V` (`v_cap`) | 1 MiB; 512 KiB; 64 ms (the median of three fresh judged runs) |
-| a badge process's start-up to its warm-up answer (`badge_start_s`) | 2 s |
+| a badge process's start-up to its warm-up answer (`badge_start_s`) | 16 s |
 | timed passes (`timed_runs`); a timed pass's output | 3; byte-identical to the service run's |
 | signed-proof file (`file_cap`); a request's `/work` after the step | 64 MiB; 4 GiB, 65,536 entries |
 | memory: prover (incl. `/tmp`, `/work` tmpfs); service; badge | 8 GiB; 2 GiB; 4 GiB |
@@ -602,12 +602,14 @@ for the smoke's Lean badge) are made before it and removed after it.
 `stream_s` counts **the entry's time alone** (review R3 L1): the 64 requests' start-ups and timed
 parts (16 in the service run, 48 in the timed passes, each up to `ready_s + step_s` = 30 s, 1,920 s
 in all) and the 50 badge runs from each process's release to its last answer (48 judged, 2 of
-canaries: about 12 s at `V` near 40 ms, a start-up up to `badge_start_s` = 2 s in each, and a failed
-judged run up to `60 s + 4 · v_cap`, which for an intermediate output costs only the track `every`;
-all three judged runs of a proof are made even after one fails). So an entry within every
-per-request cap has 80 s for its badge runs, whatever the runner's own work costs, and reaching
-`stream_s` is its REJECT. The runner's own work in the stream is off that clock and recorded in the
-result (`stream.clock`: `entry_s`, `wall_s`, `runner_overhead_s`): the copies of the binary and the
+canaries: about 12 s at `V` near 40 ms, a start-up up to `badge_start_s` = 16 s in each, and a
+failed judged run up to `60 s + 4 · v_cap`, which for an intermediate output costs only the track
+`every`; all three judged runs of a proof are made even after one fails). So an entry within every
+per-request cap has 80 s for its badge runs, whatever the runner's own work costs; 50 start-ups
+near `badge_start_s` take about 800 s, which leaves about 18 s per request (`ready` and step) at
+16 s start-ups. Reaching `stream_s` is the entry's REJECT. The runner's own work in the stream is
+off that clock and recorded in the result (`stream.clock`: `entry_s`, `wall_s`,
+`runner_overhead_s`): the copies of the binary and the
 setup before each timed pass, each badge run's copies, each sandbox's mask files and CPU tree, the
 staging of the inputs, the outputs' reads and walks, the scrubs (about 0.1 s before each request and
 badge run, and before each of the 48 timed requests its random machine-wide batches, about 10 s on
@@ -987,7 +989,7 @@ are indicative only, except where a bullet says "on the machine".
   re-checks history grows with the stream and breaks the 64 ms cap.
 - **Your verifier's start-up is on the stream clock.** Each output starts three badge processes
   (one per judged run: 48 per stream) and the canaries two more, each start-up capped by
-  `badge_start_s` (2 s); one entry's `V` took 11.7 s to initialise on a runner.
+  `badge_start_s` (16 s); one entry's `V` took 11.7 s to initialise on a runner.
 - **Determinism is a rule.** Seed every randomised choice from the inputs and the oracle's answers;
   search grinding nonces in a fixed order and take the first; never let the thread schedule pick
   between valid outputs. One-time signature indices follow the order in which `SIGN`s arrive, so
@@ -1068,9 +1070,8 @@ python3 -I harness/evaluate.py all --entry PATH/TO/ROOT --org "$PWD" \
 `evaluate.py cert` and `evaluate.py bench` run the two halves separately. `harness/smoke.toml` is a
 small shape (4 steps of 6 blocks each; the season's size caps, its own verifier and time caps: its
 `v_cap` is 128 ms, because the toy's witness-sending `V` grows with the stream and CI runs the smoke
-on shared runners, its `badge_start_s` 10 s (the season's 2 s) for the `--mock` Python stand-in
-badge, its `[certificate] build_s` 600 s (the season's 1,200 s), its `step_s` and `stream_s` its
-own, 60 s and 300 s); `harness/season.toml` is the real one, and it
+on shared runners, its `[certificate] build_s` 600 s (the season's 1,200 s), its `step_s` and
+`stream_s` its own, 60 s and 300 s); `harness/season.toml` is the real one, and it
 runs only on the evaluation machine: elsewhere its fingerprint check stops the benchmark as an
 organiser ERROR before the prover is built, and its `c_P` drift check would too. To run the
 season's shape on your own machine, generate a local copy and pass it to `--season`:

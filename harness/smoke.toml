@@ -54,9 +54,9 @@ service_s = 1
 [caps]            # the season's size caps; its own verifier cap (below)
 pi_cap = 1048576
 final_pi_cap = 524288
-badge_start_s = 10 # as the season's 2 s; 10 s for the Python stand-in badge of `--mock`,
-                  # which compiles its C Keccak-256 reference on its first check
-v_cap_ms = 128    # AN EXCEPTION to the season's caps (64 ms there; badge_start_s and build_s are the others): the toy's
+badge_start_s = 16 # as the season's (the Python stand-in badge of `--mock` compiles its C Keccak-256
+                  # reference on its first check)
+v_cap_ms = 128    # AN EXCEPTION to the season's caps (64 ms there; build_s is the other): the toy's
                   # witness-sending V grows with the stream's history (each node checks its children
                   # again), its final V about 51–64 ms with the compiled badge on an organiser
                   # workstation, and CI runs the smoke on shared runners, where a 64 ms cap would make
