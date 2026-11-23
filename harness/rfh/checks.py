@@ -40,7 +40,7 @@ outputs `i` and `i + 1` together would have let a verifier that memoises its chi
 answer the check of `π_i` inside output `i + 1` from the memo (review LR2,
 `tests/harness/accprobe/MemoChildSub.lean`). The warm-up is recognisable, which costs nothing: it only
 pays the start-up and the page-in. The start-up, from the sandbox's release to the warm-up's
-answer, is capped by the season's `badge_start_s` (2 s, against about 0.08 s measured), since the
+answer, is capped by the season's `badge_start_s` (16 s, against about 0.08 s measured), since the
 entry's top-level constants are evaluated then, untimed; past it the run fails like a timed-out
 one. Work done inside a judged check is that check's. The runner's own
 thread is not pinned, so its scheduling can only add to the external time, never subtract (one slow

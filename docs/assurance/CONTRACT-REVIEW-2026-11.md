@@ -189,8 +189,9 @@ instance as well, it rejected a valid proof (the key read as zeros, the length w
    memoises across checks paid its work in the untimed warm-up (R7 HIGH-1). Since `2293db0` every
    judged run is a fresh process warmed with the organiser's own input (`rfh.checks.warm_file`
    under a fresh random key and statement), its items are distinct, each re-timing is another
-   fresh process, and the start-up to the warm-up's answer is capped at `badge_start_s` = 2 s
-   (measured about 0.08 s; past it the check fails, a REJECT for the final output). Work an entry
+   fresh process, and the start-up to the warm-up's answer is capped at `badge_start_s` = 16 s
+   (2 s when this review was written; measured about 0.08 s; past it the check fails, a REJECT for
+   the final output). Work an entry
    does at start-up is untimed but bounded by that cap; any other work happens inside some judged
    check.
 4. *Fixtures.* `tests/harness/accprobe/` builds the real badge around a hostile submission
@@ -242,7 +243,8 @@ What a record still rests on, beyond the kernel-checked theorem:
   7, 8, 9 and the word list); the source rule is lexical.
 - **The runner** (sandbox, statements, canaries, the two clocks, the warm-up), **the service**
   (keys, signatures, replay), and **the machine**; all tested, none proved. What an entry's
-  verifier can still do outside a judged window: work at start-up, up to `badge_start_s` = 2 s;
+  verifier can still do outside a judged window: work at start-up, up to `badge_start_s` (16 s; 2 s
+  when this review was written);
   pure background tasks between requests, on the same pinned core, in gaps of a millisecond or so;
   and state kept from one judged check to a later, different one of the same run, whose cost was
   paid inside the earlier check.

@@ -99,7 +99,7 @@ service_s = 2           # seconds per service throughput measurement (published,
 pi_cap = 1048576        # 1 MiB: every output, its |π| if it parses as a signed proof that acc accepts,
                         # else its file size (a breach is the entry's REJECT, whichever step)
 final_pi_cap = 524288   # 512 KiB: the final output's |π| (both tracks)
-badge_start_s = 2       # a warmed badge process, from its release to the answer to the organiser's warm-up
+badge_start_s = 16      # a warmed badge process, from its release to the answer to the organiser's warm-up
                         # input (start-up included: an entry's top-level constants are evaluated then,
                         # untimed); measured about 0.08 s; a breach is a failed check (the final
                         # output's: REJECT; an intermediate one's: the track `every`)

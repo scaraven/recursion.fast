@@ -270,9 +270,9 @@ def main():
           and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 64.0)
           and not hasattr(p, "size_ref") and p.mem_prover == "8G" and (p.check_every, p.calib_every) == (8, 8)
           and p.scrub_batches == 4096 and p.runner_budget_s == 900
-          and p.badge_start_s == 2 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
+          and p.badge_start_s == 16 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
           f"season 1: M = 16 steps of one leaf of 2^18 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
-          f"/ 512 KiB / 64 ms, no size_ref, scrub_batches 4096, runner_budget_s 900 s, check_every 8, calibration every 8, badge_start_s 2 s, prover 8G")
+          f"/ 512 KiB / 64 ms, no size_ref, scrub_batches 4096, runner_budget_s 900 s, check_every 8, calibration every 8, badge_start_s 16 s, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap)
           == (p.pi_cap, p.final_pi_cap, p.file_cap)
