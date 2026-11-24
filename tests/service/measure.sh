@@ -40,11 +40,11 @@ for args in "1 0 1" "1 64 1" "$N 64 0.5"; do
   exec 4>&-; sleep 0.3; tail -1 svc2.out
 done
 for size in 0 64 65536; do "$B/rf-bench" - local 1024 $size; done
-# the leaf hasher: 4 files of 2^18 random 32-byte blocks (the season's leaf), 2^19 - 1 permutations each
-for i in 1 2 3 4; do head -c $((32 * 262144)) /dev/urandom > "$W/leaf$i.bin"; done
+# the leaf hasher: 4 files of 2^17 random 32-byte blocks (the season's leaf), 2^18 - 1 permutations each
+for i in 1 2 3 4; do head -c $((32 * 131072)) /dev/urandom > "$W/leaf$i.bin"; done
 for t in 1 $N; do
   s=$(date +%s.%N)
   "$B/rf-oracle" --data-roots --threads $t "$W"/leaf{1,2,3,4}.bin > /dev/null
   e=$(date +%s.%N)
-  echo "data-roots threads=$t files=4 blocks=262144 permutations_per_s=$(python3 -c "print(round(4 * (2 * 262144 - 1) / ($e - $s)))")"
+  echo "data-roots threads=$t files=4 blocks=131072 permutations_per_s=$(python3 -c "print(round(4 * (2 * 131072 - 1) / ($e - $s)))")"
 done

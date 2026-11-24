@@ -1,7 +1,7 @@
 """The random draws of one evaluation (TRUSTED RUNTIME).
 
 **The shape is not drawn.** Every step proves one leaf of the season file's one size `[stream] n`
-(`2^18` blocks of 32 bytes in season 1, at most the contract's `leafCap = 2^20`), and the stream
+(`2^17` blocks of 32 bytes in season 1, at most the contract's `leafCap = 2^20`), and the stream
 has `[stream] M` steps: published constants, the same for every evaluation, every entry and every
 core commit until the owner changes them.
 

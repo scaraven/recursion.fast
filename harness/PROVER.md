@@ -143,7 +143,7 @@ more times, timed, against its replay (below). Every step is a fresh process in 
 (fresh `/work`, fresh `/tmp`, read-only `/setup`); nothing survives a request except the proof the
 runner copies, so **state between steps travels only inside `π`**.
 
-Every step proves one fresh leaf of exactly `n` blocks (`n = 2^18`, 8 MiB of data, in season 1, at
+Every step proves one fresh leaf of exactly `n` blocks (`n = 2^17`, 4 MiB of data, in season 1, at
 most the contract's `leafCap = 2^20`; 6 in the smoke), about `2n` permutations per step:
 
 ```

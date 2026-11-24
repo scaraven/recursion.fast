@@ -77,4 +77,4 @@ of a leaf, `u64 0 ‖ u64 n ‖ x_0 ‖ … ‖ x_5`, 208 bytes; no query) is
 `8 + 208 + 8 + 0 + 8 + 4768 = 5000` bytes, its first stream step's output; every further step (a
 node, `u64 1 ‖ c1 ‖ c2` and the previous output and the step's signed leaf, both carried whole)
 adds `72 + 5000 + 4792 = 9864` bytes (computed from the layouts: 5,000, 14,864, 24,728, 34,592).
-At the season's `n = 2^18` the leaf's `π` alone is `16 + 2^23` bytes, above `pi_cap`.
+At the season's `n = 2^17` the leaf's `π` alone is `16 + 2^22` bytes, above `pi_cap`.

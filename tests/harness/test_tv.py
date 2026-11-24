@@ -22,7 +22,7 @@ synthetic steps.
    scored; the tracks: `final` always, `every` only when every output is accepted within the caps and
    the canaries of outputs 1 and 2 are rejected, else `tracks_reason` says why; a step without
    exactly three timed times is `MalformedStream`.
-3. The season's constants (AGENTS.md §6, the v6 rules): `M = 16` steps of one leaf of `n = 2^18`
+3. The season's constants (AGENTS.md §6, the v6 rules): `M = 16` steps of one leaf of `n = 2^17`
    blocks of 32 bytes, 3 timed passes, `step_s` 20 s, `stream_s` 2,000 s, the caps 1 MiB, 512 KiB and
    64 ms, no `size_ref`, `scrub_batches` 4096, the prover's 8 GiB; the smoke's exceptions (its `v_cap_ms` 128
    and `scrub_batches` 256, its size caps the season's); `Params.load` refuses a malformed shape (`n` above
@@ -148,7 +148,7 @@ def main():
 
     p = Params.load(os.path.join(ROOT, "harness", "season.toml"))
     cal = {"c_P": 1.0}
-    N = 1 << 18
+    N = 1 << 17
 
     def mk(i, P, pi=100, n=N, times=None, **kw):
         """A step of P s in each of the three timed passes (or `times`)."""
@@ -265,13 +265,13 @@ def main():
           "season 1's fingerprint is a sha256 in hex")
 
     # the season's constants (the v6 rules)
-    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s, p.ready_s) == (16, 1 << 18, 3, 20, 2000, 10)
+    check((p.M, p.n, p.timed_runs, p.step_s, p.stream_s, p.ready_s) == (16, 1 << 17, 3, 20, 2000, 10)
           and not hasattr(p, "chains")
           and (p.pi_cap, p.final_pi_cap, p.v_cap_ms) == (1 << 20, 512 << 10, 64.0)
           and not hasattr(p, "size_ref") and p.mem_prover == "8G" and (p.check_every, p.calib_every) == (8, 8)
           and p.scrub_batches == 4096 and p.runner_budget_s == 900
           and p.badge_start_s == 16 and not hasattr(p, "n_ref") and not hasattr(draws, "draw_M"),
-          f"season 1: M = 16 steps of one leaf of 2^18 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
+          f"season 1: M = 16 steps of one leaf of 2^17 blocks, 3 timed passes, step_s 20 s, stream_s 2000 s, caps 1 MiB "
           f"/ 512 KiB / 64 ms, no size_ref, scrub_batches 4096, runner_budget_s 900 s, check_every 8, calibration every 8, badge_start_s 16 s, prover 8G")
     sp = Params.load(os.path.join(ROOT, "harness", "smoke.toml"))
     check((sp.M, sp.n, sp.timed_runs) == (4, 6, 3) and (sp.pi_cap, sp.final_pi_cap, sp.file_cap)
@@ -281,11 +281,11 @@ def main():
           f"the smoke: M = 4, n = 6, 3 timed passes, the season's size caps, scrub_batches 256 (CI's limits); the one documented exception, "
           f"its v_cap {sp.v_cap_ms:g} ms (the season's {p.v_cap_ms:g}); its own time caps")
     season_text = open(os.path.join(ROOT, "harness", "season.toml")).read()
-    for what, pat, new, want in (("n above leafCap", r"(?m)^n = 262144", "n = 1048577", "leafCap = 2^20"),
-                                 ("n = 2^22, the v5 cap", r"(?m)^n = 262144", "n = 4194304", "leafCap = 2^20"),
-                                 ("n zero", r"(?m)^n = 262144", "n = 0", "n not a positive integer"),
+    for what, pat, new, want in (("n above leafCap", r"(?m)^n = 131072", "n = 1048577", "leafCap = 2^20"),
+                                 ("n = 2^22, the v5 cap", r"(?m)^n = 131072", "n = 4194304", "leafCap = 2^20"),
+                                 ("n zero", r"(?m)^n = 131072", "n = 0", "n not a positive integer"),
                                  ("M a string", r"(?m)^M = 16", 'M = "16"', "M not a positive integer"),
-                                 ("no n", r"(?m)^n = 262144", "", "n not a positive integer"),
+                                 ("no n", r"(?m)^n = 131072", "", "n not a positive integer"),
                                  ("no timed pass", r"(?m)^timed_runs = 3", "timed_runs = 0", "timed_runs"),
                                  ("an even number of timed passes", r"(?m)^timed_runs = 3", "timed_runs = 2",
                                   "timed_runs = 2, not an odd positive integer"),
@@ -306,7 +306,7 @@ def main():
             check(Params.load(os.path.join(bd, "s.toml"), check=False).name == p.name,
                   f"... and loads it unchecked for the aggregation ({what})")
     with tempfile.TemporaryDirectory(prefix="rf-shape-") as bd:
-        open(os.path.join(bd, "s.toml"), "w").write(re.sub(r"(?m)^n = 262144", "n = 1048576", season_text, count=1))
+        open(os.path.join(bd, "s.toml"), "w").write(re.sub(r"(?m)^n = 131072", "n = 1048576", season_text, count=1))
         check(Params.load(os.path.join(bd, "s.toml")).n == 1 << 20, "Params.load accepts n = leafCap = 2^20")
     src = open(os.path.join(ROOT, "harness", "rfh", "draws.py")).read()
     check(len(set(draws.starts(1000))) == 1000 and "random.Random" not in src and "import random" not in src

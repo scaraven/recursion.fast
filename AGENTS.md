@@ -17,7 +17,7 @@ The fastest **recursive prover for batches of Keccak-256 hashes** whose soundnes
 Lean. An entry is a hash-based non-interactive argument for one relation over 32-byte digests: a
 leaf digest commits to a Keccak-256 Merkle root over `n` runner-supplied 32-byte blocks, a node
 digest to two accepted children. The benchmark is a stream of 16 steps, each one fresh leaf: each
-step proves a Merkle root over `2^18` blocks (about `2^19` permutations) and folds it into the
+step proves a Merkle root over `2^17` blocks (about `2^18` permutations) and folds it into the
 running proof. It is ranked in two tracks with their own records: `every`, where every proof of
 the stream must be accepted, and `final`, where only the last one must. The score is the median of
 three timed passes' total wall times times a proof size in bytes: the final proof's in `final`, the
@@ -75,7 +75,7 @@ half is [`harness/toy-prover/honest/prover.s`](harness/toy-prover/honest/prover.
 `prover/prover.s`. It passes the certificate and runs through the benchmark at the smoke's shape
 ([`harness/smoke.toml`](harness/smoke.toml)). At the season's shape it is REJECTed at step 1,
 before any `V` is timed: its first output is a leaf proof that sends the leaf's data whole,
-`16 + 2^23` bytes, above `pi_cap` = 1 MiB (§6). It shows the format, not a design.
+`16 + 2^22` bytes, above `pi_cap` = 1 MiB (§6). It shows the format, not a design.
 
 ## 3. The relation and acceptance
 
@@ -261,14 +261,14 @@ key.
 
 ## 6. The benchmark
 
-*Intuition.* One stream of 16 steps. Each step receives 8 MiB of fresh data from the runner and
+*Intuition.* One stream of 16 steps. Each step receives 4 MiB of fresh data from the runner and
 must prove its Merkle root, folded into the running proof. The stream runs first against the oracle
 service, which fixes and checks every output. Then the oracle's key is handed to the prover and the
 stream is run three more times on the clock; each of those outputs must be the service run's, byte
 for byte. So the timed passes measure the prover without the service, and every accepted proof
 comes from a run in which the prover never had the key.
 
-- **Statements.** Step `i` gets its data `xs_i`, `n = 2^18` blocks of 32 bytes, with the leaf
+- **Statements.** Step `i` gets its data `xs_i`, `n = 2^17` blocks of 32 bytes, with the leaf
   `L_i = leafStmt (dataRoot xs_i) n`, and
   ```
   c_1 = L_1,      c_i = nodeStmt c_(i-1) L_i      (i = 2 … M, M = 16)
@@ -276,8 +276,8 @@ comes from a run in which the prover never had the key.
   Step 1, `prover first`: `leaf.json` (`{"n": N}`) and `leaf.bin` (the data, exactly `32 · N`
   bytes, `x_0 ‖ … ‖ x_(N−1)`), output a signed proof of `c_1`. Step `i ≥ 2`, `prover step`: also
   `prev.stmt` and `prev.bin` (the previous statement and the service run's output for it), output
-  for `c_i`. Every step's leaf is `2^18` block hashes and `2^18 − 1` tree nodes (one permutation
-  each, about `2^19`), about `2^23` in the stream. The interface and the files are in
+  for `c_i`. Every step's leaf is `2^17` block hashes and `2^17 − 1` tree nodes (one permutation
+  each, about `2^18`), about `2^22` in the stream. The interface and the files are in
   [`harness/PROVER.md`](harness/PROVER.md) §3 and [`harness/FORMAT.md`](harness/FORMAT.md).
 - **Data, seeds and keys.** Per step the runner draws a fresh secret 32-byte seed `s_i` from the
   OS CSPRNG and expands it to the step's data,
@@ -428,7 +428,7 @@ pass `t*`, so `Σ_i P_i = P_total`.
 
 - **Wall time, nothing else.** How the work is spread over the steps is the entry's choice, within
   `step_s` (which applies to the service run too, where every oracle answer is a round trip) and
-  the memory cap. Hashing cannot be deferred: a step's data (8 MiB) exceeds `pi_cap`, so it
+  the memory cap. Hashing cannot be deferred: a step's data (4 MiB) exceeds `pi_cap`, so it
   cannot be carried to a later step, and its hashing is proved in the step that receives it.
   Recursion can: in `final`, where intermediate outputs need not be proofs, an entry may defer
   it, and a final compression wrap of the last proof pays there.
@@ -473,7 +473,7 @@ runner fault, an organiser ERROR named `malformed` (§8).
 | Symbol | Value | Meaning |
 |---|---|---|
 | `M` | 16 | stream steps, the same for every entry |
-| `n` | `2^18` | blocks of 32 bytes per step (one leaf, 8 MiB) |
+| `n` | `2^17` | blocks of 32 bytes per step (one leaf, 4 MiB) |
 | `timed_runs` | 3 | timed passes; `P_total` is the median of their totals |
 | size of `π` | bytes; at most `final_pi_cap` = 512 KiB (the final output), `pi_cap` = 1 MiB (any output) | the score's size factor, unscaled: `S` in seconds · bytes |
 | `ref_ns` | 316.2 ms, measured | `calib`'s time (32 rounds, 8 threads) on the machine, fixed per season; `c_P` against it is a health check (§6), never a factor |
@@ -594,7 +594,7 @@ if they are 10^9-byte gigabytes. The service uses far less than its cap in pract
 4 GiB is never in use while a prover runs (checks run with no entry process alive), so a badge
 run holds at most 4 + 4 + 2 GiB. The tmpfs (`/dev/shm`, half of the VM's memory by default) must
 have room for the copy; it is the runner's failure if not. The inputs a request receives at `go`
-(`leaf.bin`'s 8 MiB among them) are written by the runner, so their pages are charged to the
+(`leaf.bin`'s 4 MiB among them) are written by the runner, so their pages are charged to the
 runner too; a copy the prover makes counts toward its cap and `work_cap`. Each badge run's copies
 (the badge directory, the files `verify` loads, the checked files, the warm-up file: about 140 MiB
 for the smoke's Lean badge) are made before it and removed after it.
@@ -805,16 +805,16 @@ three delays 2.1 s.
   step (§7); hashing cannot be deferred. The verifier cap (64 ms) bounds what can be left to the
   verifier itself.
 - **The leaf is an emulation, not leanXMSS.** It has the hash count and witness density of
-  signature aggregation (`2^18` blocks: about the Keccak calls of 2,800 leanXMSS signatures; 8 MiB,
+  signature aggregation (`2^17` blocks: about the Keccak calls of 1,400 leanXMSS signatures; 4 MiB,
   16 bytes per permutation), but none of its irregular work (digit-dependent chain lengths,
   checksums, selection) and no per-signature authentication paths.
 - **The split between hashing and fixed cost is measured on a proxy.** Fitted on the evaluation
   machine over the previous season's best entry, whose leaf committed one 32-byte digest per hash:
-  about 1.6 µs per permutation and a fixed 0.39 s per step. That projects hashing at about 61–71 %
-  of a step of about 1.3 s for the best code today. The committed-data leaf commits a different number of words per
+  about 1.6 µs per permutation and a fixed 0.39 s per step. That projects hashing at about 44–55 %
+  of a step of about 0.85 s for the best code today. The committed-data leaf commits a different number of words per
   permutation, and with one fixed `n` the split cannot be watched in season. A later season can move
   `n` without a contract change.
-- **Short steps weigh fixed costs more.** About 0.4 s of a 1.3 s step is fixed cost, mostly the
+- **Short steps weigh fixed costs more.** About 0.4 s of a 0.85 s step is fixed cost, mostly the
   commitment's opening and the recursion.
 - **The verifier cap is tighter.** The best entries' `V` averaged 39–41 ms under the previous
   rules, and a larger committed witness may raise opening costs.
@@ -999,11 +999,12 @@ are indicative only, except where a bullet says "on the machine".
   4-vCPU runner. Modules outside the organiser's precompiled closure (`RecursionFast`, the CompPoly
   roots, `Mathlib.Tactic`) are compiled inside the 180 s badge build, about 860 modules;
   `import Mathlib` does not fit.
-- **Every step is a `2^18`-block leaf** (about `2^19` permutations, 8 MiB of data to commit to)
+- **Every step is a `2^17`-block leaf** (about `2^18` permutations, 4 MiB of data to commit to)
   within `step_s = 20 s`, in the service run too (where every answer is a round trip), and more if
   you defer recursion. Test the service run's time, not only the timed one.
 - **`queryCap` is per query**: a transcript that absorbs a long message in one query (a Ligero row
-  of 1.57 MB at `n = 2^18`) is refused by the service and the proof fails. Absorb in pieces.
+  of 1.57 MB at the earlier `n = 2^18`) is refused by the service and the proof fails. Absorb in
+  pieces.
 - **A signed child restates every byte its verifier hashed**: a signed `n = 16` leaf was 538,698
   bytes for a `π` of 143,711. Sending children in the clear does not scale.
 - **`errorCap = 2^-128` excludes plain GF(2^128) sumcheck** (a degree-2 round costs `2^-127`):
