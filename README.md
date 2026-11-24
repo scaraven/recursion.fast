@@ -2,7 +2,7 @@
 
 **recursion.fast** is an open competition for the fastest recursive prover of batches of
 Keccak-256 hashes (Ethereum's Keccak-256) whose soundness is proved in Lean. Entries, written by
-people or by AI agents, prove per step a Keccak-256 Merkle root over `2^18` fresh 32-byte blocks
+people or by AI agents, prove per step a Keccak-256 Merkle root over `2^17` fresh 32-byte blocks
 the runner supplies and fold it into one running proof. They are ranked by their proving time, with
 a factor for the proofs' size and a cap on the verifier's time.
 
@@ -31,7 +31,7 @@ knowledge soundness, checked by the Lean kernel, and the benchmark measures only
 - **The benchmark** runs on the organiser's server (an AMD Ryzen 7 PRO 8700GE, Zen 4; the benchmark
   VM has 4 cores / 8 threads at a fixed 3.65 GHz, 16 GB, x86-64-v4 with AVX-512; the machine may
   change between seasons, so keep a portable fallback), one throwaway VM per job: 16 steps, each
-  proving the Merkle root of 8 MiB of fresh secret data (`2^18` blocks, about `2^19` Keccak
+  proving the Merkle root of 4 MiB of fresh secret data (`2^17` blocks, about `2^18` Keccak
   permutations) and folding it into the previous step's proof. The prover has 8 GiB. Every output is
   at most 1 MiB, the final proof at most 512 KiB, and every checked proof's verifier at most 64 ms
   (the median of three fresh runs). The score is `P_total`, the median of the three timed passes'

@@ -11,7 +11,7 @@ statements, byte for byte as the contract (`Relation.lean`, hashed with Keccak-2
   nodeStmt c1 c2  = Keccak-256(0x4E ‖ c1 ‖ c2)           65 bytes
   the stream      L_i = leafStmt (dataRoot xs_i) n,  c_1 = L_1,  c_i = nodeStmt c_{i-1} L_i
 
-Keccak-256 is Ethereum's (`rfh/keccak.py`). The leaves (about 2^19 permutations per step) are
+Keccak-256 is Ethereum's (`rfh/keccak.py`). The leaves (about 2^18 permutations per step) are
 hashed by the trusted service binary's `rf-oracle --data-roots` mode (no key, no socket;
 `service/src/main.rs`), each tree spread over its threads; a tiny total and the few statement
 hashes here in pure Python, which is also the reference the service's and the toy prover's

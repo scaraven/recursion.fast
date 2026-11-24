@@ -24,8 +24,8 @@
     and the word-level hashes (`Library/Fast.lean`); `check_eq` states it with the specification
     functions. `V vk c π := ret (check vk c π)`: no query, `qV = 0`. Compiled, `check` decodes a
     leaf through the contract's `readList`, which is not tail-recursive: one stack frame per block.
-    That is harmless at the season's shape: the witness-sent leaf of `n = 2^18` blocks is `16 +
-    2^23` bytes, above `pi_cap` (1 MiB), so the runner rejects it before any verifier runs, and a
+    That is harmless at the season's shape: the witness-sent leaf of `n = 2^17` blocks is `16 +
+    2^22` bytes, above `pi_cap` (1 MiB), so the runner rejects it before any verifier runs, and a
     leaf proof within `pi_cap` has fewer than `2^15` blocks (`scripts/speed/Extract.lean` runs the
     compiled decoder on leaves of up to about a thousand).
   * **Prover.** `P vk c w := ret (encode w)`. Every witness of the relation fits the format

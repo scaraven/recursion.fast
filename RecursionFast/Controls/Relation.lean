@@ -22,7 +22,7 @@ Positive:
   levels), `leafStmt_kat` (the statement of `root4_kat`'s root, `n = 4`), `rel_root4` (that
   statement is in the relation with the four blocks as its witness), `nodeStmt_kat`: the byte
   layouts;
-  `leafStmt_season_kat` (the count `2^18`, the season's `n`) with `enc64` beyond its first byte
+  `leafStmt_season_kat` (the count `2^17`, the season's `n`) with `enc64` beyond its first byte
   (`enc64_season`, `enc64_kat`: 8 bytes, little-endian).
 * `leafStmt_empty_kat`, `leaf_empty`, `leaf_empty_unique`: at `n = 0` the statement
   `leafStmt zero 0` is public: `[]` witnesses it and only it, so modulo a Keccak-256 collision
@@ -241,17 +241,17 @@ theorem nodeStmt_kat :
 /-- `python3 -I -c "import sys; sys.path.insert(0, 'harness')
 from rfh.keccak import keccak256 as K
 h=bytes.fromhex('55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1');
-print(K(b'L'+h+(2**18).to_bytes(8,'little')).hex())"` (the root of `root4_kat` with the season's
-count `n = 2^18`) -/
+print(K(b'L'+h+(2**17).to_bytes(8,'little')).hex())"` (the root of `root4_kat` with the season's
+count `n = 2^17`) -/
 theorem leafStmt_season_kat :
     (leafStmt (ofHex "55c3ed43367f2313bd98059444f498d7ad3efb1aa34846e9543dde3a414085b1")
-      (2 ^ 18)).toList =
-      hex "7fff63bbbaa1db5254cd9f32f6d51d8c5c574eee5dd95abe753128700ea48e94" := by
+      (2 ^ 17)).toList =
+      hex "91ed2e982de4d9f3afb3774a0da9f6e0bdcfa260f5b5e2873b40400108a87e2b" := by
   rw [← leafStmtF_eq]
   decide +kernel
 
-/-- The season's `n = 2^18` in 8 little-endian bytes: its one set bit is in the third byte. -/
-theorem enc64_season : enc64 (2 ^ 18) = [0, 0, 0x04, 0, 0, 0, 0, 0] := by decide
+/-- The season's `n = 2^17` in 8 little-endian bytes: its one set bit is in the third byte. -/
+theorem enc64_season : enc64 (2 ^ 17) = [0, 0, 0x02, 0, 0, 0, 0, 0] := by decide
 
 /-- `enc64` writes 8 bytes, low byte first. -/
 theorem enc64_kat : enc64 0x0807060504030201 = [1, 2, 3, 4, 5, 6, 7, 8] := by decide
